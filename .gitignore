@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+
+# Credentials and local configuration.
+# .env holds the generated DB passwords and connection strings written by
+# scripts/init_db.sh. .env.example carries placeholders only and is committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+.pgpass
+
+# Local evidence artifacts (§4.4 raw store)
+evidence_store/
