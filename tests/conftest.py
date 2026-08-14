@@ -8,6 +8,7 @@ in the first place.
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -23,11 +24,26 @@ load_dotenv()
 
 @pytest.fixture(scope="session")
 def db_available() -> bool:
+    """Fail — do not skip — when the database is unreachable.
+
+    Most of what this suite verifies (RLS, append-only grants, resolver
+    precedence) only exists in the database. Skipping those tests turns a red
+    run green while checking nothing, which is the §8.6 failure mode wearing a
+    different hat. Set CYBERORCH_ALLOW_DB_SKIP=1 to opt into skipping in an
+    environment that genuinely has no PostgreSQL.
+    """
     try:
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as exc:  # pragma: no cover - environment guard
-        pytest.skip(f"PostgreSQL not reachable ({exc}). Run scripts/init_db.sh first.")
+        message = (
+            f"PostgreSQL not reachable ({exc}).\n"
+            "Run scripts/init_db.sh first. These tests assert database-enforced "
+            "security properties and are not meaningful without it."
+        )
+        if os.environ.get("CYBERORCH_ALLOW_DB_SKIP") == "1":
+            pytest.skip(message)
+        pytest.fail(message, pytrace=False)
     return True
 
 
