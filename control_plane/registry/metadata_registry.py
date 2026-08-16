@@ -18,6 +18,12 @@ interchangeable (§5, I6b, I6c):
 Rows of different tiers coexist for one identity rather than overwriting each
 other: an LLM_HINT never displaces the customer's declaration, and the
 resolver decides what each tier is allowed to do.
+
+Writes require the ``registry_admin`` role (§5). ``cyberorch_app`` — what the
+resolvers, the orchestrator and the agents connect as — holds SELECT only. That
+matters most for exactly the case MVP-Kernel exists to test: a component that
+could write an AUTHORITATIVE row could reclassify a PII database as a static
+site, and no amount of care in the resolver would help.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
+from control_plane.state.db import REGISTRY_ADMIN_ROLE, assert_registry_admin
 
 AUTHORITY_TIERS = ("AUTHORITATIVE", "OBSERVED", "INFERRED", "LLM_HINT")
 
@@ -105,11 +112,31 @@ def register_metadata(
     resource_class: Sequence[str] = (),
     data_class: Sequence[str] = (),
 ) -> MetadataRow:
-    """Register or update a classification. Engagement Manager only (§5)."""
+    """Register or update a classification. Engagement Manager only (§5).
+
+    Requires a :func:`registry_admin_scope` connection.
+    """
     if authority not in AUTHORITY_TIERS:
         raise ValueError(f"unknown classification authority {authority!r}")
     if not actor:
         raise ValueError("registry writes must name an actor (§5)")
+    assert_registry_admin(conn)
+
+    # Captured before the upsert so the audit says what changed. A
+    # reclassification is the single most security-relevant edit in the system;
+    # recording only the new value would leave an investigator unable to tell
+    # whether a host had just been downgraded from PII.
+    before = conn.execute(
+        text("""
+            SELECT resource_class, data_class, classification_source,
+                   classification_version
+            FROM metadata_registry
+            WHERE engagement_id = :eid AND identity_type = :itype
+              AND identity_value = :ivalue AND classification_authority = :authority
+        """),
+        {"eid": engagement_id, "itype": identity_type,
+         "ivalue": identity_value, "authority": authority},
+    ).mappings().one_or_none()
 
     row = conn.execute(
         text("""
@@ -145,16 +172,29 @@ def register_metadata(
         conn,
         engagement_id=engagement_id,
         actor=actor,
-        event_type="metadata.registered",
+        event_type="metadata.registered" if before is None else "metadata.reclassified",
         subject_type="asset",
         subject_id=row["asset_id"],
         payload={
+            "db_role": REGISTRY_ADMIN_ROLE,
             "identity": f"{identity_type}:{identity_value}",
             "authority": authority,
-            "source": source,
-            "data_class": list(data_class),
-            "resource_class": list(resource_class),
-            "version": row["classification_version"],
+            "before": (
+                {
+                    "resource_class": list(before["resource_class"]),
+                    "data_class": list(before["data_class"]),
+                    "source": before["classification_source"],
+                    "version": before["classification_version"],
+                }
+                if before
+                else None
+            ),
+            "after": {
+                "resource_class": list(row["resource_class"]),
+                "data_class": list(row["data_class"]),
+                "source": row["classification_source"],
+                "version": row["classification_version"],
+            },
         },
     )
     return MetadataRow(

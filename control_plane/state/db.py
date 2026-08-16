@@ -21,6 +21,7 @@ from sqlalchemy import Connection, Engine, create_engine, text
 from control_plane.config import require_env
 
 _ENGINE: Engine | None = None
+_REGISTRY_ADMIN_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -37,6 +38,15 @@ def database_url() -> str:
     )
 
 
+def registry_admin_url() -> str:
+    """The Engagement Manager's connection string (§5)."""
+    return require_env(
+        "REGISTRY_ADMIN_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export REGISTRY_ADMIN_DATABASE_URL "
+             "for the registry_admin role.",
+    )
+
+
 def get_engine() -> Engine:
     global _ENGINE
     if _ENGINE is None:
@@ -44,27 +54,87 @@ def get_engine() -> Engine:
     return _ENGINE
 
 
+def get_registry_admin_engine() -> Engine:
+    """A second pool, for the one role allowed to write the registries.
+
+    Two pools rather than one connection that switches roles: SET ROLE can be
+    reset from inside a session, so a single pool would make the privilege
+    boundary something SQL could step across. Separate connections,
+    authenticated as separate roles, cannot be talked out of their grants.
+    """
+    global _REGISTRY_ADMIN_ENGINE
+    if _REGISTRY_ADMIN_ENGINE is None:
+        _REGISTRY_ADMIN_ENGINE = create_engine(
+            registry_admin_url(), pool_pre_ping=True, future=True
+        )
+    return _REGISTRY_ADMIN_ENGINE
+
+
 def reset_engine() -> None:
-    """Drop the cached engine (tests switch roles between connections)."""
-    global _ENGINE
-    if _ENGINE is not None:
-        _ENGINE.dispose()
+    """Drop the cached engines (tests switch roles between connections)."""
+    global _ENGINE, _REGISTRY_ADMIN_ENGINE
+    for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE):
+        if engine is not None:
+            engine.dispose()
     _ENGINE = None
+    _REGISTRY_ADMIN_ENGINE = None
+
+
+REGISTRY_ADMIN_ROLE = "registry_admin"
+
+
+def assert_registry_admin(conn: Connection) -> None:
+    """Refuse a registry write on a connection that is not registry_admin.
+
+    The database already refuses it — that is the real enforcement, and the
+    tests assert it directly. This turns "permission denied for table
+    scope_registry" three frames deep into a message naming the actual mistake,
+    which is passing the wrong connection.
+    """
+    role = conn.execute(text("SELECT current_user")).scalar_one()
+    if role != REGISTRY_ADMIN_ROLE:
+        raise PermissionError(
+            f"registry writes require the {REGISTRY_ADMIN_ROLE} connection (§5); "
+            f"this connection is {role!r}. Use registry_admin_scope()."
+        )
 
 
 @contextmanager
-def engagement_scope(engagement_id: str) -> Iterator[Connection]:
-    """Open a transaction bound to one engagement.
-
-    Commits on success, rolls back on exception. Everything the caller can see
-    inside is filtered by the RLS policy for ``engagement_id``.
-    """
+def _scoped(engine: Engine, engagement_id: str) -> Iterator[Connection]:
     if not engagement_id:
         raise ValueError("engagement_id is required: RLS fails closed without it")
-    engine = get_engine()
     with engine.begin() as conn:
         conn.execute(
             text("SELECT set_config('cyberorch.engagement_id', :eid, true)"),
             {"eid": engagement_id},
         )
+        yield conn
+
+
+@contextmanager
+def engagement_scope(engagement_id: str) -> Iterator[Connection]:
+    """Open a transaction bound to one engagement, as ``cyberorch_app``.
+
+    Commits on success, rolls back on exception. Everything the caller can see
+    inside is filtered by the RLS policy for ``engagement_id``. This connection
+    can read the registries but not write them (§5).
+    """
+    with _scoped(get_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def registry_admin_scope(engagement_id: str) -> Iterator[Connection]:
+    """Open a transaction as ``registry_admin`` — Engagement Manager only (§5).
+
+    The only connection in the system that can write the Scope Registry or the
+    Authoritative Metadata Registry. Still bound to one engagement and still
+    subject to RLS: writing the registries is not permission to cross an
+    engagement boundary.
+
+    Reach for this only in engagement setup and registry maintenance. Every
+    other component -- canonicalizer, resolvers, orchestrator, agents -- uses
+    :func:`engagement_scope`, and the database will refuse them if they do not.
+    """
+    with _scoped(get_registry_admin_engine(), engagement_id) as conn:
         yield conn

@@ -19,8 +19,7 @@ from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import normalize_target
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import ALLOW, DENY, PolicyLayer, merge_policy
-from control_plane.registry.metadata_registry import register_metadata
-from control_plane.registry.scope_registry import list_scope_objects, register_scope_object
+from control_plane.registry.scope_registry import list_scope_objects
 from control_plane.state.db import engagement_scope
 
 
@@ -50,28 +49,27 @@ def _decide(conn, *, target, action, scope_object_id, policy, **kw):
 
 
 @pytest.fixture
-def engagement_with_scope(engagement_id):
-    """An engagement with a cidr scope object authorizing network.scan."""
+def engagement_with_scope(engagement_id, registry):
+    """An engagement with a cidr scope object authorizing network.scan.
+
+    Seeded through registry_admin, read back through cyberorch_app -- the same
+    split production uses (§5).
+    """
     sid = _uid("SCOPE")
-    with engagement_scope(engagement_id) as conn:
-        register_scope_object(
-            conn, engagement_id=engagement_id, scope_object_id=sid, type="cidr",
-            value="10.20.0.0/24", allowed_actions=["network.recon", "network.scan"],
-            actor="engagement-manager",
-        )
+    registry.scope(scope_object_id=sid, type="cidr", value="10.20.0.0/24",
+                   allowed_actions=["network.recon", "network.scan"])
     return engagement_id, sid
 
 
-def test_authorized_scan_of_a_known_host_is_allowed(engagement_with_scope):
+def test_authorized_scan_of_a_known_host_is_allowed(engagement_with_scope, registry):
     eid, sid = engagement_with_scope
     target = normalize_target({"logical_identity": {"type": "ip", "value": "10.20.0.7"}})
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="ip", identity_value="10.20.0.7",
+        authority="AUTHORITATIVE", source="customer_declared",
+        resource_class=["host"], data_class=["network_service"],
+    )
     with engagement_scope(eid) as conn:
-        register_metadata(
-            conn, engagement_id=eid, asset_id=_uid("ASSET"), identity_type="ip",
-            identity_value="10.20.0.7", authority="AUTHORITATIVE",
-            source="customer_declared", resource_class=["host"],
-            data_class=["network_service"], actor="engagement-manager",
-        )
         decision = _decide(
             conn, target=target, action="network.scan", scope_object_id=sid,
             policy=_policy({"network.scan": ALLOW}), risk_hint="low",
@@ -80,7 +78,9 @@ def test_authorized_scan_of_a_known_host_is_allowed(engagement_with_scope):
     assert decision.engine_error is None
 
 
-def test_adversarial_reviewer_cannot_talk_a_pii_host_into_allow(engagement_with_scope):
+def test_adversarial_reviewer_cannot_talk_a_pii_host_into_allow(
+    engagement_with_scope, registry
+):
     """I6b through the real path.
 
     The customer declared PII at AUTHORITATIVE. The reviewer files an LLM_HINT
@@ -89,19 +89,17 @@ def test_adversarial_reviewer_cannot_talk_a_pii_host_into_allow(engagement_with_
     """
     eid, sid = engagement_with_scope
     target = normalize_target({"logical_identity": {"type": "ip", "value": "10.20.0.9"}})
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="ip", identity_value="10.20.0.9",
+        authority="AUTHORITATIVE", source="customer_declared",
+        data_class=["PII"], resource_class=["customer_database"],
+    )
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="ip", identity_value="10.20.0.9",
+        authority="LLM_HINT", source="adversarial_fake_reviewer",
+        data_class=[], resource_class=["static_site"],
+    )
     with engagement_scope(eid) as conn:
-        register_metadata(
-            conn, engagement_id=eid, asset_id=_uid("ASSET"), identity_type="ip",
-            identity_value="10.20.0.9", authority="AUTHORITATIVE",
-            source="customer_declared", data_class=["PII"],
-            resource_class=["customer_database"], actor="engagement-manager",
-        )
-        register_metadata(
-            conn, engagement_id=eid, asset_id=_uid("ASSET"), identity_type="ip",
-            identity_value="10.20.0.9", authority="LLM_HINT",
-            source="adversarial_fake_reviewer", data_class=[],
-            resource_class=["static_site"], actor="engagement-manager",
-        )
         decision = _decide(
             conn, target=target, action="network.scan", scope_object_id=sid,
             policy=_policy({"network.scan": ALLOW}),
@@ -114,14 +112,14 @@ def test_adversarial_reviewer_cannot_talk_a_pii_host_into_allow(engagement_with_
     assert "target_out_of_scope" not in decision.deny_reasons
 
 
-def test_fqdn_scope_does_not_authorize_scanning_the_resolved_address(engagement_id):
+def test_fqdn_scope_does_not_authorize_scanning_the_resolved_address(
+    engagement_id, registry
+):
     """§4.1.5 / I8 end to end."""
     sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="fqdn", value="app.customer-a.com",
+                   allowed_actions=["web.*"])
     with engagement_scope(engagement_id) as conn:
-        register_scope_object(
-            conn, engagement_id=engagement_id, scope_object_id=sid, type="fqdn",
-            value="app.customer-a.com", allowed_actions=["web.*"], actor="em",
-        )
         decision = _decide(
             conn,
             target=normalize_target({

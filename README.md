@@ -46,6 +46,25 @@ tests/stateful/   Hypothesis RuleBasedStateMachine over event sequences
 Deliberately **not** here (§10 "明確不要做"): real LLMs, Neo4j, vector DB, egress
 proxy, multi-provider routing, Web Agent, Playwright, approval UI.
 
+## Database roles (§8.6, §5)
+
+| Role | Used by | Can do |
+|---|---|---|
+| `migration_owner` | alembic | owns every table; runs DDL |
+| `cyberorch_app` | everything at runtime | read/write state; **read-only** on both registries |
+| `registry_admin` | Engagement Manager only | `cyberorch_app` plus writes to `scope_registry` and `metadata_registry` |
+
+None of the three is a superuser and none carries `BYPASSRLS`, so RLS applies
+to all of them. `registry_admin` is a writer, not an administrator: it is
+confined to one engagement exactly like `cyberorch_app`, and holds no `DELETE`
+anywhere — registry rows are retired with `active = FALSE` so the audit trail
+keeps something to point at.
+
+The split exists because §5 calls the two registries the highest value attack
+surface in the system: whoever can write them can authorize themselves, or
+reclassify a customer database as a static site. With one role, that guarantee
+rested on application code choosing not to issue the write.
+
 ## Requirements
 
 Python 3.12, PostgreSQL 16, OPA 1.x (Rego v1), Docker.

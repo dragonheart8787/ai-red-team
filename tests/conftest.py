@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from control_plane.config import load_dotenv
 from control_plane.state.db import engagement_scope, get_engine
+from tests.helpers import EngagementManager
 
 # Credentials come from the environment or the gitignored .env that
 # scripts/init_db.sh writes — never from a literal in the test suite.
@@ -61,3 +62,9 @@ def engagement_id(db_available) -> str:
             {"eid": eid},
         )
     return eid
+
+
+
+@pytest.fixture
+def registry(engagement_id) -> EngagementManager:
+    return EngagementManager(engagement_id)
