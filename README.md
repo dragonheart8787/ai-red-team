@@ -65,9 +65,35 @@ surface in the system: whoever can write them can authorize themselves, or
 reclassify a customer database as a static site. With one role, that guarantee
 rested on application code choosing not to issue the write.
 
+## Tool sandbox (§8.3)
+
+Tools run in a container attached to a Docker network created `internal` with
+the engagement's allowlisted CIDR as its subnet. An internal network gets no
+default gateway, so the namespace has a route to the allowlist and to nothing
+else: traffic anywhere else fails in the kernel with `ENETUNREACH` before a
+packet is built. The container drops every capability, so it cannot add the
+route back.
+
+Two things worth knowing before trusting a green test run:
+
+- **A scanner's own report cannot tell you the boundary held.** Under `-Pn`,
+  nmap describes a target it has no route to as "host up, port filtered" —
+  identical to a firewall in front of a reachable host. Confinement is checked
+  with `DockerSandbox.probe_egress`, which asks the kernel.
+- **`ENETUNREACH` and `EHOSTUNREACH` are not the same result.** "Network is
+  unreachable" means nothing left the namespace; "No route to host" means
+  traffic left and the host did not answer. Both read as "no route" in English,
+  and conflating them makes a confinement test pass whenever the target is
+  simply absent.
+
+The tool image is built from the host's own nmap install
+(`make sandbox-image`) rather than pulled, so it works without a registry and
+is pinned to what the operator installed.
+
 ## Requirements
 
-Python 3.12, PostgreSQL 16, OPA 1.x (Rego v1), Docker.
+Python 3.12, PostgreSQL 16, OPA 1.x (Rego v1), Docker, and `nmap` + `ncat` on
+the host (for `make sandbox-image`).
 
 ## Setup
 

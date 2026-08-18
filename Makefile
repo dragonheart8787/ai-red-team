@@ -6,7 +6,7 @@ PY := .venv/bin/python
 PIP := .venv/bin/pip
 PYTEST := .venv/bin/pytest
 
-.PHONY: setup db test test-py test-opa lint clean
+.PHONY: setup db sandbox-image test test-py test-opa lint clean
 
 setup:
 	$(PYTHON) -m venv .venv
@@ -15,6 +15,9 @@ setup:
 
 db:
 	./scripts/init_db.sh
+
+sandbox-image:
+	./tool_gateway/images/build_nmap_image.sh
 
 test: test-opa test-py
 
