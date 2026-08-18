@@ -28,6 +28,28 @@ after both resolvers, and its opinion is placed only where the policy reads it
 for escalation. It cannot see a decision to influence, and it cannot supply a
 fact anything depends on (I6b). After a DENY the function returns; the broker
 and the gateway are not reached, rather than reached and refused.
+
+**Where the reviewer's output is recorded, and why not in the registry.** The
+reviewer's claim goes to ``audit_log``, beside the authoritative classification
+it contradicts. It does *not* become an ``LLM_HINT`` row in the Authoritative
+Metadata Registry, even though that tier exists and the resolver already
+surfaces such rows as observations.
+
+The reason is §5, which states that the Policy Reviewer AI has no write access
+to the registry at all. Since D4.5 that is enforced by the database:
+``registry_admin`` writes the registries and this pipeline runs as
+``cyberorch_app``. A reviewer able to file its own observation would be writing
+to the table the Metadata Resolver reads — the exact channel I6b exists to
+close, reached from a different direction. The tier is for classifications an
+Engagement Manager records *about* model output, not a channel a model writes
+to itself.
+
+So the observations mechanism stays reachable only through the registry_admin
+path, and the live reviewer's claim is preserved in the audit trail instead.
+That still answers the question §10 cares about — proving the AI lied and the
+kernel was not fooled — because the claim and the contradicting classification
+are recorded together and can be read back with
+``audit.query.reconstruct_decision``.
 """
 
 from __future__ import annotations
@@ -106,7 +128,7 @@ def claim_task(conn: Connection, *, engagement_id: str, agent_id: str) -> str | 
     ``FOR UPDATE SKIP LOCKED`` plus a lease, so two workers cannot take the
     same task and a worker that dies does not strand it.
     """
-    return conn.execute(
+    task_id = conn.execute(
         text("""
             UPDATE tasks
             SET status = 'claimed', owner_agent_id = :agent,
@@ -121,6 +143,16 @@ def claim_task(conn: Connection, *, engagement_id: str, agent_id: str) -> str | 
         """),
         {"agent": agent_id, "eid": engagement_id},
     ).scalar_one_or_none()
+    if task_id is not None:
+        # Which agent took which task, and when. Without this the audit trail
+        # attributes everything downstream to the orchestrator, and the agent
+        # that actually did the work appears nowhere.
+        record_audit(
+            engagement_id=engagement_id, actor=agent_id, event_type="task.claimed",
+            subject_type="task", subject_id=task_id,
+            payload={"lease_seconds": 300},
+        )
+    return task_id
 
 
 def complete_task(
@@ -177,6 +209,20 @@ def propose_action(
         )
 
     _persist_proposal(conn, engagement_id, proposal_id, proposal, target, agent_id)
+    # Attributed to the agent, unlike everything after it, which the
+    # orchestrator does. "Which agent asked for this" is otherwise only in the
+    # proposal row, and the audit trail should stand on its own.
+    record_audit(
+        engagement_id=engagement_id, actor=agent_id, event_type="proposal.submitted",
+        subject_type="action_proposal", subject_id=proposal_id,
+        payload={
+            "action": proposal.action,
+            "target": target.normalized,
+            "authorization": dict(proposal.authorization),
+            "discovery": dict(proposal.discovery),
+            "task_id": proposal.task_id,
+        },
+    )
 
     # --- 2. Authorization Resolver ------------------------------------------
     authorization = resolve_authorization(

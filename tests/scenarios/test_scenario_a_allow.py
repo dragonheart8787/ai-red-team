@@ -34,6 +34,7 @@ from control_plane.api.function_api import (
     propose_action,
     query_evidence,
 )
+from control_plane.audit.query import engagement_timeline, reconstruct_decision
 from control_plane.evidence.store import read_raw_artifact, verify_artifact
 from control_plane.provenance import graph
 from control_plane.state.db import engagement_scope
@@ -196,35 +197,40 @@ def test_scenario_a_audit_trail_reconstructs_the_decision(
     )
 
     with engagement_scope(engagement_id) as conn:
-        rows = conn.execute(
-            text("SELECT event_type, actor, decision, reasons, payload, subject_id "
-                 "FROM audit_log ORDER BY audit_id"),
-        ).mappings().all()
+        chain = reconstruct_decision(conn, proposal_id=outcome.proposal_id)
+        timeline = engagement_timeline(conn)
 
-    events = [r["event_type"] for r in rows]
-    for required in ("task.created", "policy_reviewer.opinion", "policy.decided",
-                     "capability.issued", "tool_run.started", "tool_run.succeeded",
-                     "task.completed"):
-        assert required in events, f"{required} missing from the audit trail: {events}"
+    # The chain answers the §10 question directly, without this test having to
+    # know how audit_log is laid out.
+    assert chain.decision == "ALLOW"
+    assert chain.why() == ()
+    assert chain.executed is True
+    assert outcome.capability_id in chain.capability_ids
+    assert outcome.run_id in chain.run_ids
+    assert list(chain.by_stage()) == ["proposal", "review", "decision",
+                                      "capability", "execution"]
 
-    decided = next(r for r in rows if r["event_type"] == "policy.decided")
-    assert decided["decision"] == "ALLOW"
+    types = {e.event_type for e in chain.events}
+    assert {"proposal.submitted", "policy_reviewer.opinion", "policy.decided",
+            "capability.issued", "tool_run.started", "evidence.recorded",
+            "tool_run.succeeded"} <= types
+
+    decided = next(e for e in chain.events if e.event_type == "policy.decided")
     # Why: the classification OPA actually saw.
-    assert decided["payload"]["resource_metadata"]["classification"]["authority"] == (
+    assert decided.payload["resource_metadata"]["classification"]["authority"] == (
         "AUTHORITATIVE"
     )
-    assert decided["payload"]["authorization"]["authorized"] is True
+    assert decided.payload["authorization"]["authorized"] is True
+    assert chain.reviewer_claim()["risk_hint"] == "low"
 
-    # And what the reviewer said, recorded whether or not it mattered.
-    opinion = next(r for r in rows if r["event_type"] == "policy_reviewer.opinion")
-    assert opinion["payload"]["opinion"]["risk_hint"] == "low"
+    started = next(e for e in chain.events if e.event_type == "tool_run.started")
+    assert started.payload["network_allowlist"] == [ALLOWED_CIDR]
+    assert "/usr/bin/nmap" in started.payload["command"]
 
-    issued = next(r for r in rows if r["event_type"] == "capability.issued")
-    assert issued["subject_id"] == outcome.capability_id
-
-    started = next(r for r in rows if r["event_type"] == "tool_run.started")
-    assert started["payload"]["network_allowlist"] == [ALLOWED_CIDR]
-    assert "/usr/bin/nmap" in started["payload"]["command"]
+    # The task lifecycle sits outside the proposal's chain, so it is checked
+    # against the engagement timeline instead.
+    engagement_events = {e.event_type for e in timeline}
+    assert {"task.created", "task.claimed", "task.completed"} <= engagement_events
 
 
 def test_scenario_a_reviewer_may_still_escalate(

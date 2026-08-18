@@ -24,6 +24,15 @@ resolvers, the orchestrator and the agents connect as — holds SELECT only. Tha
 matters most for exactly the case MVP-Kernel exists to test: a component that
 could write an AUTHORITATIVE row could reclassify a PII database as a static
 site, and no amount of care in the resolver would help.
+
+That restriction covers every tier, ``LLM_HINT`` included. It would be natural
+to let a Policy Reviewer file its own hints here — the tier is named for model
+output, after all — but §5 gives the reviewer no write access, and the point of
+the tier is a classification an Engagement Manager records *about* what a model
+said, not a channel the model writes to itself. A reviewer that could insert an
+LLM_HINT row would be writing into the table the resolver reads, which reaches
+the I6b bypass from the other side. Live reviewer output is recorded in the
+audit trail instead; see control_plane/api/function_api.py.
 """
 
 from __future__ import annotations

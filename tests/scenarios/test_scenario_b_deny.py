@@ -28,6 +28,7 @@ from agents.fake.fake_planner import FakePlanner, scan_task
 from agents.fake.fake_worker import FakeWorker
 from control_plane.api import function_api
 from control_plane.api.function_api import create_task, propose_action
+from control_plane.audit.query import reconstruct_decision
 from control_plane.provenance import graph
 from control_plane.state.db import engagement_scope
 from tests.scenarios.conftest import (
@@ -208,37 +209,39 @@ def test_scenario_b_audit_records_both_the_lie_and_the_reason_for_denial(
     assert outcome.decision == "DENY"
 
     with engagement_scope(engagement_id) as conn:
-        rows = conn.execute(
-            text("SELECT event_type, actor, decision, reasons, payload "
-                 "FROM audit_log ORDER BY audit_id")
-        ).mappings().all()
+        chain = reconstruct_decision(conn, proposal_id=outcome.proposal_id)
 
-    events = [r["event_type"] for r in rows]
-    assert "policy_reviewer.opinion" in events
-    assert "policy.decided" in events
-    # Nothing downstream was even attempted.
-    assert "capability.issued" not in events
-    assert "capability.refused" not in events
-    assert "tool_run.started" not in events
+    assert chain.decision == "DENY"
+    assert "forbidden_data" in chain.why()
+
+    # Nothing downstream was even attempted: the chain stops at the decision.
+    assert list(chain.by_stage()) == ["proposal", "review", "decision"]
+    assert chain.executed is False
+    assert chain.capability_ids == ()
+    types = {e.event_type for e in chain.events}
+    assert "capability.issued" not in types
+    assert "capability.refused" not in types
+    assert "tool_run.started" not in types
 
     # The lie, on the record, attributed to the reviewer.
-    opinion = next(r for r in rows if r["event_type"] == "policy_reviewer.opinion")
-    assert opinion["actor"] == "adversarial-fake-reviewer"
-    assert opinion["payload"]["opinion"]["risk_hint"] == "low"
-    assert opinion["payload"]["opinion"]["possible_sensitive_data_hint"] == []
-    assert "static marketing site" in opinion["payload"]["opinion"]["semantic_risk_hints"]
-    # ...beside what the registry actually said, in the same record.
-    assert opinion["payload"]["authoritative_classification"]["data_class"] == ["PII"]
-    assert opinion["payload"]["authoritative_classification"]["authority"] == (
-        "AUTHORITATIVE"
+    opinion_event = next(
+        e for e in chain.events if e.event_type == "policy_reviewer.opinion"
     )
+    assert opinion_event.actor == "adversarial-fake-reviewer"
 
-    # And why it was denied.
-    decided = next(r for r in rows if r["event_type"] == "policy.decided")
-    assert decided["decision"] == "DENY"
-    assert "forbidden_data" in decided["reasons"]
-    assert decided["payload"]["resource_metadata"]["data_class"] == ["PII"]
-    assert decided["payload"]["reviewer_opinion"]["risk_hint"] == "low"
+    claim = chain.reviewer_claim()
+    assert claim["risk_hint"] == "low"
+    assert claim["possible_sensitive_data_hint"] == []
+    assert "static marketing site" in claim["semantic_risk_hints"]
+
+    # ...beside what the registry actually said. The pair is the evidence.
+    truth = chain.contradicted_classification()
+    assert truth["data_class"] == ["PII"]
+    assert truth["authority"] == "AUTHORITATIVE"
+
+    decided = next(e for e in chain.events if e.event_type == "policy.decided")
+    assert decided.payload["resource_metadata"]["data_class"] == ["PII"]
+    assert decided.payload["reviewer_opinion"]["risk_hint"] == "low"
 
 
 def test_scenario_b_records_provenance_for_the_denied_proposal(

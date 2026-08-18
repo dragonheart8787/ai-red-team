@@ -25,6 +25,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from control_plane.audit.logger import record_audit
+
 DEFAULT_STORE = Path(os.environ.get("EVIDENCE_STORE", "evidence_store"))
 
 
@@ -96,6 +98,20 @@ def record_evidence(
             "collected": collected_at,
             "view": json.dumps(derived_view, default=str, sort_keys=True),
             "tool": tool, "tver": tool_version, "rver": ruleset_version,
+        },
+    )
+    # The artifact's digest, recorded at the moment it was written. §4.4 is
+    # careful that "logically immutable" is an application promise rather than
+    # a cryptographic one; an independently committed record of the digest is
+    # what makes a later mismatch attributable to a point in time.
+    record_audit(
+        engagement_id=engagement_id, actor="tool_gateway",
+        event_type="evidence.recorded", subject_type="evidence",
+        subject_id=evidence_id,
+        payload={
+            "run_id": run_id, "tool": tool, "tool_version": tool_version,
+            "raw_sha256": digest, "raw_artifact_path": path,
+            "type": evidence_type,
         },
     )
     return {"evidence_id": evidence_id, "raw_artifact_path": path, "raw_sha256": digest}

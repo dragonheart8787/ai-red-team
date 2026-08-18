@@ -511,7 +511,8 @@ def revoke_all_for_engagement(
 
 
 def consume_request(
-    conn: Connection, *, capability_id: str, max_requests: int
+    conn: Connection, *, capability_id: str, max_requests: int,
+    engagement_id: str | None = None, actor: str = "tool_gateway",
 ) -> bool:
     """Atomic check-and-increment against a tool-specific request budget (§8.5).
 
@@ -531,6 +532,19 @@ def consume_request(
         """),
         {"cid": capability_id, "maximum": max_requests},
     ).scalar_one_or_none()
+
+    # Refusals are audited; successful consumption is not. A refusal is a
+    # decision — the budget stopped something — while a successful request is
+    # bookkeeping already visible in capabilities.requests_used and in the
+    # tool_run record. Auditing every one would bury the decisions among them,
+    # and an audit log nobody can search is one nobody reads.
+    if updated is None and engagement_id:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="capability.budget_exhausted", subject_type="capability",
+            subject_id=capability_id, decision="DENY", reasons=(BUDGET_EXHAUSTED,),
+            payload={"max_requests": max_requests},
+        )
     return updated is not None
 
 
