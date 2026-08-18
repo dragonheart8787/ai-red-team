@@ -416,3 +416,117 @@ def test_registry_writes_require_an_actor(engagement_id):
                 identity_type="fqdn", identity_value="x.customer-a.com",
                 authority="AUTHORITATIVE", source="customer_declared", actor="",
             )
+
+
+# --------------------------------------------------------------------------
+# Soft delete — the third state the precedence rule has to handle
+# --------------------------------------------------------------------------
+
+def test_deactivated_authoritative_row_reads_as_unknown(engagement_id, registry):
+    """active = FALSE must mean "no AUTHORITATIVE row", not "still PII".
+
+    The precedence rule has two documented branches -- an AUTHORITATIVE row
+    exists, or it does not. Soft delete adds a third state, and only one
+    reading of it is safe: a retired row is gone as far as the resolver is
+    concerned, so the identity falls back to UNKNOWN. The dangerous outcomes
+    are the other two -- continuing to report PII from a row the customer
+    retired, or raising and taking the decision path down with it.
+    """
+    from control_plane.registry.metadata_registry import deactivate_metadata
+
+    ident = "retired.customer-a.com"
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="fqdn", identity_value=ident,
+        authority="AUTHORITATIVE", source="customer_declared",
+        data_class=["PII"], resource_class=["customer_database"],
+    )
+    assert _classify(engagement_id, _target("fqdn", ident)).data_class == ("PII",)
+
+    with registry_admin_scope(engagement_id) as conn:
+        assert deactivate_metadata(
+            conn, engagement_id=engagement_id, identity_type="fqdn",
+            identity_value=ident, authority="AUTHORITATIVE", actor="engagement-manager",
+        ) is True
+
+    result = _classify(engagement_id, _target("fqdn", ident))
+    assert result.known is False
+    assert result.authority == "UNKNOWN"
+    assert result.data_class == ()
+    assert result.resource_class == ()
+
+
+def test_deactivating_the_authoritative_row_does_not_promote_a_lower_tier(
+    engagement_id, registry
+):
+    """The failure this test exists for.
+
+    A retired AUTHORITATIVE row leaves an LLM_HINT behind that says the host is
+    a harmless static site. If "no active AUTHORITATIVE row" were implemented
+    as "fall back to the best row available", retiring the customer's
+    declaration would hand the adversarial reviewer exactly the canonical
+    classification it wanted -- I6b defeated through the soft-delete path
+    rather than the write path.
+    """
+    from control_plane.registry.metadata_registry import deactivate_metadata
+
+    ident = "retired-with-hint.customer-a.com"
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="fqdn", identity_value=ident,
+        authority="AUTHORITATIVE", source="customer_declared", data_class=["PII"],
+    )
+    registry.metadata(
+        asset_id=_uid("ASSET"), identity_type="fqdn", identity_value=ident,
+        authority="LLM_HINT", source="adversarial_fake_reviewer",
+        data_class=[], resource_class=["static_site"],
+    )
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_metadata(
+            conn, engagement_id=engagement_id, identity_type="fqdn",
+            identity_value=ident, authority="AUTHORITATIVE", actor="em",
+        )
+
+    result = _classify(engagement_id, _target("fqdn", ident))
+    assert result.known is False
+    assert result.authority == "UNKNOWN"
+    assert result.data_class == ()
+    assert result.resource_class == ()
+    # The hint is still visible as an observation, still unable to be canonical.
+    assert [o.authority for o in result.observations] == ["LLM_HINT"]
+
+
+def test_deactivating_a_classification_is_audited(engagement_id, registry):
+    """Retiring a classification reduces what the system knows; it must show."""
+    from control_plane.registry.metadata_registry import deactivate_metadata
+
+    ident = "audited-retire.customer-a.com"
+    asset_id = _uid("ASSET")
+    registry.metadata(
+        asset_id=asset_id, identity_type="fqdn", identity_value=ident,
+        authority="AUTHORITATIVE", source="customer_declared", data_class=["PII"],
+    )
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_metadata(
+            conn, engagement_id=engagement_id, identity_type="fqdn",
+            identity_value=ident, authority="AUTHORITATIVE", actor="em-3",
+        )
+    with engagement_scope(engagement_id) as conn:
+        row = conn.execute(
+            text("SELECT actor, event_type, payload FROM audit_log "
+                 "WHERE subject_id = :s AND event_type = 'metadata.deactivated'"),
+            {"s": asset_id},
+        ).mappings().one()
+    assert row["actor"] == "em-3"
+    assert row["payload"]["before"]["data_class"] == ["PII"]
+    assert row["payload"]["after"]["active"] is False
+
+
+def test_deactivating_a_classification_requires_registry_admin(engagement_id, registry):
+    from control_plane.registry.metadata_registry import deactivate_metadata
+
+    with engagement_scope(engagement_id) as conn:
+        with pytest.raises(PermissionError, match="registry_admin"):
+            deactivate_metadata(
+                conn, engagement_id=engagement_id, identity_type="fqdn",
+                identity_value="x.customer-a.com", authority="AUTHORITATIVE",
+                actor="em",
+            )

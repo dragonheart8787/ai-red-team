@@ -99,6 +99,83 @@ def lookup(
     ]
 
 
+def deactivate_metadata(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    identity_type: str,
+    identity_value: str,
+    authority: str,
+    actor: str,
+) -> bool:
+    """Retire a classification. Engagement Manager only (§5).
+
+    Soft delete, matching :func:`deactivate_scope_object`: neither role holds
+    DELETE on the registries, so the row stays and the audit trail keeps
+    something to point at.
+
+    Retiring an AUTHORITATIVE row is a security-relevant act in its own right —
+    :func:`lookup` filters on ``active``, so the resolver stops seeing it and
+    the identity falls back to UNKNOWN. That is the correct behaviour (an
+    unknown classification cannot satisfy a prerequisite, I10) but it is a
+    reduction in what the system knows, and it must be visible in the audit log
+    rather than looking like the classification was never there.
+
+    Returns True if a row was retired.
+    """
+    if not actor:
+        raise ValueError("registry writes must name an actor (§5)")
+    assert_registry_admin(conn)
+
+    before = conn.execute(
+        text("""
+            SELECT asset_id, resource_class, data_class, classification_source,
+                   classification_version
+            FROM metadata_registry
+            WHERE engagement_id = :eid AND identity_type = :itype
+              AND identity_value = :ivalue AND classification_authority = :authority
+              AND active IS TRUE
+        """),
+        {"eid": engagement_id, "itype": identity_type,
+         "ivalue": identity_value, "authority": authority},
+    ).mappings().one_or_none()
+
+    if before is None:
+        return False
+
+    conn.execute(
+        text("""
+            UPDATE metadata_registry SET active = FALSE, updated_at = now()
+            WHERE engagement_id = :eid AND identity_type = :itype
+              AND identity_value = :ivalue AND classification_authority = :authority
+        """),
+        {"eid": engagement_id, "itype": identity_type,
+         "ivalue": identity_value, "authority": authority},
+    )
+    record_audit(
+        conn,
+        engagement_id=engagement_id,
+        actor=actor,
+        event_type="metadata.deactivated",
+        subject_type="asset",
+        subject_id=before["asset_id"],
+        payload={
+            "db_role": REGISTRY_ADMIN_ROLE,
+            "identity": f"{identity_type}:{identity_value}",
+            "authority": authority,
+            "before": {
+                "resource_class": list(before["resource_class"]),
+                "data_class": list(before["data_class"]),
+                "source": before["classification_source"],
+                "version": before["classification_version"],
+                "active": True,
+            },
+            "after": {"active": False},
+        },
+    )
+    return True
+
+
 def register_metadata(
     conn: Connection,
     *,
