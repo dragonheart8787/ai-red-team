@@ -32,12 +32,36 @@ NET_ADMIN could add the missing route itself, which would make the boundary
 advisory. The sandbox is what the design calls the last physical boundary,
 and it has to hold even when the three layers above it have been bypassed.
 
-**What this does not do.** The allowlisted CIDR is realized as a Docker-managed
-subnet, so targets must be reachable within it. A deployment scanning a real
-customer network would attach a routed or macvlan network restricted to the
-same CIDR. The enforcement mechanism is unchanged — the namespace has a route
-to the allowlist and no default route — but the driver differs, and nothing
-here has been exercised against a non-Docker network.
+DEFERRED — enforcement against a non-Docker network
+---------------------------------------------------
+The allowlisted CIDR is realized as a Docker-managed bridge subnet, so targets
+have to live inside it. That is enough for MVP-Kernel, where the targets are
+containers, and it is genuinely namespace-level enforcement: the tests confirm
+the kernel returns ENETUNREACH for anything outside the range.
+
+It is not enough for a real engagement, where the allowlist describes a
+customer's actual network. Such a deployment would attach a routed or macvlan
+network restricted to the same CIDR. **This has never been exercised, and no
+test here covers it.** The enforcement mechanism should be unchanged — the
+namespace holds a route to the allowlist and no default route, which is a
+property of the routing table rather than of the driver — but "should be" is
+the honest phrasing, and the difference between a bridge and a macvlan is
+exactly the sort of place where a boundary quietly stops holding.
+
+If it is implemented, three things are not negotiable:
+
+1. **The confinement tests must run against the new driver.** The existing
+   suite proves a bridge network confines; it says nothing about a macvlan.
+   Passing tests on the old driver is not evidence about the new one.
+2. **Confinement is confirmed with the kernel, never with the tool.** Under
+   -Pn a scanner reports an unroutable target as "host up, port filtered",
+   identical to a firewall in front of a reachable host. probe_egress asks
+   connect() instead, and ENETUNREACH is the only answer that means nothing
+   left the namespace — EHOSTUNREACH means traffic did leave.
+3. **No capability may widen the allowlist.** The sandbox is configured from
+   the engagement's allowlist and never from the capability being executed.
+   A routed setup makes it tempting to derive the network from the target,
+   which would delete the §8.3 boundary while appearing to preserve it.
 """
 
 from __future__ import annotations
