@@ -127,7 +127,6 @@ def register_scope_object(
     ).mappings().one()
 
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
         event_type="scope_object.registered" if before is None else "scope_object.updated",
@@ -172,7 +171,6 @@ def deactivate_scope_object(
         {"sid": scope_object_id},
     )
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
         event_type="scope_object.deactivated",

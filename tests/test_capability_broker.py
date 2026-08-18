@@ -18,6 +18,7 @@ correct in isolation.
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -361,7 +362,51 @@ def test_late_heartbeat_cannot_resurrect_an_expired_lease(engagement_id):
         )
     result = _heartbeat(engagement_id, capability.capability_id)
     assert result.renewed is False
+    assert result.must_terminate is True
     assert LEASE_EXPIRED in result.reasons
+    # Refusing to renew is not enough: the capability must end up revoked, or
+    # it sits in a state that still looks issuable to anything that reads it.
+    assert result.capability.revoked is True
+    with engagement_scope(engagement_id) as conn:
+        assert get_capability(conn, capability.capability_id).revoked is True
+
+
+def test_repeated_heartbeats_never_push_the_lease_past_the_budget(engagement_id):
+    """Consecutive renewals, checked against the whole-life budget each time.
+
+    The single-renewal test fakes an old issued_at; this one does it the way an
+    agent would -- heartbeat after heartbeat, each asking for far more time
+    than the budget allows. The invariant is not "each lease is short" but
+    "the lease never passes issued_at + max_duration_seconds", which only a
+    sequence can check: three renewals that each look reasonable in isolation
+    could still walk the deadline forward.
+
+    The sleep is real rather than faked. Rewriting issued_at would test the
+    arithmetic while assuming the clock behaves, and the budget is a wall-clock
+    bound.
+    """
+    budget_seconds = 2
+    capability = _issued(engagement_id, ttl_seconds=60,
+                         budget=Budget(max_duration_seconds=budget_seconds))
+    deadline = capability.issued_at + timedelta(seconds=budget_seconds)
+
+    for attempt in range(3):
+        result = _heartbeat(engagement_id, capability.capability_id, ttl_seconds=600)
+        assert result.renewed is True, (attempt, result.reasons)
+        assert result.capability.lease_expires_at <= deadline, (
+            f"heartbeat {attempt} pushed the lease past "
+            "issued_at + max_duration_seconds"
+        )
+        assert result.capability.renewal_count == attempt + 1
+
+    # Past the budget now. The next heartbeat must stop, not extend.
+    time.sleep(budget_seconds + 0.3)
+    final = _heartbeat(engagement_id, capability.capability_id, ttl_seconds=600)
+
+    assert final.renewed is False
+    assert final.must_terminate is True
+    assert {BUDGET_EXHAUSTED, LEASE_EXPIRED} & set(final.reasons)
+    assert final.capability.revoked is True
 
 
 def test_renewal_cannot_outrun_the_duration_budget(engagement_id):

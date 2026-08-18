@@ -124,6 +124,20 @@ def engagement_scope(engagement_id: str) -> Iterator[Connection]:
 
 
 @contextmanager
+def audit_scope(engagement_id: str) -> Iterator[Connection]:
+    """A short transaction used only for writing audit records (§4.4).
+
+    Separate from :func:`engagement_scope` so an audit record commits on its
+    own, independent of whether the caller's transaction later succeeds. Uses
+    the ``cyberorch_app`` engine, which holds INSERT and SELECT on audit_log
+    and nothing else — both registry_admin and the app role audit through here,
+    so there is one write path rather than one per caller role.
+    """
+    with _scoped(get_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
 def registry_admin_scope(engagement_id: str) -> Iterator[Connection]:
     """Open a transaction as ``registry_admin`` — Engagement Manager only (§5).
 

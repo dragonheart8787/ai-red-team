@@ -313,7 +313,7 @@ def issue_capability(
     )
     if reasons:
         record_audit(
-            conn, engagement_id=engagement_id, actor=actor,
+            engagement_id=engagement_id, actor=actor,
             event_type="capability.refused", subject_type="capability",
             subject_id=capability_id, decision="DENY", reasons=reasons,
             payload={"action": action, "agent_id": agent_id},
@@ -348,7 +348,7 @@ def issue_capability(
     ).mappings().one()
 
     record_audit(
-        conn, engagement_id=engagement_id, actor=actor,
+        engagement_id=engagement_id, actor=actor,
         event_type="capability.issued", subject_type="capability",
         subject_id=capability_id, decision="ALLOW",
         payload={
@@ -459,7 +459,7 @@ def renew_capability(
     ).mappings().one()
 
     record_audit(
-        conn, engagement_id=engagement_id, actor=actor,
+        engagement_id=engagement_id, actor=actor,
         event_type="capability.renewed", subject_type="capability",
         subject_id=capability_id, decision="ALLOW",
         payload={
@@ -502,7 +502,7 @@ def revoke_all_for_engagement(
 
     for capability_id in rows:
         record_audit(
-            conn, engagement_id=engagement_id, actor=actor,
+            engagement_id=engagement_id, actor=actor,
             event_type="capability.revoked", subject_type="capability",
             subject_id=capability_id, decision="DENY", reasons=(reason,),
             payload={"cascade": True},
@@ -565,7 +565,7 @@ def _revoke(
         return None
 
     record_audit(
-        conn, engagement_id=engagement_id, actor=actor, event_type=event,
+        engagement_id=engagement_id, actor=actor, event_type=event,
         subject_type="capability", subject_id=capability_id, decision="DENY",
         reasons=reasons, payload={"action": row["action"]},
     )

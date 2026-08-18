@@ -153,7 +153,6 @@ def deactivate_metadata(
          "ivalue": identity_value, "authority": authority},
     )
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
         event_type="metadata.deactivated",
@@ -246,7 +245,6 @@ def register_metadata(
     ).mappings().one()
 
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
         event_type="metadata.registered" if before is None else "metadata.reclassified",
