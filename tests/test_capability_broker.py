@@ -4,10 +4,15 @@ Every test here runs on the ``cyberorch_app`` connection. That is a scope
 constraint, not a convenience: the broker's question is "is the decision that
 authorized this still in force", which is answered from capabilities,
 approvals, credentials, policy_layers and engagements. Whether an action is
-authorized *against a target* was settled earlier by the resolvers and OPA. If
-the broker ever needed registry_admin, the design would have drifted — so
-test_broker_never_touches_the_registries asserts it structurally rather than
-leaving it as an intention.
+authorized *against a target* was settled earlier by the resolvers and OPA, and
+is not re-decided here.
+
+The one exception, added after D9's stateful test found the hole it leaves: the
+broker reads the single scope_registry row that authorized a capability, to
+confirm it is still active and still permits the action. That is a liveness
+check on a recorded premise, not an authorization decision, and
+test_broker_reads_scope_only_as_a_liveness_check pins the difference
+structurally rather than leaving it as an intention.
 
 The renewal tests all share one shape, which is the shape I9 describes: issue a
 capability while everything is in order, change exactly one thing it depended
@@ -35,6 +40,8 @@ from control_plane.capability.broker import (
     KILL_SWITCH,
     LEASE_EXPIRED,
     POLICY_CHANGED,
+    SCOPE_ACTION_WITHDRAWN,
+    SCOPE_OBJECT_DEACTIVATED,
     Budget,
     consume_request,
     current_policy_version,
@@ -553,24 +560,106 @@ def test_budget_is_enforced_by_check_and_increment(engagement_id):
 # Scope constraint
 # ---------------------------------------------------------------------------
 
-def test_broker_never_touches_the_registries():
-    """The scope constraint, asserted structurally.
-
-    Nothing the broker does requires knowing what a target *is* or whether it
-    is in scope — those were settled before a capability was requested. If this
-    fails, the design has drifted, and the fix is to move the work back to the
-    resolvers rather than to widen the broker's grants.
-    """
+def _broker_source() -> str:
     from pathlib import Path
 
     import control_plane.capability.broker as broker_module
 
-    source = Path(broker_module.__file__).read_text()
-    for forbidden in ("registry_admin", "scope_registry", "metadata_registry"):
-        assert forbidden not in source, (
-            f"capability broker references {forbidden!r}; it should need neither "
-            "registry nor the role that writes them"
+    return Path(broker_module.__file__).read_text()
+
+
+def _broker_code() -> str:
+    """The broker's source with docstrings and comments stripped.
+
+    The prose explains at length what the broker must not do, and naming a
+    forbidden construct in order to forbid it would trip a naive substring
+    search. These rules are about what the code does, so they read the code.
+    """
+    import ast
+
+    tree = ast.parse(_broker_source())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef):
+            if (node.body and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)):
+                node.body.pop(0)
+    return ast.unparse(tree)
+
+
+def test_broker_never_touches_the_metadata_registry_or_the_admin_role():
+    """The part of the scope constraint that is still absolute.
+
+    What a resource *is* — its data_class, its resource_class — is never the
+    broker's business, and neither is the role that writes the registries. If
+    this fails the design has drifted, and the fix is to move the work back to
+    the resolvers rather than to widen the broker's grants.
+    """
+    code = _broker_code()
+    for forbidden in ("registry_admin", "metadata_registry"):
+        assert forbidden not in code, (
+            f"capability broker references {forbidden!r}; it needs neither the "
+            "metadata registry nor the role that writes the registries"
         )
+
+
+def test_broker_reads_scope_only_as_a_liveness_check():
+    """The narrower rule that replaced "never touches scope_registry".
+
+    D9's stateful test showed the old rule was too strong: renewal has to be
+    able to notice that the scope object authorizing a capability was retired,
+    and that means reading scope_registry. So the constraint moved rather than
+    disappearing — the broker may look one row up by id, and may not decide
+    authorization.
+
+    Written structurally because the distinction is easy to erode by degrees.
+    "Just also check the target while we're here" is a one-line change that
+    would put a second implementation of scope containment in the codebase,
+    free to drift from the resolver's. The rule has to be mechanical to survive
+    a reader who finds it inconvenient.
+    """
+    code = _broker_code()
+
+    # 1. No authorization decision. The resolver is upstream and stays there.
+    for forbidden in (
+        "resolve_authorization", "AuthorizationResolution",
+        "canonicalizer", "normalize_target", "CanonicalTarget",
+    ):
+        assert forbidden not in code, (
+            f"capability broker references {forbidden!r}: re-resolving "
+            "authorization here duplicates the decision the resolver owns"
+        )
+
+    # 2. No target matching, by any route.
+    for forbidden in (
+        "scope_covers_target", "action_matches", "ip_network", "ip_address",
+        "ipaddress", "subnet_of", "logical_identity",
+    ):
+        assert forbidden not in code, (
+            f"capability broker references {forbidden!r}: comparing a target "
+            "against a scope object is the resolver's job, and a second "
+            "implementation of it is a second thing to get wrong"
+        )
+
+    # 3. Exactly one scope_registry statement, selecting only liveness columns.
+    import re
+
+    statements = re.findall(r"[Ss][Ee][Ll][Ee][Cc][Tt][^\"']*?scope_registry", code)
+    assert len(statements) == 1, (
+        f"expected exactly one scope_registry query, found {len(statements)}: "
+        f"{statements}"
+    )
+    assert "active" in statements[0] and "allowed_actions" in statements[0]
+
+    # It is a lookup by id, not a scan: a query that could return more than one
+    # scope object would be searching for one that fits.
+    assert "WHERE scope_object_id = :sid" in code
+
+    # 4. Read-only. The broker holds SELECT on the registries and nothing more,
+    # so a write would fail at runtime — but failing here names the reason.
+    for write in ("INSERT INTO scope_registry", "UPDATE scope_registry",
+                  "DELETE FROM scope_registry"):
+        assert write not in code, f"capability broker attempts {write!r}"
 
 
 def test_full_lifecycle_runs_on_the_app_role(engagement_id, approval, credential):
@@ -624,3 +713,187 @@ def test_capabilities_are_engagement_scoped(engagement_id):
             actor="orchestrator",
         )
     assert result.renewed is False
+
+
+# ---------------------------------------------------------------------------
+# Scope object liveness (I1, I8) — the gap D9's stateful test found
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def scope_object(engagement_id):
+    """A live scope object permitting network.scan."""
+    from control_plane.registry.scope_registry import register_scope_object
+    from control_plane.state.db import registry_admin_scope
+
+    sid = _uid("SCOPE")
+    with registry_admin_scope(engagement_id) as conn:
+        register_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=sid,
+            type="cidr", value="10.20.0.0/24",
+            allowed_actions=["network.recon", "network.scan"],
+            actor="engagement-manager",
+        )
+    return sid
+
+
+def _issue_against(engagement_id, scope_object_id, *, action="network.scan"):
+    with engagement_scope(engagement_id) as conn:
+        result = issue_capability(
+            conn, engagement_id=engagement_id, capability_id=_uid("CAP"),
+            agent_id="fake-worker", action=action, actor="orchestrator",
+            constraints={"host": "10.20.0.7"}, budget=Budget(),
+            ttl_seconds=60, scope_object_id=scope_object_id,
+        )
+    return result
+
+
+def test_capability_records_the_scope_object_that_authorized_it(
+    engagement_id, scope_object
+):
+    """I8: a capability that cannot name its authorization cannot prove it."""
+    capability = _issue_against(engagement_id, scope_object).capability
+    assert capability.scope_object_id == scope_object
+
+    with engagement_scope(engagement_id) as conn:
+        stored = conn.execute(
+            text("SELECT scope_object_id FROM capabilities WHERE capability_id = :c"),
+            {"c": capability.capability_id},
+        ).scalar_one()
+    assert stored == scope_object
+
+
+def test_renewal_fails_once_the_authorizing_scope_object_is_retired(
+    engagement_id, scope_object
+):
+    """The bug itself (I1, I9).
+
+    Before this, deactivating a scope object revoked nothing and every
+    subsequent heartbeat succeeded, so a scan continued against a target that
+    was no longer in scope for as long as its budget allowed.
+    """
+    from control_plane.registry.scope_registry import deactivate_scope_object
+    from control_plane.state.db import registry_admin_scope
+
+    capability = _issue_against(engagement_id, scope_object).capability
+
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object,
+            actor="engagement-manager",
+        )
+
+    result = _heartbeat(engagement_id, capability.capability_id)
+    assert result.renewed is False
+    assert result.must_terminate is True
+    assert SCOPE_OBJECT_DEACTIVATED in result.reasons
+
+    # The real reason, not a borrowed one. An investigator reading
+    # policy_version_changed here would look for a policy layer that never moved.
+    with engagement_scope(engagement_id) as conn:
+        stored = get_capability(conn, capability.capability_id)
+    assert stored.revoked is True
+    assert SCOPE_OBJECT_DEACTIVATED in stored.revoked_reason
+    assert POLICY_CHANGED not in (stored.revoked_reason or "")
+
+
+def test_issue_is_refused_against_a_retired_scope_object(engagement_id, scope_object):
+    """Issue and renewal ask the same question, so they get the same answer."""
+    from control_plane.registry.scope_registry import deactivate_scope_object
+    from control_plane.state.db import registry_admin_scope
+
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object,
+            actor="engagement-manager",
+        )
+
+    result = _issue_against(engagement_id, scope_object)
+    assert result.issued is False
+    assert SCOPE_OBJECT_DEACTIVATED in result.reasons
+
+
+def test_renewal_fails_when_the_action_is_withdrawn_from_the_scope_object(
+    engagement_id, scope_object
+):
+    """Narrowing allowed_actions withdraws authorization for exactly that action."""
+    from control_plane.registry.scope_registry import register_scope_object
+    from control_plane.state.db import registry_admin_scope
+
+    capability = _issue_against(engagement_id, scope_object).capability
+
+    with registry_admin_scope(engagement_id) as conn:
+        register_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object,
+            type="cidr", value="10.20.0.0/24",
+            allowed_actions=["network.recon"],  # network.scan withdrawn
+            actor="engagement-manager",
+        )
+
+    result = _heartbeat(engagement_id, capability.capability_id)
+    assert result.renewed is False
+    assert SCOPE_ACTION_WITHDRAWN in result.reasons
+
+
+def test_retiring_one_scope_object_leaves_capabilities_from_another_alone(
+    engagement_id, scope_object
+):
+    """Precision, and the reason option 2 was rejected.
+
+    Folding scope changes into policy_version would have revoked every
+    capability in the engagement on any scope edit. Fail-closed, but a control
+    that stops unrelated work is one operators route around.
+    """
+    from control_plane.registry.scope_registry import (
+        deactivate_scope_object,
+        register_scope_object,
+    )
+    from control_plane.state.db import registry_admin_scope
+
+    other = _uid("SCOPE")
+    with registry_admin_scope(engagement_id) as conn:
+        register_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=other,
+            type="cidr", value="10.21.0.0/24", allowed_actions=["network.scan"],
+            actor="engagement-manager",
+        )
+
+    doomed = _issue_against(engagement_id, scope_object).capability
+    bystander = _issue_against(engagement_id, other).capability
+
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object,
+            actor="engagement-manager",
+        )
+
+    assert _heartbeat(engagement_id, doomed.capability_id).renewed is False
+    assert _heartbeat(engagement_id, bystander.capability_id).renewed is True
+
+    with engagement_scope(engagement_id) as conn:
+        assert get_capability(conn, bystander.capability_id).revoked is False
+
+
+def test_a_capability_with_no_recorded_scope_object_abstains(
+    engagement_id, credential
+):
+    """NULL is unknown, and unknown is neither a pass nor a veto.
+
+    Capabilities predating the column have no recorded premise to re-check.
+    Treating NULL as authorized would be a silent exemption; treating it as
+    revoked would strand every capability issued before the migration. It is
+    simply not a check that applies, and the other checks still run.
+    """
+    capability = _issued(engagement_id, credential_id=credential)
+    assert capability.scope_object_id is None
+
+    assert _heartbeat(engagement_id, capability.capability_id).renewed is True
+
+    # The other preconditions are unaffected by abstaining here.
+    with engagement_scope(engagement_id) as conn:
+        conn.execute(
+            text("UPDATE credentials SET revoked = TRUE WHERE credential_id = :c"),
+            {"c": credential},
+        )
+    result = _heartbeat(engagement_id, capability.capability_id)
+    assert result.renewed is False
+    assert CREDENTIAL_REVOKED in result.reasons

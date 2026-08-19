@@ -33,8 +33,11 @@ from control_plane.audit.query import (
     reconstruct_decision,
 )
 from control_plane.capability.broker import (
+    CREDENTIAL_REVOKED,
+    SCOPE_OBJECT_DEACTIVATED,
     Budget,
     consume_request,
+    get_capability,
     issue_capability,
     renew_capability,
     revoke_capability,
@@ -45,6 +48,8 @@ from control_plane.orchestrator.engagement import (
     get_engagement,
     pause_engagement,
     resume_engagement,
+    retire_scope_object,
+    revoke_credential,
 )
 from control_plane.registry.metadata_registry import deactivate_metadata
 from control_plane.registry.scope_registry import deactivate_scope_object
@@ -453,3 +458,112 @@ def test_a_failed_audit_write_takes_the_operation_down_with_it(
     assert surviving == 0, (
         "a capability was issued that no audit record covers"
     )
+
+
+# ---------------------------------------------------------------------------
+# The two controls D9 added (§1.3.2, §4.5, I1, I9)
+# ---------------------------------------------------------------------------
+
+def test_revoking_a_credential_cascades_and_is_audited(engagement_id):
+    """The cascade that D9 found named in a docstring and nowhere else.
+
+    Before this, ``check_preconditions`` read ``credentials.revoked`` but no
+    operation set it, so a pulled credential took effect at the next heartbeat
+    if anything happened to heartbeat. The control now exists, it is eager, and
+    the operation is on the record.
+    """
+    credential_id = _uid("CRED")
+    capability_id = _uid("CAP")
+    with engagement_scope(engagement_id) as conn:
+        conn.execute(
+            text("INSERT INTO credentials (credential_id, engagement_id, label) "
+                 "VALUES (:c, :e, 'leaked')"),
+            {"c": credential_id, "e": engagement_id},
+        )
+        issued = issue_capability(
+            conn, engagement_id=engagement_id, capability_id=capability_id,
+            agent_id="fake-worker", action="network.scan", actor="orchestrator",
+            credential_id=credential_id, ttl_seconds=60,
+        )
+        assert issued.issued is True
+
+        revoked = revoke_credential(
+            conn, engagement_id=engagement_id, credential_id=credential_id,
+            actor="operator", reason="credential leaked",
+        )
+
+    # Eager: revoked now, not at the next heartbeat.
+    assert revoked == (capability_id,)
+    with engagement_scope(engagement_id) as conn:
+        stored = get_capability(conn, capability_id)
+        assert stored.revoked is True
+        assert CREDENTIAL_REVOKED in stored.revoked_reason
+        assert "credential.revoked" in audited_event_types(conn)
+
+
+def test_revoking_a_credential_leaves_capabilities_holding_another_alone(
+    engagement_id
+):
+    """Precise, like the scope cascade: one credential, not the engagement."""
+    pulled, kept = _uid("CRED"), _uid("CRED")
+    doomed, bystander = _uid("CAP"), _uid("CAP")
+    with engagement_scope(engagement_id) as conn:
+        for cid in (pulled, kept):
+            conn.execute(
+                text("INSERT INTO credentials (credential_id, engagement_id, label) "
+                     "VALUES (:c, :e, 'test')"),
+                {"c": cid, "e": engagement_id},
+            )
+        for cap, cred in ((doomed, pulled), (bystander, kept)):
+            issue_capability(
+                conn, engagement_id=engagement_id, capability_id=cap,
+                agent_id="fake-worker", action="network.scan", actor="orchestrator",
+                credential_id=cred, ttl_seconds=60,
+            )
+        revoked = revoke_credential(
+            conn, engagement_id=engagement_id, credential_id=pulled,
+            actor="operator", reason="rotated",
+        )
+
+    assert revoked == (doomed,)
+    with engagement_scope(engagement_id) as conn:
+        assert get_capability(conn, doomed).revoked is True
+        assert get_capability(conn, bystander).revoked is False
+
+
+def test_retiring_a_scope_object_cascades_and_is_audited(engagement_id):
+    """§4.5 + I1, and the operation the stateful test proved was missing."""
+    from control_plane.registry.scope_registry import register_scope_object
+
+    scope_object_id = _uid("SCOPE")
+    capability_id = _uid("CAP")
+    with registry_admin_scope(engagement_id) as conn:
+        register_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object_id,
+            type="cidr", value="10.30.0.0/24", allowed_actions=["network.scan"],
+            actor="engagement-manager",
+        )
+    with engagement_scope(engagement_id) as conn:
+        issue_capability(
+            conn, engagement_id=engagement_id, capability_id=capability_id,
+            agent_id="fake-worker", action="network.scan", actor="orchestrator",
+            constraints={"host": "10.30.0.5"}, scope_object_id=scope_object_id,
+            ttl_seconds=60,
+        )
+
+    revoked = retire_scope_object(
+        engagement_id=engagement_id, scope_object_id=scope_object_id,
+        actor="engagement-manager", reason="out of scope",
+    )
+
+    assert revoked == (capability_id,)
+    with engagement_scope(engagement_id) as conn:
+        stored = get_capability(conn, capability_id)
+        assert stored.revoked is True
+        assert SCOPE_OBJECT_DEACTIVATED in stored.revoked_reason
+
+        types = audited_event_types(conn)
+        # Both halves are recorded: the registry edit and the cascade it caused.
+        assert "scope_object.retired" in types
+        assert "scope_object.deactivated" in types
+        assert "capability.revoked" in types

@@ -8,6 +8,8 @@ venv/
 # Test / tooling caches
 .pytest_cache/
 .hypothesis/
+.coverage
+htmlcov/
 .ruff_cache/
 
 # Credentials and local configuration.

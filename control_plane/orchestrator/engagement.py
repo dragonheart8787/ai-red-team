@@ -25,7 +25,16 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
-from control_plane.capability.broker import KILL_SWITCH, revoke_all_for_engagement
+from control_plane.capability.broker import (
+    CREDENTIAL_REVOKED,
+    KILL_SWITCH,
+    SCOPE_OBJECT_DEACTIVATED,
+    revoke_all_for_engagement,
+    revoke_capabilities_for_credential,
+    revoke_capabilities_for_scope_object,
+)
+from control_plane.registry.scope_registry import deactivate_scope_object
+from control_plane.state.db import engagement_scope, registry_admin_scope
 
 ACTIVE = "active"
 PAUSED = "paused"
@@ -167,6 +176,90 @@ def complete_engagement(
         payload={"summary": summary, "revoked_capabilities": revoked},
     )
     return EngagementState(engagement_id, COMPLETED, False, tuple(revoked))
+
+
+def revoke_credential(
+    conn: Connection, *, engagement_id: str, credential_id: str, actor: str,
+    reason: str,
+) -> tuple[str, ...]:
+    """Revoke a credential and stop everything holding it (§1.3.2, I9).
+
+    Until D9 this operation did not exist. ``check_preconditions`` had read
+    ``credentials.revoked`` since D5, and ``revoke_capability``'s docstring
+    named "credential cascade" among its callers — but nothing revoked a
+    credential, and nothing cascaded. Every test that needed a revoked
+    credential wrote the column directly, which is exactly how the kill switch
+    stayed unimplemented for three deliverables while appearing covered.
+
+    Eager, like the kill switch and for the same reason: a credential pulled
+    because it leaked is not pulled in one lease's time. The renewal check
+    remains the backstop for anything issued in the same instant.
+    """
+    conn.execute(
+        text("UPDATE credentials SET revoked = TRUE, revoked_at = now() "
+             "WHERE credential_id = :cid AND engagement_id = :eid"),
+        {"cid": credential_id, "eid": engagement_id},
+    )
+    revoked = revoke_capabilities_for_credential(
+        conn, engagement_id=engagement_id, credential_id=credential_id,
+        actor=actor, reason=CREDENTIAL_REVOKED,
+    )
+    record_audit(
+        engagement_id=engagement_id, actor=actor, event_type="credential.revoked",
+        subject_type="credential", subject_id=credential_id, decision="DENY",
+        reasons=(reason,),
+        payload={"revoked_capabilities": revoked, "capability_count": len(revoked)},
+    )
+    return tuple(revoked)
+
+
+def retire_scope_object(
+    *, engagement_id: str, scope_object_id: str, actor: str, reason: str,
+) -> tuple[str, ...]:
+    """Retire a scope object and revoke what it authorized (§4.5, I1).
+
+    The operation D9's stateful test showed was missing. Deactivating a scope
+    object revoked nothing, so a capability authorized by it stayed live and
+    renewable, and I1 — "any executed action's target is in scope" — held only
+    until someone retired the scope it rested on.
+
+    Opens both connections itself, which is the one place in this module that
+    happens and needs justifying. The two halves require different database
+    roles: only ``registry_admin`` may write the Scope Registry, and only
+    ``cyberorch_app`` may touch capabilities. Neither role can do both, and
+    that separation is deliberate (§5) — a role that could retire a scope
+    object *and* mint capabilities is the role worth stealing. Making the
+    caller supply two correctly-scoped connections would put the constraint in
+    everyone's hands rather than in one place.
+
+    So it is two transactions, not one, and the order is the safe one. The
+    retirement commits first: if the revocation then fails, the system is in
+    the lazy state — the scope object is retired and ``check_preconditions``
+    refuses the next heartbeat — rather than one where capabilities were
+    revoked for a scope object still live. Fail-closed either way, and the
+    backstop covers the gap.
+    """
+    with registry_admin_scope(engagement_id) as conn:
+        deactivate_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object_id,
+            actor=actor,
+        )
+
+    with engagement_scope(engagement_id) as conn:
+        revoked = revoke_capabilities_for_scope_object(
+            conn, engagement_id=engagement_id, scope_object_id=scope_object_id,
+            actor=actor, reason=SCOPE_OBJECT_DEACTIVATED,
+        )
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="scope_object.retired", subject_type="scope_object",
+            subject_id=scope_object_id, decision="DENY", reasons=(reason,),
+            payload={
+                "revoked_capabilities": revoked,
+                "capability_count": len(revoked),
+            },
+        )
+    return tuple(revoked)
 
 
 def _set_status(conn: Connection, engagement_id: str, status: str) -> None:

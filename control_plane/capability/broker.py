@@ -24,12 +24,24 @@ execution authorization, and refusing to issue into a paused engagement is the
 same rule as refusing to renew into one.
 
 Scope: this module touches capabilities, approvals, credentials, policy_layers
-and engagements. It never reads or writes the Scope Registry or the
-Authoritative Metadata Registry, and so runs entirely on the ``cyberorch_app``
-connection — the role that holds no write access to either (§5). Whether an
-action is *authorized against a target* was settled by the resolvers and OPA
-before a capability was ever requested; the broker's question is narrower and
-strictly later: is that decision still in force right now.
+and engagements, and reads one row of the Scope Registry by id. It never touches
+the Authoritative Metadata Registry and never writes either registry, so it runs
+entirely on the ``cyberorch_app`` connection — the role that holds SELECT and no
+more on both (§5).
+
+That one registry read needs stating precisely, because the line it sits on is
+easy to erase. The broker does **not** re-run the Authorization Resolver and does
+**not** compare a target against a scope object. It asks a strictly narrower
+question about a decision already made: the scope object that authorized this
+capability — is it still active, and does it still permit this action? That is
+the same kind of question as "has this credential been revoked", and it is
+answered the same way, by a single lookup on a recorded id.
+
+The distinction matters because re-resolving would mean deciding authorization
+here, which belongs upstream in the resolvers and OPA: two places deciding the
+same thing is how they come to disagree. Checking that an existing decision's
+premises still hold is not deciding. ``test_broker_reads_scope_only_as_a_liveness
+_check`` pins the difference structurally.
 """
 
 from __future__ import annotations
@@ -53,6 +65,9 @@ CREDENTIAL_REVOKED = "credential_revoked"
 CREDENTIAL_MISSING = "credential_not_found"
 ENGAGEMENT_NOT_ACTIVE = "engagement_not_active"
 KILL_SWITCH = "kill_switch_engaged"
+SCOPE_OBJECT_DEACTIVATED = "scope_object_deactivated"
+SCOPE_OBJECT_MISSING = "scope_object_not_found"
+SCOPE_ACTION_WITHDRAWN = "scope_action_no_longer_allowed"
 LEASE_EXPIRED = "lease_expired"
 BUDGET_EXHAUSTED = "budget_exhausted"
 ALREADY_REVOKED = "already_revoked"
@@ -113,6 +128,7 @@ class Capability:
     policy_version: int
     approval_id: str | None
     credential_id: str | None
+    scope_object_id: str | None
     proposal_id: str | None
     issued_at: datetime
     lease_expires_at: datetime
@@ -181,8 +197,8 @@ class RenewalResult:
 _SELECT_CAPABILITY = """
     SELECT capability_id, engagement_id, agent_id, action, constraints, budget,
            requests_used, revoked, revoked_reason, policy_version, approval_id,
-           credential_id, proposal_id, issued_at, lease_expires_at,
-           last_heartbeat_at, renewal_count
+           credential_id, scope_object_id, proposal_id, issued_at,
+           lease_expires_at, last_heartbeat_at, renewal_count
     FROM capabilities
     WHERE capability_id = :cid
 """
@@ -213,6 +229,43 @@ def current_policy_version(conn: Connection, engagement_id: str) -> int:
     ).scalar_one()
 
 
+def _check_scope_object_still_live(
+    conn: Connection, *, scope_object_id: str, action: str
+) -> tuple[str, ...]:
+    """Is the scope object that authorized this capability still standing?
+
+    A liveness check on a recorded fact, not an authorization decision. It reads
+    one row by id and asks two things of it: is it still active, and does it
+    still permit this action. It does not look at the target, does not call the
+    Authorization Resolver, and cannot authorize anything — the only outcomes
+    are "no objection" and a reason to revoke.
+
+    Target containment is deliberately not re-checked. A scope object's ``value``
+    is immutable in practice (retirement is a soft delete, and a changed CIDR is
+    a new object), so re-deriving containment would re-run work the resolver
+    already did and, worse, put a second implementation of ``scope_covers_target``
+    where it could drift from the first.
+    """
+    row = conn.execute(
+        text("SELECT active, allowed_actions FROM scope_registry "
+             "WHERE scope_object_id = :sid"),
+        {"sid": scope_object_id},
+    ).mappings().one_or_none()
+
+    if row is None:
+        # Also where RLS lands for another engagement's scope object: from in
+        # here it does not exist, and a capability cannot rest on it either way.
+        return (SCOPE_OBJECT_MISSING,)
+    if not row["active"]:
+        return (SCOPE_OBJECT_DEACTIVATED,)
+    # Membership, not pattern matching. Narrowing allowed_actions after issue is
+    # a withdrawal of exactly this capability's authorization; the wildcard
+    # semantics that decided the original grant live in the resolver.
+    if action not in row["allowed_actions"]:
+        return (SCOPE_ACTION_WITHDRAWN,)
+    return ()
+
+
 def check_preconditions(
     conn: Connection,
     *,
@@ -220,6 +273,8 @@ def check_preconditions(
     approval_id: str | None,
     credential_id: str | None,
     policy_version: int | None = None,
+    scope_object_id: str | None = None,
+    action: str | None = None,
 ) -> tuple[str, ...]:
     """Re-check every state a capability depends on (§4.6).
 
@@ -280,6 +335,14 @@ def check_preconditions(
         if current_policy_version(conn, engagement_id) != policy_version:
             reasons.append(POLICY_CHANGED)
 
+    # A capability issued before scope_object_id existed carries NULL, which is
+    # unknown rather than authorized: there is no recorded premise to re-check,
+    # so this check abstains instead of inventing a verdict either way.
+    if scope_object_id is not None and action is not None:
+        reasons.extend(_check_scope_object_still_live(
+            conn, scope_object_id=scope_object_id, action=action,
+        ))
+
     return tuple(reasons)
 
 
@@ -297,6 +360,7 @@ def issue_capability(
     approval_id: str | None = None,
     credential_id: str | None = None,
     proposal_id: str | None = None,
+    scope_object_id: str | None = None,
 ) -> IssueResult:
     """Issue a capability, or refuse (§4.6).
 
@@ -304,12 +368,18 @@ def issue_capability(
     something to compare against. Nothing else captures it: the merged policy
     is computed per decision and not stored, so without this the "has policy
     changed" question would have no baseline.
+
+    ``scope_object_id`` serves the same purpose for authorization (I8): the
+    caller has already had the resolver authorize this target against that scope
+    object, and recording which one lets every later heartbeat confirm the
+    premise still holds.
     """
     budget = budget or Budget()
 
     reasons = check_preconditions(
         conn, engagement_id=engagement_id,
         approval_id=approval_id, credential_id=credential_id,
+        scope_object_id=scope_object_id, action=action,
     )
     if reasons:
         record_audit(
@@ -329,21 +399,21 @@ def issue_capability(
         text("""
             INSERT INTO capabilities (capability_id, engagement_id, agent_id,
                 proposal_id, action, constraints, budget, policy_version,
-                approval_id, credential_id, lease_expires_at)
+                approval_id, credential_id, scope_object_id, lease_expires_at)
             VALUES (:cid, :eid, :agent, :pid, :action, CAST(:constraints AS jsonb),
-                    CAST(:budget AS jsonb), :pver, :aid, :crid,
+                    CAST(:budget AS jsonb), :pver, :aid, :crid, :sid,
                     now() + make_interval(secs => :lease))
             RETURNING capability_id, engagement_id, agent_id, action, constraints,
                       budget, requests_used, revoked, revoked_reason, policy_version,
-                      approval_id, credential_id, proposal_id, issued_at,
-                      lease_expires_at, last_heartbeat_at, renewal_count
+                      approval_id, credential_id, scope_object_id, proposal_id,
+                      issued_at, lease_expires_at, last_heartbeat_at, renewal_count
         """),
         {
             "cid": capability_id, "eid": engagement_id, "agent": agent_id,
             "pid": proposal_id, "action": action,
             "constraints": _json(constraints or {}), "budget": _json(budget.as_dict()),
             "pver": policy_version, "aid": approval_id, "crid": credential_id,
-            "lease": lease_seconds,
+            "sid": scope_object_id, "lease": lease_seconds,
         },
     ).mappings().one()
 
@@ -419,6 +489,11 @@ def renew_capability(
         approval_id=capability.approval_id,
         credential_id=capability.credential_id,
         policy_version=capability.policy_version,
+        # The scope object recorded at issue, not one supplied by the caller: a
+        # heartbeat that could nominate its own scope object would be able to
+        # renew against whichever one happens to still be active.
+        scope_object_id=capability.scope_object_id,
+        action=capability.action,
     ))
 
     if reasons:
@@ -452,8 +527,8 @@ def renew_capability(
             WHERE capability_id = :cid AND revoked IS FALSE
             RETURNING capability_id, engagement_id, agent_id, action, constraints,
                       budget, requests_used, revoked, revoked_reason, policy_version,
-                      approval_id, credential_id, proposal_id, issued_at,
-                      lease_expires_at, last_heartbeat_at, renewal_count
+                      approval_id, credential_id, scope_object_id, proposal_id,
+                      issued_at, lease_expires_at, last_heartbeat_at, renewal_count
         """),
         {"cid": capability_id, "expiry": new_expiry},
     ).mappings().one()
@@ -474,10 +549,76 @@ def renew_capability(
 def revoke_capability(
     conn: Connection, *, engagement_id: str, capability_id: str, reason: str, actor: str
 ) -> Capability | None:
-    """Revoke explicitly (kill switch, operator action, credential cascade)."""
+    """Revoke one capability explicitly (operator action)."""
     return _revoke(
         conn, engagement_id=engagement_id, capability_id=capability_id,
         reasons=(reason,), actor=actor, event="capability.revoked",
+    )
+
+
+def _revoke_where(
+    conn: Connection, *, engagement_id: str, predicate: str,
+    params: Mapping[str, Any], reason: str, actor: str, payload: Mapping[str, Any],
+) -> list[str]:
+    """Revoke every live capability matching a predicate, and audit each one.
+
+    One conditional UPDATE rather than select-then-update: a capability issued
+    between the two would slip through the gap, and the gap is exactly when a
+    revocation cascade is running.
+    """
+    rows = conn.execute(
+        text(f"""
+            UPDATE capabilities
+            SET revoked = TRUE, revoked_reason = coalesce(revoked_reason, :reason),
+                revoked_at = coalesce(revoked_at, now())
+            WHERE engagement_id = :eid AND revoked IS FALSE AND {predicate}
+            RETURNING capability_id
+        """),
+        {**params, "eid": engagement_id, "reason": reason},
+    ).scalars().all()
+
+    for capability_id in rows:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="capability.revoked", subject_type="capability",
+            subject_id=capability_id, decision="DENY", reasons=(reason,),
+            payload={"cascade": True, **payload},
+        )
+    return list(rows)
+
+
+def revoke_capabilities_for_scope_object(
+    conn: Connection, *, engagement_id: str, scope_object_id: str, actor: str,
+    reason: str = SCOPE_OBJECT_DEACTIVATED,
+) -> list[str]:
+    """Revoke exactly the capabilities one scope object authorized (I1).
+
+    Precise by construction. Revoking the whole engagement would also be
+    fail-closed, and would be wrong: a control that stops unrelated work is one
+    operators learn to route around, and the audit trail would then blame a
+    scope retirement for capabilities it had nothing to do with.
+
+    Capabilities with a NULL scope_object_id are not matched. They predate the
+    column and have no recorded link to this scope object; revoking them here
+    would be a guess, and ``check_preconditions`` abstains on them for the same
+    reason.
+    """
+    return _revoke_where(
+        conn, engagement_id=engagement_id,
+        predicate="scope_object_id = :sid", params={"sid": scope_object_id},
+        reason=reason, actor=actor, payload={"scope_object_id": scope_object_id},
+    )
+
+
+def revoke_capabilities_for_credential(
+    conn: Connection, *, engagement_id: str, credential_id: str, actor: str,
+    reason: str = CREDENTIAL_REVOKED,
+) -> list[str]:
+    """Revoke exactly the capabilities holding one credential (§1.3.2, I9)."""
+    return _revoke_where(
+        conn, engagement_id=engagement_id,
+        predicate="credential_id = :crid", params={"crid": credential_id},
+        reason=reason, actor=actor, payload={"credential_id": credential_id},
     )
 
 
@@ -569,8 +710,8 @@ def _revoke(
             WHERE capability_id = :cid
             RETURNING capability_id, engagement_id, agent_id, action, constraints,
                       budget, requests_used, revoked, revoked_reason, policy_version,
-                      approval_id, credential_id, proposal_id, issued_at,
-                      lease_expires_at, last_heartbeat_at, renewal_count
+                      approval_id, credential_id, scope_object_id, proposal_id,
+                      issued_at, lease_expires_at, last_heartbeat_at, renewal_count
         """),
         {"cid": capability_id, "reason": ",".join(reasons)},
     ).mappings().one_or_none()
@@ -600,6 +741,7 @@ def _to_capability(row) -> Capability:
         policy_version=row["policy_version"],
         approval_id=row["approval_id"],
         credential_id=row["credential_id"],
+        scope_object_id=row["scope_object_id"],
         proposal_id=row["proposal_id"],
         issued_at=row["issued_at"],
         lease_expires_at=row["lease_expires_at"],

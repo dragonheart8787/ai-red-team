@@ -326,6 +326,12 @@ def propose_action(
         budget=budget or Budget(max_duration_seconds=120),
         ttl_seconds=capability_ttl_seconds or proposal.requested_capability_ttl_seconds,
         proposal_id=proposal_id,
+        # The scope object the resolver actually authorized against, carried
+        # forward so every later heartbeat can re-check that it still stands
+        # (I8). Taken from the resolution rather than from the proposal: the
+        # proposal is what an agent asked for, the resolution is what was
+        # granted, and only the second is a fact about this system.
+        scope_object_id=authorization.scope_object_id,
     )
     if not issued.issued:
         # The policy said yes and the broker said no. Both are recorded; the

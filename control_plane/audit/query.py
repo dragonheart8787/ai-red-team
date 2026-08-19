@@ -55,6 +55,8 @@ STAGE_OF_EVENT = {
     "scope_object.registered": "registry",
     "scope_object.updated": "registry",
     "scope_object.deactivated": "registry",
+    "scope_object.retired": "registry",
+    "credential.revoked": "capability",
     "metadata.registered": "registry",
     "metadata.reclassified": "registry",
     "metadata.deactivated": "registry",
