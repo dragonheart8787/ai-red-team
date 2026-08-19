@@ -252,3 +252,74 @@ def test_scenario_a_reviewer_may_still_escalate(
     # Escalation stops the pipeline too: no capability, no execution.
     assert outcome.capability_id is None
     assert spy.call_count == 0
+
+
+def test_reconstruct_decision_matches_the_raw_audit_query_it_replaced(
+    engagement, sandbox, effective_policy, scan_target
+):
+    """Equivalence of the D8 refactor, characterised rather than assumed.
+
+    Scenario A and B each built their own ``SELECT ... FROM audit_log ORDER BY
+    audit_id`` and grouped the rows by hand; D8 replaced both with
+    :func:`reconstruct_decision`. A refactor of the thing that answers "what
+    happened and why" is worth proving equivalent, not eyeballing — a chain
+    that quietly dropped an event would still satisfy every assertion written
+    in terms of the events it kept.
+
+    The two are *not* equal, and writing this test is how that surfaced. The
+    chain follows subject ids outward from the proposal — to its capabilities,
+    their runs, and the evidence those produced — so it excludes rows whose
+    subject is something else entirely: the engagement's registry setup, and
+    the task the proposal came from. That is the documented behaviour and the
+    right one for "why was this action allowed", but it means the chain is a
+    strict subset of the whole-engagement query, not a drop-in for it.
+
+    Worth stating plainly because it is a real limit: the task lifecycle sits
+    *behind* the proposal rather than ahead of it, so "which agent was asked to
+    do this, and when" is not answerable from the chain alone. Recorded here
+    rather than in a comment, so a future widening of reconstruct_decision has
+    a test to update rather than a surprise to discover.
+    """
+    engagement_id, _ = engagement
+    outcome, _, task_id, _ = _run_scenario_a(
+        engagement, sandbox, effective_policy, scan_target
+    )
+
+    with engagement_scope(engagement_id) as conn:
+        chain = reconstruct_decision(conn, proposal_id=outcome.proposal_id)
+        raw = conn.execute(
+            text("SELECT audit_id, event_type, actor, decision, reasons, payload, "
+                 "subject_id FROM audit_log ORDER BY audit_id")
+        ).mappings().all()
+
+    by_id = {r["audit_id"]: r for r in raw}
+    chain_ids = [e.audit_id for e in chain.events]
+
+    # Nothing invented, nothing reordered.
+    assert chain_ids == sorted(chain_ids)
+    assert set(chain_ids) <= set(by_id)
+
+    # Every field the old query read is carried through unchanged.
+    for event in chain.events:
+        row = by_id[event.audit_id]
+        assert event.event_type == row["event_type"]
+        assert event.actor == row["actor"]
+        assert event.decision == row["decision"]
+        assert event.reasons == tuple(row["reasons"] or ())
+        assert event.payload == (row["payload"] or {})
+
+    # And the difference is exactly the rows about something other than this
+    # proposal's chain -- not an arbitrary subset.
+    excluded = {r["event_type"] for r in raw if r["audit_id"] not in set(chain_ids)}
+    assert excluded == {
+        "scope_object.registered", "metadata.registered",
+        "task.created", "task.claimed", "task.completed",
+    }, f"the chain dropped something unexpected: {excluded}"
+
+    # The task events are absent because their subject is the task, not the
+    # proposal -- reachable from the timeline, just not from this chain.
+    assert all(e.subject_id != task_id for e in chain.events)
+
+    # by_stage partitions the chain: every event lands in exactly one stage.
+    grouped = [e for events in chain.by_stage().values() for e in events]
+    assert sorted(e.audit_id for e in grouped) == chain_ids
