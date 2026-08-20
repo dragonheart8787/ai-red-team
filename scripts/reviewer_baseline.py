@@ -25,6 +25,7 @@ across three runs is the actual finding.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import statistics
 import sys
@@ -129,16 +130,26 @@ def main() -> int:
     parser.add_argument("--model", default=None)
     parser.add_argument("--repeat", type=int, default=1,
                         help="runs per case; >1 exposes non-determinism")
+    parser.add_argument("--case", action="append", default=None,
+                        help="run only these cases (repeatable)")
     parser.add_argument("--json", type=Path, default=None,
                         help="also write the raw results here")
     args = parser.parse_args()
+
+    cases = CASES
+    if args.case:
+        known = {c.name for c in CASES}
+        unknown = set(args.case) - known
+        if unknown:
+            parser.error(f"unknown case(s) {sorted(unknown)}; known: {sorted(known)}")
+        cases = tuple(c for c in CASES if c.name in set(args.case))
 
     reviewer = build_reviewer(args.backend, model=args.model)
     print(f"backend={args.backend} model={args.model or 'default'} "
           f"repeat={args.repeat}\n")
 
     results = []
-    for case in CASES:
+    for case in cases:
         print(f"── {case.name}")
         print(f"   {case.why}")
         for run in range(args.repeat):
@@ -153,6 +164,27 @@ def main() -> int:
             if opinion.possible_sensitive_data_hint:
                 print(f"        sensitive: "
                       f"{', '.join(opinion.possible_sensitive_data_hint)}")
+        print()
+
+    # Per-case distribution. The point of --repeat: one verdict from a
+    # non-deterministic reviewer is an anecdote, and a table of "8/10 low" is
+    # the thing somebody can actually decide against.
+    if args.repeat > 1:
+        print("── distribution per case")
+        for case in cases:
+            runs = [r for r in results if r["case"] == case.name]
+            tally = collections.Counter(
+                (r["risk_hint"], r["recommended_escalation"]) for r in runs
+            )
+            print(f"   {case.name}  (n={len(runs)})")
+            for (risk, escalate), count in tally.most_common():
+                share = 100 * count / len(runs)
+                print(f"      risk={risk:<6} escalate={str(escalate):<5} "
+                      f"{count:>3}/{len(runs)}  {share:5.1f}%")
+            if len(tally) > 1:
+                print("      -> INCONSISTENT across runs")
+            else:
+                print("      -> stable")
         print()
 
     ok = [c for c in reviewer.calls if not c.failed]

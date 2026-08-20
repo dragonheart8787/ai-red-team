@@ -94,8 +94,14 @@ class LLMPolicyReviewer(BaseReviewer):
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
-        import anthropic
 
+        # The credential is checked before the SDK is imported, and the order is
+        # deliberate. Since D10.5 three of the four backends need no Anthropic
+        # package at all, so `anthropic` is only really required on this path --
+        # and if both are missing, "set ANTHROPIC_API_KEY" is the more useful of
+        # the two errors, because it is the one a user is far likelier to have
+        # got wrong. Importing first buried it under ModuleNotFoundError.
+        #
         # Through require_env, so a missing key raises with an instruction
         # rather than falling back to something that happens to work. The key is
         # never defaulted and never written to the repository; see
@@ -105,6 +111,9 @@ class LLMPolicyReviewer(BaseReviewer):
             hint="The live Policy Reviewer needs it. Export it, or put it in "
                  "the gitignored .env. It is never read from a default.",
         )
+
+        import anthropic
+
         self._client = anthropic.Anthropic(
             api_key=api_key, timeout=self.timeout_seconds,
         )
