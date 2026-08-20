@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 
-from hypothesis import HealthCheck, settings
+from hypothesis import HealthCheck, event, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     Bundle,
@@ -260,6 +260,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 f"{resolution.reasons}"
             )
             if not resolution.authorized:
+                event("issue: refused by the resolver (scope retired)")
                 return None
 
             result = issue_capability(
@@ -279,10 +280,12 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         )
 
         if result.issued:
+            event("issue: capability granted")
             self.issued[capability_id] = {
                 "target": target, "revoked": False, "scope": which,
             }
             return capability_id
+        event(f"issue: broker refused ({','.join(sorted(result.reasons))})")
         return None
 
     @rule(capability=capabilities)
@@ -299,11 +302,13 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         if capability in self.must_fail_renewal:
             # I9. Renewal is a new authorization, and everything this
             # capability depended on has since been withdrawn.
+            event("renew: correctly refused after a dependency was withdrawn")
             assert result.renewed is False, (
                 f"{capability} renewed after {sorted(self._why_dead(capability))}"
             )
             self._mark_revoked(capability)
         elif result.renewed:
+            event("renew: succeeded, I3 bound checked")
             # I3, checked here rather than only in the invariant so the
             # renewal that produced the lease is the one blamed.
             expiry = result.capability.lease_expires_at
@@ -330,10 +335,12 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                     actor="orchestrator", ttl_seconds=60,
                 )
             if capability in self.must_fail_renewal:
+                event("renew_repeatedly: refused mid-loop")
                 assert result.renewed is False
                 self._mark_revoked(capability)
                 return
             if result.renewed:
+                event("renew_repeatedly: consecutive renewal held the budget")
                 cap = result.capability
                 assert (
                     cap.lease_expires_at - cap.issued_at
@@ -378,6 +385,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 )
         self.policy_shape = after
 
+        event("emergency_tighten: overlay published, policy version moved")
         # Every capability issued before the change now depends on a policy
         # version that no longer exists.
         for capability_id, state in self.issued.items():
@@ -399,6 +407,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 credential_id=self.credential_id, actor="operator",
                 reason="stateful test",
             )
+        event(f"revoke_credential: cascade revoked {len(revoked)}")
         self.credential_revoked = True
         for capability_id in revoked:
             self._mark_revoked(capability_id)
@@ -415,6 +424,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 conn, engagement_id=self.engagement_id, actor="operator",
                 reason="stateful test",
             )
+        event(f"pause: cascade revoked {len(state.revoked_capabilities)}")
         self.paused = True
         for capability_id in state.revoked_capabilities:
             self._mark_revoked(capability_id)
@@ -437,7 +447,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                         reason="stateful test",
                     )
                 except ValueError:
-                    pass  # expected
+                    event("resume: REFUSED after kill switch (I9)")  # expected
                 else:
                     raise AssertionError(
                         "resume_engagement succeeded after the kill switch (I9)"
@@ -449,6 +459,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 conn, engagement_id=self.engagement_id, actor="operator",
                 reason="stateful test",
             )
+        event("resume: allowed after a plain pause")
         self.paused = False
         # I9: resuming does not bring revoked capabilities back. They stay in
         # must_fail_renewal and must_be_revoked.
@@ -461,6 +472,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 conn, engagement_id=self.engagement_id, actor="operator",
                 reason="stateful test",
             )
+        event(f"kill_switch: cascade revoked {len(state.revoked_capabilities)}")
         self.killed = True
         for capability_id in state.revoked_capabilities:
             self._mark_revoked(capability_id)
@@ -515,6 +527,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
             f"{sorted(expected)} — the cascade is imprecise in "
             f"{'both directions' if revoked and expected else 'one direction'}"
         )
+        event(f"deactivate_scope: cascade revoked {len(revoked)}")
         for capability_id in revoked:
             self.revoked_by_scope[capability_id] = which
             self._mark_revoked(capability_id)
@@ -540,6 +553,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         # separately from must_be_revoked because a capability killed earlier by
         # the kill switch and only later caught by a retirement carries the
         # earlier reason, and asserting the scope reason on it would be wrong.
+        event(f"precision: checking {len(self.revoked_by_scope)} cascade-revoked")
         for capability_id in self.revoked_by_scope:
             with engagement_scope(self.engagement_id) as conn:
                 stored = get_capability(conn, capability_id)
@@ -591,7 +605,9 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                 f"{capability_id} rests on a live scope object but the cascade "
                 f"claimed it"
             )
+            event("precision: bystander on a live scope object checked")
             if eligible:
+                event("precision: bystander renewal asserted to succeed")
                 assert result.renewed is True, (
                     f"{capability_id} rests on scope object {state['scope']}, "
                     f"which is still active, and had no other reason to fail, "
@@ -624,6 +640,8 @@ class CapabilityLifecycle(RuleBasedStateMachine):
 
             claimed = claim_for_dispatch(conn, existing)
 
+        event("duplicate_dispatch: first claim" if claimed
+              else "duplicate_dispatch: repeat claim correctly refused")
         self.dispatch_claims[key] = self.dispatch_claims.get(key, 0) + int(claimed)
         assert self.dispatch_claims[key] <= 1, (
             f"idempotency key {key} was dispatched "
