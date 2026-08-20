@@ -214,3 +214,122 @@ def test_registry_admin_cannot_touch_findings_or_evidence(engagement_id):
             with registry_admin_scope(engagement_id) as conn:
                 conn.execute(text(stmt), {"eid": engagement_id})
         assert _insufficient_privilege(err), stmt
+
+
+# ---------------------------------------------------------------------------
+# I4 across the two-role operation D9 added
+# ---------------------------------------------------------------------------
+
+def test_retire_scope_object_cannot_reach_into_another_engagement(engagement_id):
+    """I4 against retire_scope_object, which spans two roles (§5, D9).
+
+    Worth its own test rather than inheriting D2's and D4.5's coverage. Those
+    proved that each role individually is confined by RLS; this operation opens
+    a registry_admin connection *and* a cyberorch_app connection, and the
+    question is whether the pair can do something neither can do alone.
+
+    Concretely, the failure mode: attacker holds ENG-A, names ENG-B's scope
+    object. The registry_admin half sees nothing to deactivate under ENG-A's
+    RLS, and the cyberorch_app half must likewise revoke nothing — the risk is
+    a cascade keyed on scope_object_id that reaches ENG-B's capabilities
+    because the id matched even though the engagement did not.
+
+    What actually holds the line, established by mutation: RLS. Neutralising
+    the cascade's explicit ``engagement_id = :eid`` predicate leaves this test
+    passing, because the policy on ``capabilities`` already makes the victim's
+    rows invisible on an ENG-A connection. The explicit filter is defence in
+    depth, not the load-bearing part — worth knowing, since a future change
+    that loosened RLS would not be caught by the filter's presence.
+    """
+    from control_plane.capability.broker import Budget, get_capability, issue_capability
+    from control_plane.orchestrator.engagement import retire_scope_object
+    from control_plane.registry.scope_registry import register_scope_object
+
+    victim = f"ENG-VICTIM-{uuid.uuid4().hex[:10]}"
+    victim_scope = _uid("SCOPE")
+    victim_capability = _uid("CAP")
+
+    with engagement_scope(victim) as conn:
+        conn.execute(
+            text("INSERT INTO engagements (engagement_id, customer_id, "
+                 "policy_snapshot_version) VALUES (:e, 'CUST-VICTIM', 1)"),
+            {"e": victim},
+        )
+    with registry_admin_scope(victim) as conn:
+        register_scope_object(
+            conn, engagement_id=victim, scope_object_id=victim_scope,
+            type="cidr", value="10.55.0.0/24", allowed_actions=["network.scan"],
+            actor="engagement-manager",
+        )
+    with engagement_scope(victim) as conn:
+        assert issue_capability(
+            conn, engagement_id=victim, capability_id=victim_capability,
+            agent_id="fake-worker", action="network.scan", actor="orchestrator",
+            constraints={"host": "10.55.0.9"}, budget=Budget(), ttl_seconds=60,
+            scope_object_id=victim_scope,
+        ).issued is True
+
+    # The attacking engagement names the victim's scope object by id.
+    revoked = retire_scope_object(
+        engagement_id=engagement_id, scope_object_id=victim_scope,
+        actor="attacker", reason="cross-engagement attempt",
+    )
+
+    # Nothing of the victim's was touched, by either half of the operation.
+    assert revoked == ()
+    with engagement_scope(victim) as conn:
+        assert get_capability(conn, victim_capability).revoked is False
+        still_active = conn.execute(
+            text("SELECT active FROM scope_registry WHERE scope_object_id = :s"),
+            {"s": victim_scope},
+        ).scalar_one()
+    assert still_active is True
+
+
+def test_revoke_credential_cannot_reach_into_another_engagement(engagement_id):
+    """The same question for D9's other cascade.
+
+    revoke_credential runs on one connection rather than two, so RLS alone
+    should confine it — but the cascade is keyed on credential_id, and an id is
+    not an engagement. This is the assertion that says so.
+
+    As above, RLS is the mechanism doing the work; the UPDATE's own
+    ``engagement_id`` predicate is redundant while the policy holds.
+    """
+    from control_plane.capability.broker import Budget, get_capability, issue_capability
+    from control_plane.orchestrator.engagement import revoke_credential
+
+    victim = f"ENG-VICTIM-{uuid.uuid4().hex[:10]}"
+    victim_credential = _uid("CRED")
+    victim_capability = _uid("CAP")
+
+    with engagement_scope(victim) as conn:
+        conn.execute(
+            text("INSERT INTO engagements (engagement_id, customer_id, "
+                 "policy_snapshot_version) VALUES (:e, 'CUST-VICTIM', 1)"),
+            {"e": victim},
+        )
+        conn.execute(
+            text("INSERT INTO credentials (credential_id, engagement_id, label) "
+                 "VALUES (:c, :e, 'victim credential')"),
+            {"c": victim_credential, "e": victim},
+        )
+        assert issue_capability(
+            conn, engagement_id=victim, capability_id=victim_capability,
+            agent_id="fake-worker", action="network.scan", actor="orchestrator",
+            budget=Budget(), ttl_seconds=60, credential_id=victim_credential,
+        ).issued is True
+
+    with engagement_scope(engagement_id) as conn:
+        revoked = revoke_credential(
+            conn, engagement_id=engagement_id, credential_id=victim_credential,
+            actor="attacker", reason="cross-engagement attempt",
+        )
+
+    assert revoked == ()
+    with engagement_scope(victim) as conn:
+        assert get_capability(conn, victim_capability).revoked is False
+        assert conn.execute(
+            text("SELECT revoked FROM credentials WHERE credential_id = :c"),
+            {"c": victim_credential},
+        ).scalar_one() is False
