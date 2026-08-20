@@ -155,6 +155,9 @@ capabilities = Table(
     Column("engagement_id", Text, nullable=False),
     Column("agent_id", Text, nullable=False),
     Column("proposal_id", Text),
+    # The scope object that authorized this capability (I8). Nullable: rows
+    # predating migration 0004 have no answer, and NULL means unknown.
+    Column("scope_object_id", Text),
     Column("action", Text, nullable=False),
     Column("constraints", JSONB, nullable=False),
     Column("budget", JSONB, nullable=False),

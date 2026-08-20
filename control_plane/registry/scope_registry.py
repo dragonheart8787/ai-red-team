@@ -5,11 +5,12 @@ tool adapters and the Policy Reviewer have no write access here: whoever can
 write this table can grant themselves authorization, which makes it the highest
 value target in the system.
 
-In MVP-Kernel that boundary is drawn in the application layer — the function
-API in §2 exposes no registry write, and the only writer is
-:func:`register_scope_object`, which demands an ``actor`` and audits every
-call. A dedicated database role for registry writes is the natural next turn of
-the screw; see the note in README.
+The boundary is drawn twice. In the application layer the §2 function API
+exposes no registry write at all. In the database, writes require the
+``registry_admin`` role, which only the Engagement Manager connects as;
+``cyberorch_app`` — the role every other component uses — holds SELECT and
+nothing more. An application-layer bug, or a component taken over and talking
+to the database directly, still cannot change what is authorized.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
+from control_plane.state.db import REGISTRY_ADMIN_ROLE, assert_registry_admin
 
 
 @dataclass(frozen=True)
@@ -83,11 +85,23 @@ def register_scope_object(
 ) -> ScopeObject:
     """Register a scope object. Engagement Manager only (§5).
 
-    ``actor`` is mandatory and audited: §5 asks for a record of who changed
-    which scope object to what, because this table is what authorization means.
+    Requires a :func:`registry_admin_scope` connection. ``actor`` is mandatory
+    and audited: §5 asks for a record of who changed which scope object to
+    what, because this table is what authorization *means*.
     """
     if not actor:
         raise ValueError("registry writes must name an actor (§5)")
+    assert_registry_admin(conn)
+
+    # Read the current row first so the audit record can say what changed, not
+    # merely what it now says. "SCOPE-18 allows web.*" is far less useful after
+    # an incident than "SCOPE-18 allowed web.get and now allows web.*".
+    before = conn.execute(
+        text("SELECT type, value, allowed_actions, version, active "
+             "FROM scope_registry WHERE scope_object_id = :sid"),
+        {"sid": scope_object_id},
+    ).mappings().one_or_none()
+
     row = conn.execute(
         text("""
             INSERT INTO scope_registry (scope_object_id, engagement_id, type, value,
@@ -113,17 +127,21 @@ def register_scope_object(
     ).mappings().one()
 
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
-        event_type="scope_object.registered",
+        event_type="scope_object.registered" if before is None else "scope_object.updated",
         subject_type="scope_object",
         subject_id=scope_object_id,
         payload={
-            "type": type,
-            "value": value,
-            "allowed_actions": list(allowed_actions),
-            "version": row["version"],
+            "db_role": REGISTRY_ADMIN_ROLE,
+            "before": _snapshot(before),
+            "after": {
+                "type": row["type"],
+                "value": row["value"],
+                "allowed_actions": list(row["allowed_actions"]),
+                "version": row["version"],
+                "active": row["active"],
+            },
         },
     )
     return _to_scope_object(row)
@@ -132,19 +150,51 @@ def register_scope_object(
 def deactivate_scope_object(
     conn: Connection, *, engagement_id: str, scope_object_id: str, actor: str
 ) -> None:
+    """Retire a scope object. Engagement Manager only (§5).
+
+    Deactivation rather than deletion: the row stays, so the audit trail keeps
+    something to point at. Neither role holds DELETE on this table.
+    """
+    if not actor:
+        raise ValueError("registry writes must name an actor (§5)")
+    assert_registry_admin(conn)
+
+    before = conn.execute(
+        text("SELECT type, value, allowed_actions, version, active "
+             "FROM scope_registry WHERE scope_object_id = :sid"),
+        {"sid": scope_object_id},
+    ).mappings().one_or_none()
+
     conn.execute(
         text("UPDATE scope_registry SET active = FALSE, updated_at = now() "
              "WHERE scope_object_id = :sid"),
         {"sid": scope_object_id},
     )
     record_audit(
-        conn,
         engagement_id=engagement_id,
         actor=actor,
         event_type="scope_object.deactivated",
         subject_type="scope_object",
         subject_id=scope_object_id,
+        payload={
+            "db_role": REGISTRY_ADMIN_ROLE,
+            "before": _snapshot(before),
+            "after": dict(_snapshot(before) or {}, active=False) if before else None,
+        },
     )
+
+
+def _snapshot(row) -> dict[str, Any] | None:
+    """Serialize a scope_registry row for the audit record."""
+    if row is None:
+        return None
+    return {
+        "type": row["type"],
+        "value": row["value"],
+        "allowed_actions": list(row["allowed_actions"]),
+        "version": row["version"],
+        "active": row["active"],
+    }
 
 
 def _to_scope_object(row) -> ScopeObject:

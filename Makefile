@@ -1,16 +1,23 @@
+# Override on machines where the 3.12 interpreter is not named python3.12
+# (CI provisions it via actions/setup-python and exposes it as `python`).
+PYTHON ?= python3.12
+
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 PYTEST := .venv/bin/pytest
 
-.PHONY: setup db test test-py test-opa lint clean
+.PHONY: setup db sandbox-image test test-py test-opa lint clean
 
 setup:
-	python3.12 -m venv .venv
+	$(PYTHON) -m venv .venv
 	$(PIP) install -q --upgrade pip
 	$(PIP) install -q -e '.[dev]'
 
 db:
 	./scripts/init_db.sh
+
+sandbox-image:
+	./tool_gateway/images/build_nmap_image.sh
 
 test: test-opa test-py
 

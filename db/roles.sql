@@ -8,6 +8,10 @@
 --   migration_owner  runs DDL/alembic and owns every table.
 --   cyberorch_app    the runtime connection. NOSUPERUSER, NOBYPASSRLS, and
 --                    owner of nothing. RLS therefore always applies to it.
+--   registry_admin   the Engagement Manager's connection. Identical to
+--                    cyberorch_app except that it may write scope_registry and
+--                    metadata_registry (§5). Not an administrator: same RLS,
+--                    same engagement boundary, two extra tables it can write.
 --
 -- Run as a superuser, before the first migration. Passwords come from psql
 -- variables so none is committed: see scripts/init_db.sh.
@@ -24,6 +28,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cyberorch_app') THEN
         CREATE ROLE cyberorch_app LOGIN;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'registry_admin') THEN
+        CREATE ROLE registry_admin LOGIN;
+    END IF;
 END
 $$;
 
@@ -37,3 +44,11 @@ ALTER ROLE migration_owner
 ALTER ROLE cyberorch_app
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'cyberorch_app_password';
+
+-- The Engagement Manager's role (§5). Deliberately NOBYPASSRLS: the ability to
+-- write the registries is not the ability to reach across engagements. It is
+-- cyberorch_app plus write access to exactly two tables, nothing more — an
+-- administrator role here would trade one over-broad grant for another.
+ALTER ROLE registry_admin
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'registry_admin_password';
