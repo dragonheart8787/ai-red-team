@@ -180,6 +180,32 @@ def reconstruct_decision(conn: Connection, *, proposal_id: str) -> DecisionChain
     those runs produced. Subject ids are followed rather than joined, because
     audit_log holds no foreign keys by design (see migration 0003) and the
     subjects live in different tables.
+
+    Outward only, and that boundary is worth stating because it is invisible
+    from the result. The chain does **not** include the task the proposal came
+    from — ``task.created``, ``task.claimed``, ``task.completed`` are recorded
+    against the task id, which sits *behind* the proposal rather than ahead of
+    it. Nor does it include the engagement's registry setup, whose subjects are
+    scope objects and assets.
+
+    So "why was this action allowed, and what did it do" is fully answerable
+    here, while "which agent was asked to do this, and when" is not. That second
+    question is answerable from :func:`engagement_timeline`, or by following
+    ``action_proposals.task_id``. ``test_reconstruct_decision_matches_the_raw_
+    audit_query_it_replaced`` pins the exact difference against the
+    whole-engagement query this function replaced, so a future widening has a
+    test to update rather than a surprise to discover.
+
+    DEFERRED — walking backwards to the task
+    -----------------------------------------
+    Extending the chain to include the originating task is a small change and
+    is deliberately not made yet. It needs a decision the design does not
+    record: whether a task's events belong to *every* proposal that task
+    produced, which would make one task's claim appear in several chains and
+    make "the events belonging to one proposal" stop being a partition. Until a
+    planner emits more than one proposal per task — MVP-Kernel's Fake Planner
+    emits exactly one — there is no case to design against, and guessing would
+    fix the shape before the requirement exists.
     """
     events = [
         _to_event(r) for r in conn.execute(
