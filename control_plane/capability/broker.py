@@ -42,6 +42,30 @@ here, which belongs upstream in the resolvers and OPA: two places deciding the
 same thing is how they come to disagree. Checking that an existing decision's
 premises still hold is not deciding. ``test_broker_reads_scope_only_as_a_liveness
 _check`` pins the difference structurally.
+
+DEFERRED — heartbeat_required is declared but not enforced
+----------------------------------------------------------
+``capabilities.heartbeat_required`` exists in the schema, defaults to TRUE, and
+is read by nothing. §4.6's capability object carries the field, so the column
+matches the design; what is missing is the enforcement it implies — a sweeper
+that revokes a capability whose heartbeat has stopped arriving.
+
+Not implemented for MVP-Kernel, and the column is kept rather than dropped
+because the gap is in behaviour, not in the schema. Today a capability with no
+heartbeat simply lapses when its lease expires, which is safe but slower than
+§4.6 intends: the lease is the deadline rather than the heartbeat interval.
+
+Two things have to exist first, and neither does yet. There is no scheduler in
+MVP-Kernel — ``reconcile_stale_dispatches`` is called by tests, not by anything
+periodic — so a sweeper would have nothing to run it. And ``last_heartbeat_at``
+is only meaningful once an agent heartbeats on its own schedule rather than
+when a test calls ``renew_capability``; with a real worker loop the expected
+interval becomes definable, and until then any staleness threshold would be a
+number invented to make a test pass.
+
+When both exist: sweep for ``heartbeat_required AND last_heartbeat_at <
+now() - interval``, revoke with a distinct reason, and treat a missed heartbeat
+as the anomaly §4.6 calls it rather than as an expiry.
 """
 
 from __future__ import annotations
@@ -213,11 +237,23 @@ def current_policy_version(conn: Connection, engagement_id: str) -> int:
     higher id, so the version moves and every outstanding capability is
     re-checked against it on its next heartbeat.
 
-    Deactivating a layer does not move the version, and that is sound rather
-    than an oversight: removing a layer can only widen the effective policy
-    (allow lists intersect, deny lists union, rate limits take the minimum), and
-    I9 is about a capability outliving a *tightening*. A widening leaves an
-    existing capability no more permissive than it already was.
+    Deactivating a layer *does* move the version, downward, because the maximum
+    is taken over active rows only. An earlier version of this docstring claimed
+    the opposite — that deactivation left the version alone, and that this was
+    sound because removing a layer can only widen. The reasoning was fine and
+    the claim was false: retiring the highest-id layer drops the maximum to the
+    next one, and every outstanding capability is then revoked on its next
+    heartbeat for POLICY_CHANGED.
+
+    That over-revokes on a widening, which is the harmless direction to be wrong
+    in, so it is left as it stands rather than papered over with a monotonic
+    counter that would make the version stop describing which layers are live.
+    ``test_deactivating_a_layer_widens_and_revokes_nothing`` pins the real
+    behaviour so the next reader is not misled the way this comment was.
+
+    The version never repeats: ids come from a sequence and nothing reactivates
+    a layer, so a decreased maximum is still a value no earlier capability
+    recorded.
     """
     return conn.execute(
         text("""

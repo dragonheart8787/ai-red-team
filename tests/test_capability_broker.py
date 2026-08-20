@@ -51,6 +51,7 @@ from control_plane.capability.broker import (
     revoke_all_for_engagement,
     revoke_capability,
 )
+from control_plane.policy.layers import EMERGENCY_OVERLAY, publish_policy_layer
 from control_plane.state.db import engagement_scope
 
 
@@ -76,6 +77,20 @@ def credential(engagement_id):
 
 @pytest.fixture
 def approval(engagement_id):
+    """Test-only seeding. There is no approval-granting operation to call.
+
+    ``approvals`` is read by check_preconditions -- valid_until and revoked are
+    both checked on every issue and renewal -- and written by nothing in the
+    control plane. That is deliberate for MVP-Kernel rather than the kill-switch
+    pattern repeating: §4.7's Human Approval flow needs an Approval API and a
+    reviewer-facing surface, and both are explicitly out of scope for this stage.
+
+    So these rows are seeded directly, and the *checking* of them is what these
+    tests cover. Granting and revoking an approval belong to the Phase 1
+    Approval API; when it exists, this fixture should call it, and a
+    revoke_approval() cascade will need the same treatment revoke_credential()
+    got in D9.
+    """
     aid = _uid("APR")
     with engagement_scope(engagement_id) as conn:
         conn.execute(
@@ -120,15 +135,23 @@ def _heartbeat(engagement_id, capability_id, ttl_seconds=60):
 
 
 def _publish_emergency_overlay(engagement_id, version):
-    """Tighten globally, mid-engagement — the §4.5 emergency channel."""
+    """Tighten mid-engagement — the §4.5 emergency channel.
+
+    Goes through publish_policy_layer rather than an INSERT. It used to be a raw
+    write, which is how policy_layers ended up being the third state this system
+    enforced but could not set: the tests exercised the column and nobody
+    noticed there was no operation behind it.
+
+    Scoped to the engagement, not global. A global layer is visible to every
+    engagement and outlives the test that published it, so a suite-wide DENY on
+    network.scan accumulated in the database and would now change what
+    load_effective_policy returns for unrelated tests.
+    """
     with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("""
-                INSERT INTO policy_layers (layer, version, document)
-                VALUES ('emergency_overlay', :v,
-                        '{"actions": {"network.scan": "DENY"}}'::jsonb)
-            """),
-            {"v": version},
+        publish_policy_layer(
+            conn, engagement_id=engagement_id, layer=EMERGENCY_OVERLAY,
+            version=version, document={"actions": {"network.scan": "DENY"}},
+            actor="incident-commander", scoped_to_engagement=True,
         )
 
 
@@ -182,6 +205,8 @@ def test_issue_is_refused_when_the_engagement_is_not_available(
 
 
 def test_issue_is_refused_on_an_expired_approval(engagement_id):
+    # Test-only seeding; see the `approval` fixture for why there is no
+    # granting operation to call instead (Phase 1 Approval API).
     aid = _uid("APR")
     with engagement_scope(engagement_id) as conn:
         conn.execute(
@@ -260,6 +285,7 @@ def test_emergency_tighten_then_heartbeat_revokes(engagement_id, approval, crede
 
 def test_expired_approval_then_heartbeat_revokes(engagement_id, credential):
     """§4.7: a capability must not outlive the approval that justified it."""
+    # Test-only seeding; see the `approval` fixture.
     aid = _uid("APR")
     with engagement_scope(engagement_id) as conn:
         conn.execute(

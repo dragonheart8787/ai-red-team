@@ -56,6 +56,12 @@ from control_plane.orchestrator.engagement import (
     retire_scope_object,
     revoke_credential,
 )
+from control_plane.policy.layers import (
+    EMERGENCY_OVERLAY,
+    load_effective_policy,
+    publish_policy_layer,
+)
+from control_plane.policy.merge import EffectivePolicy
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
 from control_plane.state.db import engagement_scope, registry_admin_scope
@@ -73,38 +79,6 @@ SCOPE_PREFIX = {"a": "10.90.0", "b": "10.91.0"}
 
 def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
-
-
-def _effective_policy_shape(conn, engagement_id: str) -> dict:
-    """The parts of the merged policy I2 is about, read from the database.
-
-    Deliberately computed from the stored layers rather than from a value the
-    test kept, so a tighten that failed to land shows up as a difference rather
-    than being masked by the test's own bookkeeping.
-    """
-    rows = conn.execute(
-        text("""
-            SELECT document FROM policy_layers
-            WHERE active IS TRUE
-              AND (engagement_id IS NULL OR engagement_id = :eid)
-            ORDER BY id
-        """),
-        {"eid": engagement_id},
-    ).scalars().all()
-
-    data_deny: set[str] = set()
-    scope_deny: set[str] = set()
-    actions: dict[str, str] = {}
-    for doc in rows:
-        data_deny |= set(doc.get("data_deny") or ())
-        scope_deny |= set(doc.get("scope_deny") or ())
-        for key, value in (doc.get("actions") or {}).items():
-            # DENY-dominant, matching merge.resolve_action.
-            if value == "DENY" or actions.get(key) == "DENY":
-                actions[key] = "DENY"
-            elif value == "ALLOW":
-                actions.setdefault(key, "ALLOW")
-    return {"data_deny": data_deny, "scope_deny": scope_deny, "actions": actions}
 
 
 class CapabilityLifecycle(RuleBasedStateMachine):
@@ -130,7 +104,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         self.must_fail_renewal: set[str] = set()
         # Once here, the database row must already read revoked.
         self.must_be_revoked: set[str] = set()
-        self.policy_shape: dict | None = None
+        self.policy_shape: EffectivePolicy | None = None
         self.tighten_counter = 0
         self.dispatch_claims: dict[str, int] = {}
         # Capabilities revoked specifically by a scope retirement, and by
@@ -192,7 +166,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                     data_class=["network_service"], actor="engagement-manager",
                 )
         with engagement_scope(self.engagement_id) as conn:
-            self.policy_shape = _effective_policy_shape(conn, self.engagement_id)
+            self.policy_shape = load_effective_policy(conn, self.engagement_id)
 
         seeded = []
         for key in sorted(SCOPE_CIDRS):
@@ -358,30 +332,29 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         """
         self.tighten_counter += 1
         with engagement_scope(self.engagement_id) as conn:
-            before = _effective_policy_shape(conn, self.engagement_id)
-            conn.execute(
-                text("""
-                    INSERT INTO policy_layers (layer, version, engagement_id, document)
-                    VALUES ('emergency_overlay', :v, :eid,
-                            CAST(:doc AS jsonb))
-                """),
-                {
-                    "v": self.tighten_counter, "eid": self.engagement_id,
-                    "doc": f'{{"data_deny": ["tightened_{self.tighten_counter}"], '
-                           f'"actions": {{"destructive_action": "DENY"}}}}',
+            before = load_effective_policy(conn, self.engagement_id)
+            publish_policy_layer(
+                conn, engagement_id=self.engagement_id,
+                layer=EMERGENCY_OVERLAY, version=self.tighten_counter,
+                document={
+                    "data_deny": [f"tightened_{self.tighten_counter}"],
+                    "actions": {"destructive_action": "DENY"},
                 },
+                actor="incident-commander", scoped_to_engagement=True,
             )
-            after = _effective_policy_shape(conn, self.engagement_id)
+            after = load_effective_policy(conn, self.engagement_id)
 
-        # I2, at the moment of the change.
-        assert after["data_deny"] >= before["data_deny"], (
+        # I2, at the moment of the change, against the merged policy the system
+        # would actually enforce rather than a shape the test computed itself.
+        assert after.data_deny >= before.data_deny, (
             "an emergency overlay removed entries from data_deny"
         )
-        assert after["scope_deny"] >= before["scope_deny"]
-        for action, decision in before["actions"].items():
+        assert after.scope_deny >= before.scope_deny
+        assert after.rate_limit <= before.rate_limit
+        for action, decision in before.actions.items():
             if decision == "DENY":
-                assert after["actions"].get(action) == "DENY", (
-                    f"{action} moved from DENY to {after['actions'].get(action)}"
+                assert after.actions.get(action) == "DENY", (
+                    f"{action} moved from DENY to {after.actions.get(action)}"
                 )
         self.policy_shape = after
 
@@ -732,13 +705,19 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         if self.policy_shape is None:
             return
         with engagement_scope(self.engagement_id) as conn:
-            current = _effective_policy_shape(conn, self.engagement_id)
-        assert current["data_deny"] >= self.policy_shape["data_deny"], (
+            current = load_effective_policy(conn, self.engagement_id)
+        assert current.data_deny >= self.policy_shape.data_deny, (
             "the effective data_deny shrank (I2)"
         )
-        for action, decision in self.policy_shape["actions"].items():
+        assert current.scope_deny >= self.policy_shape.scope_deny, (
+            "the effective scope_deny shrank (I2)"
+        )
+        assert current.rate_limit <= self.policy_shape.rate_limit, (
+            "the effective rate limit was raised (I2)"
+        )
+        for action, decision in self.policy_shape.actions.items():
             if decision == "DENY":
-                assert current["actions"].get(action) == "DENY", (
+                assert current.actions.get(action) == "DENY", (
                     f"{action} was reopened after being denied (I2)"
                 )
 
