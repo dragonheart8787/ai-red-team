@@ -12,6 +12,9 @@ dependencies = [
     "alembic>=1.14",
     "httpx>=0.28",
     "docker>=7.1",
+    # MVP-0: the live Policy Reviewer. The kernel itself never calls a model
+    # -- this is needed only by agents/llm/.
+    "anthropic>=0.69",
 ]
 
 [project.optional-dependencies]
