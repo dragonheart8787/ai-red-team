@@ -39,6 +39,14 @@ BACKEND_ENV = "CYBERORCH_REVIEWER_BACKEND"
 #: because "opus" means something to the CLI and nothing to a local server.
 MODEL_ENV = "CYBERORCH_REVIEWER_MODEL"
 
+#: The same two variables for the Worker (D13), separate from the Reviewer's so
+#: one role can be a real model while the other stays scripted. That is not a
+#: convenience: D13's whole discipline is introducing one source of
+#: non-determinism at a time, and a single switch flipping both would make that
+#: impossible to hold.
+WORKER_BACKEND_ENV = "CYBERORCH_WORKER_BACKEND"
+WORKER_MODEL_ENV = "CYBERORCH_WORKER_MODEL"
+
 FAKE = "fake"
 API = "api"
 CLAUDE_CODE = "claude_code"
@@ -94,4 +102,44 @@ def build_reviewer(
 
     raise ReviewerSelectionError(
         f"unknown reviewer backend {backend!r}; expected one of {BACKENDS}"
+    )
+
+
+#: Which Workers can be built. Only two so far: the scripted one, and the
+#: headless CLI. There is no API-billed Worker because nobody has asked for one
+#: and adding a backend nothing exercises is how an unused code path acquires a
+#: bug in private.
+WORKER_BACKENDS = (FAKE, CLAUDE_CODE)
+
+
+def build_worker(
+    backend: str | None = None, *, model: str | None = None, **kwargs: Any
+):
+    """Return the configured Worker (D13).
+
+    Defaults to ``fake`` for the reason ``build_reviewer`` does, with one extra
+    edge: a Worker reaching a real model does not merely cost money, it decides
+    what the system will be asked to *do*. An unconfigured checkout must get the
+    scripted one.
+
+    An unknown name raises rather than falling back, so a typo cannot produce a
+    run that looks like it exercised a real model and did not.
+    """
+    backend = (backend or os.environ.get(WORKER_BACKEND_ENV) or FAKE).strip().lower()
+    model = model or os.environ.get(WORKER_MODEL_ENV) or None
+
+    if backend == FAKE:
+        from agents.fake.fake_worker import FakeWorker
+
+        return FakeWorker(**kwargs)
+
+    if backend == CLAUDE_CODE:
+        from agents.llm.claude_code_headless_worker import ClaudeCodeHeadlessWorker
+
+        return ClaudeCodeHeadlessWorker(
+            **({"model": model} if model else {}), **kwargs
+        )
+
+    raise ReviewerSelectionError(
+        f"unknown worker backend {backend!r}; expected one of {WORKER_BACKENDS}"
     )

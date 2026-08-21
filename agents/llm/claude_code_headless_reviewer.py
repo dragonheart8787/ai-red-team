@@ -68,14 +68,13 @@ measurable on the same terms as the paid one.
 
 from __future__ import annotations
 
-import json
-import shutil
 import subprocess
-import tempfile
 import time
 from typing import Any
 
 from agents.base_agent import ProposedAction, ReviewerOpinion
+from agents.llm import headless
+from agents.llm.headless import CLI, DEFAULT_MODEL, ISOLATION_FLAGS, HeadlessError
 from agents.llm.reviewer_base import (
     OPINION_SCHEMA,
     SYSTEM_PROMPT,
@@ -84,25 +83,7 @@ from agents.llm.reviewer_base import (
     ReviewCall,
 )
 
-#: Alias rather than a pinned id: the CLI resolves 'opus'/'sonnet' to whatever
-#: the subscription currently serves, and pinning here would silently diverge
-#: from what the user is actually paying for.
-DEFAULT_MODEL = "opus"
-
-CLI = "claude"
-
-#: The isolation flags, as one list so a test can assert on the whole set rather
-#: than on whichever ones somebody remembered to check. Verified against
-#: `claude --help` on 2.1.237 rather than recalled — several of these changed
-#: name across versions, and a stale flag fails open by being ignored.
-ISOLATION_FLAGS: tuple[str, ...] = (
-    "--tools", "",                  # zero tools
-    "--safe-mode",                  # no CLAUDE.md, skills, plugins, hooks, MCP
-    "--setting-sources", "",        # no settings files
-    "--strict-mcp-config",          # no ambient MCP servers
-    "--disable-slash-commands",     # no skills
-    "--no-session-persistence",     # no memory between proposals
-)
+__all__ = ["CLI", "DEFAULT_MODEL", "ISOLATION_FLAGS", "ClaudeCodeHeadlessReviewer"]
 
 
 class ClaudeCodeHeadlessReviewer(BaseReviewer):
@@ -129,15 +110,10 @@ class ClaudeCodeHeadlessReviewer(BaseReviewer):
 
     def build_command(self, prompt: str) -> list[str]:
         """The exact argv. Separate so a test can assert on it without a call."""
-        return [
-            self.executable,
-            "--print", prompt,
-            "--model", self.model,
-            "--system-prompt", SYSTEM_PROMPT,
-            "--output-format", "json",
-            "--json-schema", json.dumps(OPINION_SCHEMA),
-            *ISOLATION_FLAGS,
-        ]
+        return headless.build_command(
+            prompt=prompt, system_prompt=SYSTEM_PROMPT, schema=OPINION_SCHEMA,
+            model=self.model, executable=self.executable,
+        )
 
     # -- review ------------------------------------------------------------
 
@@ -148,80 +124,19 @@ class ClaudeCodeHeadlessReviewer(BaseReviewer):
             proposal=proposal, canonical_target=canonical_target,
         )
         started = time.monotonic()
-
-        # Fresh and empty every call. Claude Code reads context from cwd, and a
-        # reviewer that could see this repository would be reviewing proposals
-        # with the project's own documentation in its context.
-        workdir = tempfile.mkdtemp(prefix="reviewer-")
         try:
-            completed = self._runner(
-                self.build_command(prompt),
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
+            result = headless.run_headless(
+                command=self.build_command(prompt),
+                timeout_seconds=self.timeout_seconds,
+                runner=self._runner,
             )
-        except subprocess.TimeoutExpired:
-            return self._escalate(started, f"timed out after {self.timeout_seconds}s")
-        except (OSError, ValueError) as exc:
-            return self._escalate(started, f"{type(exc).__name__}: {exc}")
-        finally:
-            shutil.rmtree(workdir, ignore_errors=True)
-
-        if completed.returncode != 0:
-            # stderr is truncated: it can carry the prompt back, and the prompt
-            # contains attacker-influenced text that would then land in an audit
-            # payload unbounded.
-            detail = (completed.stderr or "").strip()[:200]
-            return self._escalate(
-                started, f"cli exited {completed.returncode}: {detail}",
-            )
-
-        try:
-            envelope = self._parse_json_object(completed.stdout)
-            payload = self._unwrap(envelope)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return self._escalate(started, f"unparseable reply: {exc}")
+        except HeadlessError as exc:
+            return self._escalate(started, str(exc))
 
         self.calls.append(ReviewCall(
             latency_seconds=time.monotonic() - started,
-            input_tokens=self._usage(envelope, "input_tokens"),
-            output_tokens=self._usage(envelope, "output_tokens"),
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
             model=self.model,
         ))
-        return self._to_opinion(payload)
-
-    # -- helpers -----------------------------------------------------------
-
-    def _unwrap(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Pull the opinion out of the CLI's result envelope.
-
-        ``--output-format json`` returns metadata around the model's answer, and
-        the answer itself may arrive either already parsed or as a JSON string
-        in ``result``. Both are accepted; anything else escalates rather than
-        being guessed at.
-
-        An envelope reporting an error is treated as a failure even though the
-        process exited zero — a CLI that says ``is_error`` and returns 0 would
-        otherwise pass a hallucinated opinion straight through.
-        """
-        if envelope.get("is_error") or envelope.get("subtype") == "error":
-            raise ValueError(f"cli reported an error: {str(envelope)[:200]}")
-
-        result = envelope.get("result", envelope)
-        if isinstance(result, str):
-            result = self._parse_json_object(result)
-        if not isinstance(result, dict):
-            raise ValueError(f"expected an object, got {type(result).__name__}")
-        return result
-
-    @staticmethod
-    def _usage(envelope: dict[str, Any], field: str) -> int:
-        usage = envelope.get("usage")
-        if isinstance(usage, dict):
-            try:
-                return int(usage.get(field, 0) or 0)
-            except (TypeError, ValueError):
-                return 0
-        return 0
+        return self._to_opinion(result.payload)
