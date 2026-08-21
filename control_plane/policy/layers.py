@@ -7,12 +7,22 @@ means the mechanism I2 rests on was exercised only as a column, never as an
 operation. That is the same shape as the kill switch D8 found and the credential
 cascade D9 found: enforced, and unreachable.
 
-Two functions, and the second is why the first is worth having:
+Three functions, and each later one is why the earlier is worth having:
 
 :func:`publish_policy_layer`
     The operation. Validates, inserts, audits.
 :func:`load_effective_policy`
     Reads the stored layers and merges them into an :class:`EffectivePolicy`.
+:func:`list_effective_policy_layers`
+    Reports the rows behind that merge, and where each came from.
+
+The third was added at D14, after DEFERRED 11.1 had happened twice. A merged
+policy says ``network.scan: DENY`` and nothing about which of nineteen rows
+said so, which is fine until the answer is surprising — and then the only tool
+is SQL against ``policy_layers``. The listing and the merge share one selection
+predicate (``_APPLICABLE``) rather than each having its own, because two
+answers that can disagree about what is in force is worse than one answer that
+is hard to read.
 
 The loader deserves a note, because its absence was itself a finding. Before
 this, ``policy_layers`` was read by exactly one thing — ``current_policy_version``
@@ -38,6 +48,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -56,6 +67,10 @@ from control_plane.policy.merge import (
 )
 
 EMERGENCY_OVERLAY = "emergency_overlay"
+
+#: How a layer's reach is reported. A word, not an inference from a null column.
+GLOBAL = "global"
+ENGAGEMENT = "engagement"
 
 
 class PolicyLayerError(ValueError):
@@ -218,6 +233,159 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
     )
 
 
+#: The one place the "which layers apply here" question is answered in SQL.
+#:
+#: Extracted at D14 so ``load_effective_policy`` and
+#: ``list_effective_policy_layers`` cannot describe different sets. That is
+#: DEFERRED 11.1's second binding constraint, and it is a constraint rather than
+#: a preference: a listing that shows a different set from the one being
+#: enforced is worse than no listing at all, because it will be believed.
+#:
+#: Sharing the predicate makes divergence impossible by construction rather than
+#: by discipline. ``test_the_listing_returns_exactly_the_rows_the_merge_consumed``
+#: still watches the statements ``load_effective_policy`` actually issues, so a
+#: future edit that stops using this helper is caught rather than assumed away.
+_APPLICABLE = """
+    FROM policy_layers
+    WHERE active IS TRUE
+      AND (engagement_id IS NULL OR engagement_id = :eid)
+"""
+
+
+def _select_applicable(conn: Connection, engagement_id: str, columns: str):
+    return conn.execute(
+        text(f"SELECT {columns} {_APPLICABLE} ORDER BY id"), {"eid": engagement_id},
+    ).mappings().all()
+
+
+@dataclass(frozen=True)
+class EffectiveLayer:
+    """One row that is currently in force, as the merge sees it.
+
+    ``scope`` is a field rather than something a reader derives from
+    ``engagement_id`` being null. DEFERRED 11.1's third constraint: the whole
+    D11-6 failure was a global layer read as though it were the engagement's
+    own, and "you can tell because the other column is empty" is exactly the
+    inference that failed.
+    """
+
+    id: int
+    layer: str
+    version: int
+    scope: str
+    engagement_id: str | None
+    customer_id: str | None
+    document: Mapping[str, Any]
+    created_at: Any
+    published_by: str | None
+    published_at: Any
+    attribution_note: str | None = None
+
+    @property
+    def is_global(self) -> bool:
+        return self.scope == GLOBAL
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "layer": self.layer,
+            "version": self.version,
+            "scope": self.scope,
+            "engagement_id": self.engagement_id,
+            "customer_id": self.customer_id,
+            "document": dict(self.document),
+            "created_at": self.created_at,
+            "published_by": self.published_by,
+            "published_at": self.published_at,
+            "attribution_note": self.attribution_note,
+        }
+
+
+def list_effective_policy_layers(
+    conn: Connection, engagement_id: str
+) -> tuple[EffectiveLayer, ...]:
+    """Which layers are in force here, and where each came from (D14, 11.1).
+
+    The operation D11-6 needed twice and did not have. ``load_effective_policy``
+    answers "what is the policy" — ``network.scan: DENY`` — and nothing about
+    why; ``current_policy_version`` answers with a number. Both were built on
+    rows reachable only by writing SQL against ``policy_layers``, so "why is
+    this engagement denied" was answerable by someone who already knew the
+    schema and by nobody else. Twice: once in the D11 live run, and again in
+    D12.5 when a container snapshot rolled the same nineteen rows back.
+
+    **It reports; it does not decide.** No merge happens here and no judgement
+    about what *should* be in force. The rows come from the same predicate
+    ``load_effective_policy`` selects on, and the merged answer still comes from
+    that function. A second implementation of §4.5's algebra that could disagree
+    with the first would be worse than the unreadable state this replaces.
+
+    **Attribution is honest about what it cannot say.** ``published_by`` comes
+    from the ``policy_layer.published`` audit row, which is RLS-scoped to the
+    engagement whose connection wrote it (§8.6, I4). For a global layer that is
+    usually a different engagement, so the record is invisible from here — and
+    the listing says so in ``attribution_note`` rather than leaving the field
+    blank. A blank would read as "nobody published it", which is false and is
+    precisely the confusion D11-7 is about. This function does not fix D11-7;
+    it declines to hide it.
+
+    Read-only, over the connection it is handed. No new grant: ``policy_layers``
+    and ``audit_log`` are already readable by ``cyberorch_app``.
+    """
+    rows = _select_applicable(
+        conn, engagement_id,
+        "id, layer, version, engagement_id, customer_id, document, created_at",
+    )
+    attribution = _publication_audit(conn, [row["id"] for row in rows])
+
+    layers: list[EffectiveLayer] = []
+    for row in rows:
+        is_global = row["engagement_id"] is None
+        published = attribution.get(row["id"])
+        note = None
+        if published is None:
+            note = (
+                "the publication audit record is not visible from this "
+                "engagement" + (
+                    "; a global layer is normally published from another one, "
+                    "and audit_log is scoped per engagement (DEFERRED 11.2)"
+                    if is_global else ""
+                )
+            )
+        layers.append(EffectiveLayer(
+            id=row["id"], layer=row["layer"], version=row["version"],
+            scope=GLOBAL if is_global else ENGAGEMENT,
+            engagement_id=row["engagement_id"], customer_id=row["customer_id"],
+            document=row["document"] or {}, created_at=row["created_at"],
+            published_by=published["actor"] if published else None,
+            published_at=published["ts"] if published else None,
+            attribution_note=note,
+        ))
+    return tuple(layers)
+
+
+def _publication_audit(
+    conn: Connection, layer_ids: list[int]
+) -> dict[int, Mapping[str, Any]]:
+    """Who published each layer, for the ids whose audit row is visible here.
+
+    Deliberately returns nothing for the rest rather than a placeholder. RLS
+    decides what is visible and this function does not argue with it.
+    """
+    if not layer_ids:
+        return {}
+    rows = conn.execute(
+        text("""
+            SELECT subject_id, actor, ts FROM audit_log
+            WHERE event_type = 'policy_layer.published'
+              AND subject_id = ANY(:ids)
+            ORDER BY audit_id
+        """),
+        {"ids": [str(i) for i in layer_ids]},
+    ).mappings().all()
+    return {int(row["subject_id"]): row for row in rows}
+
+
 def load_effective_policy(
     conn: Connection, engagement_id: str
 ) -> EffectivePolicy:
@@ -226,6 +394,8 @@ def load_effective_policy(
     Selects the same set ``current_policy_version`` counts — active layers that
     are global or this engagement's — so the version a capability records and
     the policy it was issued under describe the same thing.
+    :func:`list_effective_policy_layers` reports that same set, through the same
+    predicate, so the listing and the enforcement cannot come apart.
 
     Every active applicable row participates; see :func:`_combine` for why rows
     sharing a layer name are folded together rather than resolved by recency.
@@ -234,15 +404,7 @@ def load_effective_policy(
     table yields an unconstrained policy rather than an empty one — the §4.5 bug
     that ``intersect_allow`` exists to avoid, reached from the loading side.
     """
-    rows = conn.execute(
-        text("""
-            SELECT layer, document FROM policy_layers
-            WHERE active IS TRUE
-              AND (engagement_id IS NULL OR engagement_id = :eid)
-            ORDER BY id
-        """),
-        {"eid": engagement_id},
-    ).mappings().all()
+    rows = _select_applicable(conn, engagement_id, "id, layer, document")
 
     grouped: dict[str, list[PolicyLayer]] = {name: [] for name in LAYER_ORDER}
     for row in rows:
@@ -256,9 +418,13 @@ def load_effective_policy(
 
 __all__ = [
     "EMERGENCY_OVERLAY",
+    "ENGAGEMENT",
+    "GLOBAL",
+    "EffectiveLayer",
     "EmergencyOverlayError",
     "PolicyLayerError",
     "deactivate_policy_layer",
+    "list_effective_policy_layers",
     "load_effective_policy",
     "publish_policy_layer",
 ]
