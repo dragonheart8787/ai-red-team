@@ -600,3 +600,179 @@ CYBERORCH_REVIEWER_BACKEND=claude_code PYTHONPATH=. \
 The harness refuses rather than degrades: no reviewer backend configured, no
 sandbox image, or a target outside the allowlist each stop the run with a
 message. It reads the target's address from Docker and never from a constant.
+
+---
+
+# 10. D12.5 — the D12 fixes, replayed against the live target
+
+D12 fixed D11-4 and D11-5, and both fixes were mutation-tested and pinned by
+unit and Rego tests. This is the same two counterexamples put back through the
+whole pipeline in the environment that produced them: the real target container
+on the real allowlist network, the `claude_code` reviewer, and the real Docker
+sandbox. No new behaviour, and no new production code.
+
+Harness: `scripts/live_run/verify_d12.py`. Engagement `ENG-D125-c174464658`,
+target `10.79.0.2` on `cyberorch-allow-97e616e2f962` (`10.79.0.0/24`), scope
+object `SCOPE-6a320e933a` covering the range, effective policy
+`{network.recon: ALLOW, network.scan: ALLOW}`.
+
+**All checks passed**, on both of the two runs made. The two cases and their
+two controls:
+
+| | Target | `max_targets` | Decision | Stopped at |
+|---|---|---|---|---|
+| A | `cidr 10.79.0.0/24` | 1 | DENY `target_count_exceeds_budget` | OPA |
+| B | `cidr 10.79.0.2/24` | 1 | DENY `target_not_canonicalizable` | Canonicalizer |
+| C | `cidr 10.79.0.0/24` | 256 | ALLOW, 256 hosts scanned | ran |
+| D | `ip 10.79.0.2` | 1 | ALLOW, 3 ports found | ran |
+
+The table is the first run. A second run, made after a change to the harness,
+returned **HUMAN_APPROVAL** for case D — recorded below rather than smoothed
+over, because the reason is §6's escalation-by-narration and not the kernel.
+
+## A — D11-4 replayed: the budget deny happens before a capability exists
+
+```
+decision           DENY
+deny_reasons       ['target_count_exceeds_budget']
+approval_reasons   []
+broker_call_count  0
+capabilities rows  0
+tool_runs rows     0
+audit events       ['proposal.submitted', 'policy_reviewer.opinion', 'policy.decided']
+```
+
+The checks that matter are the ones distinguishing *where* it stopped, because
+"denied at OPA" and "capability issued then refused downstream" both end in no
+scan. The Capability Broker was wrapped and counted (Scenario B's technique,
+for Scenario B's reason: an absent capability row cannot tell "never asked
+for" from "asked for and refused"), and the sandbox passed in was one that
+raises on any call at all. Zero broker calls, zero capability rows, no
+`capability.issued` in the audit trail, and the sandbox never fired.
+
+`policy.decided` *is* present and the proposal row *was* persisted, which is
+the positive half: the pipeline ran all the way to the decision point and the
+decision is what stopped it. `deny_reasons` is exactly one entry, so nothing
+incidental produced the DENY.
+
+The reviewer rated it `low`, `recommended_escalation: false`, no hints — the
+DENY owes nothing to the model, which is the point.
+
+## B — D11-5 replayed: this one never reaches OPA
+
+Direct canonicalizer call first:
+
+```
+CanonicalizationError: cidr '10.79.0.2/24' has host bits set. It is ambiguous
+between one host and the 256-address network 10.79.0.0/24, and normalizing it
+would pick the wider reading. Pass 10.79.0.0/24 for the network, or the bare
+address for the host.
+```
+
+Then the same target through `propose_action`:
+
+```
+decision              DENY
+deny_reasons          ['target_not_canonicalizable']
+failure               cidr '10.79.0.2/24' has host bits set. ...
+action_proposal rows  0
+broker_call_count     0
+reviewer_opinion      None
+audit events          ['proposal.rejected']
+```
+
+**The distinction the brief asked for, confirmed:** A and B fail at different
+places and the record says which. B produces no `policy.decided`, no proposal
+row, and no reviewer call — it is refused by the Canonicalizer before anything
+downstream exists. Had the old widening still been in place, B would have
+become `10.79.0.0/24` and come back with A's `target_count_exceeds_budget`
+from OPA instead: same verdict, different mechanism, and only the audit trail
+tells them apart. It does.
+
+## C and D — the controls
+
+C changes only the budget: `max_targets: 256` against the same `/24`. ALLOW, no
+deny reasons, broker called once, `RUN-22e83bd04e4e` succeeded with exit 0 and
+`derived_view.hosts` holding **256** entries. So A's DENY is about the budget
+and not about a `/24` being unscannable — the range is scannable, under a
+budget that covers it.
+
+D is one host, `max_targets: 1`: ALLOW, `RUN-4c44d6f2412e`, ports 25, 80 and
+8080 open on the live target. The ordinary path is untouched by either fix.
+
+Both controls reached ALLOW on the first run, with the reviewer rating all
+four cases `low`, no sensitive-data hints, no escalation — so none of those
+outcomes involved the model.
+
+**On the second run, case D came back HUMAN_APPROVAL.** Nothing about the
+kernel differed: `deny_reasons` was still empty, the target still
+canonicalized, the budget still did not bind. The reviewer had written one
+sentence into `possible_sensitive_data_hint` —
+
+> If port 25 is open, the host may be a mail relay/transfer agent handling
+> internal email
+
+— and OPA's `sensitive_data_hint` rule fires on `count(...) > 0`, so the
+proposal escalated and the broker was not called. That is §6's finding
+recurring in a four-case run: same proposal, same target, `risk_hint: low`,
+`recommended_escalation: false`, escalated anyway by the presence of prose.
+
+It also means these controls are **not deterministic end to end**, and the
+checks are written accordingly: what is asserted is that the escalation came
+from the reviewer's advisory field rather than from the kernel, so the run
+still distinguishes the outcome D12 is about from every other way to end up
+without a scan. Case A, case B and case C were identical across both runs.
+
+## What went wrong on the first attempt, and why it is in this report
+
+The first run of the verification came back with `action_denied_by_policy` on
+every case, including the controls. **D11-6 had recurred.** The same nineteen
+global emergency overlays from 16–19 August were active again — this container
+had been reclaimed and its PostgreSQL data directory rolled back to a snapshot
+taken during D11, after the baseline layer was published (`id=703` is present)
+and before those rows were retired.
+
+So the cause was the environment rather than a regression, and the retirement
+done in D11 was real. What recurred is the *condition*, and with it the
+experience D11-6 is about: a fresh engagement, denied for a reason that is
+nowhere in that engagement, diagnosable only by writing SQL against
+`policy_layers`. Nothing had changed about that, because D12 recorded 11.1 as
+deferred rather than building it.
+
+Two things follow, and both belong in the record rather than in a fix:
+
+* The harness now **refuses to run** when the stored policy does not permit
+  `network.scan`, printing every active layer that mentions the action and
+  where each is scoped. It does not retire anything. A verification script that
+  quietly cleared a global emergency overlay so its own checks could pass would
+  be adjusting the check until the answer is the one wanted — the thing this
+  project has refused since D6. The nineteen rows were retired separately,
+  through `deactivate_policy_layer` under an operator name, so the cleanup is
+  audited.
+* That refusal message is what `list_effective_policy_layers()` would provide,
+  which is now demonstrated twice rather than argued once. It took a debugging
+  cycle in D11 and one screen of output here — but only because a throwaway
+  script re-implemented the query, not because the system gained the interface.
+  **11.1's priority ranking stands, and this is a second data point for it.**
+
+## Limits
+
+* Two runs per case, not a distribution. The kernel paths are deterministic —
+  the same input reaches the same rule, and A, B and C were identical both
+  times — so a larger sample would be measuring the reviewer, which §6 already
+  does at n=10 per case. Case D's divergence between the two runs is that
+  measurement showing through, not variance in what D12 changed.
+* The controls prove the fixes did not over-correct on the paths exercised
+  here. They say nothing about D11-5's registry-side twin, which is unfixed and
+  still open: `scope_registry` stores a scope object's `value` verbatim and
+  `canonicalizer/authorization.py` parses it with `strict=False`, so an
+  Engagement Manager can still register `cidr 10.79.0.2/24` and have it mean
+  the whole range.
+
+## Reproducing
+
+```bash
+scripts/live_run/build_target_image.sh
+PYTHONPATH=. scripts/live_run/start_target.sh
+PYTHONPATH=. python scripts/live_run/verify_d12.py /tmp/d12_5.json
+```
