@@ -162,10 +162,41 @@ def normalize_ip(value: str) -> str:
 
 
 def normalize_cidr(value: str) -> str:
+    """Parse a network, refusing one written as a host address plus a prefix.
+
+    Strict. ``10.79.0.2/24`` raises rather than becoming ``10.79.0.0/24``,
+    which is what it used to do — silently, via ``strict=False``.
+
+    That was this module's own rule broken in its own file: "Ambiguity is an
+    error, not a guess." ``10.79.0.2/24`` has two readings, the host and the
+    network, and masking the host bits picks the wider one. D11 followed that
+    all the way through the pipeline: a proposal naming ``10.79.0.2/24``
+    normalized to the whole ``/24``, was authorized against a scope object
+    covering it, and produced ``nmap ... 10.79.0.0/24`` — 256 addresses from a
+    target block that reads as one host.
+
+    Widening is the wrong direction to be wrong in, so the ambiguity is
+    refused. A caller that means the network passes the network address; a
+    caller that means the host passes ``ip`` or a ``/32``.
+    """
+    text = value.strip()
     try:
-        return str(ipaddress.ip_network(value.strip(), strict=False))
+        network = ipaddress.ip_network(text, strict=True)
     except ValueError as exc:
-        raise CanonicalizationError(f"invalid cidr {value!r}: {exc}") from exc
+        # strict=True raises for both malformed input and host bits set, and
+        # the two deserve different explanations: one is a typo, the other is
+        # a request that would be answered by scanning more than it names.
+        try:
+            relaxed = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            raise CanonicalizationError(f"invalid cidr {value!r}: {exc}") from exc
+        raise CanonicalizationError(
+            f"cidr {value!r} has host bits set. It is ambiguous between one "
+            f"host and the {relaxed.num_addresses}-address network "
+            f"{relaxed}, and normalizing it would pick the wider reading. "
+            f"Pass {relaxed} for the network, or the bare address for the host."
+        ) from exc
+    return str(network)
 
 
 def normalize_path(path: str | None) -> str | None:
