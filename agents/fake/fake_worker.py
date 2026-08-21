@@ -19,14 +19,20 @@ class FakeWorker:
     agent_id = "fake-worker"
 
     def __init__(self, *, discovery_source: str = "explicit_scope",
-                 ports: str = "8080") -> None:
+                 ports: str = "8080", scan_type: str = "connect") -> None:
         self._discovery_source = discovery_source
         self._ports = ports
+        # Constructor argument for the same reason ``ports`` is one, and added
+        # when the D11 live run needed to drive a scan type other than the
+        # default through the real pipeline. "connect" stays the default so
+        # every existing caller is unchanged.
+        self._scan_type = scan_type
 
     def propose(self, *, task: ProposedTask, task_id: str | None = None) -> ProposedAction:
         return ProposedAction(
             action=task.action,
-            target={**task.target, "ports": self._ports, "scan_type": "connect"},
+            target={**task.target, "ports": self._ports,
+                    "scan_type": self._scan_type},
             # The only authorization an agent can express: a pointer to a scope
             # object someone else registered. It cannot mint one.
             authorization={
