@@ -22,8 +22,17 @@ base := {
 		"changes_state": false,
 	},
 	"canonical": {
-		"target": {"logical_identity": {"type": "ip", "value": "10.20.0.7"}},
+		"target": {
+			"logical_identity": {"type": "ip", "value": "10.20.0.7"},
+			"address_count": 1,
+		},
 		"risk": "low",
+	},
+	"capability_request": {
+		"max_duration_seconds": 120,
+		"max_targets": 1,
+		"max_concurrency": 1,
+		"tool": {},
 	},
 	"authorization_resolution": {"authorized": true, "scope_object_id": "SCOPE-2"},
 	"resource_metadata": {
@@ -312,6 +321,76 @@ test_sensitive_data_hint_escalates_but_does_not_deny if {
 
 	r.decision == "HUMAN_APPROVAL"
 	"sensitive_data_hint" in r.approval_reasons
+}
+
+# ---------------------------------------------------------------------------
+# Capability budget (§4.6, I3) — D11-4
+# ---------------------------------------------------------------------------
+# The live run's counterexample, as a permanent regression test: a capability
+# request stating max_targets 1 against a /24, which is 256 addresses. Every
+# other route to DENY is closed in `base`, so this cannot pass incidentally.
+
+test_target_count_over_budget_denies if {
+	r := authz.result with input as object.union(base, {"canonical": {"target": {
+		"logical_identity": {"type": "cidr", "value": "10.20.0.0/24"},
+		"address_count": 256,
+	}}})
+
+	r.decision == "DENY"
+	"target_count_exceeds_budget" in r.deny_reasons
+}
+
+# The control. Raising the budget to cover the range is the only thing that
+# changes, and it is enough -- so the DENY above is about the budget and not
+# about the target being a cidr.
+test_the_same_range_within_budget_is_allowed if {
+	r := authz.result with input as object.union(base, {
+		"canonical": {"target": {
+			"logical_identity": {"type": "cidr", "value": "10.20.0.0/24"},
+			"address_count": 256,
+		}},
+		"capability_request": {"max_targets": 256},
+	})
+
+	r.decision == "ALLOW"
+	count(r.deny_reasons) == 0
+}
+
+test_exactly_at_the_budget_is_allowed if {
+	r := authz.result with input as object.union(base, {
+		"canonical": {"target": {
+			"logical_identity": {"type": "cidr", "value": "10.20.0.0/30"},
+			"address_count": 4,
+		}},
+		"capability_request": {"max_targets": 4},
+	})
+
+	r.decision == "ALLOW"
+}
+
+# I10, both directions. A missing budget is not an unlimited one, and a target
+# whose size nobody stated is not a target of size one.
+test_absent_budget_denies if {
+	stripped := json.remove(base, ["capability_request"])
+	r := authz.result with input as stripped
+
+	r.decision == "DENY"
+	"capability_budget_missing" in r.deny_reasons
+}
+
+test_absent_target_count_denies if {
+	stripped := json.remove(base, ["canonical/target/address_count"])
+	r := authz.result with input as stripped
+
+	r.decision == "DENY"
+	"target_count_unknown" in r.deny_reasons
+}
+
+test_non_numeric_budget_denies if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_targets": "unlimited"}})
+
+	r.decision == "DENY"
+	"capability_budget_missing" in r.deny_reasons
 }
 
 # ---------------------------------------------------------------------------

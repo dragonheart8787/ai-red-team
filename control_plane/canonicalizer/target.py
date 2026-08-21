@@ -75,6 +75,30 @@ class CanonicalTarget:
             base += self.path
         return base
 
+    @property
+    def address_count(self) -> int:
+        """How many addresses this target names (§4.6 ``max_targets``, I3).
+
+        The number the policy compares against the requested budget. It exists
+        because D11 watched a capability recording ``max_targets: 1`` execute a
+        scan against 256 addresses: a ``cidr`` target is one *identity* and one
+        proposal, and the count of things it touches was nowhere in the input.
+
+        A property rather than a stored field, so it cannot drift from the
+        identity it describes.
+
+        **Everything that is not a cidr counts as one, and that is a statement
+        about the identity, not about reachability.** An fqdn may resolve to
+        any number of addresses; this module never resolves anything (§8.9/I8),
+        so it does not know and must not pretend to. One name is one target.
+        A budget meant to bound how many *hosts* a name reaches is not a thing
+        this field can provide, and reading it that way would be the v0.2 bug
+        where discovery quietly widened scope.
+        """
+        if self.logical_identity.type != "cidr":
+            return 1
+        return ipaddress.ip_network(self.logical_identity.value).num_addresses
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "logical_identity": {
@@ -93,6 +117,7 @@ class CanonicalTarget:
             "port": self.port,
             "path": self.path,
             "normalized": self.normalized,
+            "address_count": self.address_count,
         }
 
 

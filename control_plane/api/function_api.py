@@ -259,6 +259,11 @@ def propose_action(
     )
 
     # --- 5. OPA --------------------------------------------------------------
+    # Resolved before the decision rather than at step 6, because since D12 the
+    # policy checks the requested budget against the size of the target (I3).
+    # The same object then goes to the broker, so what OPA judged and what was
+    # issued cannot come apart.
+    requested_budget = budget or Budget(max_duration_seconds=120)
     policy_input = build_policy_input(
         target=target, action=proposal.action, authorization=authorization,
         metadata=metadata, policy=policy,
@@ -271,6 +276,7 @@ def propose_action(
         discovery=proposal.discovery,
         writes_data=proposal.writes_data,
         changes_state=proposal.changes_state,
+        capability_request=requested_budget.as_dict(),
     )
     decision = evaluate(policy_input)
 
@@ -323,7 +329,7 @@ def propose_action(
         constraints={"host": target.logical_identity.value,
                      "ports": proposal.target.get("ports", "8080"),
                      "scan_type": proposal.target.get("scan_type", "connect")},
-        budget=budget or Budget(max_duration_seconds=120),
+        budget=requested_budget,
         ttl_seconds=capability_ttl_seconds or proposal.requested_capability_ttl_seconds,
         proposal_id=proposal_id,
         # The scope object the resolver actually authorized against, carried

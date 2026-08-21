@@ -120,6 +120,7 @@ def build_policy_input(
     writes_data: bool = False,
     changes_state: bool = False,
     requests_in_window: int = 0,
+    capability_request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble ``input`` for the policy.
 
@@ -130,6 +131,18 @@ def build_policy_input(
     that decide whether an action may proceed come from the resolvers and the
     registries. That separation is I6b, expressed as a data shape rather than
     as a rule someone has to follow.
+
+    ``capability_request`` is the §4.6 budget the caller is about to ask the
+    broker for — the ``Budget`` that will be handed to ``issue_capability``,
+    serialized. Present tense on purpose: no capability exists yet at this
+    point, and the policy is deciding whether one should. It arrives as a plain
+    mapping rather than a ``Budget`` so this module keeps knowing nothing about
+    the Capability Broker.
+
+    A caller that passes nothing gets an empty object here rather than a
+    permissive default, and the policy denies on it (I10). Filling in "no
+    stated budget means no limit" would be the opposite of what §4.6 asks for,
+    at the one place nobody would look again.
     """
     return {
         "action": {
@@ -147,6 +160,7 @@ def build_policy_input(
             "target": target.as_dict(),
             "risk": risk_hint,
         },
+        "capability_request": dict(capability_request or {}),
         "authorization_resolution": authorization.as_dict(),
         "resource_metadata": metadata.as_dict(),
         "policy": {
