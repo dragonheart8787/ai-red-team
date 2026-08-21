@@ -26,15 +26,37 @@ TOOL = "nmap"
 # would need the container to hold a capability that also lets it reshape its
 # own network namespace, which would make the §8.3 boundary advisory. A slower
 # scan is the right trade.
-SCAN_TYPES = {
-    "connect": "-sT",
-    "ping": "-sn",
-    "version": "-sV",
+#
+# "version" is a tuple for that same reason, and the D11 live run is what
+# showed it had to be. -sV is not a scan technique; it is service detection
+# layered on top of one. Emitted alone it left nmap to choose, and nmap running
+# as uid 0 chooses a SYN scan without checking whether it holds NET_RAW — so
+# every "version" scan died with ``dnet: Failed to open device eth0`` and exit
+# 1 after the capability had been issued and the request dispatched. The
+# reasoning above was applied to the default and not to this entry.
+SCAN_TYPES: dict[str, tuple[str, ...]] = {
+    "connect": ("-sT",),
+    "ping": ("-sn",),
+    "version": ("-sT", "-sV"),
 }
 
 _PORT_SPEC = re.compile(r"^[0-9,\-]+$")
 _OPEN_PORT = re.compile(r"^(\d+)/(tcp|udp)\s+(\S+)\s+(\S*)", re.MULTILINE)
 _HOST_LINE = re.compile(r"Nmap scan report for (\S+)")
+
+#: How far ahead of the sandbox's kill the tool is asked to stop itself.
+#:
+#: The two deadlines used to be the same number — ``--host-timeout Ns`` and a
+#: container killed at N seconds — which makes them a dead heat that the kill
+#: wins, so a scan that ran long was destroyed mid-write and its partial output
+#: discarded rather than reported. D11 hit this with a -sV scan of a listener
+#: that never answers.
+#:
+#: The margin is taken off the *tool's* deadline and never added to the
+#: sandbox's. The budget in the capability is an authorization, so the hard
+#: kill stays exactly at it (I3): the scan is asked to stop at N-5 and stopped
+#: at N regardless.
+TOOL_STOP_GRACE_SECONDS = 5
 
 
 class AdapterError(ValueError):
@@ -79,6 +101,11 @@ def tool_version() -> str:
     return match.group(1) if match else "unknown"
 
 
+def tool_deadline(max_duration_seconds: int) -> int:
+    """When nmap is asked to stop, given when the sandbox will kill it."""
+    return max(1, max_duration_seconds - TOOL_STOP_GRACE_SECONDS)
+
+
 def validate_ports(spec: str | None) -> str | None:
     if spec is None or spec == "":
         return None
@@ -98,10 +125,15 @@ def build_plan(
     """Turn a capability into a concrete scan.
 
     ``max_duration_seconds`` reaches nmap twice over. ``--host-timeout`` asks
-    it to stop, and the sandbox kills the container at the same deadline. The
-    sandbox is the one that counts — a tool that has stopped responding will
-    not honour its own timeout — but passing it in as well means a well-behaved
-    run ends cleanly with partial output rather than being killed mid-write.
+    it to stop, and the sandbox kills the container. The sandbox is the one
+    that counts — a tool that has stopped responding will not honour its own
+    timeout — but asking as well means a well-behaved run ends cleanly with
+    partial output rather than being killed mid-write.
+
+    That only works if the request lands *first*, which is why the tool's
+    deadline is ``TOOL_STOP_GRACE_SECONDS`` short of the kill rather than equal
+    to it. Equal was the same instant, the kill won every time, and the partial
+    output the request exists to preserve was thrown away with the container.
     """
     if not target:
         raise AdapterError("no target")
@@ -119,8 +151,22 @@ def build_plan(
             f"unsupported scan_type {scan_type!r}; expected one of {sorted(SCAN_TYPES)}"
         )
 
-    command: list[str] = ["/usr/bin/nmap", SCAN_TYPES[scan_type]]
+    command: list[str] = ["/usr/bin/nmap", *SCAN_TYPES[scan_type]]
     command.append("-n")
+    # --unprivileged states the truth about the sandbox once, rather than
+    # leaving each technique to happen to avoid raw sockets.
+    #
+    # The container drops every capability, NET_RAW included, but it still runs
+    # as uid 0 — and nmap decides whether it may open a raw socket by looking
+    # at the uid, not by asking the kernel. So it selects a raw technique,
+    # calls into libdnet, and dies with "dnet: Failed to open device eth0"
+    # after the capability was issued and the run dispatched. That killed both
+    # -sn (ARP discovery on an on-link target) and bare -sV until D11 ran them
+    # against a real host; the suite only ever executed -sT.
+    #
+    # Telling nmap it is unprivileged makes it choose connect-based probes
+    # everywhere, which is the only kind that can work here anyway.
+    command.append("--unprivileged")
     if scan_type != "ping":
         # -Pn: the sandbox has no route off the allowlist, so an unanswered
         # ping says nothing useful and skipping discovery keeps the run inside
@@ -128,7 +174,7 @@ def build_plan(
         command.append("-Pn")
     if ports and scan_type != "ping":
         command += ["-p", ports]
-    command += ["--host-timeout", f"{max_duration}s"]
+    command += ["--host-timeout", f"{tool_deadline(max_duration)}s"]
     command.append(target)
 
     return NmapPlan(
@@ -160,15 +206,21 @@ def derive_view(stdout: str, stderr: str, *, truncated_at: int = 4000) -> dict[s
         "open_ports": open_ports,
         "filtered_ports": filtered_ports,
         "port_count": len(open_ports),
-        # Nmap's own words for "I could not route to this address". Present
-        # only for scan types that do their own routing (-sn, raw scans).
+        # Nmap's own words for "I could not route to this address", emitted
+        # while it was deciding how to build a raw packet.
         #
-        # Not a security signal, and named so nobody reads it as one. Under -Pn
-        # with a connect scan, a target the namespace has no route to is
+        # Never a security signal, and named so nobody reads it as one. Under
+        # -Pn with a connect scan, a target the namespace has no route to is
         # reported as "host up, port filtered" -- the same thing a firewall in
         # front of a reachable host produces. Confirming that the §8.3 boundary
         # held requires DockerSandbox.probe_egress, which asks the kernel
         # instead of the scanner.
+        #
+        # Since D11 added --unprivileged this is always False: nmap no longer
+        # plans a route, it just calls connect() and reports "host seems down".
+        # The key is kept rather than removed because it is what an older
+        # artifact's derived view contains, and a reader comparing two runs
+        # should find the field present and false rather than absent.
         "nmap_reported_no_route": "failed to determine route" in f"{stdout}{stderr}",
         "stdout_excerpt": stdout[:truncated_at],
         "stderr_excerpt": stderr[:truncated_at],
