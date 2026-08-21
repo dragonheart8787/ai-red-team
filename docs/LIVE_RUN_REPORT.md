@@ -5,12 +5,15 @@ scanner and a real LLM reviewer, to see what a live target shows that fixtures
 do not. Not new functionality: production code was touched only where the run
 turned up a defect, and each of those is a separate commit.
 
-Eleven findings. Three were defects and are fixed; two are open invariant
-questions I am not deciding unilaterally; the rest are gaps and observations.
+Eleven findings. Three were defects fixed during D11; two were invariant
+questions left for the user to decide, both since answered and fixed in D12
+(see §7); the rest are gaps and observations, two of which D12 recorded as
+deferred items.
 The three most useful are:
 
 * **A capability budgeted for one target executed a scan against 256** — an
-  I3 violation, reproduced through the real pipeline. Open, see D11-4.
+  I3 violation, reproduced through the real pipeline. Fixed in D12 (`c4c7d04`),
+  see D11-4.
 * **A scan confined to a range with no route to the target "succeeded", and
   the identical scan from a range that could reach it was then answered from
   the cache and never ran.** Fixed in `3736780`.
@@ -219,7 +222,7 @@ execution"). A namespace that can reach the target and one that cannot are
 different executions by the same argument, and a stronger one: the difference
 decides whether a packet is sent at all.
 
-### D11-4 — `budget.max_targets` bounds nothing (open — **I3 violation**)
+### D11-4 — `budget.max_targets` bounds nothing (**I3 violation**; fixed in D12, `c4c7d04`)
 
 A capability whose budget records `max_targets: 1` executed a scan against 256
 addresses. Reproduced through `propose_action`:
@@ -252,12 +255,13 @@ But §8 line 697 states the containment argument for a fully compromised worker
 in terms of "TTL + max_requests + explicit scope" per capability, and one of
 those three is currently decorative.
 
-**Not fixed, because the design does not say where it should be enforced** —
-OPA, the broker at issue time, or the gateway at dispatch — and the three give
-materially different behaviour (a DENY, a refused capability, or a truncated
-scan). Question 1 in §7.
+Left unfixed in D11 because the design does not say where it should be
+enforced — OPA, the broker at issue time, or the gateway at dispatch — and the
+three give materially different behaviour (a DENY, a refused capability, or a
+truncated scan). Put to the user as Question 1 in §7, answered "OPA", and
+implemented in D12 (`c4c7d04`).
 
-### D11-5 — `normalize_cidr` silently widens a host into its network (open)
+### D11-5 — `normalize_cidr` silently widens a host into its network (fixed in D12, `ec08275`)
 
 The reachable route into D11-4. The proposal named `10.79.0.2/24`, meaning one
 host in a /24 on the most natural reading; the canonicalizer normalized it to
@@ -274,15 +278,17 @@ guess.** A target that cannot be normalized raises rather than being normalized
 to something plausible; I10 wants authorization-critical attributes to fail
 closed when they are unclear" — and `10.79.0.2/24` is exactly ambiguous.
 
-**Not fixed**, because the behaviour is deliberate and pinned by
-`test_cidr_normalization_masks_host_bits`. Reversing a tested decision is the
-user's call, not mine. Question 2 in §7.
+Left unfixed in D11 because the behaviour was deliberate and pinned by
+`test_cidr_normalization_masks_host_bits` — reversing a tested decision was the
+user's call. Put as Question 2 in §7, answered "reverse it", and implemented in
+D12 (`ec08275`).
 
-Note that closing D11-5 would *not* close D11-4: a scope object legitimately
-registered as `cidr 10.79.0.0/24` and proposed as `10.79.0.0/24` still scans
-256 hosts under a budget of one.
+Note that closing D11-5 does *not* on its own close D11-4: a scope object
+legitimately registered as `cidr 10.79.0.0/24` and proposed as `10.79.0.0/24`
+would still scan 256 hosts under a budget of one, which is why both fixes were
+needed and why each has its own test.
 
-### D11-6 — Global policy layers accumulate forever, and nothing lists them (open)
+### D11-6 — Global policy layers accumulate forever, and nothing lists them (deferred, `DEFERRED_MVP0.md` 11.1)
 
 The very first live attempt returned **DENY** with `action_denied_by_policy`,
 against a freshly published baseline that said `network.scan: ALLOW`.
@@ -316,7 +322,7 @@ under a dedicated `ENG-D11-MAINT` engagement, so the cleanup is itself audited.
 That is environment repair, not a relaxed check; the DENY is recorded above as
 the result it was.
 
-### D11-7 — A global policy layer is visible everywhere; the record of who published it is not (open)
+### D11-7 — A global policy layer is visible everywhere; the record of who published it is not (deferred, `DEFERRED_MVP0.md` 11.2)
 
 ```
 global layers visible from ENG-D11-3ee453d054 : [{'id': 703, 'layer': 'baseline_global', 'engagement_id': None}]
@@ -524,28 +530,47 @@ presenting a substitute as the thing asked for.
 
 ---
 
-## 7. Two questions
+## 7. Two questions, and how they were answered
+
+Both were put to the user and both were decided; D12 implemented the answers.
+Kept here in full, because the reasoning behind an enforcement point is worth
+more later than the fact that one was chosen.
 
 **Q1 (D11-4, I3).** Where should `max_targets` be enforced? Three candidates,
-materially different:
+materially different: OPA (denied before a capability exists), the broker at
+issue time (`issue_capability` refuses), or the gateway at dispatch (the
+adapter refuses to build the plan).
 
-* **OPA** — the proposal is denied before a capability exists. Cleanest audit
-  trail; needs the target's host count in `policy_input`.
-* **The broker, at issue time** — `issue_capability` refuses. Matches how
-  the other budget dimensions are already checked, and produces the
-  policy-said-yes-broker-said-no record the pipeline already handles.
-* **The gateway, at dispatch** — the adapter refuses to build a plan whose
-  target exceeds the budget. Closest to the tool, latest to fail.
+**Answered: OPA.** How much an action may touch is an authorization question
+and belongs at the one decision point, beside scope and data_class. The broker
+was deliberately narrowed at D5/D9 to confirming liveness rather than judging
+authorization, and this was not the place to open an exception; the gateway is
+the network boundary and holds no policy. Implemented in `c4c7d04` as
+`canonical.target.address_count` against `input.capability_request.max_targets`,
+with `capability_budget_missing` and `target_count_unknown` covering the
+fail-closed cases — a missing budget is not an unlimited one.
 
-`max_concurrency` has the same question and no consumer at all in a
-single-scan-at-a-time MVP; it may simply not belong in the MVP budget.
+`max_concurrency` was left unenforced, and the reason is that the dimension it
+would bound does not exist: a proposal produces one capability, one dispatch
+and one container, so there is nothing in a request to compare it against.
+Bounding it would mean counting an engagement's in-flight runs, which is a
+question about system state rather than about the proposal and cannot reuse the
+same rule.
 
-**Q2 (D11-5, I10).** Should `normalize_cidr` keep masking host bits? Reversing
-it means `10.79.0.2/24` raises `CanonicalizationError`, which matches the
-module's stated rule and closes the reachable path into D11-4 — but it reverses
-a deliberate, tested decision and would reject a spelling some tools accept.
+**Q2 (D11-5, I10).** Should `normalize_cidr` keep masking host bits?
 
----
+**Answered: no.** `10.79.0.2/24` now raises `CanonicalizationError` (`ec08275`).
+A caller that means the network passes the network address; a caller that means
+the host passes `ip` or a `/32`, which stays legal. This closes the reachable
+route into D11-4 at the front, and the budget check closes it for a
+legitimately-written `/24` as well.
+
+One thing that fix does **not** cover, found while sweeping for it:
+`scope_registry` stores a scope object's `value` verbatim and
+`canonicalizer/authorization.py` parses it with `strict=False`, so an
+Engagement Manager can still register `cidr 10.79.0.2/24` and have it mean the
+whole range. That is the same ambiguity on the registry side of the boundary
+and needs its own decision about whether registry writes are canonicalized.
 
 ## 8. Limits of this run
 
