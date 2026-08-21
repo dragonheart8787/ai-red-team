@@ -306,6 +306,63 @@ def test_a_second_identical_scan_is_deduplicated(engagement_id, sandbox, scan_ta
     assert second.run_id == first.run_id
 
 
+def test_a_scan_confined_elsewhere_is_not_the_same_execution(
+    engagement_id, sandbox, scan_target
+):
+    """§7: the network boundary is part of what makes a scan different.
+
+    The live run's reproduction, kept as a test. The first scan is confined to
+    a range with no route to the target, so it succeeds and reports nothing
+    open — under -Pn that is indistinguishable from a host with nothing
+    listening. The second names the range that *can* reach it.
+
+    Before D11 those two shared a fingerprint, the second was answered from the
+    cache and never ran, and the open port went unreported while the engagement
+    recorded a successful scan that found nothing. §7 calls exactly this out:
+    a missing fingerprint component causes a false negative, and the scan that
+    gets skipped is the one that would have found something.
+
+    Asserted on the port actually being found, not merely on two run ids being
+    different — the interesting failure is the result, and a cache that
+    returned a fresh id for stale content would still be wrong.
+    """
+    unreachable = "10.98.0.0/24"
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(conn, engagement_id)
+        blind = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id), capability=capability,
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[unreachable],
+        )
+        assert blind.state == SUCCEEDED
+        blind_view = conn.execute(
+            text("SELECT derived_view FROM evidence WHERE run_id = :r"),
+            {"r": blind.run_id},
+        ).scalar_one()
+        assert blind_view["open_ports"] == [], (
+            "the confined scan reached the target; the premise is gone"
+        )
+
+        seeing = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id), capability=capability,
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+
+        assert seeing.reason != "dedup_hit"
+        assert seeing.run_id != blind.run_id
+        seeing_view = conn.execute(
+            text("SELECT derived_view FROM evidence WHERE run_id = :r"),
+            {"r": seeing.run_id},
+        ).scalar_one()
+
+    assert any(p["port"] == 8080 for p in seeing_view["open_ports"]), seeing_view
+
+    sandbox.remove_network([unreachable])
+
+
 # ---------------------------------------------------------------------------
 # UNKNOWN_OUTCOME (§8.8, I7)
 # ---------------------------------------------------------------------------
