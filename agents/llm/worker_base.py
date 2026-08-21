@@ -368,11 +368,20 @@ class BaseWorker:
                 f"{len(offered)} offered"
             )
 
+        # Against the *selected* candidate rather than the union of all of
+        # them. The schema's enum is necessarily the union — one enum cannot
+        # depend on another field's value — so a Worker offered a cidr allowing
+        # network.scan and an fqdn allowing web.get can return web.get paired
+        # with the cidr, and the union check would pass it. The Authorization
+        # Resolver denies that combination anyway, which is the guarantee; this
+        # refuses it here so the local check says the same thing the resolver
+        # will, rather than something weaker.
+        selected = offered[scope_object_id]
         action = payload.get("action")
-        allowed = {a for c in candidates for a in c.allowed_actions}
-        if action not in allowed:
+        if action not in selected.allowed_actions:
             raise WorkerRefusal(
-                f"action {action!r} is not allowed by any offered scope object"
+                f"action {action!r} is not in {scope_object_id}'s allowed_actions "
+                f"{list(selected.allowed_actions)}"
             )
 
         target_type = payload.get("target_type")
@@ -408,7 +417,11 @@ class BaseWorker:
                            "scope_object_id": scope_object_id},
             discovery={"source": discovery_source},
             task_id=task_id,
-            resources=("network_host",),
+            # Left empty rather than guessed. §4.1's `resources` is what the
+            # action touches, the model is not asked, and nothing reads it for a
+            # decision — so filling in a plausible constant would put a value
+            # into the audit record that nobody determined.
+            resources=(),
             expected_data=tuple(
                 str(x) for x in payload.get("expected_data") or ()
             ),

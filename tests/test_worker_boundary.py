@@ -153,6 +153,42 @@ def test_an_action_no_offered_scope_object_allows_is_refused():
     assert "data.read" in worker.calls[-1].failure
 
 
+def test_an_action_allowed_by_a_different_candidate_is_refused():
+    """The union is not good enough, and the schema can only offer the union.
+
+    One JSON-schema enum cannot depend on another field's value, so the enum of
+    actions is necessarily every action any offered scope object allows. That
+    lets a reply pair ``web.get`` — legitimate for SCOPE-2 — with SCOPE-1,
+    which allows no such thing. The Authorization Resolver denies that
+    combination downstream, which is the guarantee; the point of checking here
+    is that the local check should say what the resolver will, not something
+    weaker.
+    """
+    worker = _worker({
+        **WELL_FORMED, "action": "web.get", "scope_object_id": "SCOPE-1",
+    })
+    assert worker.propose(task=TASK, candidates=CANDIDATES) is None
+    assert "SCOPE-1" in worker.calls[-1].failure
+
+    # ...and the same action paired with the scope object that does allow it
+    # is fine, so this is not simply refusing web.get.
+    ok = _worker({
+        **WELL_FORMED, "action": "web.get", "scope_object_id": "SCOPE-2",
+        "target_type": "fqdn", "target_value": "app.customer-a.com",
+    })
+    assert ok.propose(task=TASK, candidates=CANDIDATES) is not None
+
+
+def test_resources_is_left_empty_rather_than_guessed():
+    """Nothing reads it for a decision, and the model is not asked.
+
+    A plausible constant here would be a value in the audit record that nobody
+    determined.
+    """
+    worker = _worker(WELL_FORMED)
+    assert worker.propose(task=TASK, candidates=CANDIDATES).resources == ()
+
+
 def test_no_candidates_means_no_proposal():
     """Refusing is the only honest answer when there is nothing to select."""
     worker = _worker(WELL_FORMED)
