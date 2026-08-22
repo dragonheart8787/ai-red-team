@@ -1,6 +1,12 @@
-"""Choosing which Policy Reviewer backend runs (D10.5).
+"""Choosing which backend runs each agent role (D10.5, D13, D17).
 
-Four ways to run the same role, selected by one environment variable:
+Three roles, three independent environment variables, and the same rule for all
+of them: the default is scripted, and every other value reaches a real model.
+Holding them apart is what lets one role be a real model while the other two
+stay wherever they were — which is the discipline D13 and D17 are built on, one
+new source of non-determinism at a time.
+
+Four ways to run the Policy Reviewer, selected by one environment variable:
 
 ===================  ====================================================
 ``fake``             The scripted reviewers. The default, and what CI uses.
@@ -47,6 +53,13 @@ MODEL_ENV = "CYBERORCH_REVIEWER_MODEL"
 WORKER_BACKEND_ENV = "CYBERORCH_WORKER_BACKEND"
 WORKER_MODEL_ENV = "CYBERORCH_WORKER_MODEL"
 
+#: And again for the Supervisor (D17), the third and last role. Three
+#: independent switches rather than one, for the reason above: D17's variable is
+#: the Supervisor, and it is only the Supervisor if the other two can be held
+#: wherever they were.
+SUPERVISOR_BACKEND_ENV = "CYBERORCH_SUPERVISOR_BACKEND"
+SUPERVISOR_MODEL_ENV = "CYBERORCH_SUPERVISOR_MODEL"
+
 FAKE = "fake"
 API = "api"
 CLAUDE_CODE = "claude_code"
@@ -56,7 +69,12 @@ BACKENDS = (FAKE, API, CLAUDE_CODE, LOCAL)
 
 
 class ReviewerSelectionError(ValueError):
-    """Raised for an unknown backend name."""
+    """Raised for an unknown backend name.
+
+    One exception type for all three roles rather than three that would behave
+    identically. Kept under its original name so nothing that catches it has to
+    change; the message always says which role and which name.
+    """
 
 
 def build_reviewer(
@@ -142,4 +160,51 @@ def build_worker(
 
     raise ReviewerSelectionError(
         f"unknown worker backend {backend!r}; expected one of {WORKER_BACKENDS}"
+    )
+
+
+#: Which Supervisors can be built (D17). The scripted planner and the headless
+#: CLI, for the reason ``WORKER_BACKENDS`` gives: a backend nothing exercises is
+#: how an unused code path acquires a bug in private.
+SUPERVISOR_BACKENDS = (FAKE, CLAUDE_CODE)
+
+
+def build_supervisor(
+    backend: str | None = None, *, model: str | None = None, **kwargs: Any
+):
+    """Return the configured Supervisor (D17).
+
+    Defaults to ``fake``, and here the default matters most of the three. A
+    Reviewer reaching a real model costs money; a Worker reaching one decides
+    what the system will be asked to do about a target somebody already named; a
+    Supervisor reaching one decides *which targets get looked at at all*. An
+    unconfigured checkout must get the scripted planner, which plans nothing
+    until it is handed a script.
+
+    An unknown name raises rather than falling back, so a typo cannot produce a
+    run that looks like it exercised a real model and did not.
+    """
+    backend = (backend or os.environ.get(SUPERVISOR_BACKEND_ENV) or FAKE).strip().lower()
+    model = model or os.environ.get(SUPERVISOR_MODEL_ENV) or None
+
+    if backend == FAKE:
+        from agents.fake.fake_planner import FakePlanner
+
+        # An empty script by default: a fake planner that invented tasks would
+        # be a fake with an opinion, and MVP-Kernel's whole point is that the
+        # scripted roles have none.
+        return FakePlanner(kwargs.pop("script", ()), **kwargs)
+
+    if backend == CLAUDE_CODE:
+        from agents.llm.claude_code_headless_supervisor import (
+            ClaudeCodeHeadlessSupervisor,
+        )
+
+        return ClaudeCodeHeadlessSupervisor(
+            **({"model": model} if model else {}), **kwargs
+        )
+
+    raise ReviewerSelectionError(
+        f"unknown supervisor backend {backend!r}; expected one of "
+        f"{SUPERVISOR_BACKENDS}"
     )

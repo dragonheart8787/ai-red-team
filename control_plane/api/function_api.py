@@ -406,7 +406,47 @@ def query_evidence(conn: Connection, *, evidence_id: str) -> dict[str, Any] | No
     return dict(row) if row else None
 
 
-def query_state(conn: Connection, *, engagement_id: str) -> dict[str, Any]:
+def query_state(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    task_status: Sequence[str] | None = None,
+    task_limit: int = 50,
+    decision_limit: int = 20,
+) -> dict[str, Any]:
+    """What has happened in this engagement so far (§2).
+
+    Counts alone were enough while the only planner was scripted. A real
+    Supervisor (D17) has to decide what to do *next*, and a summary that cannot
+    say which tasks already exist leaves it no way to answer that except by
+    guessing — so this returns the task ledger and the recent decisions as well.
+
+    **Read-only, and deliberately not an execution interface.** §2 draws the
+    line at what an agent may *call*, not at what it may know: tool invocation,
+    shell, network and registry writes stay absent, and adding a way to read
+    state does not move that line. Three properties keep it on the right side:
+
+    * Nothing here writes, and the whole function runs on the ordinary
+      ``cyberorch_app`` connection, which holds SELECT and no more on these
+      tables. D17 added no grant.
+    * Every row is confined to the current engagement by RLS, exactly as the
+      rest of the pipeline is (I4). There is no engagement-wide or
+      cross-engagement variant of this call and no parameter that could ask for
+      one — the ``engagement_id`` argument names the connection's own scope for
+      the audit trail's benefit, it does not select which engagement to read.
+    * ``filter`` in §2's signature is spelled here as explicit keyword
+      arguments rather than a free-form predicate. A filter object that became
+      SQL would be a query interface an agent could widen from the inside;
+      ``task_status`` is checked against a fixed set and everything else is a
+      bound parameter.
+
+    What it does newly expose, stated plainly rather than glossed: an agent can
+    now see decisions on proposals *other agents* made in the same engagement.
+    Each such row was already returned to whoever submitted it — this is the
+    same content with a wider readership, bounded by the engagement. §5's
+    isolation boundary is the engagement, not the agent, so this is inside it;
+    it is still a widening, and D17's report says so.
+    """
     counts = conn.execute(
         text("""
             SELECT
@@ -417,7 +457,116 @@ def query_state(conn: Connection, *, engagement_id: str) -> dict[str, Any]:
               (SELECT count(*) FROM evidence) AS evidence
         """)
     ).mappings().one()
-    return dict(counts)
+
+    statuses = _valid_task_statuses(task_status)
+    tasks = conn.execute(
+        text("""
+            SELECT task_id, goal, status, owner_agent_id, created_by,
+                   parent_task_id, overlaps_with, priority, result_summary,
+                   lease_expires_at, created_at
+            FROM tasks
+            WHERE (:all_statuses OR status = ANY(:statuses))
+            ORDER BY created_at ASC
+            LIMIT :limit
+        """),
+        {"all_statuses": statuses is None, "statuses": list(statuses or ()),
+         "limit": max(0, int(task_limit))},
+    ).mappings().all()
+
+    decisions = conn.execute(
+        text("""
+            SELECT proposal_id, task_id, agent_id, action,
+                   target -> 'logical_identity' ->> 'value' AS target_value,
+                   target -> 'logical_identity' ->> 'type' AS target_type,
+                   decision, decision_reasons, created_at
+            FROM action_proposals
+            WHERE decision IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": max(0, int(decision_limit))},
+    ).mappings().all()
+
+    return {
+        "counts": dict(counts),
+        "tasks": [dict(r) for r in tasks],
+        # Newest first: a planner reading this wants the most recent refusal,
+        # and truncating at ``decision_limit`` must drop the oldest rather than
+        # the ones that explain why the last attempt failed.
+        "recent_decisions": [dict(r) for r in decisions],
+    }
+
+
+#: §4.2's status vocabulary. Checked against rather than interpolated: the
+#: status filter is the one place a caller supplies something that reaches a
+#: WHERE clause, and an allowlist is what keeps it a filter rather than an
+#: opening.
+TASK_STATUSES = (
+    "queued", "claimed", "running", "completed", "failed", "cancelled",
+)
+
+#: §4.3's states, for the same reason.
+FINDING_STATES = (
+    "candidate", "hypothesis", "pending_verification", "verified", "rejected",
+    "mitigated", "accepted_risk",
+)
+
+
+def _valid_task_statuses(requested: Sequence[str] | None) -> tuple[str, ...] | None:
+    if requested is None:
+        return None
+    unknown = [s for s in requested if s not in TASK_STATUSES]
+    if unknown:
+        raise ValueError(f"unknown task status(es) {unknown}; expected {TASK_STATUSES}")
+    return tuple(requested)
+
+
+def query_findings(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    state: Sequence[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Findings for this engagement (§2, §4.3).
+
+    §2 has listed this since v0.1 and nothing implemented it, because until
+    D17 no component needed it: the Worker is given one task and the Reviewer
+    one proposal, and neither plans. A Supervisor does, and "what has this
+    engagement actually established so far" is the question its whole job rests
+    on.
+
+    Read-only and RLS-confined, on the same terms as :func:`query_state`. Note
+    that ``claim`` is *derived from tool output* and therefore carries whatever
+    a target put in front of the system — a caller showing these to a model must
+    wrap them in the untrusted block (§8.1), which the Supervisor's prompt
+    builder does (D17).
+
+    ``confidence`` is deliberately absent, because §4.3 removed the column. The
+    strength of a finding is ``evidence_strength`` plus ``verifier_state``, two
+    discrete fields, and a planner that wants to rank findings has to reason
+    about those rather than sort by a number nobody computed.
+    """
+    if state is not None:
+        unknown = [s for s in state if s not in FINDING_STATES]
+        if unknown:
+            raise ValueError(
+                f"unknown finding state(s) {unknown}; expected {FINDING_STATES}"
+            )
+    rows = conn.execute(
+        text("""
+            SELECT finding_id, claim, state, evidence_strength, verifier_state,
+                   evidence_ids, affects, attack_path_ids,
+                   verification_conflict, created_at, confirmed_at
+            FROM findings
+            WHERE (:all_states OR state = ANY(:states))
+            ORDER BY created_at ASC
+            LIMIT :limit
+        """),
+        {"all_states": state is None, "states": list(state or ()),
+         "limit": max(0, int(limit))},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def _persist_proposal(
