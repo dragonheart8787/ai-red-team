@@ -221,7 +221,8 @@ def seed_finding(engagement_id: str, *, claim: str, state: str = "candidate",
 # ---------------------------------------------------------------------------
 
 def build_state(engagement_id: str, *, objective: str = OBJECTIVE,
-                evidence_ids: tuple[str, ...] = ()) -> StateSummary:
+                evidence_ids: tuple[str, ...] = (),
+                task_limit: int = 50) -> StateSummary:
     """Read the engagement through ``query_state`` / ``query_findings`` /
     ``query_evidence`` and nothing else.
 
@@ -230,7 +231,8 @@ def build_state(engagement_id: str, *, objective: str = OBJECTIVE,
     component holding a ``Connection`` has reached past it.
     """
     with engagement_scope(engagement_id) as conn:
-        state = function_api.query_state(conn, engagement_id=engagement_id)
+        state = function_api.query_state(conn, engagement_id=engagement_id,
+                                         task_limit=task_limit)
         findings = function_api.query_findings(conn, engagement_id=engagement_id)
         evidence = [
             function_api.query_evidence(conn, evidence_id=eid)
@@ -489,11 +491,18 @@ def arm_independent(*, supervisor, state, candidates, engagement_id, runs
 
 
 def arm_accumulating(*, supervisor, candidates, engagement_id, rounds,
-                     evidence_ids, created_by) -> dict[str, Any]:
-    """N rounds, each seeing the tasks the previous rounds created."""
+                     evidence_ids, created_by, task_limit: int = 50
+                     ) -> dict[str, Any]:
+    """N rounds, each seeing the tasks the previous rounds created.
+
+    ``task_limit=0`` is the ``blind`` arm: the tasks are still really created,
+    and the planner is simply not shown them. See ``main`` for why that state is
+    worth measuring rather than a way of forcing a result.
+    """
     records = []
     for i in range(rounds):
-        state = build_state(engagement_id, evidence_ids=evidence_ids)
+        state = build_state(engagement_id, evidence_ids=evidence_ids,
+                            task_limit=task_limit)
         print(f"  round [{i + 1}/{rounds}] ledger={len(state.tasks)}", end="",
               flush=True)
         record = plan_once(supervisor=supervisor, state=state,
@@ -724,7 +733,7 @@ def main() -> int:
                              "out-of-scope objective")
     parser.add_argument(
         "--arms",
-        default="independent,accumulating,warned,closed,pressure",
+        default="independent,accumulating,warned,blind,closed,pressure",
     )
     args = parser.parse_args()
 
@@ -794,6 +803,34 @@ def main() -> int:
         arm["engagement_id"] = engagement_id
         arm["scope_objects"] = registered
         results["arms"]["independent"] = arm
+
+    if "blind" in wanted:
+        # The ledger is created and then withheld: ``task_limit=0``.
+        #
+        # Constructed, and labelled constructed — but not artificial. §2's
+        # query takes a limit because a prompt is finite, and a long engagement
+        # will not fit its whole task history into one; the first thing to fall
+        # off is the oldest work, which is exactly the work most likely to be
+        # repeated. The zero case is the end of that spectrum, and it is the
+        # only arm that puts the question the brief actually asks to the *Task
+        # Manager* rather than to the model's reading of a ledger: when a
+        # planner does re-issue work that already exists, does anything between
+        # it and the ``tasks`` table notice?
+        engagement_id, registered, _lab, evidence_ids = fresh("BLIND")
+        candidates = candidates_for(engagement_id)
+        print(f"\nblind arm — engagement {engagement_id}, "
+              f"task ledger withheld (task_limit=0)")
+        supervisor = build_supervisor(args.backend)
+        arm = arm_accumulating(
+            supervisor=supervisor, candidates=candidates,
+            engagement_id=engagement_id, rounds=args.rounds,
+            evidence_ids=evidence_ids, created_by=supervisor.agent_id,
+            task_limit=0,
+        )
+        arm["engagement_id"] = engagement_id
+        arm["scope_objects"] = registered
+        arm["note"] = "task ledger withheld from the planner (task_limit=0)"
+        results["arms"]["blind"] = arm
 
     for label, warned in (("accumulating", False), ("accumulating_warned", True)):
         key = "accumulating" if not warned else "warned"
