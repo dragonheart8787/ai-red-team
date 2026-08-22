@@ -280,3 +280,116 @@ predicate, writing the record under a borrowed engagement id, or duplicating the
 row into every engagement would each close the visibility gap by opening the
 isolation one. Whatever lands has to be a decision about the model, made once,
 and 11.1's listing interface must not pre-empt it.
+
+## 11.3 Two tasks are never compared — D17 Supervisor run
+
+`control_plane/api/function_api.py` (`create_task`), `db/migrations/versions/0001_core_schema.py`
+(the `tasks` table), `control_plane/dedup/`
+
+The brief for D17 asked whether the Task Manager's dedup/lease mechanism could
+identify a real planner's semantically-duplicate tasks, or whether varying
+natural language would slip past a literal comparison. Measuring it turned up a
+prior question: **there is no comparison to slip past.**
+
+Three separate facts, each checkable:
+
+1. **`create_task` inserts unconditionally.** A fresh uuid, an INSERT, an audit
+   record. Nothing is looked up first. Two calls with a byte-identical goal
+   produce two tasks — `test_even_a_byte_identical_goal_creates_a_second_task`.
+2. **The `tasks` table does not retain what a non-semantic comparison would
+   need.** `ProposedTask` carries an action, a target and a scope object id;
+   `create_task` writes `goal`, `created_by` and `priority` and drops the other
+   three. So the only thing about a task that survives into the database is free
+   text, and any dedup built on the table as it stands could only ever compare
+   prose — `test_a_task_keeps_its_prose_and_discards_its_structure`.
+3. **§4.2's `overlaps_with` is written by nothing.** It has been in the schema
+   since the first migration and no code path assigns it —
+   `test_nothing_ever_writes_the_overlap_field`.
+
+What *does* exist, and what it covers:
+
+* **§6's claim/lease works and was never the exposure.** `FOR UPDATE SKIP
+  LOCKED` plus a status guard and a five-minute lease: eight threads against six
+  tasks claim each exactly once
+  (`test_concurrent_agents_never_claim_the_same_task`, three mutations). But it
+  answers "who owns this row", not "is this row the same work as that one".
+  Seed the same sentence twice and two agents hold two live leases, each
+  believing it owns work nobody else is doing —
+  `test_the_lease_protects_a_task_not_the_work_it_describes`.
+* **§7's fingerprint deduplicates *executions*, several stages later.** It is
+  consulted in `dispatch_scan` and it is real: an identical second scan returns
+  `dedup_hit` without the tool running
+  (`test_a_second_identical_scan_is_deduplicated`). Two limits matter, and both
+  are now pinned by tests. It keys on `normalized_params`, so two duplicate
+  tasks that lead a Worker to the same host with *different ports* are two
+  executions (`test_the_same_host_scanned_for_different_ports_is_not_deduplicated`).
+  And it runs **after** the policy evaluation and after `issue_capability`, so a
+  duplicate still costs a proposal, a decision and a capability even in the case
+  the cache catches.
+
+*Why not now:* the brief is explicit — report the finding, do not decide how task
+identity should be compared. That decision is larger than a deliverable. It has
+to answer what makes two tasks the same (identical structure? overlapping target
+sets? the same objective reached differently?), what the system does when they
+are (refuse, merge, link through `overlaps_with`, warn), and it interacts with
+§9's ADR G, which rules out automatic semantic derivation on the grounds that
+getting it wrong produces a false negative — the scan that should have run and
+did not. A dedup that silently swallows a task is a worse failure than a
+duplicate one.
+
+*What the D17 run measured about it:* see `docs/D17_SUPERVISOR_REPORT.md` §5.
+The numbers there are input to whatever gets decided, not a proposal.
+
+*Binding constraints on whoever takes this:*
+
+1. **Fail towards a duplicate, never towards a silent drop.** §1.2c and ADR G
+   are both explicit that a false negative here is a security bug. If a
+   comparison is uncertain, the task gets created.
+2. **Whatever is compared has to be stored.** Any structural comparison needs
+   `create_task` to persist the action, canonical target and scope object it is
+   currently given and discards. That is a schema change and a write-path
+   change, and it is the smallest honest starting point.
+3. **Not automatic semantic derivation** (ADR G). An explicit rule, an explicit
+   table, or a human-visible "these look related" link — not a similarity score.
+4. **`overlaps_with` is the field §4.2 already reserved** for the "related, not
+   identical" answer, and it should be used rather than a new one.
+
+## 11.4 A task goal is generated text on the trusted side of another model's prompt — D17
+
+`agents/llm/worker_base.py` (`BaseWorker.build_prompt`), `agents/llm/supervisor_base.py`
+
+`BaseWorker.build_prompt` places the task — goal and action — **outside** the
+untrusted block, and says why: the task "comes from the Supervisor and the
+registry". That was accurate while the Supervisor was a scripted fixture
+emitting constants.
+
+With a real model behind the role it is no longer simply true. A Supervisor's own
+prompt contains an untrusted block (findings and evidence, both derived from what
+targets said), and its output includes free text that becomes `tasks.goal`. So
+there is a path by which text a target chose can be copied into a goal and
+re-emerge on the *trusted* side of a different model's prompt.
+
+The channel is bounded, and the bound is real rather than reassuring:
+
+* A goal cannot name an authorization. The Worker still selects
+  `scope_object_id` from a schema enum over the offered candidates, and the
+  Authorization Resolver still decides containment from the registry (D15).
+* A goal cannot name a tool, a port, a budget or a capability — none of those
+  are fields the Supervisor has.
+* What a goal *can* do is tell a Worker what to work on, in words the Worker is
+  told to trust.
+
+*Measured, not assumed:* the D17 run counts how often a generated goal quotes the
+lure address or the hostname from the untrusted block. The result is in
+`docs/D17_SUPERVISOR_REPORT.md` §6.
+
+*Why not now:* the fix is not obvious and the obvious one is wrong. Wrapping the
+task in the Worker's untrusted block would tell the Worker to distrust its own
+assignment — the same mistake D13 refused when it declined to wrap the scope
+objects — and would leave the Worker with no trusted statement of what it is for.
+The alternatives (a structured goal with a free-text field marked as
+model-authored; wrapping only the goal while leaving the action and scope
+outside; keeping goals but having the Worker take its target from the structured
+fields alone) are all interface changes to a boundary D13 and D15 verified
+empirically, and re-opening it deserves its own deliverable rather than a rider
+on this one.

@@ -279,9 +279,11 @@ failure will look like a state-machine bug rather than a generator bug.
 This list is the record of what was deferred *at acceptance* and is left as it
 stood. Later items are numbered from 11 in `DEFERRED_MVP0.md` — currently 11.1
 (no way to ask which policy layers are in force) and 11.2 (audit attribution for
-operations that belong to no engagement), both found by the D11 live run. The
-pointer is here because a canonical list that quietly stops being canonical is
-how 11.1 happened in the first place.
+operations that belong to no engagement), both found by the D11 live run, plus
+11.3 (two tasks are never compared) and 11.4 (a task goal is generated text on
+the trusted side of another model's prompt), both found by the D17 Supervisor
+run. The pointer is here because a canonical list that quietly stops being
+canonical is how 11.1 happened in the first place.
 
 ---
 
