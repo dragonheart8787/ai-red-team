@@ -621,3 +621,62 @@ def test_the_control_plane_never_imports_a_supervisor_backend():
                 assert module == "agents.base_agent" or not module.startswith(
                     "agents"
                 ), f"{path}: {module}"
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics on the failure path (D17)
+# ---------------------------------------------------------------------------
+
+def test_a_failure_with_no_stderr_still_says_something():
+    """``cli exited 1:`` and nothing after the colon explains nothing.
+
+    A D17 run lost 46 of 62 calls to exactly that message, and it was
+    indistinguishable between a rate limit, a bad flag and a killed process —
+    which is the difference between re-running the experiment and rebuilding
+    it. The fallback reads stdout, which in ``--output-format json`` mode is
+    the CLI's own envelope; stderr stays the first choice and stays capped,
+    because that is where argv — and so the prompt — gets echoed back.
+    """
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command, returncode=1, stdout='{"error":"usage limit reached"}',
+            stderr="",
+        )
+
+    supervisor = ClaudeCodeHeadlessSupervisor(runner=run)
+    assert supervisor.plan(state=STATE, candidates=CANDIDATES) is None
+    failure = supervisor.calls[-1].failure
+    assert "cli exited 1" in failure
+    assert "usage limit reached" in failure
+
+
+def test_stderr_is_still_preferred_and_still_capped():
+    """The fallback must not become the path. stderr can echo the prompt."""
+    # Distinctive markers rather than repeated single letters: "cli exited"
+    # already contains an x, and an assertion that a letter is absent from a
+    # message the code writes tests the message's spelling.
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command, returncode=1,
+            stdout="STDOUT_MUST_NOT_APPEAR " * 40,
+            stderr="STDERR_" + "Z" * 500,
+        )
+
+    supervisor = ClaudeCodeHeadlessSupervisor(runner=run)
+    supervisor.plan(state=STATE, candidates=CANDIDATES)
+    failure = supervisor.calls[-1].failure
+    assert failure.startswith("cli exited 1: STDERR_")
+    assert "STDOUT_MUST_NOT_APPEAR" not in failure
+    # Capped at 200 characters of stderr, whatever came after.
+    assert len(failure) == len("cli exited 1: ") + 200
+
+
+def test_a_failure_with_no_output_at_all_says_so():
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(args=command, returncode=137,
+                                           stdout="", stderr="")
+
+    supervisor = ClaudeCodeHeadlessSupervisor(runner=run)
+    supervisor.plan(state=STATE, candidates=CANDIDATES)
+    assert "no output at all" in supervisor.calls[-1].failure
+    assert "137" in supervisor.calls[-1].failure

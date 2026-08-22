@@ -325,9 +325,18 @@ def duplication(records: list[dict[str, Any]]) -> dict[str, Any]:
     it had already asked for" is a count of repeats, and grouping would hide a
     goal asked for four times behind one entry.
     """
+    def key(value):
+        """Hashable, whether the record came from memory or from the JSON.
+
+        ``d17_analyze.py`` re-derives these numbers from a finished run's file,
+        where every tuple has become a list. Normalizing here means the two
+        paths compute the same thing rather than nearly the same thing.
+        """
+        return tuple(value) if isinstance(value, list) else value
+
     tasks = [t for r in records for t in r.get("tasks", [])]
-    structural = [t["structural_key"] for t in tasks]
-    work = [t["work_key"] for t in tasks]
+    structural = [key(t["structural_key"]) for t in tasks]
+    work = [key(t["work_key"]) for t in tasks]
 
     def repeats(keys):
         seen, n = set(), 0
@@ -341,8 +350,7 @@ def duplication(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     same_work_pairs = [
         (a, b) for a, b in combinations(range(len(tasks)), 2)
-        if tasks[a]["structural_key"] is not None
-        and tasks[a]["structural_key"] == tasks[b]["structural_key"]
+        if structural[a] is not None and structural[a] == structural[b]
     ]
     literal_pairs = [
         (a, b) for a, b in same_work_pairs if tasks[a]["goal"] == tasks[b]["goal"]
@@ -352,9 +360,21 @@ def duplication(records: list[dict[str, Any]]) -> dict[str, Any]:
         if normalized_goal(tasks[a]["goal"]) == normalized_goal(tasks[b]["goal"])
     ]
 
+    # Repeats *inside a single plan* are a different and stronger finding than
+    # repeats across calls: across calls a planner may simply not have been told
+    # what it did last time, but a plan that lists the same work twice in one
+    # answer contradicts itself with the whole ledger in front of it.
+    within_plan = sum(
+        len(r.get("tasks", []))
+        - len({key(t["structural_key"]) for t in r.get("tasks", [])
+               if t["structural_key"] is not None})
+        for r in records
+    )
+
     return {
         "tasks_total": len(tasks),
         "unreducible_targets": sum(1 for k in structural if k is None),
+        "repeat_within_a_single_plan": within_plan,
         "repeat_structural": repeats(structural),
         "repeat_work_ignoring_scope_object": repeats(work),
         "distinct_structural_keys": len({k for k in structural if k}),
@@ -676,6 +696,7 @@ def summarize(name: str, arm: dict[str, Any]) -> dict[str, Any]:
     d = summary["duplication"]
     print(f"   tasks total          {d['tasks_total']} "
           f"({d['distinct_structural_keys']} distinct)")
+    print(f"   repeats within one plan         {d['repeat_within_a_single_plan']}")
     print(f"   repeats (action+target+scope)   {d['repeat_structural']}")
     print(f"   repeats (action+target only)    {d['repeat_work_ignoring_scope_object']}")
     print(f"   same-work pairs                 {d['same_work_pairs']}")

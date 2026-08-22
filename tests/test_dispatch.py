@@ -306,6 +306,47 @@ def test_a_second_identical_scan_is_deduplicated(engagement_id, sandbox, scan_ta
     assert second.run_id == first.run_id
 
 
+def test_the_same_host_scanned_for_different_ports_is_not_deduplicated(
+    engagement_id, sandbox, scan_target
+):
+    """§7's boundary, which D17 needed stated precisely rather than assumed.
+
+    ``normalized_params`` is part of the fingerprint, so two scans of one host
+    that ask for different ports are two executions. That is correct — the
+    second asks a question the first did not — and it is also the limit of what
+    execution-level deduplication can do about duplicate *tasks*.
+
+    D17 found there is no task-level deduplication at all, and §7's fingerprint
+    is the nearest thing the system has to one. This marks how near: it catches
+    a repeat only when the work reduces to identical parameters. Two tasks
+    worded differently that lead a Worker to the same host with different port
+    specifications both run — and both are charged a proposal, a policy
+    decision and a capability first, because the fingerprint is consulted
+    inside ``dispatch_scan``, downstream of ``issue_capability``.
+    """
+    with engagement_scope(engagement_id) as conn:
+        narrow = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id),
+            capability=_capability(conn, engagement_id, ports="8080"),
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+        assert narrow.state == SUCCEEDED
+
+        wider = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id),
+            capability=_capability(conn, engagement_id, ports="8080,9090"),
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+
+    assert wider.reason != "dedup_hit"
+    assert wider.run_id != narrow.run_id
+    assert wider.state == SUCCEEDED
+
+
 def test_a_scan_confined_elsewhere_is_not_the_same_execution(
     engagement_id, sandbox, scan_target
 ):

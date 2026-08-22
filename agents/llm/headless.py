@@ -161,6 +161,20 @@ def run_headless(
         # contains attacker-influenced text that would then land in an audit
         # payload unbounded.
         detail = (completed.stderr or "").strip()[:200]
+        if not detail:
+            # D17: a run lost 46 of 62 calls to ``cli exited 1:`` with nothing
+            # after the colon, and the message was the same whether the cause
+            # was a rate limit, a bad flag or a killed process. An empty
+            # diagnostic on the failure path is how a whole experiment gets
+            # discarded rather than explained.
+            #
+            # stdout is used only as the fallback, and only in this branch. In
+            # ``--output-format json`` mode it carries the CLI's own envelope,
+            # which is the CLI talking about itself; stderr is where argv (and
+            # therefore the prompt, and therefore target-chosen text) gets
+            # echoed back, which is why that one stays first and stays capped.
+            out = (completed.stdout or "").strip()[:200]
+            detail = f"no stderr; stdout: {out}" if out else "no output at all"
         raise HeadlessError(f"cli exited {completed.returncode}: {detail}")
 
     try:
