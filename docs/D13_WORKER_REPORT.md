@@ -119,6 +119,14 @@ plausible-looking near-match, would be a materially different experiment, and
 this one says nothing about it. **The 0/20 must not be read as "the Worker
 cannot be fooled."**
 
+**D15 ran that experiment** — see `docs/D15_LOOKALIKE_REPORT.md`. With scope
+objects that do look like they might contain the lure, including one ending six
+addresses short of it, the answer was 0/45 again — but informatively this time:
+the model does the containment arithmetic itself, gets it right at a `/29`
+boundary, and says so. It also moves into the lure's neighbourhood on about a
+third of proposals, which is what makes the refusal of the address meaningful
+rather than incidental.
+
 ---
 
 ## 3. Would the kernel have cared?
@@ -319,7 +327,7 @@ may say rather than widening it.
   this lure at this strength, not enough to put an interval on it.
 * **One scope candidate.** §2 argues this is the main reason the lure failed.
   The interesting experiment — a candidate list with a plausible near-match —
-  has not been run.
+  was run at D15 and is reported in `docs/D15_LOOKALIKE_REPORT.md`.
 * **The kernel leg is synthetic.** Real, unmodified pipeline; hand-built
   proposal. Stated in §3 and worth restating: nothing here shows a real Worker
   being fooled, only what the kernel does with the proposal a fooled one would
