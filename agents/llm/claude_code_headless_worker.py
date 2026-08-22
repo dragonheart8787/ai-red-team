@@ -20,7 +20,12 @@ from typing import Any
 
 from agents.base_agent import ProposedAction, ProposedTask
 from agents.llm import headless
-from agents.llm.headless import CLI, DEFAULT_MODEL, TIMEOUT_SECONDS, HeadlessError
+from agents.llm.headless import (
+    CLI,
+    DEFAULT_MODEL,
+    WORKER_TIMEOUT_SECONDS,
+    HeadlessError,
+)
 from agents.llm.worker_base import (
     WORKER_SYSTEM_PROMPT,
     BaseWorker,
@@ -40,7 +45,7 @@ class ClaudeCodeHeadlessWorker(BaseWorker):
         *,
         agent_id: str = "claude-code-headless-worker",
         model: str = DEFAULT_MODEL,
-        timeout_seconds: float = TIMEOUT_SECONDS,
+        timeout_seconds: float = WORKER_TIMEOUT_SECONDS,
         executable: str = CLI,
         runner: Any | None = None,
     ) -> None:

@@ -53,6 +53,7 @@ will really do.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -83,6 +84,14 @@ DISCOVERY_SOURCES = (
 )
 
 SCAN_TYPES = ("connect", "version", "ping")
+
+#: What a port specification may contain. Deliberately a second copy of the
+#: rule ``tool_gateway.adapters.nmap`` enforces, rather than an import: §2 keeps
+#: agents from knowing about tools at all, and an agent module importing a tool
+#: adapter would be a worse coupling than a six-character regex in two places.
+#: The adapter stays authoritative — if these ever diverge it refuses, cleanly,
+#: which is what ``dispatch_scan`` was taught to do at D15.
+_PORT_SPEC = re.compile(r"^[0-9,\-]+$")
 
 
 @dataclass(frozen=True)
@@ -199,7 +208,13 @@ def proposal_schema(
             },
             "ports": {
                 "type": "string",
-                "description": "Port specification: digits, commas and hyphens.",
+                "pattern": "^[0-9,\\-]+$",
+                "description": (
+                    "Port specification: digits, commas and hyphens only, such "
+                    "as \"22,80,443\" or \"1-1024\". Omit this field entirely "
+                    "for a scan type that has no ports, such as ping. Do not "
+                    "write a placeholder."
+                ),
             },
             "scan_type": {"type": "string", "enum": list(SCAN_TYPES)},
             "reason": {
@@ -400,11 +415,25 @@ class BaseWorker:
         if scan_type not in SCAN_TYPES:
             raise WorkerRefusal(f"unknown scan_type {scan_type!r}")
 
+        # D15: a real Worker asked for a ping sweep and wrote ``ports: "n/a"``,
+        # which is a reasonable thing to say about a scan that has no ports and
+        # is not a port specification. It reached the Tool Gateway, where the
+        # adapter raised — and before D15 that exception escaped the pipeline
+        # entirely. Refused here so the malformed field never becomes a
+        # proposal, and refused there too, because two layers is the point.
+        ports = payload.get("ports")
+        if ports is not None and not isinstance(ports, str):
+            raise WorkerRefusal(f"ports must be a string, got {type(ports).__name__}")
+        if isinstance(ports, str) and ports.strip() and not _PORT_SPEC.match(ports.strip()):
+            raise WorkerRefusal(
+                f"invalid port specification {ports!r}: digits, commas and "
+                "hyphens only. Omit the field for a scan that has no ports."
+            )
+
         target: dict[str, Any] = {
             "logical_identity": {"type": target_type, "value": target_value.strip()},
             "scan_type": scan_type,
         }
-        ports = payload.get("ports")
         if isinstance(ports, str) and ports.strip():
             target["ports"] = ports.strip()
 

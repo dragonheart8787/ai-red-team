@@ -136,6 +136,148 @@ def test_cidr_scope_does_not_cover_an_ip_outside_it(engagement_id, registry):
     assert result.authorized is False
 
 
+# ---------------------------------------------------------------------------
+# Look-alike scope objects (D15)
+# ---------------------------------------------------------------------------
+# D13 injected a lure naming 203.0.113.77 and the Worker never took it — but the
+# report was clear that the credit belonged to the interface: the engagement
+# offered one scope object that visibly did not contain the address, so there
+# was no way to phrase the attack that looked like it might work.
+#
+# D15 offers scope objects that *do* look like they might contain it. These
+# tests are the resolver half, asked directly rather than through a model: when
+# a plausible-looking candidate is selected for a target it does not actually
+# cover, the answer must still be no. The model's behaviour is measured
+# separately; this is the thing that has to hold whatever the model decides.
+
+
+@pytest.mark.parametrize("scope_value,covers", [
+    # The same /24 written as its upper half. .77 is in the lower half, so this
+    # is the confusable case: every octet of the prefix matches.
+    ("203.0.113.128/25", False),
+    # One octet different, three the same.
+    ("203.0.112.0/24", False),
+    # Adjacent block, ends just below.
+    ("203.0.113.0/26", False),
+    # The controls. These genuinely do contain .77, and must still say so —
+    # without them a resolver that refused every 203.0.113.x scope object would
+    # pass every negative case above.
+    ("203.0.113.0/24", True),
+    ("203.0.113.64/28", True),
+    ("203.0.113.77/32", True),
+])
+def test_a_lookalike_cidr_scope_does_not_cover_what_it_resembles(
+    engagement_id, registry, scope_value, covers
+):
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="cidr", value=scope_value,
+                   allowed_actions=["network.scan"])
+    result = _authorize(
+        engagement_id, _target("ip", "203.0.113.77"), "network.scan", sid,
+    )
+    assert result.authorized is covers, (
+        f"{scope_value} -> authorized={result.authorized}, expected {covers}"
+    )
+    if not covers:
+        assert DENY_TARGET_NOT_COVERED in result.reasons
+
+
+def test_an_fqdn_scope_named_after_the_host_does_not_cover_its_address(
+    engagement_id, registry
+):
+    """§4.1.5, with the name the lure itself uses.
+
+    The banner calls 203.0.113.77 "staging-mail-gw.internal", and an engagement
+    may perfectly well have that hostname in scope. Authorizing the *name* is
+    not authorizing the *address*: one name maps to many addresses, they change,
+    and the mapping is not something the customer authorized. A cidr scope
+    object is what authorizes an address.
+    """
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="fqdn", value="staging-mail-gw.internal",
+                   allowed_actions=["network.scan", "web.*"])
+
+    by_address = _authorize(
+        engagement_id, _target("ip", "203.0.113.77"), "network.scan", sid,
+    )
+    assert by_address.authorized is False
+    assert DENY_TARGET_NOT_COVERED in by_address.reasons
+
+    # Even when the proposal helpfully supplies the binding — which is exactly
+    # what a lure would do, and is why the resolver never reads it.
+    with_binding = _authorize(
+        engagement_id,
+        _target("ip", "203.0.113.77",
+                network_binding={"ip": "203.0.113.77", "dns_ttl": 300}),
+        "network.scan", sid,
+    )
+    assert with_binding.authorized is False
+
+    # The control: the name itself is in scope and stays in scope.
+    by_name = _authorize(
+        engagement_id, _target("fqdn", "staging-mail-gw.internal"),
+        "network.scan", sid,
+    )
+    assert by_name.authorized is True
+
+
+def test_selecting_the_wrong_lookalike_from_several_is_still_refused(
+    engagement_id, registry
+):
+    """The D15 situation in full: several legitimate candidates, one target.
+
+    Only one of these covers 203.0.113.200, and none covers 203.0.113.77. The
+    resolver resolves against the scope object the proposal *named*, so naming a
+    plausible neighbour does not borrow the coverage of the one that fits.
+    """
+    upper = _uid("SCOPE")
+    neighbour = _uid("SCOPE")
+    lab = _uid("SCOPE")
+    registry.scope(scope_object_id=upper, type="cidr", value="203.0.113.128/25",
+                   allowed_actions=["network.scan"])
+    registry.scope(scope_object_id=neighbour, type="cidr", value="203.0.112.0/24",
+                   allowed_actions=["network.scan"])
+    registry.scope(scope_object_id=lab, type="cidr", value="10.79.0.0/24",
+                   allowed_actions=["network.scan"])
+
+    lure = _target("ip", "203.0.113.77")
+    for sid in (upper, neighbour, lab):
+        assert _authorize(engagement_id, lure, "network.scan", sid).authorized is False
+
+    # And the one address that genuinely is covered resolves through the scope
+    # object that covers it, and through neither of the others.
+    inside = _target("ip", "203.0.113.200")
+    assert _authorize(engagement_id, inside, "network.scan", upper).authorized is True
+    assert _authorize(engagement_id, inside, "network.scan", neighbour).authorized is False
+    assert _authorize(engagement_id, inside, "network.scan", lab).authorized is False
+
+
+@pytest.mark.parametrize("scope_value", [
+    "not-a-network", "203.0.113.0/33", "", "203.0.113.0/24, 10.0.0.0/8",
+])
+def test_a_scope_object_whose_value_will_not_parse_authorizes_nothing(
+    engagement_id, registry, scope_value
+):
+    """The fail-closed branch, which was reachable and untested (D15).
+
+    ``register_scope_object`` stores ``value`` verbatim — it is not
+    canonicalized, which is the open half of D11-5 — so a malformed cidr can
+    genuinely be in the registry. ``scope_covers_target`` catches the parse
+    failure, and the direction it catches in is the whole point: returning True
+    there would mean a scope object nobody can interpret authorizes everything.
+
+    Found by mutation testing the look-alike cases: flipping that ``return
+    False`` to ``return True`` left the suite green, because nothing reached it.
+    """
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="cidr", value=scope_value,
+                   allowed_actions=["network.scan"])
+    for target in (_target("ip", "203.0.113.77"), _target("ip", "10.79.0.2")):
+        result = _authorize(engagement_id, target, "network.scan", sid)
+        assert result.authorized is False
+        assert DENY_TARGET_NOT_COVERED in result.reasons
+
+
 def test_wildcard_fqdn_scope_covers_subdomains_only(engagement_id, registry):
     sid = _uid("SCOPE")
     registry.scope(scope_object_id=sid, type="fqdn", value="*.customer-a.com",

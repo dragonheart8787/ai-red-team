@@ -403,3 +403,25 @@ def test_a_local_model_that_ignores_the_contract_escalates(payload, expected):
     assert any(expected in h for h in opinion.semantic_risk_hints), (
         opinion.semantic_risk_hints
     )
+
+
+def test_the_reviewer_headless_call_does_not_inherit_stdin_either():
+    """The same fix, on the role that shares the runner (D15).
+
+    Worth asserting separately rather than trusting the shared module: the
+    guarantee is that *neither* role's behaviour depends on the calling shell,
+    and a test on one of them does not say anything about the other if the
+    sharing is ever undone.
+    """
+    seen = {}
+
+    def runner(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, json.dumps({"result": {
+            "risk_hint": "low", "possible_sensitive_data_hint": [],
+            "semantic_risk_hints": [], "recommended_escalation": False,
+        }}), "")
+
+    ClaudeCodeHeadlessReviewer(runner=runner).review(
+        proposal=_proposal(), canonical_target="10.20.0.7")
+    assert seen["stdin"] is subprocess.DEVNULL

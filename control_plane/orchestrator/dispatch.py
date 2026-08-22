@@ -45,6 +45,11 @@ SUCCEEDED = "succeeded"
 FAILED = "failed"
 UNKNOWN_OUTCOME = "unknown_outcome"
 
+#: A capability whose constraints the tool adapter cannot turn into a command.
+#: Distinct from a failed run: nothing executed, and nothing was going to.
+UNBUILDABLE_PLAN = "unbuildable_plan"
+DENY_DECISION = "DENY"
+
 # States a dispatch can be interrupted in. Anything found here after a restart
 # is unresolved, not failed.
 IN_FLIGHT = (DISPATCHING, RUNNING)
@@ -164,10 +169,33 @@ def dispatch_scan(
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
 
-    plan = nmap.build_plan(
-        constraints=capability.constraints, budget=capability.budget.as_dict(),
-        target=target,
-    )
+    try:
+        plan = nmap.build_plan(
+            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            target=target,
+        )
+    except nmap.AdapterError as exc:
+        # A capability the adapter cannot turn into a command. Refused, and
+        # audited, rather than raised — D15 found this the hard way: a real
+        # Worker proposed ``ports: "n/a"`` for a ping scan, the AdapterError
+        # propagated out of dispatch_scan, out of propose_action, and killed
+        # the orchestrator process.
+        #
+        # Whoever supplied the malformed constraint is not the point. Every
+        # other refusal on this path returns a DispatchOutcome, and an
+        # unparseable constraint has to as well, or one bad proposal takes down
+        # the loop that would have refused the next one.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": nmap.TOOL, "error": str(exc),
+                     "constraints": dict(capability.constraints),
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
     tool_version = nmap.tool_version()
     allowlist = network_allowlist or [target]
     fingerprint = execution_fingerprint(

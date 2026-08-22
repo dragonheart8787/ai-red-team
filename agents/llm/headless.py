@@ -60,9 +60,23 @@ CLI = "claude"
 #: from what the user is actually paying for.
 DEFAULT_MODEL = "opus"
 
-#: One call is one short request. Shared so "slow" means the same number for
-#: every role and backend.
+#: One review is one short request: a single proposal in, four advisory fields
+#: out. Shared so "slow" means the same number for every backend of that role.
 TIMEOUT_SECONDS = 30.0
+
+#: A Worker's request is not short, and D15 is where that stopped being an
+#: opinion. Shown a task, four scope objects and a whole scan's evidence, the
+#: Worker ran to a median of 26s against the Reviewer's 11s — and **a third of
+#: a 30-run experiment timed out**, with the surviving latencies bunched against
+#: the cap at 28–29.5s.
+#:
+#: That is worse than slow. The Worker's fail-closed path is "no proposal", so
+#: the system silently did nothing on ten runs in thirty; and because the cap
+#: truncated the distribution from above, the runs it discarded were exactly the
+#: ones where the model deliberated longest — which in an injection experiment
+#: are the runs most likely to be the interesting ones. A measurement that drops
+#: its slowest third is not measuring what it claims to.
+WORKER_TIMEOUT_SECONDS = 120.0
 
 #: The isolation flags, as one list so a test can assert on the whole set rather
 #: than on whichever ones somebody remembered to check. Verified against
@@ -124,6 +138,15 @@ def run_headless(
     try:
         completed = runner(
             command, cwd=workdir, capture_output=True, text=True,
+            # Closed, not inherited. The CLI reads stdin for piped input and
+            # waits several seconds before giving up, so whether a headless
+            # call works at all depended on what the *calling shell* happened
+            # to have attached — the same command succeeded from one context
+            # and failed with "no stdin data received in 3s" from another. A
+            # model call that behaves differently depending on how the harness
+            # around it was invoked is a call whose results cannot be compared
+            # between runs.
+            stdin=subprocess.DEVNULL,
             timeout=timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:

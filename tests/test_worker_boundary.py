@@ -486,3 +486,99 @@ def test_a_refusal_is_not_an_exception_the_caller_can_ignore():
     worker = _worker({"scope_object_id": "SCOPE-1"})  # missing everything else
     assert worker.propose(task=TASK, candidates=CANDIDATES) is None
     assert issubclass(WorkerRefusal, ValueError)
+
+
+def test_the_headless_call_does_not_inherit_stdin():
+    """Closed, not inherited (D15).
+
+    The CLI reads stdin for piped input and waits before giving up, so whether
+    a call worked at all depended on what the calling shell had attached: the
+    same command succeeded from one context and failed with "no stdin data
+    received in 3s" from another, which surfaced as the Worker refusing every
+    proposal. A model call whose behaviour depends on how the harness around it
+    was invoked produces results that cannot be compared between runs.
+    """
+    seen = {}
+
+    def runner(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps({"result": WELL_FORMED}), "")
+
+    ClaudeCodeHeadlessWorker(runner=runner).propose(
+        task=TASK, candidates=CANDIDATES)
+    assert seen["stdin"] is subprocess.DEVNULL
+
+
+def test_the_worker_gets_a_longer_deadline_than_the_reviewer():
+    """Sized for the request, not inherited from the other role (D15).
+
+    A Reviewer is shown one proposal; a Worker is shown a task, the scope
+    objects and a whole scan's evidence. On the Reviewer's 30s cap a third of a
+    30-run experiment timed out, and the surviving latencies bunched against
+    the cap — so the runs discarded were the ones where the model deliberated
+    longest, which in an injection experiment are the interesting ones.
+    """
+    from agents.llm.headless import TIMEOUT_SECONDS, WORKER_TIMEOUT_SECONDS
+
+    assert WORKER_TIMEOUT_SECONDS > TIMEOUT_SECONDS
+    assert ClaudeCodeHeadlessWorker().timeout_seconds == WORKER_TIMEOUT_SECONDS
+
+    seen = {}
+
+    def runner(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps({"result": WELL_FORMED}), "")
+
+    ClaudeCodeHeadlessWorker(runner=runner).propose(
+        task=TASK, candidates=CANDIDATES)
+    assert seen["timeout"] == WORKER_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("ports", ["n/a", "none", "all", "22, 80", "22;80", 443])
+def test_a_port_specification_the_tool_cannot_read_is_refused(ports):
+    """D15's crash, refused at the boundary that produced it.
+
+    A real Worker asked for a ping sweep and wrote ``ports: "n/a"`` — a
+    reasonable thing to say about a scan that has no ports, and not a port
+    specification. It became a proposal, became a capability, reached the Tool
+    Gateway, and the adapter's AdapterError escaped the whole pipeline.
+
+    Refused here so the field never becomes a proposal. ``dispatch_scan``
+    refuses it too, and both matter: this one stops a Worker from producing it,
+    that one stops anything else from crashing the orchestrator with it.
+    """
+    worker = _worker({**WELL_FORMED, "ports": ports})
+    assert worker.propose(task=TASK, candidates=CANDIDATES) is None
+    assert "port" in worker.calls[-1].failure.lower()
+
+
+@pytest.mark.parametrize("ports", ["22,80,443", "1-1024", "  8080  ", None, ""])
+def test_a_usable_port_specification_or_none_at_all_is_accepted(ports):
+    """The control, including the answer the model should have given.
+
+    Omitting ports is legal — a ping scan has none — and must stay legal, or
+    the refusal above would just push the model toward inventing a different
+    placeholder.
+    """
+    payload = {**WELL_FORMED}
+    if ports is None:
+        payload.pop("ports")
+    else:
+        payload["ports"] = ports
+
+    proposal = _worker(payload).propose(task=TASK, candidates=CANDIDATES)
+    assert proposal is not None
+    if ports and ports.strip():
+        assert proposal.target["ports"] == ports.strip()
+    else:
+        assert "ports" not in proposal.target
+
+
+def test_the_schema_constrains_the_port_field_too():
+    """Both halves again: a pattern the service enforces, a check we enforce."""
+    schema = proposal_schema(
+        scope_object_ids=("SCOPE-1",), actions=("network.scan",))
+    assert schema["properties"]["ports"]["pattern"] == r"^[0-9,\-]+$"
+    assert "ports" not in schema["required"]

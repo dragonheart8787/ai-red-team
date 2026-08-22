@@ -449,3 +449,56 @@ def test_an_unavailable_sandbox_yields_unknown_outcome(engagement_id, scan_targe
             text("SELECT status FROM tool_runs WHERE run_id = :r"),
             {"r": outcome.run_id},
         ).scalar_one() == UNKNOWN_OUTCOME
+
+
+def test_a_capability_the_adapter_cannot_read_is_refused_not_raised(engagement_id):
+    """D15: one malformed constraint must not take down the orchestrator.
+
+    A real Worker proposed ``ports: "n/a"`` for a ping scan. The capability was
+    issued, the dispatch began, and ``AdapterError`` propagated out of
+    dispatch_scan, out of propose_action, and killed the process — so the next
+    proposal, which would have been fine, never happened either.
+
+    The Worker boundary now refuses that field before it becomes a proposal.
+    This is the other half: whatever produced the constraint, the gateway
+    returns an outcome rather than an exception. Both matter, because the first
+    only constrains Workers and this path is reached by anything holding a
+    capability.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(conn, engagement_id, ports="n/a")
+        proposal_id = _proposal(conn, engagement_id)
+
+        outcome = dispatch_scan(
+            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            capability=capability, target="10.78.0.10", actor="orchestrator",
+            sandbox=_ExplodingSandbox(), network_allowlist=[ALLOWED_CIDR],
+        )
+
+        assert outcome.dispatched is False
+        assert outcome.reason == "unbuildable_plan"
+        assert outcome.run_id is None
+        assert outcome.state == "failed"
+
+        # Nothing ran, and the refusal is on the record with the reason.
+        assert conn.execute(
+            text("SELECT count(*) FROM tool_runs WHERE proposal_id = :p"),
+            {"p": proposal_id},
+        ).scalar_one() == 0
+        events = [
+            r[0] for r in conn.execute(
+                text("SELECT event_type FROM audit_log WHERE subject_id = :p "
+                     "ORDER BY audit_id"),
+                {"p": proposal_id},
+            ).all()
+        ]
+        assert "tool_run.refused" in events
+
+
+class _ExplodingSandbox:
+    """Reaching the sandbox at all would mean the plan was built."""
+
+    image = "must-not-run"
+
+    def run(self, **kwargs):  # pragma: no cover - the assertion is the point
+        raise AssertionError(f"the sandbox was reached: {kwargs}")
