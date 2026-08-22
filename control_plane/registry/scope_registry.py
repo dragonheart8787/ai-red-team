@@ -22,7 +22,21 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
+from control_plane.canonicalizer.target import (
+    CanonicalizationError,
+    canonicalize_scope_value,
+)
 from control_plane.state.db import REGISTRY_ADMIN_ROLE, assert_registry_admin
+
+
+class ScopeValueError(ValueError):
+    """A scope object's value is not something authorization can rest on.
+
+    Distinct from :class:`CanonicalizationError`, which is the canonicalizer
+    saying a *target* is unusable. This is the registry refusing to record an
+    authorization it could not later interpret, and it names the scope object
+    so the operator knows which registration failed.
+    """
 
 
 @dataclass(frozen=True)
@@ -88,10 +102,38 @@ def register_scope_object(
     Requires a :func:`registry_admin_scope` connection. ``actor`` is mandatory
     and audited: §5 asks for a record of who changed which scope object to
     what, because this table is what authorization *means*.
+
+    ``value`` is canonicalized before it is stored, and a value that will not
+    canonicalize is refused here rather than tolerated and puzzled over later
+    (D16). Two reasons, and the second is the one that made this urgent:
+
+    * The Engagement Manager is the only party that knows what was meant. By
+      the time a scope object is being *read*, ``cidr 10.20.0.5/24`` has two
+      readings — one host or two hundred and fifty-six — and every reader is
+      guessing. D11-5 refused that guess on the proposal side; this is the same
+      refusal on the side that grants permission.
+    * A value nobody can parse has to be handled somewhere. Leaving it in the
+      table pushes the obligation onto every query, and D15's mutation test
+      showed what that costs: flipping ``scope_covers_target``'s parse-failure
+      branch to ``return True`` left the entire suite green, because a scope
+      object nobody could parse was a state nothing had ever created.
+
+    Storing the canonical form rather than merely validating it closes a
+    quieter version of the same problem. ``scope_covers_target`` compares an
+    fqdn scope to an already-normalized target by string equality, so a scope
+    object registered as ``APP.Example.COM`` matched nothing at all — no error,
+    no warning, an authorization that silently did not work.
     """
     if not actor:
         raise ValueError("registry writes must name an actor (§5)")
     assert_registry_admin(conn)
+
+    try:
+        value = canonicalize_scope_value(type, value)
+    except CanonicalizationError as exc:
+        raise ScopeValueError(
+            f"cannot register scope object {scope_object_id!r}: {exc}"
+        ) from exc
 
     # Read the current row first so the audit record can say what changed, not
     # merely what it now says. "SCOPE-18 allows web.*" is far less useful after
