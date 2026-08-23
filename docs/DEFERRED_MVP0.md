@@ -283,6 +283,20 @@ and 11.1's listing interface must not pre-empt it.
 
 ## 11.3 Two tasks are never compared — D17 Supervisor run
 
+**RESOLVED in D19 (`docs/ADR_TASK_IDENTITY.md`, Option 1).** `create_task` now
+persists the action, canonical target and scope object it used to discard
+(migration 0006), computes a target-level identity key `(action, canonical
+target)`, and on a match populates `overlaps_with` — marking the duplicate,
+never dropping it (binding constraint 1). `query_tasks` is the read side of the
+same key. Replaying the committed D17 `blind` arm through the new logic
+identifies **21 of 25** tasks as duplicates at insertion (25 − 4 distinct
+groups), and the Redis:6379 / relay:7001-7002 pair is kept as two rows rather
+than merged — the port-level distinction is made downstream by §7's fingerprint,
+which is the layer that has ports. The original finding is kept below as the
+record of why the change was made.
+
+---
+
 `control_plane/api/function_api.py` (`create_task`), `db/migrations/versions/0001_core_schema.py`
 (the `tasks` table), `control_plane/dedup/`
 

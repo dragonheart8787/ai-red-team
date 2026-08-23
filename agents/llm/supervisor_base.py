@@ -113,10 +113,11 @@ STATUS_ASSESSMENTS = ("work_remains", "objective_met", "blocked")
 class TaskRecord:
     """One row of the task ledger, as ``query_state`` returns it.
 
-    ``overlaps_with`` is carried through even though it is always empty. §4.2
-    defines the field and nothing in the system has ever written it; showing it
-    as the empty list it really is beats omitting it and letting a reader assume
-    the ledger was filtered.
+    ``overlaps_with`` is carried through so the Supervisor can see when a task
+    is the same target-level work as others in flight. Empty until D19 wired
+    up task identity (§11.3, ADR_TASK_IDENTITY.md); ``create_task`` now fills it
+    when a new task matches one already queued, marking the overlap rather than
+    dropping the task.
     """
 
     task_id: str

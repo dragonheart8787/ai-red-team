@@ -96,6 +96,12 @@ tasks = Table(
     Column("overlaps_with", ARRAY(Text), nullable=False),
     Column("priority", Integer, nullable=False),
     Column("result_summary", Text),
+    # Task identity (§11.3, ADR_TASK_IDENTITY.md, migration 0006). Nullable:
+    # a task whose target will not canonicalize stores NULL and matches nothing.
+    Column("action", Text),
+    Column("canonical_target", Text),
+    Column("scope_object_id", Text),
+    Column("identity_key", Text),
     _ts("created_at"), _ts("updated_at"),
 )
 

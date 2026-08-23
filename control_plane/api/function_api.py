@@ -103,21 +103,104 @@ class ActionOutcome:
 # Task lifecycle (§4.2, §6)
 # ---------------------------------------------------------------------------
 
+#: A task is "in flight" when it is queued or being worked. A completed,
+#: failed or cancelled task is not work anyone is about to redo, so it is not
+#: what an overlap warning is about — the blind-arm harm D17 measured was live
+#: leases piling up on the same sweep, not history.
+_LIVE_TASK_STATUSES = ("queued", "claimed", "running")
+
+
+def _task_identity(action: str, target: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """The target-level work identity of a task (ADR_TASK_IDENTITY.md, Option 1).
+
+    Returns ``(canonical_target, identity_key)``. ``canonical_target`` is the
+    logical identity — ``type:value`` — at host/network granularity, from the
+    real Target Canonicalizer, so ``10.79.0.0/24`` and any other spelling of
+    that network collapse to one value. Deliberately *not* ``CanonicalTarget.
+    normalized``: that appends a port when one is present, and Option 1's whole
+    point is that the task layer identifies work at host granularity and leaves
+    the port distinction to §7's execution fingerprint.
+
+    ``identity_key`` is ``action`` and that canonical target together. Scope is
+    not in it: the same host under two valid scope objects is the same work.
+
+    Both are ``None`` when the target will not canonicalize — a task nobody can
+    reduce must match nothing rather than match everything (that would be a
+    fail-open drop, the exact failure §1.2c/ADR G call a security bug).
+    """
+    try:
+        canonical = normalize_target(dict(target))
+    except CanonicalizationError:
+        return None, None
+    identity = canonical.logical_identity
+    canonical_target = f"{identity.type}:{identity.value}"
+    return canonical_target, f"{action}\x1f{canonical_target}"
+
+
 def create_task(
     conn: Connection, *, engagement_id: str, task: ProposedTask, created_by: str
 ) -> str:
+    """Create a task, and mark — never drop — any in-flight task it overlaps (§11.3).
+
+    ADR_TASK_IDENTITY.md Option 1. The task is always inserted; if its
+    target-level identity matches tasks already in flight in this engagement,
+    ``overlaps_with`` is populated on the new task and symmetrically on the ones
+    it matched. A duplicate is made visible to the Supervisor and to a human,
+    not deleted: dropping a task that turns out not to be redundant is a false
+    negative, and §1.2c is explicit that that is a security bug, while §7 still
+    deduplicates the redundant *execution* downstream where it is safe to.
+    """
     task_id = f"TASK-{uuid.uuid4().hex[:10]}"
+    canonical_target, identity_key = _task_identity(task.action, task.target)
+
+    overlaps: list[str] = []
+    if identity_key is not None:
+        overlaps = [
+            row[0]
+            for row in conn.execute(
+                text("""
+                    SELECT task_id FROM tasks
+                    WHERE engagement_id = :eid
+                      AND identity_key = :key
+                      AND status = ANY(:live)
+                """),
+                {"eid": engagement_id, "key": identity_key,
+                 "live": list(_LIVE_TASK_STATUSES)},
+            )
+        ]
+
     conn.execute(
         text("""
-            INSERT INTO tasks (task_id, engagement_id, goal, created_by, priority)
-            VALUES (:tid, :eid, :goal, :by, :priority)
+            INSERT INTO tasks (task_id, engagement_id, goal, created_by, priority,
+                               action, canonical_target, scope_object_id,
+                               identity_key, overlaps_with)
+            VALUES (:tid, :eid, :goal, :by, :priority,
+                    :action, :ctarget, :scope, :key, :overlaps)
         """),
         {"tid": task_id, "eid": engagement_id, "goal": task.goal,
-         "by": created_by, "priority": task.priority},
+         "by": created_by, "priority": task.priority,
+         "action": task.action, "ctarget": canonical_target,
+         "scope": task.scope_object_id, "key": identity_key,
+         "overlaps": overlaps},
     )
+    if overlaps:
+        # Symmetric: each existing task now points back at the new one, so the
+        # overlap is readable from either end. array_append rather than a
+        # rewrite, so a task overlapping three others accumulates all three.
+        conn.execute(
+            text("""
+                UPDATE tasks
+                SET overlaps_with = array_append(overlaps_with, :new),
+                    updated_at = now()
+                WHERE task_id = ANY(:ids)
+            """),
+            {"new": task_id, "ids": overlaps},
+        )
     record_audit(
         engagement_id=engagement_id, actor=created_by, event_type="task.created",
-        subject_type="task", subject_id=task_id, payload={"goal": task.goal},
+        subject_type="task", subject_id=task_id,
+        payload={"goal": task.goal, "identity_key": identity_key,
+                 "overlaps_with": overlaps},
     )
     return task_id
 
@@ -495,6 +578,42 @@ def query_state(
         # the ones that explain why the last attempt failed.
         "recent_decisions": [dict(r) for r in decisions],
     }
+
+
+def query_tasks(
+    conn: Connection, *, engagement_id: str, action: str, target: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """The in-flight tasks in this engagement that are the same work (§11.3).
+
+    D17 withheld this function because "the same work" was undefined, and
+    defining it *was* the task-identity decision. ADR_TASK_IDENTITY.md makes that
+    decision, so the read side can exist without settling anything sideways: it
+    matches on the identity key ``create_task`` writes — ``(action, canonical
+    target)`` at host granularity — and on nothing else. There is no free-text
+    argument, no similarity score and no dimension beyond that key, so a
+    Supervisor can ask "is this already queued?" and get the same answer the
+    write path would compute.
+
+    Same three guarantees as ``query_state`` (§2): read-only; on the ordinary
+    ``cyberorch_app`` connection with no new grant; confined to the caller's
+    engagement by RLS. A target that will not canonicalize matches nothing —
+    returning everything would be a fail-open read.
+    """
+    _, identity_key = _task_identity(action, target)
+    if identity_key is None:
+        return []
+    rows = conn.execute(
+        text("""
+            SELECT task_id, goal, status, owner_agent_id, created_by,
+                   action, canonical_target, scope_object_id,
+                   overlaps_with, priority, created_at
+            FROM tasks
+            WHERE identity_key = :key AND status = ANY(:live)
+            ORDER BY created_at ASC
+        """),
+        {"key": identity_key, "live": list(_LIVE_TASK_STATUSES)},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 #: §4.2's status vocabulary. Checked against rather than interpolated: the

@@ -274,18 +274,15 @@ def test_the_queries_need_no_grant_beyond_the_runtime_role(engagement_id):
 # What the Task Manager retains — D17's finding, pinned (§4.2, §7)
 # ---------------------------------------------------------------------------
 
-def test_a_task_keeps_its_prose_and_discards_its_structure(engagement_id):
-    """**This documents a gap, it does not endorse one.**
+def test_a_task_now_keeps_its_structure_not_only_its_prose(engagement_id):
+    """The gap D17 pinned here, closed by D19 (§11.3, ADR_TASK_IDENTITY.md).
 
-    ``ProposedTask`` carries an action, a canonical target and a scope object
-    id. ``create_task`` writes the goal, the creator and the priority, and drops
-    the other three on the floor. So the only thing about a task that survives
-    into the database is free text — which means any task-level deduplication
-    that could exist would necessarily be a comparison of prose.
-
-    Pinned as a test because D17's report rests on it, and because if somebody
-    later decides to persist the structured fields this should fail and make
-    them say so deliberately.
+    D17's version asserted the opposite: ``create_task`` dropped the action,
+    canonical target and scope object ``ProposedTask`` carries, leaving only
+    free text, so any comparison could only ever compare prose. That was the
+    finding, and this is its fix — the structured fields are persisted, and the
+    canonical target is the Canonicalizer's form, not the raw string the model
+    wrote (Option 1: host-level, so ``ip:``/``cidr:`` prefix and no port).
     """
     with engagement_scope(engagement_id) as conn:
         task_id = create_task(
@@ -302,30 +299,27 @@ def test_a_task_keeps_its_prose_and_discards_its_structure(engagement_id):
             text("SELECT * FROM tasks WHERE task_id = :t"), {"t": task_id}
         ).mappings().one()
 
-    assert "action" not in columns
-    assert "target" not in columns
-    assert "scope_object_id" not in columns
+    assert {"action", "canonical_target", "scope_object_id", "identity_key"} <= columns
     assert row["goal"] == "Sweep the lab range"
-    # And §4.2's overlap field is there, empty, and written by nothing.
-    assert row["overlaps_with"] == []
+    assert row["action"] == "network.scan"
+    assert row["canonical_target"] == "cidr:10.79.0.0/24"
+    assert row["scope_object_id"] == "SCOPE-1"
+    # Identity is action + canonical target, and does not carry the scope object.
+    assert row["identity_key"] == "network.scan\x1fcidr:10.79.0.0/24"
+    assert "SCOPE-1" not in row["identity_key"]
 
 
 def test_two_tasks_for_the_same_work_in_different_words_both_get_created(
     engagement_id
 ):
-    """**Also a gap, also pinned rather than fixed.**
+    """Both created — never dropped — and now linked (§11.3, ADR Option 1).
 
-    There is no task-level deduplication anywhere in the system: ``create_task``
-    inserts unconditionally with a fresh id. §7's fingerprint deduplicates *tool
-    executions* — same tool, same version, same normalized target, inside a
-    freshness window — and it is consulted at dispatch, several stages after a
-    task exists. Nothing consults anything at task creation.
-
-    So two tasks whose structured content is identical and whose prose differs
-    are two tasks. This is not a bug that D17 introduced; it is the state a real
-    Supervisor is being pointed at, and measuring what that costs is what D17 is
-    for. Changing it is a design decision about how tasks are compared, which is
-    larger than this deliverable.
+    D17's version asserted the two tasks had empty ``overlaps_with``, because
+    nothing compared them. D19 compares them on target-level identity, and since
+    varying the prose does not vary the structure, they are the same work: both
+    are still created (a duplicate is marked, never silently dropped — §1.2c),
+    and each carries the other in ``overlaps_with``. The redundant *execution*
+    is still §7's job downstream; this layer makes the redundancy visible.
     """
     with engagement_scope(engagement_id) as conn:
         first = create_task(
@@ -342,8 +336,10 @@ def test_two_tasks_for_the_same_work_in_different_words_both_get_created(
         state = query_state(conn, engagement_id=engagement_id)
 
     assert first != second
-    assert len(state["tasks"]) == 2
-    assert all(t["overlaps_with"] == [] for t in state["tasks"])
+    assert len(state["tasks"]) == 2  # nothing dropped
+    by_id = {t["task_id"]: t for t in state["tasks"]}
+    assert by_id[first]["overlaps_with"] == [second]
+    assert by_id[second]["overlaps_with"] == [first]
 
 
 def test_even_a_byte_identical_goal_creates_a_second_task(engagement_id):

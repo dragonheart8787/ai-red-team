@@ -1,7 +1,10 @@
 # ADR: Task identity — what makes two tasks the same work
 
-Status: **proposed, D19. Awaiting confirmation before any implementation.**
-Closes `DEFERRED_MVP0.md` §11.3 once accepted and built.
+Status: **accepted, D19 — Option 1 (target-level identity + `overlaps_with`,
+never drop).** The §6 granularity question was decided in favour of
+distinguishing Redis/relay at execution time (§7), not at the task layer. Step
+two (schema, `create_task`, `query_tasks`, validation) is built against Option 1.
+Closes `DEFERRED_MVP0.md` §11.3.
 
 This is step one of D19: a design decision, not code. It proposes what
 structured fields a task must carry to support a *safe* identity comparison,

@@ -190,19 +190,34 @@ def test_the_lease_protects_a_task_not_the_work_it_describes(engagement_id):
     assert len({r["goal"] for r in rows}) == 1
 
 
-def test_nothing_ever_writes_the_overlap_field(engagement_id):
-    """§4.2 defines ``overlaps_with``; no code path assigns it.
+def test_overlapping_work_is_linked_and_distinct_work_is_not(engagement_id):
+    """§4.2's ``overlaps_with``, now written (§11.3, ADR_TASK_IDENTITY.md).
 
-    Not an oversight this deliverable is fixing — §9's ADR G is explicit that
-    semantic dedup must not be derived automatically, and an overlap field
-    filled in by a guess would be exactly that. Pinned so the emptiness is a
-    known state rather than something a reader assumes was populated.
+    D17 pinned this field as never-written — correct then, and the gap D19
+    closed. It is still not a guess (ADR G): it is filled only when the stored,
+    canonicalized target-level identity matches exactly. Two tasks that are the
+    same work are linked symmetrically; two tasks for different work are not;
+    and nothing is dropped in either case.
     """
-    ids = _seed(engagement_id, ["a", "b"])
     with engagement_scope(engagement_id) as conn:
-        claim_task(conn, engagement_id=engagement_id, agent_id="a")
-        overlaps = conn.execute(
-            text("SELECT overlaps_with FROM tasks WHERE task_id = ANY(:ids)"),
-            {"ids": ids},
-        ).scalars().all()
-    assert overlaps == [[], []]
+        # Same identity (default target 10.79.0.0/24, action network.scan),
+        # different words.
+        a = create_task(conn, engagement_id=engagement_id,
+                        task=_task("sweep the range"), created_by="supervisor")
+        b = create_task(conn, engagement_id=engagement_id,
+                        task=_task("enumerate the same /24"), created_by="supervisor")
+        # Different work: a different network.
+        c = create_task(conn, engagement_id=engagement_id,
+                        task=_task("scan the other range", target="10.79.1.0/24"),
+                        created_by="supervisor")
+        rows = {
+            r[0]: r[1]
+            for r in conn.execute(
+                text("SELECT task_id, overlaps_with FROM tasks "
+                     "WHERE task_id = ANY(:ids)"),
+                {"ids": [a, b, c]},
+            )
+        }
+    assert set(rows[a]) == {b}   # symmetric
+    assert set(rows[b]) == {a}
+    assert rows[c] == []         # distinct work is not linked to anything
