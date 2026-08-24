@@ -35,6 +35,8 @@ STAGE_OF_EVENT = {
     "proposal.rejected": "proposal",
     "policy_reviewer.opinion": "review",
     "policy.decided": "decision",
+    "approval.granted": "decision",
+    "approval.denied": "decision",
     "capability.issued": "capability",
     "capability.refused": "capability",
     "capability.renewed": "capability",
