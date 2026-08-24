@@ -655,19 +655,28 @@ def test_an_invisible_attribution_says_so_rather_than_being_blank(layered_engage
             conn, engagement_id=eid, layer_id=invisible_id, actor="test-teardown",
         )
 
-    published_here = listed[layered_engagement["global_id"]]
-    assert published_here.published_by == "platform-owner"
+    # An engagement-scoped layer published from this engagement has its audit
+    # row here, so the publisher is named.
+    published_here = listed[layered_engagement["scoped_id"]]
+    assert published_here.published_by == "engagement-manager"
     assert published_here.published_at is not None
     assert published_here.attribution_note is None
 
-    published_elsewhere = listed[invisible_id]
-    assert published_elsewhere.is_global is True
-    assert published_elsewhere.published_by is None
-    assert published_elsewhere.attribution_note, (
-        "an invisible attribution was left blank, which reads as 'no publisher'"
-    )
-    assert "not visible" in published_elsewhere.attribution_note
-    assert "11.2" in published_elsewhere.attribution_note
+    # A global layer's attribution is no longer visible from the engagement — the
+    # D11-7 fix stopped the global publish audit from being mis-scoped into the
+    # publisher's engagement, so even a global layer published from *this*
+    # engagement now records globally. Its publisher is read from the global
+    # trail (scripts/global_audit.py), not from here; the listing says so rather
+    # than leaving a blank that reads as "nobody published it".
+    for global_id in (layered_engagement["global_id"], invisible_id):
+        glob = listed[global_id]
+        assert glob.is_global is True
+        assert glob.published_by is None
+        assert glob.attribution_note, (
+            "an invisible attribution was left blank, which reads as 'no publisher'"
+        )
+        assert "not visible" in glob.attribution_note
+        assert "11.2" in glob.attribution_note
 
 
 def test_the_listing_carries_the_document_that_decides_the_action(layered_engagement):

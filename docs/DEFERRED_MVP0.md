@@ -223,6 +223,25 @@ the next person to meet this has no better tool than the last one did.
 
 ## 11.2 Audit attribution for operations that belong to no engagement — D11 live run
 
+**RESOLVED in D21 (a.k.a. D11-7).** `audit_log` gained a `scope`
+(`global | engagement`) with `engagement_id` now nullable, and a CHECK
+(`audit_scope_consistent`) that forbids the two disagreeing. A global operation —
+`policy_layer.published` / `deactivated` for a layer with `engagement_id IS NULL`
+— now records `scope='global', engagement_id=NULL` instead of being mis-scoped to
+the publisher's engagement (migration 0007, `control_plane/policy/layers.py`).
+A new `global_auditor` role (NOSUPERUSER, NOBYPASSRLS, owns nothing) reads exactly
+those rows through an RLS policy layered on top of the untouched per-engagement
+one; existing roles gained no way to read global audit, and the new role can read
+nothing else and write nothing. `scripts/global_audit.py` reads it — the D11
+overlay now shows `published by <actor>` rather than `published by: unknown`. The
+open questions the entry below raised were answered as: `engagement_id IS NULL`
+(not a sentinel); a dedicated read-only role, not any engagement's
+`registry_admin`; and a second RLS policy that adds a class of readable row
+without widening the existing predicate. The original entry is kept below as the
+record of why the change was made.
+
+---
+
 `control_plane/audit/logger.py`, `db/migrations/versions/0001_core_schema.py`
 (the `audit_log` RLS policy), `control_plane/policy/layers.py`
 

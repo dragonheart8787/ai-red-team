@@ -134,8 +134,15 @@ def publish_policy_layer(
         },
     ).scalar_one()
 
+    # D11-7: a layer published globally is a global operation, so its audit
+    # record is global too (engagement_id NULL, readable by global_auditor)
+    # rather than scoped to whichever engagement the publisher happened to be in.
+    # That mis-scoping is exactly what left "published by: unknown" in the D11
+    # live run.
     record_audit(
-        engagement_id=engagement_id, actor=actor,
+        engagement_id=engagement_id if scoped_to_engagement else None,
+        scope="engagement" if scoped_to_engagement else "global",
+        actor=actor,
         event_type="policy_layer.published", subject_type="policy_layer",
         subject_id=str(row_id), decision="DENY" if layer == EMERGENCY_OVERLAY else None,
         payload={
@@ -175,7 +182,7 @@ def deactivate_policy_layer(
         raise PolicyLayerError("policy layer writes must name an actor (§4.4)")
 
     before = conn.execute(
-        text("SELECT layer, version, document FROM policy_layers "
+        text("SELECT layer, version, document, engagement_id FROM policy_layers "
              "WHERE id = :lid AND active IS TRUE"),
         {"lid": layer_id},
     ).mappings().one_or_none()
@@ -186,8 +193,14 @@ def deactivate_policy_layer(
         text("UPDATE policy_layers SET active = FALSE WHERE id = :lid"),
         {"lid": layer_id},
     )
+    # D11-7: deactivating a global layer is a global operation. The layer's own
+    # engagement_id decides — NULL means it was global — not the engagement the
+    # deactivator is connected through.
+    layer_is_global = before["engagement_id"] is None
     record_audit(
-        engagement_id=engagement_id, actor=actor,
+        engagement_id=None if layer_is_global else engagement_id,
+        scope="global" if layer_is_global else "engagement",
+        actor=actor,
         event_type="policy_layer.deactivated", subject_type="policy_layer",
         subject_id=str(layer_id),
         payload={

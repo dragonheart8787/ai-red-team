@@ -281,6 +281,31 @@ def engagement_timeline(
     ]
 
 
+def list_global_audit(
+    conn: Connection, *, event_types: Sequence[str] | None = None, limit: int = 200
+) -> list[AuditEvent]:
+    """Global-scope audit events, newest first (D11-7).
+
+    Answers "who published this global overlay, and when" — the question the D11
+    live run could not, because a global operation's record was scoped to the
+    publisher's engagement and read back as ``published by: unknown``. Intended
+    to run on the ``global_auditor`` connection, whose RLS returns exactly the
+    global rows; the explicit ``scope = 'global'`` filter states the same intent
+    and keeps the query honest if ever run elsewhere.
+    """
+    sql = _SELECT + " WHERE scope = 'global'"
+    params: dict[str, Any] = {"limit": limit}
+    if event_types:
+        sql += " AND event_type = ANY(:types)"
+        params["types"] = list(event_types)
+    return [
+        _to_event(r)
+        for r in conn.execute(
+            text(sql + " ORDER BY audit_id DESC LIMIT :limit"), params
+        ).mappings().all()
+    ]
+
+
 def audited_event_types(conn: Connection) -> set[str]:
     """Distinct event types recorded for this engagement.
 

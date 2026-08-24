@@ -52,7 +52,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from control_plane.state.db import audit_scope
+from control_plane.state.db import audit_scope, global_audit_scope
 
 logger = logging.getLogger("cyberorch.audit")
 
@@ -68,7 +68,7 @@ class AuditWriteError(RuntimeError):
 
 def record_audit(
     *,
-    engagement_id: str,
+    engagement_id: str | None,
     actor: str,
     event_type: str,
     subject_type: str | None = None,
@@ -76,21 +76,35 @@ def record_audit(
     decision: str | None = None,
     reasons: Sequence[str] = (),
     payload: dict[str, Any] | None = None,
+    scope: str = "engagement",
 ) -> int:
     """Append one audit record on a dedicated connection; returns its id.
 
     Deliberately takes no ``conn``. Accepting one would let a caller opt back
     into the failure mode above, and the whole point is that no caller can.
 
+    ``scope`` is ``'engagement'`` (the default, so every existing caller is
+    unchanged) or ``'global'`` (D11-7). A global record belongs to no engagement:
+    it carries ``engagement_id IS NULL`` and is written through the no-engagement
+    connection, so a globally-scoped operation finally has a globally-scoped
+    record. The two must agree, which the ``audit_scope_consistent`` CHECK
+    enforces regardless of what reaches here.
+
     Raises :class:`AuditWriteError` if the record cannot be written.
     """
-    if not engagement_id:
-        raise ValueError("audit records must name an engagement")
+    if scope not in ("engagement", "global"):
+        raise ValueError(f"unknown audit scope {scope!r}")
+    if scope == "engagement" and not engagement_id:
+        raise ValueError("engagement-scoped audit records must name an engagement")
+    if scope == "global":
+        # A global record has no engagement, whatever the caller passed.
+        engagement_id = None
     if not actor:
         raise ValueError("audit records must name an actor")
 
     record = {
         "engagement_id": engagement_id,
+        "scope": scope,
         "actor": actor,
         "event_type": event_type,
         "subject_type": subject_type,
@@ -100,22 +114,34 @@ def record_audit(
         "payload": payload or {},
     }
 
+    params = {
+        "eid": engagement_id, "scope": scope, "actor": actor,
+        "event": event_type, "stype": subject_type, "sid": subject_id,
+        "decision": decision, "reasons": list(reasons),
+        "payload": json.dumps(record["payload"], default=str, sort_keys=True),
+    }
+    insert = text("""
+        INSERT INTO audit_log (engagement_id, scope, actor, event_type,
+            subject_type, subject_id, decision, reasons, payload)
+        VALUES (:eid, :scope, :actor, :event, :stype, :sid, :decision,
+                :reasons, CAST(:payload AS jsonb))
+    """)
     try:
-        with audit_scope(engagement_id) as conn:
+        # A global record is written on a connection with no engagement bound; an
+        # engagement record on one scoped to its engagement. Opening the scope is
+        # inside the try so a connection failure is wrapped, not raw.
+        scope_cm = global_audit_scope() if scope == "global" else audit_scope(engagement_id)
+        with scope_cm as conn:
+            # The engagement path reads its id straight back with RETURNING. The
+            # global path cannot: no role that may *write* a global row may
+            # *read* one (only global_auditor reads them), so RETURNING would
+            # trip the SELECT side of RLS on the row it just inserted. lastval()
+            # is the session's own sequence value — no table read, no policy.
+            if scope == "global":
+                conn.execute(insert, params)
+                return conn.execute(text("SELECT lastval()")).scalar_one()
             return conn.execute(
-                text("""
-                    INSERT INTO audit_log (engagement_id, actor, event_type,
-                        subject_type, subject_id, decision, reasons, payload)
-                    VALUES (:eid, :actor, :event, :stype, :sid, :decision, :reasons,
-                            CAST(:payload AS jsonb))
-                    RETURNING audit_id
-                """),
-                {
-                    "eid": engagement_id, "actor": actor, "event": event_type,
-                    "stype": subject_type, "sid": subject_id, "decision": decision,
-                    "reasons": list(reasons),
-                    "payload": json.dumps(record["payload"], default=str, sort_keys=True),
-                },
+                text(insert.text + " RETURNING audit_id"), params
             ).scalar_one()
     except SQLAlchemyError as exc:
         # The independent channel. Everything the lost record would have said

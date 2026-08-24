@@ -246,7 +246,10 @@ provenance_edges = Table(
 audit_log = Table(
     "audit_log", metadata,
     Column("audit_id", BigInteger, primary_key=True),
-    Column("engagement_id", Text, nullable=False),
+    # Nullable since D11-7 (migration 0007): a global row carries NULL, an
+    # engagement row carries its id, enforced by the audit_scope_consistent CHECK.
+    Column("engagement_id", Text),
+    Column("scope", Text, nullable=False),
     _ts("ts"),
     Column("actor", Text, nullable=False),
     Column("event_type", Text, nullable=False),
