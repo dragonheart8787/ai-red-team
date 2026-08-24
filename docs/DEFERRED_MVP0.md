@@ -426,3 +426,57 @@ outside; keeping goals but having the Worker take its target from the structured
 fields alone) are all interface changes to a boundary D13 and D15 verified
 empirically, and re-opening it deserves its own deliverable rather than a rider
 on this one.
+
+### Status update — D22: characterised, mitigated-by-absence, and gated
+
+`docs/ADR_GOAL_LAUNDERING.md` traced the *upstream* half — whether the state a
+real Supervisor reads can itself carry attacker-controlled text — through the two
+interfaces D17 added, `query_state()` and `query_findings()`, field by field.
+
+**Result: no live exposure path today.** Every field either is a deterministic
+system value (counts, ids, enums, canonical identities, kernel decision reasons,
+timestamps) or is free text that is not, in production, evidence-derived:
+`tasks.goal` is model-authored, and `tasks.result_summary` and `findings.claim`
+are never written from tool output because the control plane has no
+finding-writer and no `complete_task` caller (§8.10 finding verification is
+Phase-1, DEFERRED 5.6). The one active mitigation is that
+`supervisor_base.build_prompt` wraps findings and evidence in the untrusted block
+**by source**.
+
+**The channel is real and pre-armed, not closed.** The `untrusted_content: true`
+marker is enforced on exactly one thing, `evidence.derived_view`. `findings.claim`,
+`tasks.goal` and `tasks.result_summary` are bare `TEXT` with no marker. The marker
+is dropped at the *copy* that would move tool-derived text out of `derived_view`
+into `findings.claim` (finding-creation) — a copy no code performs yet — and
+`query_findings` returns the bare string with no signal. It opens the moment a
+Phase-1 finding-writer promotes evidence to a finding, or a `complete_task`
+caller summarises tool output onto `tasks.result_summary` (which sits on the
+Supervisor's *trusted* side, caught by nothing).
+
+*Binding constraints on whoever adds either of those two writers, or widens these
+interfaces to show more evidence detail:*
+
+1. **The untrusted marker travels with the data through the interface, as a
+   machine-readable fact — never as a consumer's assumption.** An evidence-derived
+   field must be returned already flagged, so any reader is told, not only the one
+   reader that knows findings are untrusted by source (the D20 principle).
+2. **Preserve the marker at every copy.** The channel opens at finding-creation
+   copying `derived_view` → `claim`, not at the query. A finding-writer must carry
+   `untrusted_content` onto the finding, and `query_findings` must surface it; the
+   same for any code filling `result_summary` from tool output.
+3. **Nothing evidence-derived may sit on the trusted side of any prompt.** The
+   trust split must be by provenance, not by which ledger a field arrived in.
+   `tasks.goal`/`tasks.result_summary` are the standing counterexample — safe only
+   by the absence of an evidence-derived writer.
+4. **Prefer deterministic derivations over raw text.** Counts, enums, canonical
+   identities, ids and timestamps can be shown freely; free target text is
+   untrusted by construction and must be marked at the interface boundary.
+5. **A single wrapping consumer is not an invariant.** The Supervisor wrapping
+   findings-by-source is correct and stays, but must not be *the* thing that makes
+   these interfaces safe; the interface's guarantees have to be its own.
+
+The downstream half (a goal on the Worker's trusted side) is unchanged from
+above and stays measured at 0/81 (D17 §6). D22 chose to record and gate rather
+than build a defence with no trigger yet; a pre-emptive flag on `claim` /
+`result_summary` remains available as a small self-contained step when a writer
+for either lands.
