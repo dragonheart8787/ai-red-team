@@ -10,8 +10,11 @@ behind a real model, selected by one environment variable each, and the kernel
 boundary each role touches held. The reasoning is in [Go / No-Go](#go--no-go) at
 the end; the evidence is everything above it. This document is the record of a
 stage that is closing, in the same form as `ACCEPTANCE_MVP_KERNEL.md` §5–§8. New
-deferred items continue to be written to `DEFERRED_MVP0.md`, not back into this
-file once it is merged.
+deferred items continue to be written to `DEFERRED_MVP0.md`, not into this file;
+what *is* written back here is the resolution of items this document listed —
+§2–§4 were extended at D23 to record the D19–D22 closures of the Class-C items
+that had a security consequence, the same way the kernel review would have been
+updated had its own deferrals been closed while it was the live record.
 
 Scope reminder — what this stage covered and what it deliberately did not. It
 put a real model behind each of the three roles and measured that role against
@@ -204,12 +207,19 @@ binding constraints.
 
 ---
 
-## 2. Problems found and fixed, D11 through D17
+## 2. Problems found and fixed, D11 through D22
 
 Same format as `ACCEPTANCE_MVP_KERNEL.md` §6: every commit pushed individually,
 CI confirmed green before the next began. Branch:
 `claude/mvp-kernel-cybersecurity-platform-su841g`. All runs below concluded
 `success`.
+
+The first block (D11–D17) is the three-role stage proper. The second (D19–D22)
+is the follow-on that took the candidate list this document left open in Class C
+and closed the four items that had real security consequences — task identity,
+discovery-source semantics, global-audit attribution, and the goal-laundering
+channel — each as its own reviewed deliverable. This section and §3–§4 were
+extended (D23) to reflect that; §1's role-verification write-ups are unchanged.
 
 | Commit | Change | CI run |
 |---|---|---|
@@ -235,6 +245,13 @@ CI confirmed green before the next began. Branch:
 | `0f5e038` | D17 — report scaffolding, and DEFERRED 11.3 / 11.4 | 32584640823 |
 | `754b949` | D17 — the blind arm: the ledger created and then withheld | 32585855189 |
 | `0c5498c` | D17 — the Supervisor run; §6 holds, and there is no task-level dedup | 32586673662 |
+| `ae8e667` | D19 step 1 — ADR for task identity (design note, awaiting decision) | 32612642236 |
+| `07f318d` | **D19** — task identity (Option 1): persist structure, mark overlaps, never drop (**closes 11.3**) | 32613340983 |
+| `83c3365` | D20 step 1 — ADR for discovery_source semantics (design note, awaiting decision) | 32618205310 |
+| `7391581` | **D20** — discovery_source becomes a deterministic fact, Option A strict (**closes discovery_source**) | 32685654009 |
+| `f7dc953` | **D21 (D11-7)** — global-scope audit attribution (**closes 11.2**) | 32688075240 |
+| `8359a9a` | D22 — investigation ADR for the goal-laundering channel | 32708336439 |
+| `40ee36a` | **D22** — gate 11.4 with binding constraints; investigation found no live path (**closes 11.4, characterised-and-gated**) | 32708633148 |
 
 The defects, in words:
 
@@ -301,6 +318,44 @@ The defects, in words:
   The discarded run's numbers were **not** reported, for the reason D15's
   truncated run was discarded.
 
+The D19–D22 follow-ons, in words (each has its own ADR/report; the design was
+proposed and confirmed before implementation, mirroring D19/D20's two-step flow):
+
+* **D19 — task identity** (`ADR_TASK_IDENTITY.md`, `07f318d`). D17 found
+  `create_task` inserted unconditionally and dropped the action/target/scope
+  `ProposedTask` carried, so 25 semantically-duplicate tasks were all created
+  with nothing comparing them. Migration 0006 persists those fields and a
+  target-level `identity_key`; a match populates `overlaps_with` and still
+  inserts — marked, never dropped, because a false negative is the §1.2c/ADR-G
+  security bug and §7's port-aware fingerprint still dedups the *execution*
+  downstream. `query_tasks` is the read side of the decided key. Replaying the
+  committed D17 `blind` arm: **21 of 25** flagged as duplicates at insertion,
+  none dropped. **Closes 11.3.**
+* **D20 — discovery_source** (`ADR_DISCOVERY_SOURCE.md`, `7391581`). D13's
+  8/10-vs-2/10 split was a self-reported field answering two questions at once.
+  The Worker no longer emits it; the pipeline computes `discovery` deterministically
+  and keys the §5 escalation on the fact *"introduced only by untrusted content"*
+  (§4.1's `evidence_id`/`discovered_by_run_id`, filled at last), which also closes
+  the banner-injection gap the old `web_content`-only rule left. Discovery ⊥
+  Authorization is untouched — the rule stays an approval reason. **Closes the
+  `discovery_source` item.**
+* **D21 — global-audit attribution** (`f7dc953`). Migration 0007 gives `audit_log`
+  a `scope`, makes `engagement_id` nullable, and a CHECK forbids the two
+  disagreeing; a new SELECT-only `global_auditor` role reads global rows through
+  an RLS policy layered on top of the per-engagement one. `policy_layer.published`
+  /`deactivated` for a global layer now record `scope='global'`, so
+  `scripts/global_audit.py` answers "who published this overlay" — the question
+  the D11 live run could not. **Closes 11.2 / D11-7.**
+* **D22 — goal-laundering investigation** (`ADR_GOAL_LAUNDERING.md`, `8359a9a`/
+  `40ee36a`). Traced every `query_state`/`query_findings` field to its source.
+  **No live exposure path today** — nothing writes a finding, nothing fills
+  `result_summary` from tool output, and `goal` is model-authored — but the
+  channel is *pre-armed*: the `untrusted_content` marker lives only on
+  `evidence.derived_view`, and `findings.claim` / `tasks.result_summary` are bare
+  `TEXT` that would drop it at the copy. Recorded and gated with five binding
+  constraints rather than defended with no trigger yet. **Closes 11.4 as
+  characterised-and-gated** (see §3).
+
 ---
 
 ## 3. DEFERRED — the full list, current status
@@ -315,7 +370,41 @@ quietly drops resolved items is how a reader loses the thread.
 | # | Item | Closed by |
 |---|---|---|
 | **11.1** | No way to ask which policy layers are in force (D11 live run) | **D14** `list_effective_policy_layers` (`c340d3f`) — reports, does not decide; one `_APPLICABLE` predicate shared with the merge; global rows visibly global; read-only, no new grant |
+| **11.2 / D11-7** | A globally-scoped operation has no globally-scoped audit record (D11) | **D21** (`f7dc953`) — `audit_log.scope` + nullable `engagement_id` + a consistency CHECK; a SELECT-only `global_auditor` role and RLS policy layered on the per-engagement one; global policy-layer events recorded `scope='global'`; `scripts/global_audit.py` reads them. No existing role gained global-read; the new role can read nothing else and write nothing. |
+| **11.3** | Two tasks are never compared (D17) | **D19** (`07f318d`) — migration 0006 persists action/canonical-target/scope + `identity_key`; `create_task` marks `overlaps_with` on a match and never drops; `query_tasks` reads the same key. Replay of the committed `blind` arm: 21/25 flagged, none dropped; mutation guards on the comparison. |
+| **11.4** | A task goal is generated text on the trusted side of another model's prompt (D17) | **D22** (`8359a9a`/`40ee36a`) — **characterised-and-gated, not a code fix** (see the note below). Investigation found no live exposure path and recorded five binding constraints so the channel cannot be armed without carrying the untrusted marker. |
+| **discovery_source** | Self-reported provenance is semantically ambiguous (D13, D15) | **D20** (`7391581`) — the Worker no longer emits it; the pipeline computes `discovery` deterministically and the §5 escalation keys on the fact "introduced only by untrusted content". Closes the banner-injection gap; Discovery ⊥ Authorization untouched; mutation guards on the matcher. |
 | **D11-5 (registry side)** + **D15 fail-open** | Registry stored CIDRs with host bits verbatim; `scope_covers_target` parse-failure branch fail-open | **D16** (`1378a12`) — canonicalize and refuse at registration; the read branch is now reachable and tested |
+
+**11.4 is closed differently from the rest, and the difference is the point.**
+It is not a defect with a regression test; it is an *investigation* that found
+the laundering channel has **no live path today** — nothing in the control plane
+writes a finding, nothing fills `tasks.result_summary` from tool output, and
+`goal` is model-authored — while confirming the channel is *structurally
+pre-armed*: the `untrusted_content` marker lives only on `evidence.derived_view`,
+and `findings.claim` / `tasks.result_summary` are bare `TEXT` that would drop it
+at the copy a Phase-1 finding-writer or a tool-derived `result_summary` writer
+would perform. What closes it is the pairing of that finding with five binding
+constraints on `DEFERRED_MVP0.md` §11.4, which any such future writer — or any
+widening of `query_state`/`query_findings` — must satisfy:
+
+1. the untrusted marker travels with the data through the interface as a
+   machine-readable fact, never as a consumer's by-source assumption (the D20
+   principle);
+2. the marker is preserved at every *copy* — the channel opens at
+   finding-creation copying `derived_view` → `claim`, not at the query;
+3. nothing evidence-derived may sit on the trusted side of any prompt — the
+   split is by provenance, not by which ledger a field arrived in
+   (`tasks.goal`/`result_summary` are the standing counterexample, safe only by
+   the absence of an evidence-derived writer);
+4. prefer deterministic derivations (counts, enums, canonical identities, ids)
+   over raw target text, which is untrusted by construction if shown;
+5. a single wrapping consumer (the Supervisor prompt builder wrapping
+   findings-by-source) is not an invariant — the interface's guarantees must be
+   its own.
+
+Its downstream half (a goal on the Worker's trusted side) stays measured at
+0/81 (D17 §6).
 
 ### Still open — carried forward unchanged from MVP-Kernel
 
@@ -326,7 +415,7 @@ quietly drops resolved items is how a reader loses the thread.
 | 5.3 | `reconstruct_decision` does not walk back to the task (D8) | Open. Extending it needs a decision the design does not record (do a task's events belong to every proposal it produced?). `by_stage()` must stay a partition; the diff against the whole-engagement query stays pinned. |
 | 5.4 | `heartbeat_required` declared, not enforced | Open. Blocked on a **missing prerequisite, not a decision**: there is still no scheduler in MVP-0, and `last_heartbeat_at` is only meaningful once an agent heartbeats on its own schedule. Column stays; the gap is behaviour. |
 | 5.5 | `approvals` has no API (Phase-1 scope) | Open, scope boundary. Checking is covered; only the granting operation is absent. When it lands, `revoke_approval()` needs the D9 cascade treatment. |
-| 5.6 | `findings.state` / `verification_conflict` (Phase-1 scope) | Open, scope boundary. **Note:** D17 implemented `query_findings` (a *read*), but the kernel still never promotes evidence to a finding, so the state machine remains unwritten. The read interface existing does not change the deferral. |
+| 5.6 | `findings.state` / `verification_conflict` (Phase-1 scope) | Open, scope boundary. **Note:** D17 implemented `query_findings` (a *read*), but the kernel still never promotes evidence to a finding, so the state machine remains unwritten (re-confirmed by the D22 investigation). The read interface existing does not change the deferral — and D22's §11.4 constraints bind the finding-writer that will eventually fill it. |
 | 5.7 | Emergency-overlay content not randomized in the stateful test | Open. The algebra is covered at 400 generated combinations per property; the stateful rule exists to test the *interaction*. If content is randomized later it must respect tighten-only. |
 | D11-8 | The derived view drops the nmap VERSION column | Open, minor. Cosmetic loss in the derived view; evidence retains the raw. |
 | D11-9 | Nothing creates an engagement | Open, gap. Engagements are seeded by tests and harnesses; no operation creates one. A stage boundary, surfaced when the live runs each had to construct their own. |
@@ -335,14 +424,14 @@ quietly drops resolved items is how a reader loses the thread.
 
 These are the items where implementing anything first requires an architecture
 or design decision the documents do not make. Guessing would invent semantics,
-which is the failure mode the whole project has refused since D6.
+which is the failure mode the whole project has refused since D6. **After D19–D22
+this list is down to two, and neither has a known security consequence** — the
+four items that did (11.2, 11.3, 11.4, `discovery_source`) are closed above.
 
 | # | Item | The decision that gates it |
 |---|---|---|
-| **11.2 / D11-7** | A globally-scoped operation has no globally-scoped audit record (D11) | Which `engagement_id` a global operation's audit row carries (`NULL` vs a reserved sentinel); who may read these rows without opening a cross-engagement read surface I4 forbids; whether they need an access rule independent of the current single-predicate RLS model. **No fix proposed on purpose.** Nothing in the RLS policy is to be touched until these are settled. |
-| **11.3** | Two tasks are never compared (D17) | What makes two tasks the same (identical structure? overlapping target sets? same objective reached differently?), and what the system does when they are (refuse / merge / link via `overlaps_with` / warn). Interacts with ADR G. Binding constraints: **fail towards a duplicate, never a silent drop** (a false negative is a security bug); whatever is compared must first be *stored* (`create_task` currently discards action/target/scope); not automatic semantic derivation; use the `overlaps_with` field §4.2 reserved. A literal comparison would have caught **<1%** of the same-work pairs a real planner produced. |
-| **11.4** | A task goal is generated text on the trusted side of another model's prompt (D17) | Whether/how to structure the goal so a Worker takes its target from structured fields rather than free text. **The obvious fix is wrong:** wrapping the task in the Worker's untrusted block tells the Worker to distrust its own assignment — the mistake D13 refused for scope objects — and leaves it with no trusted statement of what it is for. Measured 0/81 goals quoted the out-of-scope lure, but the channel is structural and stays open whatever that number says. Deserves its own deliverable. |
-| discovery_source | Self-reported provenance is semantically ambiguous (D13, D15) | Does the field describe where the *target* came from or where the *motivation* came from? §4.1 does not say. Bounded by I8 (can suppress a check on an already-authorized target; can never authorize). Until pinned, `untrusted_discovery_source` fires on a self-report whose meaning the design does not define. |
+| **5.1** | Hierarchical classification fallback (D3) | Whether a classification inherits downward (a host's class to a path beneath it, a network's to an enclosed ip). Both answers are wrong in a different direction: inheriting lets a statement about a parent stand in for an unregistered child; not inheriting means a host declared PII does not by itself protect those paths. Binding constraints if built: inherit only from an **AUTHORITATIVE** parent; only ever **tighten**; its own tests, not an extension of the exact-match ones. A design-priority choice, not a live gap — MVP-1 targets are registered directly. |
+| **5.3** | `reconstruct_decision` does not walk back to the task (D8) | Whether a task's events (`task.created/claimed/completed`) belong to *every* proposal that task produced — which would make one task's claim appear in several chains and stop the chain being a partition. MVP-1's planners still emit one proposal per task, so there is no case to design against yet. `by_stage()` must stay a partition and the diff against the whole-engagement query stays pinned whatever is chosen. D19–D22 added no new pressure here. |
 
 ### Interface note — §2 completed, not extended (D17)
 
@@ -380,8 +469,22 @@ ways); D11-4 (OPA budget rule with fail-closed controls); D11-5 target side
 (`CanonicalizationError`); **11.1 → D14** (one `_APPLICABLE` predicate, equality
 pinned); **D11-5 registry side + D15 fail-open → D16** (canonicalize-on-write,
 the read branch now reachable and tested); the three D15 pre-experiment defects;
-the D17 diagnostic fallback. Nothing in this class needs a decision — it needs
-only the guarantee that the tests stay in the gate, which they are (all offline).
+the D17 diagnostic fallback.
+
+The D19–D22 closures land here too, having moved out of Class C once decided and
+built: **11.3 → D19** (task identity persisted and compared; `blind`-arm replay
+and mutation guards); **discovery_source → D20** (deterministic provenance; rego
+tests and matcher mutation guards); **11.2 / D11-7 → D21** (global-audit scope,
+CHECK and RLS mutation tests, isolation of `global_auditor`). Nothing in this
+class needs a decision — only that the tests stay in the gate, which they are.
+
+**11.4 → D22 is the one Class-A member with no regression test, and it belongs
+here for a different reason.** No code changed, so there is nothing to pin; what
+guards it is an investigation that found no live path plus five binding
+constraints written onto `DEFERRED_MVP0.md` §11.4 (quoted in §3) that gate the
+two Phase-1 writers that could arm the channel. It is "fixed" in the sense that
+the exposure is characterised and cannot be opened silently — not in the sense
+that a test would go red, because there is nothing yet to test.
 
 ### Class B — known, bounded, and safe to leave alone
 
@@ -398,13 +501,14 @@ network is touched.
 
 Work must not start until the decision is made, because any implementation
 encodes an answer to a question the design leaves open, and a wrong guess invents
-authorization or access-control semantics. 5.1 (classification inheritance), 5.3
-(does a task's events belong to every proposal it produced), 11.2 / D11-7 (the
-audit model for global operations), 11.3 (task identity), 11.4 (the goal
-laundering channel and the boundary it re-opens), and `discovery_source`
-semantics. For each, the specific decision is in the §3 table above, and for
-11.2, 11.3 and 11.4 there are binding constraints already written so the decision
-is made once and not re-litigated by the implementer.
+authorization or access-control semantics. **After D19–D22 this class holds two
+items, and neither has a known security consequence:** 5.1 (classification
+inheritance) and 5.3 (does a task's events belong to every proposal it produced).
+Both are design-priority choices, not live gaps — MVP-1 registers targets
+directly and emits one proposal per task, so nothing is currently wrong; the
+decision is what it would *mean* to build them. The four Class-C items that did
+carry a security consequence — 11.2, 11.3, 11.4 and `discovery_source` — were
+each taken through the design-then-build flow D19–D22 and are now in Class A.
 
 ---
 
@@ -433,31 +537,36 @@ changing. That holds:
    read-only queries that *complete* §2 rather than extend it, RLS-confined and
    ungranted.
 
-Nothing on the DEFERRED list blocks the stage. Two items were closed during it
-(11.1 by D14; the registry-side ambiguity and the fail-open branch by D16).
+Nothing on the DEFERRED list blocks the stage, and after D19–D22 the list that
+this document opened in Class C is resolved down to its non-security remainder.
 
-**Next steps, and what each needs first:**
+**The D10–D22 closing statement.** Every candidate item that carried a real
+security consequence is closed:
 
-* **11.2 / D11-7 (the audit model for global operations)** is the highest-ranked
-  Class-C item, because unlike the rest it has already caused an incident — the
-  D11 live run went down on nineteen orphaned global overlays and the diagnosis
-  required SQL against a table no operation exposes. It cannot begin until the
-  three questions in §3 are answered: which `engagement_id` a global audit row
-  carries, who may read it, and whether it needs an access rule outside the
-  current RLS model. This is an access-control decision, and the binding
-  constraint is that it must be made once, not worked around locally.
-* **11.3 (task identity)** and **11.4 (goal laundering)** are the two findings the
-  real Supervisor surfaced, and both are larger than a deliverable. 11.3 needs a
-  decision on what makes two tasks the same *and* a schema/write-path change to
-  store what a comparison would need (its smallest honest starting point). 11.4
-  needs an interface decision at a boundary D13 and D15 verified empirically, so
-  re-opening it deserves its own deliverable rather than a rider.
-* **Everything in Class A and B** needs no decision — A is done and guarded, B is
-  a matter of Phase-1 scheduling — except that **5.2 must be re-proven against the
-  production network driver before any customer engagement**, which remains the
-  single caveat a reader should carry out of both acceptance reviews.
+* **11.1** (no way to list policy layers in force) → **D14**;
+* **11.2 / D11-7** (a global operation had no global-scoped audit record — the
+  one item on the list that had already taken a live run down) → **D21**;
+* **11.3** (two tasks never compared; 25 duplicates created unchecked) → **D19**;
+* **11.4** (the goal-laundering channel) → **D22**, characterised as having no
+  live path today and gated with five binding constraints so it cannot be armed
+  silently;
+* **`discovery_source`** (a self-reported provenance field the model could read
+  either way, deciding escalation) → **D20**;
+* and the D11/D15/D16 defect and fail-open fixes before them.
+
+**What remains needs no security decision.** The Class-C list is down to **5.1**
+(classification inheritance) and **5.3** (whether a task's events belong to every
+proposal it produced) — both design-priority choices with no live gap, because
+MVP-1 registers targets directly and emits one proposal per task. The single
+standing operational caveat is unchanged and is **not** a candidate-list item:
+**5.2 — sandbox confinement must be re-proven against the production network
+driver, with kernel-level evidence, before anything points at a customer
+network.** Class B is otherwise a matter of Phase-1 scheduling.
 
 The design intent from the kernel review — *"nothing else in `propose_action`
-changes, which was the point of building it this way"* — is confirmed
-empirically: three real models were placed behind the three roles, and the one
-place the decision path changed was where §2 was finished, not where it was bent.
+changes, which was the point of building it this way"* — held through all of it:
+three real models were placed behind the three roles, four security-relevant
+candidate items were then closed each through its own design-then-build
+deliverable, and the kernel's decision path changed only where §2 was finished
+or a deterministic fact was computed in place of a self-report — never where it
+was bent.
