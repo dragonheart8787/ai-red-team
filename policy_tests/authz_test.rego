@@ -188,11 +188,38 @@ test_action_outside_scope_object_allowed_actions_is_denied if {
 	"target_out_of_scope" in r.deny_reasons
 }
 
-# §8.9: a target scraped from page content is attacker-influenced by
-# construction, so it escalates no matter how benign the reviewer called it.
-test_web_content_discovery_forces_approval if {
+# §8.9 (D20): a target introduced only by attacker-controlled observation
+# content is attacker-influenced by construction, so it escalates no matter how
+# benign the reviewer called it. Keyed on the deterministic fact, not a channel.
+test_observation_introduced_target_forces_approval if {
 	r := authz.result with input as object.union(base, {
-		"action": {"discovery": {"source": "web_content"}},
+		"action": {"discovery": {"introduced_by_untrusted": true}},
+		"canonical": {"risk": "low"},
+	})
+
+	r.decision == "HUMAN_APPROVAL"
+	"untrusted_discovery_source" in r.approval_reasons
+}
+
+# The channel no longer decides: a web_content observation whose target the
+# pipeline judged *established* (introduced_by_untrusted false) does not
+# escalate. This is the D13 over-escalation the deterministic fact removes.
+test_web_channel_alone_does_not_escalate if {
+	r := authz.result with input as object.union(base, {
+		"action": {"discovery": {"source": "web_content", "introduced_by_untrusted": false}},
+		"canonical": {"risk": "low"},
+	})
+
+	r.decision == "ALLOW"
+	not "untrusted_discovery_source" in r.approval_reasons
+}
+
+# The banner gap closes: a target introduced through a tool_output channel — the
+# D13/D15 lure lived in an nmap banner — escalates just as a web one does, once
+# the fact rather than the channel is what is read.
+test_tool_output_introduced_target_also_escalates if {
+	r := authz.result with input as object.union(base, {
+		"action": {"discovery": {"source": "tool_observed", "introduced_by_untrusted": true}},
 		"canonical": {"risk": "low"},
 	})
 
@@ -209,7 +236,7 @@ test_web_content_discovery_forces_approval if {
 # and it must resolve to DENY.
 test_deny_beats_approval_when_both_apply if {
 	r := authz.result with input as object.union(data_read_base, {
-		"action": {"discovery": {"source": "web_content"}},
+		"action": {"discovery": {"introduced_by_untrusted": true}},
 		"canonical": {"risk": "high"},
 		"resource_metadata": {
 			"known": true,

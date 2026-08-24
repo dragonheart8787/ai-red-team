@@ -224,10 +224,20 @@ within_rate_limit if {
 # approval_reasons (§5, §8.9)
 # ---------------------------------------------------------------------------
 
-# I8: a target lifted out of page content is attacker-influenced by
-# construction. It escalates regardless of what risk the reviewer assigned.
+# I8: a target introduced only by attacker-controlled observation content is
+# attacker-influenced by construction. It escalates regardless of what risk the
+# reviewer assigned.
+#
+# D20 (ADR_DISCOVERY_SOURCE.md): keyed on the deterministic fact the pipeline
+# computes, not on a channel string the Worker used to self-report. The old rule
+# fired only on discovery.source == "web_content", which missed a target named
+# in a tool_output banner (the D13/D15 lure lived in exactly such a banner) and
+# fired on an in-scope host merely re-examined through a web observation. The
+# fact -- "not an offered scope object, not structurally observed, named in
+# untrusted content" -- is computed in worker_base._discovery_provenance;
+# discovery.source is now descriptive channel metadata and no longer decides.
 approval_reasons contains "untrusted_discovery_source" if {
-	input.action.discovery.source == "web_content"
+	input.action.discovery.introduced_by_untrusted == true
 }
 
 approval_reasons contains "high_risk" if input.canonical.risk == "high"

@@ -103,6 +103,7 @@ class ClaudeCodeHeadlessWorker(BaseWorker):
         try:
             proposal = self._to_proposal(
                 result.payload, candidates=candidates, task_id=task_id,
+                observations=observations,
             )
         except WorkerRefusal as exc:
             return self._refuse(started, f"unusable proposal: {exc}")
