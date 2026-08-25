@@ -207,7 +207,7 @@ binding constraints.
 
 ---
 
-## 2. Problems found and fixed, D11 through D22
+## 2. Problems found and fixed, D11 through D24
 
 Same format as `ACCEPTANCE_MVP_KERNEL.md` §6: every commit pushed individually,
 CI confirmed green before the next began. Branch:
@@ -252,6 +252,7 @@ extended (D23) to reflect that; §1's role-verification write-ups are unchanged.
 | `f7dc953` | **D21 (D11-7)** — global-scope audit attribution (**closes 11.2**) | 32688075240 |
 | `8359a9a` | D22 — investigation ADR for the goal-laundering channel | 32708336439 |
 | `40ee36a` | **D22** — gate 11.4 with binding constraints; investigation found no live path (**closes 11.4, characterised-and-gated**) | 32708633148 |
+| `a7ee6ef` | **D24** — human-approval CLI for HUMAN_APPROVAL proposals (§4.7); first Phase-1 feature | 32747094847 |
 
 The defects, in words:
 
@@ -355,6 +356,26 @@ proposed and confirmed before implementation, mirroring D19/D20's two-step flow)
   `TEXT` that would drop it at the copy. Recorded and gated with five binding
   constraints rather than defended with no trigger yet. **Closes 11.4 as
   characterised-and-gated** (see §3).
+
+And one item that is not a candidate-list closure but the first step of Phase-1
+delivery, included here because it belongs to the same stage's history:
+
+* **D24 — human-approval CLI** (`control_plane/api/approvals.py`,
+  `scripts/approvals.py`, `a7ee6ef`). The DEFERRED item recorded before D10.5 as
+  "experience, not a security gap, Phase 1". The three-role stage drove a real
+  model into `HUMAN_APPROVAL` repeatedly (D11 escalation-by-narration, D17
+  pressure-arm `blocked`), so the queue is genuinely triggered and until now
+  could only be read with raw SQL — the same operational shape as D11-6. A
+  CLI-first surface (`list` / `approve --scope` / `deny` / `watch`), no web UI
+  and no push, under five non-negotiable constraints: OPA still owns "ask a
+  human"; the approval stays a §4.7-structured object with an explicit
+  `approved_scope`; viewing writes nothing while the decision is audited;
+  fail-closed; and issuance still goes through the existing Capability Broker
+  (`approval_id`), never around it. No schema change — the `approvals` table
+  already carried every field. Lease interaction verified: a pending-approval
+  proposal has no capability and stays `dispatch_state='queued'`, so the
+  stale-dispatch sweep leaves it alone. Verified end to end against the D11
+  Case-D shape.
 
 ---
 
@@ -562,6 +583,16 @@ standing operational caveat is unchanged and is **not** a candidate-list item:
 **5.2 — sandbox confinement must be re-proven against the production network
 driver, with kernel-level evidence, before anything points at a customer
 network.** Class B is otherwise a matter of Phase-1 scheduling.
+
+**Phase 1 has begun.** D24 delivered the first Phase-1 feature — the
+human-approval CLI (`scripts/approvals.py`, §4.7) — because the three-role stage
+turned `HUMAN_APPROVAL` from a theoretical branch into one a real model hit
+repeatedly, and the queue could only be read with raw SQL. It ships under the
+same discipline as the kernel: OPA still owns the decision to escalate, the
+approval is a structured object, viewing writes nothing, the decision is
+audited, and issuance still runs through the Capability Broker. It changes no
+kernel boundary. It is included in this merge and is the marker that the stage
+after the candidate list is now underway.
 
 The design intent from the kernel review — *"nothing else in `propose_action`
 changes, which was the point of building it this way"* — held through all of it:
