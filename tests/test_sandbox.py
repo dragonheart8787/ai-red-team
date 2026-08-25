@@ -193,11 +193,73 @@ def test_a_valid_capability_does_not_widen_the_sandbox(sandbox):
     ) == "network_unreachable"
 
 
-def test_ping_scan_surfaces_the_routing_failure(sandbox):
-    """A scan type that does its own routing does report the failure.
+@pytest.mark.parametrize("scan_type", sorted(nmap.SCAN_TYPES))
+def test_every_scan_type_can_actually_execute_in_the_sandbox(
+    sandbox, scan_target, scan_type
+):
+    """Every entry in SCAN_TYPES runs, against a live host, and exits clean.
 
-    Kept to document that the signal exists for -sn and is simply unavailable
-    under -Pn with a connect scan — the reason probe_egress has to exist.
+    The test the D11 live run showed was missing, and the reason it is
+    parametrized over the whole table rather than written once per type: the
+    suite executed ``connect`` and nothing else, so two of the three scan types
+    the adapter advertises had never been run at all. Both failed — nmap picked
+    a raw-socket technique it had no NET_RAW for and quit with exit 1 — after
+    the pipeline had already canonicalized, resolved, decided, issued a
+    capability and dispatched. A configuration that passes every check upstream
+    and cannot execute is worse than one that is rejected.
+
+    Exit code and a parsed host, not just "it produced output": the broken
+    runs printed nmap's banner to stdout before dying, so anything weaker than
+    this would have passed.
+    """
+    plan = nmap.build_plan(
+        constraints={"ports": "8080", "scan_type": scan_type},
+        budget={"max_duration_seconds": 60}, target=scan_target,
+    )
+    result = sandbox.run(
+        command=plan.command, network_allowlist=[ALLOWED_CIDR],
+        max_duration_seconds=60,
+    )
+
+    assert result.exit_code == 0, (
+        f"{scan_type} scan failed: {' '.join(plan.command)}\n{result.stderr}"
+    )
+    assert "QUITTING!" not in result.stderr
+    view = nmap.derive_view(result.stdout, result.stderr)
+    assert view["hosts"] == [scan_target], (
+        f"{scan_type} produced no host report\n{result.stdout}"
+    )
+
+
+def test_version_scan_names_its_own_technique():
+    """-sV is service detection layered on a scan, not a scan.
+
+    Emitted alone it left nmap free to choose, and nmap chooses by uid rather
+    than by capability. Asserted on the command rather than only through the
+    sandbox so the reason survives as a statement about the flag.
+    """
+    plan = nmap.build_plan(
+        constraints={"ports": "8080", "scan_type": "version"},
+        budget={"max_duration_seconds": 60}, target=TARGET_IP,
+    )
+    assert "-sT" in plan.command and "-sV" in plan.command
+    assert "--unprivileged" in plan.command
+
+
+def test_ping_scan_no_longer_reports_a_routing_failure(sandbox):
+    """What --unprivileged cost, recorded rather than quietly dropped.
+
+    Before D11, ``-sn`` against an address outside the allowlist printed
+    "failed to determine route" while planning a raw packet, and
+    ``derive_view`` surfaced it as ``nmap_reported_no_route``. Unprivileged
+    nmap does not plan a route — it calls connect(), gets ENETUNREACH, and
+    says "host seems down" — so that string is gone and the flag is now
+    permanently False.
+
+    Nothing security-relevant was lost, and this test is where that claim is
+    checked rather than asserted: the scanner's account was never evidence of
+    confinement in the first place (under -Pn it calls an unroutable target
+    "up, filtered"), so the kernel is asked directly here, as it always was.
     """
     plan = nmap.build_plan(
         constraints={"scan_type": "ping"},
@@ -207,7 +269,67 @@ def test_ping_scan_surfaces_the_routing_failure(sandbox):
         command=plan.command, network_allowlist=[ALLOWED_CIDR],
         max_duration_seconds=15,
     )
-    assert nmap.derive_view(result.stdout, result.stderr)["nmap_reported_no_route"] is True
+    view = nmap.derive_view(result.stdout, result.stderr)
+    assert view["nmap_reported_no_route"] is False
+    assert view["open_ports"] == []
+
+    # The authority on whether anything left the namespace, unchanged.
+    assert sandbox.probe_egress(
+        target=OUTSIDE_IP, port=8080, network_allowlist=[ALLOWED_CIDR],
+    ) == "network_unreachable"
+
+
+def test_the_tool_is_asked_to_stop_before_the_sandbox_kills_it():
+    """The two deadlines are ordered, not simultaneous.
+
+    ``--host-timeout`` exists so a long scan ends with a partial report instead
+    of a destroyed container. Set to the same second as the kill it never got
+    the chance: D11 watched a -sV scan of a silent listener get killed at the
+    deadline with its output discarded, which is the failure the flag was added
+    to prevent.
+
+    The margin comes off the tool's deadline. The sandbox still kills at
+    exactly the budgeted duration, because that number is an authorization
+    (I3) and not a target to overshoot.
+    """
+    plan = nmap.build_plan(
+        constraints={"ports": "8080", "scan_type": "connect"},
+        budget={"max_duration_seconds": 60}, target=TARGET_IP,
+    )
+    assert plan.max_duration_seconds == 60, "the sandbox's kill must not move"
+    timeout = plan.command[plan.command.index("--host-timeout") + 1]
+    assert int(timeout.rstrip("s")) < plan.max_duration_seconds
+
+    # A budget smaller than the margin still yields a usable positive timeout
+    # rather than zero or a negative one.
+    tiny = nmap.build_plan(
+        constraints={"ports": "8080", "scan_type": "connect"},
+        budget={"max_duration_seconds": 2}, target=TARGET_IP,
+    )
+    assert int(tiny.command[tiny.command.index("--host-timeout") + 1].rstrip("s")) >= 1
+
+
+def test_a_scan_that_outlives_its_tool_deadline_still_reports(sandbox, scan_target):
+    """The behaviour the ordering buys, against a real unresponsive service.
+
+    ``-sV`` against a listener that accepts and then says nothing walks its
+    whole probe sequence, so this genuinely exceeds a short budget. With the
+    deadlines ordered, nmap stops itself and prints what it has; with them
+    equal, the container was killed and ``stdout`` held nothing but the banner.
+    """
+    plan = nmap.build_plan(
+        constraints={"ports": "8080", "scan_type": "version"},
+        budget={"max_duration_seconds": 25}, target=scan_target,
+    )
+    result = sandbox.run(
+        command=plan.command, network_allowlist=[ALLOWED_CIDR],
+        max_duration_seconds=plan.max_duration_seconds,
+    )
+
+    assert result.timed_out is False, "the sandbox had to kill it after all"
+    assert result.exit_code == 0, result.stderr
+    view = nmap.derive_view(result.stdout, result.stderr)
+    assert view["hosts"] == [scan_target], result.stdout
 
 
 def test_duration_budget_kills_a_long_run(sandbox):

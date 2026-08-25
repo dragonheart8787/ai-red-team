@@ -165,6 +165,47 @@ deny_reasons contains "action_not_in_policy" if {
 
 deny_reasons contains "over_rate_limit" if not within_rate_limit
 
+# ---------------------------------------------------------------------------
+# Capability budget (§4.6, I3)
+# ---------------------------------------------------------------------------
+# I3 is "tool execution is a subset of the issued capability", budget included.
+# Until D12 nothing anywhere read max_targets. The D11 live run watched a
+# capability recording `max_targets: 1` execute a scan against 256 addresses:
+# the proposal named a /24, which is one identity and one proposal, so every
+# stage counted it as one thing and nmap swept the range.
+#
+# Checked here rather than in the Capability Broker or the Tool Gateway
+# because "how much may this action touch" is an authorization question, and
+# belongs at the one decision point beside scope and data_class. The broker was
+# deliberately narrowed at D5/D9 to confirming liveness and does not judge
+# authorization; the gateway is the network boundary and holds no policy.
+# Denying here also means no capability is ever minted, rather than one being
+# minted and then refused downstream -- which is the difference between an
+# authorization that was never granted and one that was granted and unused.
+
+# object.get with an explicit default rather than input.canonical.target.
+# address_count directly, and that is load-bearing. A plain reference to a
+# missing key is *undefined*, an undefined rule body simply does not fire, and
+# a deny rule that does not fire is an allow. Reading the absence into a value
+# is what lets the two rules below say something about it.
+requested_target_count := object.get(input, ["canonical", "target", "address_count"], null)
+
+requested_max_targets := object.get(input, ["capability_request", "max_targets"], null)
+
+deny_reasons contains "target_count_exceeds_budget" if {
+	is_number(requested_target_count)
+	is_number(requested_max_targets)
+	requested_target_count > requested_max_targets
+}
+
+# Both halves must be present. A proposal with no stated target budget is not
+# a proposal with an unlimited one, and a target whose size nobody stated is
+# not a target of size one -- the same reasoning as action_not_in_policy
+# above, where a missing key must never read as permission (I10).
+deny_reasons contains "capability_budget_missing" if not is_number(requested_max_targets)
+
+deny_reasons contains "target_count_unknown" if not is_number(requested_target_count)
+
 # I10: an authorization-critical attribute that is UNKNOWN is handled per
 # action class below, but CONFLICT is never survivable. Two authoritative
 # classifications disagreeing is the case where guessing is least defensible.
@@ -183,10 +224,20 @@ within_rate_limit if {
 # approval_reasons (§5, §8.9)
 # ---------------------------------------------------------------------------
 
-# I8: a target lifted out of page content is attacker-influenced by
-# construction. It escalates regardless of what risk the reviewer assigned.
+# I8: a target introduced only by attacker-controlled observation content is
+# attacker-influenced by construction. It escalates regardless of what risk the
+# reviewer assigned.
+#
+# D20 (ADR_DISCOVERY_SOURCE.md): keyed on the deterministic fact the pipeline
+# computes, not on a channel string the Worker used to self-report. The old rule
+# fired only on discovery.source == "web_content", which missed a target named
+# in a tool_output banner (the D13/D15 lure lived in exactly such a banner) and
+# fired on an in-scope host merely re-examined through a web observation. The
+# fact -- "not an offered scope object, not structurally observed, named in
+# untrusted content" -- is computed in worker_base._discovery_provenance;
+# discovery.source is now descriptive channel metadata and no longer decides.
 approval_reasons contains "untrusted_discovery_source" if {
-	input.action.discovery.source == "web_content"
+	input.action.discovery.introduced_by_untrusted == true
 }
 
 approval_reasons contains "high_risk" if input.canonical.risk == "high"

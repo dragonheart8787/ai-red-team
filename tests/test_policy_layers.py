@@ -26,6 +26,7 @@ from control_plane.policy.layers import (
     EmergencyOverlayError,
     PolicyLayerError,
     deactivate_policy_layer,
+    list_effective_policy_layers,
     load_effective_policy,
     publish_policy_layer,
 )
@@ -437,3 +438,320 @@ def test_deactivating_an_absent_layer_reports_rather_than_raises(engagement_id):
         assert deactivate_policy_layer(
             conn, engagement_id=engagement_id, layer_id=999999, actor="operator",
         ) is False
+
+
+# ---------------------------------------------------------------------------
+# list_effective_policy_layers — D14, DEFERRED 11.1
+# ---------------------------------------------------------------------------
+
+class _WatchingConnection:
+    """A Connection proxy that keeps every result ``execute`` handed back.
+
+    Written this way on purpose. The binding constraint is that the listing
+    returns *exactly* the rows the merge consumed, and a test comparing the
+    listing to its own hand-written SELECT would only be asserting that two
+    copies of one query agree. This watches what ``load_effective_policy``
+    actually fetches, so rewriting its selection — a different predicate, a
+    LIMIT, dropping the ORDER BY, forgetting the global rows — changes what the
+    spy sees and turns the test red.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.fetched: list[list[dict]] = []
+
+    def execute(self, statement, *args, **kwargs):
+        result = self._inner.execute(statement, *args, **kwargs)
+        rows = result.mappings().all()
+        self.fetched.append([dict(row) for row in rows])
+        return _ReplayedResult(rows)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+class _ReplayedResult:
+    """Hands the already-consumed rows back to the real caller."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+    def scalar_one(self):
+        return next(iter(self._rows[0].values()))
+
+    def scalar_one_or_none(self):
+        if not self._rows:
+            return None
+        return next(iter(self._rows[0].values()))
+
+    def one(self):
+        return self._rows[0]
+
+    def one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+
+@pytest.fixture
+def layered_engagement(engagement_id):
+    """One global layer and one engagement-scoped layer, both active, plus a
+    retired one and another engagement's, neither of which may be listed."""
+    action = _token("action")
+    other_engagement = _uid("ENG-OTHER")
+
+    with engagement_scope(engagement_id) as conn:
+        global_id = publish_policy_layer(
+            conn, engagement_id=engagement_id, layer="baseline_global",
+            version=_version(), document={"actions": {action: ALLOW}},
+            actor="platform-owner",
+        )
+        scoped_id = publish_policy_layer(
+            conn, engagement_id=engagement_id, layer="engagement",
+            version=_version(), document={"data_deny": [_token("class")]},
+            actor="engagement-manager", scoped_to_engagement=True,
+        )
+        retired_id = publish_policy_layer(
+            conn, engagement_id=engagement_id, layer="customer",
+            version=_version(), document={"data_deny": [_token("class")]},
+            actor="engagement-manager", scoped_to_engagement=True,
+        )
+        deactivate_policy_layer(
+            conn, engagement_id=engagement_id, layer_id=retired_id,
+            actor="engagement-manager",
+        )
+
+    with engagement_scope(other_engagement) as conn:
+        conn.execute(
+            text("INSERT INTO engagements (engagement_id, customer_id, "
+                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
+            {"e": other_engagement},
+        )
+        foreign_id = publish_policy_layer(
+            conn, engagement_id=other_engagement, layer="engagement",
+            version=_version(), document={"data_deny": [_token("class")]},
+            actor="engagement-manager", scoped_to_engagement=True,
+        )
+
+    yield {
+        "engagement_id": engagement_id, "action": action,
+        "global_id": global_id, "scoped_id": scoped_id,
+        "retired_id": retired_id, "foreign_id": foreign_id,
+    }
+
+    # Retire the global layer this fixture published. A global row applies to
+    # every engagement in the database and nothing expires it, which is the
+    # accumulation DEFERRED 11.1 exists because of -- and a test that leaves one
+    # behind is the mechanism that produced the nineteen. The engagement-scoped
+    # rows are harmless and are left alone.
+    with engagement_scope(engagement_id) as conn:
+        deactivate_policy_layer(
+            conn, engagement_id=engagement_id, layer_id=global_id,
+            actor="test-teardown",
+        )
+
+
+def test_the_listing_returns_exactly_the_rows_the_merge_consumed(layered_engagement):
+    """The binding constraint from DEFERRED 11.1, pinned against the real merge.
+
+    Not "similar", not "a superset" — the same ids. A listing that shows a
+    different set from the one being enforced is worse than no listing, because
+    it will be believed. Asserted by watching the rows ``load_effective_policy``
+    actually fetched rather than by re-deriving them here, so a change to its
+    selection that this function did not follow is caught.
+    """
+    eid = layered_engagement["engagement_id"]
+
+    with engagement_scope(eid) as conn:
+        listed = list_effective_policy_layers(conn, eid)
+        watcher = _WatchingConnection(conn)
+        load_effective_policy(watcher, eid)
+
+    consumed = [row for batch in watcher.fetched for row in batch]
+    assert consumed, "load_effective_policy fetched nothing to compare against"
+    assert {row["id"] for row in consumed} == {layer.id for layer in listed}
+    # And in the same order, so "which layer wins" reads the same both ways.
+    assert [row["id"] for row in consumed] == [layer.id for layer in listed]
+
+
+def test_the_listing_excludes_retired_and_foreign_layers(layered_engagement):
+    """The control for the equality above.
+
+    Without it, a listing that returned every row in the table would satisfy
+    "exactly the rows the merge consumed" only if the merge were equally broken
+    — and both being wrong together is precisely the failure mode the shared
+    predicate exists to prevent, so it is worth checking the set is right and
+    not merely agreed upon.
+    """
+    eid = layered_engagement["engagement_id"]
+    with engagement_scope(eid) as conn:
+        listed = list_effective_policy_layers(conn, eid)
+
+    ids = {layer.id for layer in listed}
+    assert layered_engagement["global_id"] in ids
+    assert layered_engagement["scoped_id"] in ids
+    assert layered_engagement["retired_id"] not in ids, "a retired layer was listed"
+    assert layered_engagement["foreign_id"] not in ids, (
+        "another engagement's layer was listed"
+    )
+
+
+def test_a_global_layer_is_labelled_global_not_inferred(layered_engagement):
+    """DEFERRED 11.1's third constraint.
+
+    The whole D11-6 failure was a global layer read as though it were the
+    engagement's own, and "you can tell because the other column is empty" is
+    the inference that failed. So it is a field.
+    """
+    eid = layered_engagement["engagement_id"]
+    with engagement_scope(eid) as conn:
+        listed = {layer.id: layer for layer in list_effective_policy_layers(conn, eid)}
+
+    global_layer = listed[layered_engagement["global_id"]]
+    scoped_layer = listed[layered_engagement["scoped_id"]]
+
+    assert global_layer.scope == "global"
+    assert global_layer.is_global is True
+    assert global_layer.engagement_id is None
+
+    assert scoped_layer.scope == "engagement"
+    assert scoped_layer.is_global is False
+    assert scoped_layer.engagement_id == eid
+
+
+def test_an_invisible_attribution_says_so_rather_than_being_blank(layered_engagement):
+    """DEFERRED 11.1's fourth constraint, and the line against papering over 11.2.
+
+    A layer published from *this* engagement has a visible audit row, so the
+    publisher is named. A layer whose audit row belongs to another engagement is
+    invisible under RLS — and the listing must say that, because a blank field
+    reads as "nobody published it", which is false and is exactly the confusion
+    11.2 is about.
+    """
+    eid = layered_engagement["engagement_id"]
+    foreign = _uid("ENG-FOREIGN")
+
+    with engagement_scope(foreign) as conn:
+        conn.execute(
+            text("INSERT INTO engagements (engagement_id, customer_id, "
+                 "policy_snapshot_version) VALUES (:e, 'CUST-FOREIGN', 1)"),
+            {"e": foreign},
+        )
+        invisible_id = publish_policy_layer(
+            conn, engagement_id=foreign, layer="baseline_global",
+            version=_version(), document={"actions": {_token("action"): ALLOW}},
+            actor="someone-elses-operator",
+        )
+
+    with engagement_scope(eid) as conn:
+        listed = {layer.id: layer for layer in list_effective_policy_layers(conn, eid)}
+        # Same reason as the fixture's teardown: retire it before asserting, so
+        # a failing assertion cannot leave a global layer behind.
+        deactivate_policy_layer(
+            conn, engagement_id=eid, layer_id=invisible_id, actor="test-teardown",
+        )
+
+    # An engagement-scoped layer published from this engagement has its audit
+    # row here, so the publisher is named.
+    published_here = listed[layered_engagement["scoped_id"]]
+    assert published_here.published_by == "engagement-manager"
+    assert published_here.published_at is not None
+    assert published_here.attribution_note is None
+
+    # A global layer's attribution is no longer visible from the engagement — the
+    # D11-7 fix stopped the global publish audit from being mis-scoped into the
+    # publisher's engagement, so even a global layer published from *this*
+    # engagement now records globally. Its publisher is read from the global
+    # trail (scripts/global_audit.py), not from here; the listing says so rather
+    # than leaving a blank that reads as "nobody published it".
+    for global_id in (layered_engagement["global_id"], invisible_id):
+        glob = listed[global_id]
+        assert glob.is_global is True
+        assert glob.published_by is None
+        assert glob.attribution_note, (
+            "an invisible attribution was left blank, which reads as 'no publisher'"
+        )
+        assert "not visible" in glob.attribution_note
+        assert "11.2" in glob.attribution_note
+
+
+def test_the_listing_carries_the_document_that_decides_the_action(layered_engagement):
+    """The question the command exists to answer: *which* layer said DENY."""
+    eid = layered_engagement["engagement_id"]
+    action = layered_engagement["action"]
+
+    with engagement_scope(eid) as conn:
+        deny_id = publish_policy_layer(
+            conn, engagement_id=eid, layer=EMERGENCY_OVERLAY, version=_version(),
+            document={"actions": {action: DENY}}, actor="incident-commander",
+            scoped_to_engagement=True,
+        )
+        listed = list_effective_policy_layers(conn, eid)
+        policy = load_effective_policy(conn, eid)
+
+    assert policy.action_decision(action) == DENY
+    culprits = [
+        layer for layer in listed
+        if (layer.document.get("actions") or {}).get(action) == DENY
+    ]
+    assert [layer.id for layer in culprits] == [deny_id]
+
+
+def test_the_listing_writes_nothing(layered_engagement):
+    """Read-only, asserted rather than assumed.
+
+    ``policy_layers`` and ``audit_log`` are both append-friendly for this role,
+    so "it only reads" needs checking rather than trusting: a listing that
+    logged its own invocation would grow the audit trail every time somebody
+    asked a question.
+    """
+    eid = layered_engagement["engagement_id"]
+    with engagement_scope(eid) as conn:
+        before = conn.execute(
+            text("SELECT count(*) FROM policy_layers")).scalar_one()
+        audit_before = conn.execute(
+            text("SELECT count(*) FROM audit_log")).scalar_one()
+
+        list_effective_policy_layers(conn, eid)
+
+        assert conn.execute(
+            text("SELECT count(*) FROM policy_layers")).scalar_one() == before
+        assert conn.execute(
+            text("SELECT count(*) FROM audit_log")).scalar_one() == audit_before
+
+
+def test_an_engagement_with_no_layers_lists_nothing_and_denies_everything():
+    """The empty case reads the same both ways (§4.5, I10)."""
+    eid = _uid("ENG-EMPTY")
+    with engagement_scope(eid) as conn:
+        conn.execute(
+            text("INSERT INTO engagements (engagement_id, customer_id, "
+                 "policy_snapshot_version) VALUES (:e, 'CUST-EMPTY', 1)"),
+            {"e": eid},
+        )
+        # Retire everything global so this engagement genuinely sees nothing.
+        globals_ = [
+            r[0] for r in conn.execute(
+                text("SELECT id FROM policy_layers WHERE active "
+                     "AND engagement_id IS NULL")).all()
+        ]
+        for layer_id in globals_:
+            deactivate_policy_layer(
+                conn, engagement_id=eid, layer_id=layer_id, actor="test-cleanup")
+
+        listed = list_effective_policy_layers(conn, eid)
+        policy = load_effective_policy(conn, eid)
+
+        assert listed == ()
+        assert policy.action_decision("network.scan") == DENY
+
+        # Put them back: global layers belong to the whole database and this
+        # test does not own them.
+        for layer_id in globals_:
+            conn.execute(
+                text("UPDATE policy_layers SET active = TRUE WHERE id = :i"),
+                {"i": layer_id})

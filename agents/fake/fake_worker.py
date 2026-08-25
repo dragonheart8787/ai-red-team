@@ -19,22 +19,38 @@ class FakeWorker:
     agent_id = "fake-worker"
 
     def __init__(self, *, discovery_source: str = "explicit_scope",
-                 ports: str = "8080") -> None:
+                 introduced_by_untrusted: bool = False,
+                 ports: str = "8080", scan_type: str = "connect") -> None:
         self._discovery_source = discovery_source
+        # D20: the scripted worker states its discovery provenance directly, the
+        # way it states its scope object — it is a test double, not the real
+        # model, and the real deterministic computation lives in
+        # ``worker_base._discovery_provenance``. ``introduced_by_untrusted`` is
+        # the escalation fact §5's Rego now reads; default False keeps every
+        # existing caller unescalated.
+        self._introduced_by_untrusted = introduced_by_untrusted
         self._ports = ports
+        # Constructor argument for the same reason ``ports`` is one, and added
+        # when the D11 live run needed to drive a scan type other than the
+        # default through the real pipeline. "connect" stays the default so
+        # every existing caller is unchanged.
+        self._scan_type = scan_type
 
     def propose(self, *, task: ProposedTask, task_id: str | None = None) -> ProposedAction:
         return ProposedAction(
             action=task.action,
-            target={**task.target, "ports": self._ports, "scan_type": "connect"},
+            target={**task.target, "ports": self._ports,
+                    "scan_type": self._scan_type},
             # The only authorization an agent can express: a pointer to a scope
             # object someone else registered. It cannot mint one.
             authorization={
                 "source": "engagement_scope",
                 "scope_object_id": task.scope_object_id,
             },
-            # How the candidate was found. Never consulted for authorization.
-            discovery={"source": self._discovery_source},
+            # How the candidate was found. Never consulted for authorization;
+            # ``introduced_by_untrusted`` is the discovery-side escalation fact.
+            discovery={"source": self._discovery_source,
+                       "introduced_by_untrusted": self._introduced_by_untrusted},
             task_id=task_id,
             resources=("network_host",),
             expected_data=("port_state",),

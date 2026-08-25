@@ -306,6 +306,104 @@ def test_a_second_identical_scan_is_deduplicated(engagement_id, sandbox, scan_ta
     assert second.run_id == first.run_id
 
 
+def test_the_same_host_scanned_for_different_ports_is_not_deduplicated(
+    engagement_id, sandbox, scan_target
+):
+    """§7's boundary, which D17 needed stated precisely rather than assumed.
+
+    ``normalized_params`` is part of the fingerprint, so two scans of one host
+    that ask for different ports are two executions. That is correct — the
+    second asks a question the first did not — and it is also the limit of what
+    execution-level deduplication can do about duplicate *tasks*.
+
+    D17 found there is no task-level deduplication at all, and §7's fingerprint
+    is the nearest thing the system has to one. This marks how near: it catches
+    a repeat only when the work reduces to identical parameters. Two tasks
+    worded differently that lead a Worker to the same host with different port
+    specifications both run — and both are charged a proposal, a policy
+    decision and a capability first, because the fingerprint is consulted
+    inside ``dispatch_scan``, downstream of ``issue_capability``.
+    """
+    with engagement_scope(engagement_id) as conn:
+        narrow = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id),
+            capability=_capability(conn, engagement_id, ports="8080"),
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+        assert narrow.state == SUCCEEDED
+
+        wider = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id),
+            capability=_capability(conn, engagement_id, ports="8080,9090"),
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+
+    assert wider.reason != "dedup_hit"
+    assert wider.run_id != narrow.run_id
+    assert wider.state == SUCCEEDED
+
+
+def test_a_scan_confined_elsewhere_is_not_the_same_execution(
+    engagement_id, sandbox, scan_target
+):
+    """§7: the network boundary is part of what makes a scan different.
+
+    The live run's reproduction, kept as a test. The first scan is confined to
+    a range with no route to the target, so it succeeds and reports nothing
+    open — under -Pn that is indistinguishable from a host with nothing
+    listening. The second names the range that *can* reach it.
+
+    Before D11 those two shared a fingerprint, the second was answered from the
+    cache and never ran, and the open port went unreported while the engagement
+    recorded a successful scan that found nothing. §7 calls exactly this out:
+    a missing fingerprint component causes a false negative, and the scan that
+    gets skipped is the one that would have found something.
+
+    Asserted on the port actually being found, not merely on two run ids being
+    different — the interesting failure is the result, and a cache that
+    returned a fresh id for stale content would still be wrong.
+    """
+    unreachable = "10.98.0.0/24"
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(conn, engagement_id)
+        blind = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id), capability=capability,
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[unreachable],
+        )
+        assert blind.state == SUCCEEDED
+        blind_view = conn.execute(
+            text("SELECT derived_view FROM evidence WHERE run_id = :r"),
+            {"r": blind.run_id},
+        ).scalar_one()
+        assert blind_view["open_ports"] == [], (
+            "the confined scan reached the target; the premise is gone"
+        )
+
+        seeing = dispatch_scan(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id), capability=capability,
+            target=scan_target, actor="orchestrator", sandbox=sandbox,
+            network_allowlist=[ALLOWED_CIDR],
+        )
+
+        assert seeing.reason != "dedup_hit"
+        assert seeing.run_id != blind.run_id
+        seeing_view = conn.execute(
+            text("SELECT derived_view FROM evidence WHERE run_id = :r"),
+            {"r": seeing.run_id},
+        ).scalar_one()
+
+    assert any(p["port"] == 8080 for p in seeing_view["open_ports"]), seeing_view
+
+    sandbox.remove_network([unreachable])
+
+
 # ---------------------------------------------------------------------------
 # UNKNOWN_OUTCOME (§8.8, I7)
 # ---------------------------------------------------------------------------
@@ -392,3 +490,56 @@ def test_an_unavailable_sandbox_yields_unknown_outcome(engagement_id, scan_targe
             text("SELECT status FROM tool_runs WHERE run_id = :r"),
             {"r": outcome.run_id},
         ).scalar_one() == UNKNOWN_OUTCOME
+
+
+def test_a_capability_the_adapter_cannot_read_is_refused_not_raised(engagement_id):
+    """D15: one malformed constraint must not take down the orchestrator.
+
+    A real Worker proposed ``ports: "n/a"`` for a ping scan. The capability was
+    issued, the dispatch began, and ``AdapterError`` propagated out of
+    dispatch_scan, out of propose_action, and killed the process — so the next
+    proposal, which would have been fine, never happened either.
+
+    The Worker boundary now refuses that field before it becomes a proposal.
+    This is the other half: whatever produced the constraint, the gateway
+    returns an outcome rather than an exception. Both matter, because the first
+    only constrains Workers and this path is reached by anything holding a
+    capability.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(conn, engagement_id, ports="n/a")
+        proposal_id = _proposal(conn, engagement_id)
+
+        outcome = dispatch_scan(
+            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            capability=capability, target="10.78.0.10", actor="orchestrator",
+            sandbox=_ExplodingSandbox(), network_allowlist=[ALLOWED_CIDR],
+        )
+
+        assert outcome.dispatched is False
+        assert outcome.reason == "unbuildable_plan"
+        assert outcome.run_id is None
+        assert outcome.state == "failed"
+
+        # Nothing ran, and the refusal is on the record with the reason.
+        assert conn.execute(
+            text("SELECT count(*) FROM tool_runs WHERE proposal_id = :p"),
+            {"p": proposal_id},
+        ).scalar_one() == 0
+        events = [
+            r[0] for r in conn.execute(
+                text("SELECT event_type FROM audit_log WHERE subject_id = :p "
+                     "ORDER BY audit_id"),
+                {"p": proposal_id},
+            ).all()
+        ]
+        assert "tool_run.refused" in events
+
+
+class _ExplodingSandbox:
+    """Reaching the sandbox at all would mean the plan was built."""
+
+    image = "must-not-run"
+
+    def run(self, **kwargs):  # pragma: no cover - the assertion is the point
+        raise AssertionError(f"the sandbox was reached: {kwargs}")

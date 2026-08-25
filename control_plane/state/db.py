@@ -22,6 +22,7 @@ from control_plane.config import require_env
 
 _ENGINE: Engine | None = None
 _REGISTRY_ADMIN_ENGINE: Engine | None = None
+_GLOBAL_AUDITOR_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -44,6 +45,19 @@ def registry_admin_url() -> str:
         "REGISTRY_ADMIN_DATABASE_URL",
         hint="Run scripts/init_db.sh, or export REGISTRY_ADMIN_DATABASE_URL "
              "for the registry_admin role.",
+    )
+
+
+def global_auditor_url() -> str:
+    """The global-audit reader's connection string (D11-7).
+
+    Same no-fallback rule as the others: a default with a password is a
+    committed credential.
+    """
+    return require_env(
+        "GLOBAL_AUDITOR_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export GLOBAL_AUDITOR_DATABASE_URL "
+             "for the global_auditor role.",
     )
 
 
@@ -70,17 +84,35 @@ def get_registry_admin_engine() -> Engine:
     return _REGISTRY_ADMIN_ENGINE
 
 
+def get_global_auditor_engine() -> Engine:
+    """A third pool, for the role that reads global audit rows (D11-7).
+
+    Separate connection for the same reason registry_admin has one: the reach of
+    this role is an RLS policy the database enforces, and mixing it into a pool
+    that also connects as another role would make the boundary something SQL
+    could step across.
+    """
+    global _GLOBAL_AUDITOR_ENGINE
+    if _GLOBAL_AUDITOR_ENGINE is None:
+        _GLOBAL_AUDITOR_ENGINE = create_engine(
+            global_auditor_url(), pool_pre_ping=True, future=True
+        )
+    return _GLOBAL_AUDITOR_ENGINE
+
+
 def reset_engine() -> None:
     """Drop the cached engines (tests switch roles between connections)."""
-    global _ENGINE, _REGISTRY_ADMIN_ENGINE
-    for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE):
+    global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE
+    for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
     _REGISTRY_ADMIN_ENGINE = None
+    _GLOBAL_AUDITOR_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
+GLOBAL_AUDITOR_ROLE = "global_auditor"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -151,4 +183,33 @@ def registry_admin_scope(engagement_id: str) -> Iterator[Connection]:
     :func:`engagement_scope`, and the database will refuse them if they do not.
     """
     with _scoped(get_registry_admin_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def global_audit_scope() -> Iterator[Connection]:
+    """Write a globally-scoped audit record (D11-7).
+
+    The ``cyberorch_app`` engine, deliberately with **no** engagement bound:
+    a global operation belongs to no engagement, and the row carries
+    ``engagement_id IS NULL``. The ``audit_global_insert`` policy lets that row
+    through; the per-engagement policy would reject it, and being OR'd, does not.
+    This path only ever inserts ``scope='global'`` rows — the engagement path is
+    :func:`audit_scope`.
+    """
+    with get_engine().begin() as conn:
+        yield conn
+
+
+@contextmanager
+def global_auditor_scope() -> Iterator[Connection]:
+    """Read global audit rows as ``global_auditor`` (D11-7).
+
+    No engagement is set: this role reads across the global rows, which belong to
+    no single engagement, and its RLS policy returns exactly those. The
+    per-engagement policy also applies and, with no engagement bound, matches
+    nothing — so this connection sees the global rows and no engagement's. It can
+    read ``audit_log`` and touch nothing else; the database enforces both.
+    """
+    with get_global_auditor_engine().begin() as conn:
         yield conn

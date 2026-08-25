@@ -12,6 +12,10 @@
 --                    cyberorch_app except that it may write scope_registry and
 --                    metadata_registry (§5). Not an administrator: same RLS,
 --                    same engagement boundary, two extra tables it can write.
+--   global_auditor   reads the globally-scoped audit rows and nothing else
+--                    (D11-7). NOSUPERUSER, NOBYPASSRLS, owner of nothing; an
+--                    RLS policy limits it to SELECT on audit_log WHERE
+--                    scope='global'. No write anywhere, no other table.
 --
 -- Run as a superuser, before the first migration. Passwords come from psql
 -- variables so none is committed: see scripts/init_db.sh.
@@ -30,6 +34,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'registry_admin') THEN
         CREATE ROLE registry_admin LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'global_auditor') THEN
+        CREATE ROLE global_auditor LOGIN;
     END IF;
 END
 $$;
@@ -52,3 +59,12 @@ ALTER ROLE cyberorch_app
 ALTER ROLE registry_admin
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'registry_admin_password';
+
+-- The global-audit reader (D11-7). NOBYPASSRLS for the same reason as the
+-- others: its reach is defined by an RLS policy (SELECT on audit_log WHERE
+-- scope='global'), not by trusting it to stay in its lane. It owns nothing and
+-- writes nothing; a globally-scoped record needs a reader that belongs to no
+-- single engagement, and this is the whole of that reader's power.
+ALTER ROLE global_auditor
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'global_auditor_password';

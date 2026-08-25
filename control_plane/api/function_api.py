@@ -103,21 +103,104 @@ class ActionOutcome:
 # Task lifecycle (§4.2, §6)
 # ---------------------------------------------------------------------------
 
+#: A task is "in flight" when it is queued or being worked. A completed,
+#: failed or cancelled task is not work anyone is about to redo, so it is not
+#: what an overlap warning is about — the blind-arm harm D17 measured was live
+#: leases piling up on the same sweep, not history.
+_LIVE_TASK_STATUSES = ("queued", "claimed", "running")
+
+
+def _task_identity(action: str, target: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """The target-level work identity of a task (ADR_TASK_IDENTITY.md, Option 1).
+
+    Returns ``(canonical_target, identity_key)``. ``canonical_target`` is the
+    logical identity — ``type:value`` — at host/network granularity, from the
+    real Target Canonicalizer, so ``10.79.0.0/24`` and any other spelling of
+    that network collapse to one value. Deliberately *not* ``CanonicalTarget.
+    normalized``: that appends a port when one is present, and Option 1's whole
+    point is that the task layer identifies work at host granularity and leaves
+    the port distinction to §7's execution fingerprint.
+
+    ``identity_key`` is ``action`` and that canonical target together. Scope is
+    not in it: the same host under two valid scope objects is the same work.
+
+    Both are ``None`` when the target will not canonicalize — a task nobody can
+    reduce must match nothing rather than match everything (that would be a
+    fail-open drop, the exact failure §1.2c/ADR G call a security bug).
+    """
+    try:
+        canonical = normalize_target(dict(target))
+    except CanonicalizationError:
+        return None, None
+    identity = canonical.logical_identity
+    canonical_target = f"{identity.type}:{identity.value}"
+    return canonical_target, f"{action}\x1f{canonical_target}"
+
+
 def create_task(
     conn: Connection, *, engagement_id: str, task: ProposedTask, created_by: str
 ) -> str:
+    """Create a task, and mark — never drop — any in-flight task it overlaps (§11.3).
+
+    ADR_TASK_IDENTITY.md Option 1. The task is always inserted; if its
+    target-level identity matches tasks already in flight in this engagement,
+    ``overlaps_with`` is populated on the new task and symmetrically on the ones
+    it matched. A duplicate is made visible to the Supervisor and to a human,
+    not deleted: dropping a task that turns out not to be redundant is a false
+    negative, and §1.2c is explicit that that is a security bug, while §7 still
+    deduplicates the redundant *execution* downstream where it is safe to.
+    """
     task_id = f"TASK-{uuid.uuid4().hex[:10]}"
+    canonical_target, identity_key = _task_identity(task.action, task.target)
+
+    overlaps: list[str] = []
+    if identity_key is not None:
+        overlaps = [
+            row[0]
+            for row in conn.execute(
+                text("""
+                    SELECT task_id FROM tasks
+                    WHERE engagement_id = :eid
+                      AND identity_key = :key
+                      AND status = ANY(:live)
+                """),
+                {"eid": engagement_id, "key": identity_key,
+                 "live": list(_LIVE_TASK_STATUSES)},
+            )
+        ]
+
     conn.execute(
         text("""
-            INSERT INTO tasks (task_id, engagement_id, goal, created_by, priority)
-            VALUES (:tid, :eid, :goal, :by, :priority)
+            INSERT INTO tasks (task_id, engagement_id, goal, created_by, priority,
+                               action, canonical_target, scope_object_id,
+                               identity_key, overlaps_with)
+            VALUES (:tid, :eid, :goal, :by, :priority,
+                    :action, :ctarget, :scope, :key, :overlaps)
         """),
         {"tid": task_id, "eid": engagement_id, "goal": task.goal,
-         "by": created_by, "priority": task.priority},
+         "by": created_by, "priority": task.priority,
+         "action": task.action, "ctarget": canonical_target,
+         "scope": task.scope_object_id, "key": identity_key,
+         "overlaps": overlaps},
     )
+    if overlaps:
+        # Symmetric: each existing task now points back at the new one, so the
+        # overlap is readable from either end. array_append rather than a
+        # rewrite, so a task overlapping three others accumulates all three.
+        conn.execute(
+            text("""
+                UPDATE tasks
+                SET overlaps_with = array_append(overlaps_with, :new),
+                    updated_at = now()
+                WHERE task_id = ANY(:ids)
+            """),
+            {"new": task_id, "ids": overlaps},
+        )
     record_audit(
         engagement_id=engagement_id, actor=created_by, event_type="task.created",
-        subject_type="task", subject_id=task_id, payload={"goal": task.goal},
+        subject_type="task", subject_id=task_id,
+        payload={"goal": task.goal, "identity_key": identity_key,
+                 "overlaps_with": overlaps},
     )
     return task_id
 
@@ -259,6 +342,11 @@ def propose_action(
     )
 
     # --- 5. OPA --------------------------------------------------------------
+    # Resolved before the decision rather than at step 6, because since D12 the
+    # policy checks the requested budget against the size of the target (I3).
+    # The same object then goes to the broker, so what OPA judged and what was
+    # issued cannot come apart.
+    requested_budget = budget or Budget(max_duration_seconds=120)
     policy_input = build_policy_input(
         target=target, action=proposal.action, authorization=authorization,
         metadata=metadata, policy=policy,
@@ -271,6 +359,7 @@ def propose_action(
         discovery=proposal.discovery,
         writes_data=proposal.writes_data,
         changes_state=proposal.changes_state,
+        capability_request=requested_budget.as_dict(),
     )
     decision = evaluate(policy_input)
 
@@ -323,7 +412,7 @@ def propose_action(
         constraints={"host": target.logical_identity.value,
                      "ports": proposal.target.get("ports", "8080"),
                      "scan_type": proposal.target.get("scan_type", "connect")},
-        budget=budget or Budget(max_duration_seconds=120),
+        budget=requested_budget,
         ttl_seconds=capability_ttl_seconds or proposal.requested_capability_ttl_seconds,
         proposal_id=proposal_id,
         # The scope object the resolver actually authorized against, carried
@@ -400,7 +489,47 @@ def query_evidence(conn: Connection, *, evidence_id: str) -> dict[str, Any] | No
     return dict(row) if row else None
 
 
-def query_state(conn: Connection, *, engagement_id: str) -> dict[str, Any]:
+def query_state(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    task_status: Sequence[str] | None = None,
+    task_limit: int = 50,
+    decision_limit: int = 20,
+) -> dict[str, Any]:
+    """What has happened in this engagement so far (§2).
+
+    Counts alone were enough while the only planner was scripted. A real
+    Supervisor (D17) has to decide what to do *next*, and a summary that cannot
+    say which tasks already exist leaves it no way to answer that except by
+    guessing — so this returns the task ledger and the recent decisions as well.
+
+    **Read-only, and deliberately not an execution interface.** §2 draws the
+    line at what an agent may *call*, not at what it may know: tool invocation,
+    shell, network and registry writes stay absent, and adding a way to read
+    state does not move that line. Three properties keep it on the right side:
+
+    * Nothing here writes, and the whole function runs on the ordinary
+      ``cyberorch_app`` connection, which holds SELECT and no more on these
+      tables. D17 added no grant.
+    * Every row is confined to the current engagement by RLS, exactly as the
+      rest of the pipeline is (I4). There is no engagement-wide or
+      cross-engagement variant of this call and no parameter that could ask for
+      one — the ``engagement_id`` argument names the connection's own scope for
+      the audit trail's benefit, it does not select which engagement to read.
+    * ``filter`` in §2's signature is spelled here as explicit keyword
+      arguments rather than a free-form predicate. A filter object that became
+      SQL would be a query interface an agent could widen from the inside;
+      ``task_status`` is checked against a fixed set and everything else is a
+      bound parameter.
+
+    What it does newly expose, stated plainly rather than glossed: an agent can
+    now see decisions on proposals *other agents* made in the same engagement.
+    Each such row was already returned to whoever submitted it — this is the
+    same content with a wider readership, bounded by the engagement. §5's
+    isolation boundary is the engagement, not the agent, so this is inside it;
+    it is still a widening, and D17's report says so.
+    """
     counts = conn.execute(
         text("""
             SELECT
@@ -411,7 +540,152 @@ def query_state(conn: Connection, *, engagement_id: str) -> dict[str, Any]:
               (SELECT count(*) FROM evidence) AS evidence
         """)
     ).mappings().one()
-    return dict(counts)
+
+    statuses = _valid_task_statuses(task_status)
+    tasks = conn.execute(
+        text("""
+            SELECT task_id, goal, status, owner_agent_id, created_by,
+                   parent_task_id, overlaps_with, priority, result_summary,
+                   lease_expires_at, created_at
+            FROM tasks
+            WHERE (:all_statuses OR status = ANY(:statuses))
+            ORDER BY created_at ASC
+            LIMIT :limit
+        """),
+        {"all_statuses": statuses is None, "statuses": list(statuses or ()),
+         "limit": max(0, int(task_limit))},
+    ).mappings().all()
+
+    decisions = conn.execute(
+        text("""
+            SELECT proposal_id, task_id, agent_id, action,
+                   target -> 'logical_identity' ->> 'value' AS target_value,
+                   target -> 'logical_identity' ->> 'type' AS target_type,
+                   decision, decision_reasons, created_at
+            FROM action_proposals
+            WHERE decision IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": max(0, int(decision_limit))},
+    ).mappings().all()
+
+    return {
+        "counts": dict(counts),
+        "tasks": [dict(r) for r in tasks],
+        # Newest first: a planner reading this wants the most recent refusal,
+        # and truncating at ``decision_limit`` must drop the oldest rather than
+        # the ones that explain why the last attempt failed.
+        "recent_decisions": [dict(r) for r in decisions],
+    }
+
+
+def query_tasks(
+    conn: Connection, *, engagement_id: str, action: str, target: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """The in-flight tasks in this engagement that are the same work (§11.3).
+
+    D17 withheld this function because "the same work" was undefined, and
+    defining it *was* the task-identity decision. ADR_TASK_IDENTITY.md makes that
+    decision, so the read side can exist without settling anything sideways: it
+    matches on the identity key ``create_task`` writes — ``(action, canonical
+    target)`` at host granularity — and on nothing else. There is no free-text
+    argument, no similarity score and no dimension beyond that key, so a
+    Supervisor can ask "is this already queued?" and get the same answer the
+    write path would compute.
+
+    Same three guarantees as ``query_state`` (§2): read-only; on the ordinary
+    ``cyberorch_app`` connection with no new grant; confined to the caller's
+    engagement by RLS. A target that will not canonicalize matches nothing —
+    returning everything would be a fail-open read.
+    """
+    _, identity_key = _task_identity(action, target)
+    if identity_key is None:
+        return []
+    rows = conn.execute(
+        text("""
+            SELECT task_id, goal, status, owner_agent_id, created_by,
+                   action, canonical_target, scope_object_id,
+                   overlaps_with, priority, created_at
+            FROM tasks
+            WHERE identity_key = :key AND status = ANY(:live)
+            ORDER BY created_at ASC
+        """),
+        {"key": identity_key, "live": list(_LIVE_TASK_STATUSES)},
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+#: §4.2's status vocabulary. Checked against rather than interpolated: the
+#: status filter is the one place a caller supplies something that reaches a
+#: WHERE clause, and an allowlist is what keeps it a filter rather than an
+#: opening.
+TASK_STATUSES = (
+    "queued", "claimed", "running", "completed", "failed", "cancelled",
+)
+
+#: §4.3's states, for the same reason.
+FINDING_STATES = (
+    "candidate", "hypothesis", "pending_verification", "verified", "rejected",
+    "mitigated", "accepted_risk",
+)
+
+
+def _valid_task_statuses(requested: Sequence[str] | None) -> tuple[str, ...] | None:
+    if requested is None:
+        return None
+    unknown = [s for s in requested if s not in TASK_STATUSES]
+    if unknown:
+        raise ValueError(f"unknown task status(es) {unknown}; expected {TASK_STATUSES}")
+    return tuple(requested)
+
+
+def query_findings(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    state: Sequence[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Findings for this engagement (§2, §4.3).
+
+    §2 has listed this since v0.1 and nothing implemented it, because until
+    D17 no component needed it: the Worker is given one task and the Reviewer
+    one proposal, and neither plans. A Supervisor does, and "what has this
+    engagement actually established so far" is the question its whole job rests
+    on.
+
+    Read-only and RLS-confined, on the same terms as :func:`query_state`. Note
+    that ``claim`` is *derived from tool output* and therefore carries whatever
+    a target put in front of the system — a caller showing these to a model must
+    wrap them in the untrusted block (§8.1), which the Supervisor's prompt
+    builder does (D17).
+
+    ``confidence`` is deliberately absent, because §4.3 removed the column. The
+    strength of a finding is ``evidence_strength`` plus ``verifier_state``, two
+    discrete fields, and a planner that wants to rank findings has to reason
+    about those rather than sort by a number nobody computed.
+    """
+    if state is not None:
+        unknown = [s for s in state if s not in FINDING_STATES]
+        if unknown:
+            raise ValueError(
+                f"unknown finding state(s) {unknown}; expected {FINDING_STATES}"
+            )
+    rows = conn.execute(
+        text("""
+            SELECT finding_id, claim, state, evidence_strength, verifier_state,
+                   evidence_ids, affects, attack_path_ids,
+                   verification_conflict, created_at, confirmed_at
+            FROM findings
+            WHERE (:all_states OR state = ANY(:states))
+            ORDER BY created_at ASC
+            LIMIT :limit
+        """),
+        {"all_states": state is None, "states": list(state or ()),
+         "limit": max(0, int(limit))},
+    ).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def _persist_proposal(

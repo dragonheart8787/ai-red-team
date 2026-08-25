@@ -25,7 +25,7 @@ enforced by a conditional UPDATE rather than a read followed by a write.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +44,11 @@ RUNNING = "running"
 SUCCEEDED = "succeeded"
 FAILED = "failed"
 UNKNOWN_OUTCOME = "unknown_outcome"
+
+#: A capability whose constraints the tool adapter cannot turn into a command.
+#: Distinct from a failed run: nothing executed, and nothing was going to.
+UNBUILDABLE_PLAN = "unbuildable_plan"
+DENY_DECISION = "DENY"
 
 # States a dispatch can be interrupted in. Anything found here after a restart
 # is unresolved, not failed.
@@ -90,6 +95,36 @@ def _set_state(conn: Connection, proposal_id: str, state: str) -> None:
     )
 
 
+def fingerprint_context(
+    execution_context: Mapping[str, Any] | None, allowlist: Sequence[str],
+) -> dict[str, Any]:
+    """The §7 execution context, with the network boundary folded in.
+
+    The D11 live run found the dedup cache treating two runs as the same
+    execution when they were not. A scan of 10.79.0.2 confined to
+    ``10.88.0.0/24`` — a range with no route to it — succeeded and reported
+    nothing open. The identical proposal under ``10.79.0.0/24``, which *can*
+    reach the host, matched that fingerprint, was answered from the cache, and
+    never ran. Three open ports went unreported and the engagement's record
+    said the scan completed successfully with nothing found.
+
+    That is the failure §7 names as a security bug rather than a performance
+    one: the scan that gets skipped is the one that would have found something.
+
+    The allowlist belongs in ``execution_context`` rather than as a new
+    component of the hash, because §7's v0.3 amendment already put exactly this
+    kind of thing there — "the same target scanned with a different credential
+    is a different execution". A namespace that can reach the target and one
+    that cannot are different executions by the same argument, and a stronger
+    one: the difference decides whether any packet is sent at all.
+
+    The stored ``tool_runs.execution_context`` stays the caller's, so a reader
+    recomputing a fingerprint needs that column *and* ``network_allowlist``,
+    which sits beside it in the same row.
+    """
+    return {**dict(execution_context or {}), "network_allowlist": sorted(allowlist)}
+
+
 def find_cached_run(
     conn: Connection, fingerprint: str
 ) -> Mapping[str, Any] | None:
@@ -134,15 +169,39 @@ def dispatch_scan(
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
 
-    plan = nmap.build_plan(
-        constraints=capability.constraints, budget=capability.budget.as_dict(),
-        target=target,
-    )
+    try:
+        plan = nmap.build_plan(
+            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            target=target,
+        )
+    except nmap.AdapterError as exc:
+        # A capability the adapter cannot turn into a command. Refused, and
+        # audited, rather than raised — D15 found this the hard way: a real
+        # Worker proposed ``ports: "n/a"`` for a ping scan, the AdapterError
+        # propagated out of dispatch_scan, out of propose_action, and killed
+        # the orchestrator process.
+        #
+        # Whoever supplied the malformed constraint is not the point. Every
+        # other refusal on this path returns a DispatchOutcome, and an
+        # unparseable constraint has to as well, or one bad proposal takes down
+        # the loop that would have refused the next one.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": nmap.TOOL, "error": str(exc),
+                     "constraints": dict(capability.constraints),
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
     tool_version = nmap.tool_version()
+    allowlist = network_allowlist or [target]
     fingerprint = execution_fingerprint(
         engagement_id=engagement_id, tool=nmap.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
-        execution_context=execution_context,
+        execution_context=fingerprint_context(execution_context, allowlist),
     )
 
     cached = find_cached_run(conn, fingerprint)
@@ -159,7 +218,6 @@ def dispatch_scan(
         return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
 
     run_id = f"RUN-{uuid.uuid4().hex[:12]}"
-    allowlist = network_allowlist or [target]
 
     conn.execute(
         text("""

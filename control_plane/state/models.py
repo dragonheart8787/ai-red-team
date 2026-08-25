@@ -96,6 +96,12 @@ tasks = Table(
     Column("overlaps_with", ARRAY(Text), nullable=False),
     Column("priority", Integer, nullable=False),
     Column("result_summary", Text),
+    # Task identity (§11.3, ADR_TASK_IDENTITY.md, migration 0006). Nullable:
+    # a task whose target will not canonicalize stores NULL and matches nothing.
+    Column("action", Text),
+    Column("canonical_target", Text),
+    Column("scope_object_id", Text),
+    Column("identity_key", Text),
     _ts("created_at"), _ts("updated_at"),
 )
 
@@ -240,7 +246,10 @@ provenance_edges = Table(
 audit_log = Table(
     "audit_log", metadata,
     Column("audit_id", BigInteger, primary_key=True),
-    Column("engagement_id", Text, nullable=False),
+    # Nullable since D11-7 (migration 0007): a global row carries NULL, an
+    # engagement row carries its id, enforced by the audit_scope_consistent CHECK.
+    Column("engagement_id", Text),
+    Column("scope", Text, nullable=False),
     _ts("ts"),
     Column("actor", Text, nullable=False),
     Column("event_type", Text, nullable=False),

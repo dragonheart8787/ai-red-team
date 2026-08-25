@@ -20,7 +20,20 @@ class FakePlanner:
     def __init__(self, script: Sequence[ProposedTask]) -> None:
         self._script = list(script)
 
-    def plan(self, *, engagement_id: str) -> list[ProposedTask]:
+    def plan(
+        self, *, engagement_id: str = "", state: object = None,
+        candidates: object = (),
+    ) -> list[ProposedTask]:
+        """Return the script, ignoring everything it was told.
+
+        The extra keyword arguments are D17's: a real Supervisor is handed a
+        state summary and the engagement's scope objects, and accepting them
+        here — and ignoring them — means a harness can hold one variable and
+        swap ``CYBERORCH_SUPERVISOR_BACKEND`` without also changing how it calls
+        the thing it built. Ignoring them is the whole point of a fake: the
+        script is the answer regardless of what the engagement looks like, so a
+        scenario that fails failed in the kernel.
+        """
         return list(self._script)
 
 

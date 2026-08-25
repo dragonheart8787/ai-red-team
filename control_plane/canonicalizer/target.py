@@ -75,6 +75,30 @@ class CanonicalTarget:
             base += self.path
         return base
 
+    @property
+    def address_count(self) -> int:
+        """How many addresses this target names (§4.6 ``max_targets``, I3).
+
+        The number the policy compares against the requested budget. It exists
+        because D11 watched a capability recording ``max_targets: 1`` execute a
+        scan against 256 addresses: a ``cidr`` target is one *identity* and one
+        proposal, and the count of things it touches was nowhere in the input.
+
+        A property rather than a stored field, so it cannot drift from the
+        identity it describes.
+
+        **Everything that is not a cidr counts as one, and that is a statement
+        about the identity, not about reachability.** An fqdn may resolve to
+        any number of addresses; this module never resolves anything (§8.9/I8),
+        so it does not know and must not pretend to. One name is one target.
+        A budget meant to bound how many *hosts* a name reaches is not a thing
+        this field can provide, and reading it that way would be the v0.2 bug
+        where discovery quietly widened scope.
+        """
+        if self.logical_identity.type != "cidr":
+            return 1
+        return ipaddress.ip_network(self.logical_identity.value).num_addresses
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "logical_identity": {
@@ -93,6 +117,7 @@ class CanonicalTarget:
             "port": self.port,
             "path": self.path,
             "normalized": self.normalized,
+            "address_count": self.address_count,
         }
 
 
@@ -137,10 +162,41 @@ def normalize_ip(value: str) -> str:
 
 
 def normalize_cidr(value: str) -> str:
+    """Parse a network, refusing one written as a host address plus a prefix.
+
+    Strict. ``10.79.0.2/24`` raises rather than becoming ``10.79.0.0/24``,
+    which is what it used to do — silently, via ``strict=False``.
+
+    That was this module's own rule broken in its own file: "Ambiguity is an
+    error, not a guess." ``10.79.0.2/24`` has two readings, the host and the
+    network, and masking the host bits picks the wider one. D11 followed that
+    all the way through the pipeline: a proposal naming ``10.79.0.2/24``
+    normalized to the whole ``/24``, was authorized against a scope object
+    covering it, and produced ``nmap ... 10.79.0.0/24`` — 256 addresses from a
+    target block that reads as one host.
+
+    Widening is the wrong direction to be wrong in, so the ambiguity is
+    refused. A caller that means the network passes the network address; a
+    caller that means the host passes ``ip`` or a ``/32``.
+    """
+    text = value.strip()
     try:
-        return str(ipaddress.ip_network(value.strip(), strict=False))
+        network = ipaddress.ip_network(text, strict=True)
     except ValueError as exc:
-        raise CanonicalizationError(f"invalid cidr {value!r}: {exc}") from exc
+        # strict=True raises for both malformed input and host bits set, and
+        # the two deserve different explanations: one is a typo, the other is
+        # a request that would be answered by scanning more than it names.
+        try:
+            relaxed = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            raise CanonicalizationError(f"invalid cidr {value!r}: {exc}") from exc
+        raise CanonicalizationError(
+            f"cidr {value!r} has host bits set. It is ambiguous between one "
+            f"host and the {relaxed.num_addresses}-address network "
+            f"{relaxed}, and normalizing it would pick the wider reading. "
+            f"Pass {relaxed} for the network, or the bare address for the host."
+        ) from exc
+    return str(network)
 
 
 def normalize_path(path: str | None) -> str | None:
@@ -246,3 +302,79 @@ def normalize_target(target: Mapping[str, Any]) -> CanonicalTarget:
         port=port,
         path=path,
     )
+
+
+# ---------------------------------------------------------------------------
+# Scope object values (§4.1.5) — D16
+# ---------------------------------------------------------------------------
+
+def canonicalize_scope_value(scope_type: str, value: str) -> str:
+    """Canonicalize the ``value`` of a scope object, or refuse it.
+
+    The same rules :func:`normalize_target` applies to a proposal's target,
+    applied to the registry entry that authorizes one. Until D16 they were
+    applied only to the target: ``register_scope_object`` stored ``value``
+    verbatim, so ``cidr 10.20.0.5/24`` could sit in the Scope Registry meaning
+    whichever of its two readings the reader happened to take — the D11-5
+    ambiguity, on the side of the boundary that grants permission rather than
+    the side that asks for it.
+
+    Refusing at registration rather than at lookup is the point. An Engagement
+    Manager writing a scope object is the one party who knows what was meant;
+    every later reader is guessing. And a value that cannot be parsed has to be
+    handled *somewhere*, so leaving it in the table pushes that obligation onto
+    every query, which is how D15's mutation test found a fail-open branch:
+    flipping ``scope_covers_target``'s parse failure to ``return True`` left
+    the whole suite green, because a scope object nobody could parse was a
+    state nothing tested.
+
+    One asymmetry against :func:`normalize_target`, and it is deliberate.
+    ``fqdn`` scope objects may carry a leading ``*.`` — §4.1.5 writes patterns
+    like ``*.customer-a.com`` and ``scope_covers_target`` implements them — so
+    the wildcard is accepted here and rejected there. A target is one host; a
+    scope is a set.
+    """
+    if not isinstance(value, str):
+        raise CanonicalizationError(
+            f"scope object value must be a string, got {type(value).__name__}"
+        )
+    text = value.strip()
+    if not text:
+        raise CanonicalizationError("scope object value must not be empty")
+
+    if scope_type == "cidr":
+        return normalize_cidr(text)
+    if scope_type == "ip":
+        return normalize_ip(text)
+    if scope_type == "fqdn":
+        if text.startswith("*."):
+            return "*." + normalize_fqdn(text[2:])
+        return normalize_fqdn(text)
+    if scope_type == "url":
+        return normalize_url(text)[0]
+    if scope_type in ("repo", "ad_domain"):
+        # Opaque identifiers, compared verbatim — the same treatment
+        # normalize_target gives them. Nothing to canonicalize beyond the
+        # whitespace already stripped, and inventing a normalization for a
+        # value the system only ever compares for equality would change what
+        # matches without anyone deciding it should.
+        return text
+
+    raise CanonicalizationError(
+        f"unknown scope object type {scope_type!r}; expected one of "
+        f"{sorted(IDENTITY_TYPES)}"
+    )
+
+
+def scope_value_is_canonical(scope_type: str, value: str) -> bool:
+    """Whether a stored scope object value parses at all.
+
+    The read-path half of the same question, as a predicate rather than an
+    exception, because :func:`scope_covers_target` answers "does this cover
+    that" and has no business raising.
+    """
+    try:
+        canonicalize_scope_value(scope_type, value)
+    except CanonicalizationError:
+        return False
+    return True

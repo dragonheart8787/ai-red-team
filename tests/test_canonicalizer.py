@@ -51,11 +51,68 @@ def test_ip_normalization(raw, expected):
     assert target.logical_identity.value == expected
 
 
-def test_cidr_normalization_masks_host_bits():
-    target = normalize_target(
-        {"logical_identity": {"type": "cidr", "value": "10.20.0.5/24"}}
-    )
-    assert target.logical_identity.value == "10.20.0.0/24"
+def _cidr(value: str):
+    return normalize_target({"logical_identity": {"type": "cidr", "value": value}})
+
+
+@pytest.mark.parametrize(
+    "raw", ["10.20.0.5/24", "10.20.0.1/8", "192.168.1.100/16", "2001:db8::1/32"]
+)
+def test_cidr_with_host_bits_is_an_error_not_a_widening(raw):
+    """The replacement for a test that asserted the opposite (D11-5).
+
+    This used to be ``test_cidr_normalization_masks_host_bits``, and the
+    masking it pinned was a real hole rather than a tidy-up. ``10.20.0.5/24``
+    reads as one host; masking turns it into 256 addresses, and D11 followed
+    that all the way to ``nmap ... 10.20.0.0/24``. Two readings, and the
+    normalizer silently took the wider one — in a module whose stated rule is
+    that ambiguity is an error, not a guess (I10).
+    """
+    with pytest.raises(CanonicalizationError, match="host bits"):
+        _cidr(raw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("10.20.0.0/24", "10.20.0.0/24"),
+        ("10.0.0.0/8", "10.0.0.0/8"),
+        ("10.20.0.5/32", "10.20.0.5/32"),
+        ("  10.20.0.0/24  ", "10.20.0.0/24"),
+        ("2001:db8::/32", "2001:db8::/32"),
+    ],
+)
+def test_a_properly_written_network_still_normalizes(raw, expected):
+    """The control. Without it, refusing every cidr would pass the test above.
+
+    ``/32`` is in the list on purpose: a single host written as a network has
+    no host bits set, so it stays legal — that is how a caller says "this one
+    address" in cidr form, and the strict rule must not take it away.
+    """
+    target = _cidr(raw)
+    assert target.logical_identity.value == expected
+
+
+def test_a_malformed_cidr_says_so_rather_than_blaming_host_bits():
+    """The two failures are different problems and read differently."""
+    with pytest.raises(CanonicalizationError, match="invalid cidr") as excinfo:
+        _cidr("10.20.0.0/99")
+    assert "host bits" not in str(excinfo.value)
+
+
+def test_address_count_is_what_the_policy_will_compare():
+    """§4.6/I3: the field the budget check reads, at the source.
+
+    A cidr counts its addresses; everything else counts one, and for an fqdn
+    that is a statement about the identity rather than about how many hosts
+    the name reaches — this module never resolves anything.
+    """
+    assert _cidr("10.20.0.0/24").address_count == 256
+    assert _cidr("10.20.0.5/32").address_count == 1
+    assert normalize_target(
+        {"logical_identity": {"type": "ip", "value": "10.20.0.5"}}
+    ).address_count == 1
+    assert _fqdn("app.customer-a.com").address_count == 1
 
 
 @pytest.mark.parametrize(

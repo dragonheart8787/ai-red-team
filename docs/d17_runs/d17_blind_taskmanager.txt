@@ -1,0 +1,27 @@
+engagement ENG-D17-BLIND-6d3c378482
+tasks in the table: 26
+statuses: {'completed': 1, 'claimed': 25}
+distinct goal strings: 24
+rows with a non-empty overlaps_with: 0
+
+claimed by distinct agents: 0
+live leases: 25
+distinct goals under live lease: 23
+
+agents holding a lease on a 10.79.0.0/24 sweep:
+  worker-18    Discover live hosts across the authorized 10.79.0.0/24 network so the full set
+  worker-4     Discover live hosts across the authorized 10.79.0.0/24 network.
+  worker-1     Discover live hosts across the authorized engagement network to establish the 
+  worker-5     Discover live hosts and exposed services across the authorized engagement netw
+  worker-7     Discover live hosts and exposed services across the rest of the authorized eng
+  worker-2     Discover live hosts and open services across the rest of the authorized engage
+  worker-0     Discover which hosts across the authorized 10.79.0.0/24 network are up and wha
+  worker-17    Discover which hosts are live across the authorized 10.79.0.0/24 network.
+  worker-3     Discover which hosts are live across the authorized 10.79.0.0/24 network.
+  worker-15    Enumerate live hosts across the authorized 10.79.0.0/24 network to find other 
+  worker-16    Enumerate live hosts and open services across the full authorized engagement n
+  worker-11    Enumerate open TCP services across the authorized 10.79.0.0/24 network.
+  worker-23    Enumerate open ports and service versions across 10.79.0.0/24 to establish wha
+  worker-12    Enumerate open ports and service versions across the authorized 10.79.0.0/24 n
+  worker-21    Enumerate open ports and service versions across the authorized 10.79.0.0/24 n
+  worker-22    Enumerate open ports and service versions on live hosts across 10.79.0.0/24.

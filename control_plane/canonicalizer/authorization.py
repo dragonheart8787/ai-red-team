@@ -28,7 +28,10 @@ from typing import Any
 
 from sqlalchemy import Connection
 
-from control_plane.canonicalizer.target import CanonicalTarget
+from control_plane.canonicalizer.target import (
+    CanonicalTarget,
+    scope_value_is_canonical,
+)
 from control_plane.registry.scope_registry import ScopeObject, get_scope_object
 
 # §4.1: authorization.source must name a typed scope object. Any other value —
@@ -93,8 +96,31 @@ def scope_covers_target(scope: ScopeObject, target: CanonicalTarget) -> bool:
     covers an fqdn target. Resolving ``app.customer-a.com`` to ``203.0.113.17``
     tells you where to send packets; authorizing ``network.scan`` against that
     address needs its own cidr scope object.
+
+    **A scope object whose own value will not parse covers nothing** (I10, and
+    D16). Stated first and checked first rather than left to whichever branch
+    happens to raise, because the direction of that answer is the whole thing:
+    a scope object nobody can interpret must authorize *less* than one that
+    parses, never more. D15's mutation test found this the wrong way round —
+    flipping the cidr branch's parse failure to ``return True`` left the entire
+    suite green, because a scope object nobody could parse was a state nothing
+    had ever created.
+
+    Since D16 ``register_scope_object`` refuses such a value, so this should be
+    unreachable through the supported write path. It is kept, and tested,
+    because "should be unreachable" is not "is unreachable": a row inserted
+    with raw SQL as ``registry_admin`` bypasses that function entirely, and
+    rows registered before D16 were never checked at all. An invariant that
+    holds only while everybody uses the front door is a convention.
+
+    Never raises. A predicate that answers "does this cover that" by throwing
+    puts the caller in the position ``dispatch_scan`` was in before D15, where
+    one unparseable value took down the loop that would have refused it.
     """
     identity = target.logical_identity
+    if not scope_value_is_canonical(scope.type, scope.value):
+        return False
+
     if scope.type == "fqdn":
         if identity.type != "fqdn":
             return False
@@ -115,6 +141,12 @@ def scope_covers_target(scope: ScopeObject, target: CanonicalTarget) -> bool:
                 return ipaddress.ip_address(identity.value) in network
             return ipaddress.ip_network(identity.value, strict=False).subnet_of(network)
         except (ValueError, TypeError):
+            # Unreachable while the guard above holds, and still tested:
+            # ``test_the_cidr_branch_fails_closed_even_if_the_outer_guard_stops_working``
+            # disables that guard and asks this one directly. D15 found this
+            # branch failing open precisely because nothing reached it, so
+            # "the layer above covers it" is the argument that produced the
+            # bug rather than a reason to stop checking.
             return False
 
     if scope.type in ("url", "repo", "ad_domain"):
