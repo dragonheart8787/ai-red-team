@@ -437,7 +437,7 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 | 5.4 | `heartbeat_required` declared, not enforced | Open. Blocked on a **missing prerequisite, not a decision**: there is still no scheduler in MVP-0, and `last_heartbeat_at` is only meaningful once an agent heartbeats on its own schedule. Column stays; the gap is behaviour. |
 | 5.5 | `approvals` has no API (Phase-1 scope) | Open, scope boundary. Checking is covered; only the granting operation is absent. When it lands, `revoke_approval()` needs the D9 cascade treatment. |
 | 5.6 | `findings.state` / `verification_conflict` (Phase-1 scope) | Open, scope boundary. **Note:** D17 implemented `query_findings` (a *read*), but the kernel still never promotes evidence to a finding, so the state machine remains unwritten (re-confirmed by the D22 investigation). The read interface existing does not change the deferral — and D22's §11.4 constraints bind the finding-writer that will eventually fill it. |
-| 5.7 | Emergency-overlay content not randomized in the stateful test | Open. The algebra is covered at 400 generated combinations per property; the stateful rule exists to test the *interaction*. If content is randomized later it must respect tighten-only. |
+| 5.7 | Emergency-overlay content not randomized in the stateful test | **Blocked, corrected at D27** (was: Open). The suite this describes was deleted at `7c9295f` (D17) and is absent from the tree — see `ACCEPTANCE_MVP_KERNEL.md` §4.1 for the incident record. The algebra half still holds: `test_merge_properties.py` is unaffected and still covers 400 generated combinations per property. The *interaction* half has no test at all until D28 restores the suite, at which point this reverts to Open under the same tighten-only constraint. |
 | D11-8 | The derived view drops the nmap VERSION column | Open, minor. Cosmetic loss in the derived view; evidence retains the raw. |
 | D11-9 | Nothing creates an engagement | Open, gap. Engagements are seeded by tests and harnesses; no operation creates one. A stage boundary, surfaced when the live runs each had to construct their own. |
 
@@ -511,12 +511,20 @@ that a test would go red, because there is nothing yet to test.
 
 No decision required to *not* do them; each is either a Phase-1 scope boundary or
 a documented minor limit with its behaviour understood. 5.4 (missing scheduler
-prerequisite), 5.5 and 5.6 (Phase-1 scope), 5.7 (interaction already covered by
-property tests), D11-8 (cosmetic), D11-9 (stage-boundary gap). **5.2 sits at the
+prerequisite), 5.5 and 5.6 (Phase-1 scope), 5.7 (blocked — see below), D11-8
+(cosmetic), D11-9 (stage-boundary gap). **5.2 sits at the
 edge of this class and carries the one standing caveat:** it is bounded and safe
 *for MVP-1, whose targets are containers*, but it is a real-deployment gap and
 must be re-proven against the production network driver before any customer
 network is touched.
+
+**D27 correction to this class.** 5.7 was listed here as "interaction already
+covered by property tests". That was false from `7c9295f` (D17) onward: the
+stateful suite carrying that coverage had been deleted, and this document went on
+asserting it. The item is not *safe to leave alone* in the sense this class
+means — it is blocked on D28 restoring the suite. Nothing else in Class B is
+affected, and the underlying fixes are all intact and unmodified
+(`ACCEPTANCE_MVP_KERNEL.md` §4.1).
 
 ### Class C — blocked on an architecture decision
 
