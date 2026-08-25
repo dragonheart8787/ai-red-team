@@ -190,8 +190,28 @@ the clearest example. That safety net has been absent for every change made sinc
 D17, including D19's task-identity model, D20's discovery provenance and D21's
 global audit scope.
 
-**Remediation: D28**, which restores and modernises the suite rather than
-restoring the old file verbatim, since D19–D21 moved data models the rules touch.
+**Restore from git history, not from the copy on disk.** Recorded here because
+it is the one way this incident could still cause harm. The file that survived on
+the container's disk — the one whose untracked status exposed the deletion — is
+**not** the committed suite. It is an earlier draft from during D9's development:
+561 lines against the committed 762, and missing precisely the parts D9 added
+*after* the state machine found the I1 bug. It has no `retire_scope_object` or
+`revoke_credential` (so it drives the registry directly instead of the eager
+cascades), no `SCOPE_OBJECT_DEACTIVATED`, no `scope_retirement_is_precise` rule,
+and one scope object rather than two — and D9's own commit message says why that
+last one matters: *"With a single scope object 'revoke everything in the
+engagement' and 'revoke what this scope object authorized' are indistinguishable,
+and the over-broad implementation passes."*
+
+So restoring from disk would produce a suite that looks like the real one, passes,
+and is structurally incapable of catching the over-broad cascade — a worse outcome
+than the current honest absence. The authoritative copy is
+`git show 86b18bb:tests/stateful/test_capability_lifecycle.py` (and `__init__.py`
+at the same revision). The draft has been moved out of the working tree; nothing
+depends on it.
+
+**Remediation: D28**, which restores from `86b18bb` and modernises rather than
+reverting verbatim, since D19–D21 moved data models the rules touch.
 This section is updated to "restored" there, with the commit and CI run recorded.
 
 ### I9 — revocation reasons and their regression tests
