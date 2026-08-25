@@ -5,10 +5,22 @@ grew their own SELECT and their own idea of how to group the results, which is
 how a log stops being usable: the reconstruction lives in whoever last needed
 it, and two readers answer the same question differently.
 
-:func:`reconstruct_decision` is the canonical answer to "what happened to this
-proposal, and why". It returns the events in order, grouped by the stage of the
-pipeline they came from, so the sequence reads the way the pipeline ran rather
-than the way the rows happened to be inserted.
+There are two subject-scoped reconstruction interfaces, answering two different
+questions against the one log:
+
+* :func:`reconstruct_decision` — "what happened to this *proposal*, and why". It
+  returns the events in order, grouped by the stage of the pipeline they came
+  from, so the sequence reads the way the pipeline ran rather than the way the
+  rows happened to be inserted. It stops at the proposal boundary on purpose
+  (see its docstring), so "the events belonging to one proposal" stays a clean
+  partition.
+* :func:`reconstruct_task_history` — "what did this *task* do, from creation to
+  completion". A task can produce more than one proposal and has a lifecycle of
+  its own (``task.created`` / ``claimed`` / ``completed``) that the per-proposal
+  view excludes. This is the task-level aggregator: it gathers those lifecycle
+  events and calls :func:`reconstruct_decision` once per proposal, so it adds no
+  trace logic of its own and the two interfaces can never answer the same
+  proposal two different ways.
 
 Everything here is read-only. The grants make that structural — ``audit_log``
 gives the application INSERT and SELECT and nothing else — but it is worth
@@ -255,6 +267,131 @@ def reconstruct_decision(conn: Connection, *, proposal_id: str) -> DecisionChain
         proposal_id=proposal_id, events=tuple(events),
         capability_ids=capability_ids, run_ids=run_ids,
         evidence_ids=evidence_ids,
+    )
+
+
+@dataclass(frozen=True)
+class TaskHistory:
+    """Everything recorded under one task: its lifecycle, plus every proposal.
+
+    :func:`reconstruct_decision` answers "what happened to this *proposal*, and
+    why", and stops at the proposal boundary on purpose (see its docstring: the
+    task's own ``task.created`` / ``task.claimed`` / ``task.completed`` events
+    sit *behind* the proposal and are excluded, so that "the events belonging to
+    one proposal" stays a clean partition). This answers the wider question —
+    "what happened under this *task*" — by putting the two pieces side by side:
+
+    * ``lifecycle_events`` — the task's own events, the ones ``reconstruct_
+      decision`` leaves out, recorded against the task id.
+    * ``decisions`` — one :class:`DecisionChain` per proposal the task produced,
+      **each built by calling** :func:`reconstruct_decision`. This function adds
+      no trace logic of its own; it is an aggregator over the canonical
+      per-proposal reconstruction, so the two interfaces can never answer the
+      same proposal two different ways.
+
+    The two subject sets are disjoint — lifecycle events have ``subject_id ==
+    task_id``, proposal chains follow proposal ids outward — so nothing is
+    counted twice.
+    """
+
+    task_id: str
+    lifecycle_events: tuple[AuditEvent, ...]
+    decisions: tuple[DecisionChain, ...]
+
+    @property
+    def proposal_ids(self) -> tuple[str, ...]:
+        return tuple(d.proposal_id for d in self.decisions)
+
+    @property
+    def decision_counts(self) -> dict[str, int]:
+        """How many of the task's proposals landed on each decision."""
+        counts: dict[str, int] = {}
+        for chain in self.decisions:
+            counts[chain.decision or "PENDING"] = (
+                counts.get(chain.decision or "PENDING", 0) + 1
+            )
+        return counts
+
+    @property
+    def completed(self) -> bool:
+        return any(e.event_type == "task.completed" for e in self.lifecycle_events)
+
+    def all_events(self) -> tuple[AuditEvent, ...]:
+        """Every event under the task — lifecycle and per-proposal — in order.
+
+        Ordered by ``audit_id`` so the merged view reads the way the task
+        actually ran, rather than task events first and proposals after.
+        """
+        events = list(self.lifecycle_events)
+        for chain in self.decisions:
+            events.extend(chain.events)
+        events.sort(key=lambda e: e.audit_id)
+        return tuple(events)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "completed": self.completed,
+            "lifecycle_events": [e.as_dict() for e in self.lifecycle_events],
+            "proposals": [
+                {
+                    "proposal_id": chain.proposal_id,
+                    "decision": chain.decision,
+                    "reasons": list(chain.why()),
+                    "reached_stages": list(chain.reached_stages),
+                    "executed": chain.executed,
+                }
+                for chain in self.decisions
+            ],
+            "decision_counts": self.decision_counts,
+        }
+
+
+def reconstruct_task_history(conn: Connection, *, task_id: str) -> TaskHistory:
+    """Every event under one task: its lifecycle, plus each proposal's chain.
+
+    The task-level counterpart to :func:`reconstruct_decision`. Where that
+    function answers "what happened to this proposal", this answers "what did
+    this task do, across all the proposals it produced, and how did it begin and
+    end". It is the walk-backwards-to-the-task case that ``reconstruct_
+    decision`` deliberately left deferred, done as a separate function rather
+    than by widening the per-proposal one — so the partition ``reconstruct_
+    decision`` guarantees is never disturbed.
+
+    It is a pure aggregator, and that is the design:
+
+    1. It reads the task's own lifecycle events via :func:`events_for_subject`
+       (``subject_id == task_id`` — ``task.created`` / ``claimed`` /
+       ``completed``), which ``reconstruct_decision`` excludes.
+    2. It finds every proposal the task produced (``action_proposals.task_id``)
+       and calls :func:`reconstruct_decision` once per proposal, keeping each
+       returned :class:`DecisionChain` verbatim. No trace logic is rewritten
+       here; ``test_reconstruct_task_history_delegates_to_reconstruct_decision``
+       spies on the call to prove it, and ``test_reconstruct_task_history_does_
+       not_alter_the_per_proposal_chain`` pins that an embedded chain is
+       identical to the standalone one.
+
+    Read-only, like everything in this module: it issues one extra SELECT for
+    the proposal ids and otherwise reuses two existing read functions. It needs
+    no grant beyond the SELECT on ``audit_log`` and ``action_proposals`` the
+    application already holds, and RLS scopes it to the current engagement.
+    """
+    lifecycle_events = tuple(events_for_subject(conn, subject_id=task_id))
+
+    proposal_ids = tuple(
+        conn.execute(
+            text(
+                "SELECT proposal_id FROM action_proposals WHERE task_id = :tid "
+                "ORDER BY created_at, proposal_id"
+            ),
+            {"tid": task_id},
+        ).scalars().all()
+    )
+    decisions = tuple(
+        reconstruct_decision(conn, proposal_id=pid) for pid in proposal_ids
+    )
+    return TaskHistory(
+        task_id=task_id, lifecycle_events=lifecycle_events, decisions=decisions,
     )
 
 

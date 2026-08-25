@@ -31,6 +31,7 @@ from control_plane.audit.query import (
     engagement_timeline,
     events_for_subject,
     reconstruct_decision,
+    reconstruct_task_history,
 )
 from control_plane.capability.broker import (
     CREDENTIAL_REVOKED,
@@ -379,6 +380,163 @@ def test_reconstruct_decision_exposes_the_reviewers_claim_beside_the_truth(
     assert claim["possible_sensitive_data_hint"] == []
     assert truth["data_class"] == ["PII"]
     assert truth["authority"] == "AUTHORITATIVE"
+
+
+# ---------------------------------------------------------------------------
+# reconstruct_task_history — the task-level view (§5.3)
+# ---------------------------------------------------------------------------
+# reconstruct_decision answers "what happened to this proposal". A task can
+# produce more than one proposal and has a lifecycle of its own that the
+# per-proposal view excludes on purpose. These pin the task-level aggregator:
+# that it gathers the lifecycle events reconstruct_decision leaves out, that it
+# reaches the per-proposal chains *by calling reconstruct_decision* rather than
+# a second copy of the trace logic, and that doing so does not alter what
+# reconstruct_decision returns.
+
+
+def _task_with_two_proposals(engagement_id):
+    """Create a task, claim it, submit two proposals under it, complete it.
+
+    Both proposals name a scope object that does not exist, so both land on a
+    clean DENY before any capability is minted or any sandbox is touched — the
+    shape of the aggregated history is the point here, not dispatch.
+    """
+    from agents.base_agent import ProposedAction, ProposedTask
+    from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
+    from control_plane.api.function_api import (
+        claim_task,
+        complete_task,
+        create_task,
+        propose_action,
+    )
+    from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
+
+    policy = merge_policy(
+        PolicyLayer(name="baseline_global", actions={"network.scan": ALLOW}),
+        PolicyLayer(name="emergency_overlay"),
+        PolicyLayer(name="customer"),
+        PolicyLayer(name="engagement"),
+    )
+
+    with engagement_scope(engagement_id) as conn:
+        task = ProposedTask(goal="scan the two hosts", target={},
+                            action="network.scan", scope_object_id="SCOPE-none")
+        task_id = create_task(conn, engagement_id=engagement_id, task=task,
+                              created_by="fake-planner")
+        claim_task(conn, engagement_id=engagement_id, agent_id="fake-worker")
+
+        proposal_ids = []
+        for host in ("10.90.0.5", "10.90.0.6"):
+            proposal = ProposedAction(
+                action="network.scan",
+                target={"logical_identity": {"type": "ip", "value": host}},
+                authorization={"source": "engagement_scope",
+                               "scope_object_id": "MISSING"},
+                discovery={"source": "explicit_scope"},
+                task_id=task_id,
+            )
+            outcome = propose_action(
+                conn, engagement_id=engagement_id, proposal=proposal,
+                reviewer=HonestFakeReviewer(), policy=policy, agent_id="fake-worker",
+            )
+            proposal_ids.append(outcome.proposal_id)
+
+        complete_task(conn, engagement_id=engagement_id, task_id=task_id,
+                      result_summary="both denied", actor="fake-worker")
+
+    return task_id, proposal_ids
+
+
+def test_reconstruct_task_history_aggregates_lifecycle_and_each_proposal(engagement_id):
+    """The task's own lifecycle, plus one reconstructed chain per proposal."""
+    task_id, proposal_ids = _task_with_two_proposals(engagement_id)
+
+    with engagement_scope(engagement_id) as conn:
+        history = reconstruct_task_history(conn, task_id=task_id)
+
+    # The lifecycle events reconstruct_decision leaves out are present here.
+    lifecycle_kinds = {e.event_type for e in history.lifecycle_events}
+    assert {"task.created", "task.claimed", "task.completed"} <= lifecycle_kinds
+    assert history.completed is True
+
+    # One chain per proposal, each a real DecisionChain. Order is the query's
+    # own (created_at, then proposal_id) and is deterministic, but need not
+    # equal submission order, so compare as a set.
+    assert set(history.proposal_ids) == set(proposal_ids)
+    assert len(history.decisions) == 2
+    assert all(chain.decision == "DENY" for chain in history.decisions)
+    assert history.decision_counts == {"DENY": 2}
+
+    # The merged view is ordered, and the task's own events are not folded into
+    # any single proposal's chain — they live only at the task level.
+    merged = history.all_events()
+    assert [e.audit_id for e in merged] == sorted(e.audit_id for e in merged)
+    for chain in history.decisions:
+        assert not any(e.event_type.startswith("task.") for e in chain.events)
+
+    # The JSON and human renderings the CLI serves are well-formed on real data.
+    from scripts.task_history import render
+
+    doc = history.as_dict()
+    assert doc["task_id"] == task_id
+    assert doc["completed"] is True
+    assert doc["decision_counts"] == {"DENY": 2}
+    assert len(doc["proposals"]) == 2
+    text_out = render(history)
+    assert task_id in text_out
+    assert "DENY" in text_out
+
+
+def test_reconstruct_task_history_delegates_to_reconstruct_decision(
+    engagement_id, monkeypatch
+):
+    """It calls reconstruct_decision once per proposal, not a rewritten trace.
+
+    The D14-style proof that the shared logic is actually shared: spy on
+    reconstruct_decision, delegating to the real one, and assert the task
+    history reached every proposal through it.
+    """
+    import control_plane.audit.query as query_mod
+
+    task_id, proposal_ids = _task_with_two_proposals(engagement_id)
+
+    real = query_mod.reconstruct_decision
+    seen: list[str] = []
+
+    def spy(conn, *, proposal_id):
+        seen.append(proposal_id)
+        return real(conn, proposal_id=proposal_id)
+
+    monkeypatch.setattr(query_mod, "reconstruct_decision", spy)
+
+    with engagement_scope(engagement_id) as conn:
+        history = query_mod.reconstruct_task_history(conn, task_id=task_id)
+
+    # Every proposal was reconstructed through reconstruct_decision, exactly
+    # once each, and the aggregator's own order is the order it delegated in.
+    assert sorted(seen) == sorted(proposal_ids)
+    assert seen == list(history.proposal_ids)
+
+
+def test_reconstruct_task_history_does_not_alter_the_per_proposal_chain(engagement_id):
+    """An embedded chain is identical to the standalone reconstruct_decision.
+
+    Version A's guarantee: the task view aggregates reconstruct_decision without
+    touching it. A DecisionChain is a frozen dataclass, so equality is
+    structural — the chain the aggregator carries must equal the one a caller
+    gets by asking reconstruct_decision directly, field for field.
+    """
+    task_id, proposal_ids = _task_with_two_proposals(engagement_id)
+
+    with engagement_scope(engagement_id) as conn:
+        history = reconstruct_task_history(conn, task_id=task_id)
+        standalone = {
+            pid: reconstruct_decision(conn, proposal_id=pid) for pid in proposal_ids
+        }
+
+    embedded = {chain.proposal_id: chain for chain in history.decisions}
+    for pid in proposal_ids:
+        assert embedded[pid] == standalone[pid]
 
 
 # ---------------------------------------------------------------------------

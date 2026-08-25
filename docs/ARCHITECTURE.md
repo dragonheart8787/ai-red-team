@@ -358,6 +358,12 @@ GRANT INSERT, SELECT ON evidence, audit_log TO cyberorch_app;
 ```
 真正需要 cryptographic/physical immutability（例如客戶要求符合特定鑑識標準）留到有真實需求時再評估 WORM storage，不要在 MVP 就過度承諾。
 
+**審計讀取介面（audit read interfaces）：兩個問題，兩個函式，一份 append-only log。** `audit_log` 是唯一事實來源，讀取它的邏輯集中在 `control_plane/audit/query.py`，不散落在各個 caller 手寫的 SELECT 裡。目前有兩個由 subject 決定範圍的重建介面，各回答一個不同的問題：
+
+- **`reconstruct_decision(proposal_id)` — 「這個 proposal 發生了什麼、為什麼」。** 從 proposal 本身的事件往外追它造成的東西：capability → tool_run → evidence。它**刻意**在 proposal 邊界停住，不往回走到 task：`task.created/claimed/completed` 的 subject 是 task_id，位在 proposal 的**後方**而非前方，納入它們會讓「屬於某個 proposal 的事件」不再是一個乾淨的 partition（`by_stage()` 依賴這個性質）。這是 Scenario A/B、D8 audit report、D24 Approval CLI 都在用的 canonical 重建。
+
+- **`reconstruct_task_history(task_id)` — 「這個 task 做了什麼，從被建立到結束」。** task 層級的對應介面。它是一個**純聚合器**：先取 task 自己的 lifecycle 事件（正是 `reconstruct_decision` 排除掉的那三個），再對 task 底下每一個 proposal **呼叫 `reconstruct_decision`** 並原封不動地收集回來的 `DecisionChain`。它不重寫任何 trace 邏輯、不新增寫入路徑、不需要新的 grant（read-only，RLS 已把它限制在當前 engagement）；兩份介面因此永遠不會對同一個 proposal 給出兩種答案。它是 §5.3 一直 deferred 的「往回走到 task」，做成獨立函式而不是加寬既有的那個，正是為了不擾動上面那個 partition。CLI：`scripts/task_history.py --engagement <id> <task_id>`。
+
 ### 4.5 Engagement / Policy Pack
 沿用你原本 §17-18 的設計，基本正確，補三點：
 
@@ -784,6 +790,8 @@ TASK-39 ──▶ Nuclei RUN-44 ──▶ Evidence E-84 ──▶ Finding F-2
 - **Audit**：任何 confirmed finding 都能回答「這個結論的每一步是從哪個 raw evidence 來的」，不是只看最後一個 evidence，而是整條產生鏈。
 - **Hallucination debugging**：如果 Supervisor 說「WEB01 存在某服務」，可以直接追問 `why(WEB01, service_X)`，沿著 graph 走到最初的 Nmap run 和 raw evidence hash，快速判斷是真的觀察到，還是 AI 憑空推論後被當成事實寫進 state。
 - 這對資安報告的可信度、以及對「AI 決策是否可解釋」這件事，重要性不亞於 Security Graph（甚至更早需要），MVP 階段就該用一張 `provenance_edges (from_type, from_id, to_type, to_id, relation, created_at)` 的 Postgres table 記錄，不需要等 Neo4j。
+
+Provenance Graph 回答「這個結論從哪來」；`audit_log` 的重建介面（見 §4.4 審計讀取介面）回答「這個決策為什麼這樣判、以及在哪一個範圍內判」。兩者互補：`reconstruct_decision(proposal_id)` 給單一 proposal 的決策鏈，`reconstruct_task_history(task_id)` 給整個 task 從建立到結束、涵蓋它所有 proposal 的歷史。可解釋性同時需要「為什麼相信」（provenance）與「為什麼允許/拒絕」（audit 重建）兩條線。
 
 ---
 
