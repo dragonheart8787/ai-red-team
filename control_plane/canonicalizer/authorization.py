@@ -21,13 +21,13 @@ changes nothing.
 
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import Connection
 
+from control_plane.canonicalizer.containment import identity_contains
 from control_plane.canonicalizer.target import (
     CanonicalTarget,
     scope_value_is_canonical,
@@ -89,7 +89,7 @@ def action_matches(action: str, allowed_actions: tuple[str, ...] | list[str]) ->
 
 
 def scope_covers_target(scope: ScopeObject, target: CanonicalTarget) -> bool:
-    """Type-aware containment.
+    """Type-aware containment: does this scope object cover this target?
 
     The asymmetries here are the whole point of typed scope objects (§4.1.5):
     an ``fqdn`` scope never covers an IP target, and a ``cidr`` scope never
@@ -116,43 +116,40 @@ def scope_covers_target(scope: ScopeObject, target: CanonicalTarget) -> bool:
     Never raises. A predicate that answers "does this cover that" by throwing
     puts the caller in the position ``dispatch_scan`` was in before D15, where
     one unparseable value took down the loop that would have refused it.
+
+    D25 — where the arithmetic went
+    -------------------------------
+    The containment geometry this function used to implement inline now lives in
+    :mod:`control_plane.canonicalizer.containment`, and this function is the
+    authorization-side caller of it. Nothing about the answer changed; the
+    refactor is pinned by ``test_containment_refactor_is_behaviour_preserving``,
+    which runs the pre-refactor implementation beside this one over an
+    exhaustive grid of type/value pairs and requires them to agree on every one.
+
+    It moved because the Metadata Resolver needs the *same* arithmetic to find
+    an identity's ancestors (ADR_CLASSIFICATION_INHERITANCE.md §6), and there
+    were only three ways to give it one: copy the arithmetic (which is how D15's
+    mutation test caught a fail-open branch — two copies drift), have the
+    classification path import this function and feed it fabricated scope
+    objects (which would make classification depend on authorization, the one
+    entanglement D25 was told to avoid), or extract the geometry into a module
+    that belongs to neither. The third is what happened.
+
+    What did **not** move is the decision. This function still owns "is this
+    target authorized", and the guard below — a scope object's own stored value
+    must parse — stays here rather than in the shared primitive, because it is a
+    statement about the Scope Registry's contents, not about geometry. The
+    primitive fails closed on the same input independently, so the two agree;
+    the guard is kept because D15/D16's history is that this specific
+    fail-closed direction is worth asserting twice.
     """
     identity = target.logical_identity
     if not scope_value_is_canonical(scope.type, scope.value):
         return False
 
-    if scope.type == "fqdn":
-        if identity.type != "fqdn":
-            return False
-        if scope.value.startswith("*."):
-            suffix = scope.value[1:]  # ".example.com"
-            return identity.value.endswith(suffix) and identity.value != suffix[1:]
-        return identity.value == scope.value
-
-    if scope.type == "ip":
-        return identity.type == "ip" and identity.value == scope.value
-
-    if scope.type == "cidr":
-        if identity.type not in ("ip", "cidr"):
-            return False
-        try:
-            network = ipaddress.ip_network(scope.value, strict=False)
-            if identity.type == "ip":
-                return ipaddress.ip_address(identity.value) in network
-            return ipaddress.ip_network(identity.value, strict=False).subnet_of(network)
-        except (ValueError, TypeError):
-            # Unreachable while the guard above holds, and still tested:
-            # ``test_the_cidr_branch_fails_closed_even_if_the_outer_guard_stops_working``
-            # disables that guard and asks this one directly. D15 found this
-            # branch failing open precisely because nothing reached it, so
-            # "the layer above covers it" is the argument that produced the
-            # bug rather than a reason to stop checking.
-            return False
-
-    if scope.type in ("url", "repo", "ad_domain"):
-        return identity.type == scope.type and identity.value == scope.value
-
-    return False
+    return identity_contains(
+        scope.type, scope.value, identity.type, identity.value
+    )
 
 
 def resolve_authorization(
