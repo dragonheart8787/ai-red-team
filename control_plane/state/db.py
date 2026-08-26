@@ -23,6 +23,7 @@ from control_plane.config import require_env
 _ENGINE: Engine | None = None
 _REGISTRY_ADMIN_ENGINE: Engine | None = None
 _GLOBAL_AUDITOR_ENGINE: Engine | None = None
+_UI_READER_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -59,6 +60,11 @@ def global_auditor_url() -> str:
         hint="Run scripts/init_db.sh, or export GLOBAL_AUDITOR_DATABASE_URL "
              "for the global_auditor role.",
     )
+
+
+def ui_reader_url() -> str:
+    """The web console's read connection string (D29)."""
+    return require_env("UI_READER_DATABASE_URL")
 
 
 def get_engine() -> Engine:
@@ -100,19 +106,31 @@ def get_global_auditor_engine() -> Engine:
     return _GLOBAL_AUDITOR_ENGINE
 
 
+def get_ui_reader_engine() -> Engine:
+    """Pool for ``ui_reader`` — the console's reads, SELECT and nothing else."""
+    global _UI_READER_ENGINE
+    if _UI_READER_ENGINE is None:
+        _UI_READER_ENGINE = create_engine(ui_reader_url(), pool_pre_ping=True,
+                                          future=True)
+    return _UI_READER_ENGINE
+
+
 def reset_engine() -> None:
     """Drop the cached engines (tests switch roles between connections)."""
-    global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE
-    for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE):
+    global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE, _UI_READER_ENGINE
+    for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE,
+                   _UI_READER_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
     _REGISTRY_ADMIN_ENGINE = None
     _GLOBAL_AUDITOR_ENGINE = None
+    _UI_READER_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
 GLOBAL_AUDITOR_ROLE = "global_auditor"
+UI_READER_ROLE = "ui_reader"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -212,4 +230,27 @@ def global_auditor_scope() -> Iterator[Connection]:
     read ``audit_log`` and touch nothing else; the database enforces both.
     """
     with get_global_auditor_engine().begin() as conn:
+        yield conn
+
+
+@contextmanager
+def ui_reader_scope(engagement_id: str) -> Iterator[Connection]:
+    """Read one engagement as ``ui_reader`` — the web console's reads (D29).
+
+    Same engagement pinning and the same ``engagement_isolation`` policy as
+    :func:`engagement_scope`; the difference is entirely in what the role may
+    do, which is SELECT on the tables the dashboard shows and nothing else. It
+    holds no INSERT anywhere, ``audit_log`` included.
+
+    So this is not a way to see more, it is a way for a browser-facing read
+    endpoint to be incapable of writing. The console's approve and deny actions
+    deliberately do **not** come through here: they run the existing D24
+    functions on :func:`engagement_scope`, which is the one write path and the
+    one audit path, shared with ``scripts/approvals.py``.
+
+    There is no unscoped variant, for the reason the module docstring gives: an
+    escape hatch "just for the dashboard" is how a repository layer stops being
+    unbypassable. A console that wants to show two engagements opens this twice.
+    """
+    with _scoped(get_ui_reader_engine(), engagement_id) as conn:
         yield conn

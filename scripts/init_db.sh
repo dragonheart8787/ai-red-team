@@ -44,6 +44,7 @@ gen_password() {
 : "${CYBERORCH_APP_PASSWORD:=$(gen_password)}"
 : "${REGISTRY_ADMIN_PASSWORD:=$(gen_password)}"
 : "${GLOBAL_AUDITOR_PASSWORD:=$(gen_password)}"
+: "${UI_READER_PASSWORD:=$(gen_password)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
 super_psql() {
@@ -77,6 +78,7 @@ super_psql \
     -v "cyberorch_app_password=$CYBERORCH_APP_PASSWORD" \
     -v "registry_admin_password=$REGISTRY_ADMIN_PASSWORD" \
     -v "global_auditor_password=$GLOBAL_AUDITOR_PASSWORD" \
+    -v "ui_reader_password=$UI_READER_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -98,10 +100,12 @@ MIGRATION_OWNER_PASSWORD=${MIGRATION_OWNER_PASSWORD}
 CYBERORCH_APP_PASSWORD=${CYBERORCH_APP_PASSWORD}
 REGISTRY_ADMIN_PASSWORD=${REGISTRY_ADMIN_PASSWORD}
 GLOBAL_AUDITOR_PASSWORD=${GLOBAL_AUDITOR_PASSWORD}
+UI_READER_PASSWORD=${UI_READER_PASSWORD}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 REGISTRY_ADMIN_DATABASE_URL=postgresql+psycopg://registry_admin:${REGISTRY_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 GLOBAL_AUDITOR_DATABASE_URL=postgresql+psycopg://global_auditor:${GLOBAL_AUDITOR_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+UI_READER_DATABASE_URL=postgresql+psycopg://ui_reader:${UI_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 
