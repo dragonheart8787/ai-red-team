@@ -409,9 +409,9 @@ def propose_action(
     issued = issue_capability(
         conn, engagement_id=engagement_id, capability_id=capability_id,
         agent_id=agent_id, action=proposal.action, actor=actor,
-        constraints={"host": target.logical_identity.value,
-                     "ports": proposal.target.get("ports", "8080"),
-                     "scan_type": proposal.target.get("scan_type", "connect")},
+        constraints=execution_constraints(
+            proposal.target, target.logical_identity.value
+        ),
         budget=requested_budget,
         ttl_seconds=capability_ttl_seconds or proposal.requested_capability_ttl_seconds,
         proposal_id=proposal_id,
@@ -688,6 +688,37 @@ def query_findings(
     return [dict(r) for r in rows]
 
 
+def execution_constraints(
+    target_block: Mapping[str, Any], host: str
+) -> dict[str, Any]:
+    """The §4.6 ``constraints`` a capability carries, derived in one place (D30).
+
+    Both routes to a capability need this — ``propose_action`` for a clean ALLOW,
+    and ``grant_approval`` after a human approves an escalation — and before D30
+    each computed it inline from a different source. The ALLOW path read the raw
+    in-memory proposal and honoured what it asked for; the approval path read the
+    persisted row, which had lost the fields, and silently substituted defaults.
+    Two derivations of one fact, disagreeing exactly when a human was in the
+    loop.
+
+    So there is one now, and the §4.7 approval record is built from the same
+    call (see ``approvals.approval_fields``), which is what makes "the approval
+    describes what was authorized" structural rather than a property somebody
+    has to keep re-establishing. Same reasoning as the shared containment
+    primitive in D25 and the shared reconstruction in D26.
+
+    The defaults stay: a proposal that names no ports is a proposal the tool
+    still has to be told how to run. What changed is that they now apply only
+    when the *proposal* said nothing, rather than whenever the storage layer
+    happened to lose the answer.
+    """
+    return {
+        "host": host,
+        "ports": target_block.get("ports", "8080"),
+        "scan_type": target_block.get("scan_type", "connect"),
+    }
+
+
 def _persist_proposal(
     conn: Connection, engagement_id: str, proposal_id: str,
     proposal: ProposedAction, target, agent_id: str,
@@ -707,7 +738,26 @@ def _persist_proposal(
         {
             "pid": proposal_id, "eid": engagement_id, "tid": proposal.task_id,
             "agent": agent_id, "key": f"idem-{proposal_id}", "action": proposal.action,
-            "target": json.dumps(target.as_dict(), default=str),
+            # D30: the canonical target *plus* the execution parameters it does
+            # not carry. `CanonicalTarget.as_dict()` describes what the target
+            # *is* -- logical_identity, port, path, normalized -- because that is
+            # what authorization and the §7 fingerprint are about. It has no
+            # `ports` or `scan_type`, since those say how to run the tool rather
+            # than what is being targeted.
+            #
+            # Storing only the canonical form silently dropped them, and the two
+            # paths that later need them diverged: `propose_action` still had the
+            # in-memory proposal and honoured the request, while `grant_approval`
+            # -- which may run minutes later in another process, holding only this
+            # row -- found the keys missing and fell through to the defaults. A
+            # proposal asking for ports 443 came back from human approval as a
+            # capability for port 8080.
+            #
+            # Canonical values are applied last, so they stay authoritative for
+            # every key they define; the agent's extras survive alongside them.
+            "target": json.dumps(
+                {**dict(proposal.target), **target.as_dict()}, default=str
+            ),
             "auth": json.dumps(dict(proposal.authorization), default=str),
             "disc": json.dumps(dict(proposal.discovery), default=str),
             "resources": list(proposal.resources),

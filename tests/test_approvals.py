@@ -79,6 +79,189 @@ def escalated(engagement_id, registry):
 
 
 # ---------------------------------------------------------------------------
+# D30 — the approval record describes what was actually authorized
+# ---------------------------------------------------------------------------
+
+def _escalated_with_params(conn, engagement_id, scope_id, *, ports, scan_type):
+    """An escalated proposal asking for something other than the defaults.
+
+    The defaults are ``ports="8080"`` and ``scan_type="connect"``, so a test
+    that proposes those cannot tell "honoured the request" apart from "fell
+    through to the default" — which is exactly how the D30 defect survived
+    every existing test.
+    """
+    proposal = ProposedAction(
+        action="network.scan",
+        target={"logical_identity": {"type": "ip", "value": HOST},
+                "ports": ports, "scan_type": scan_type},
+        authorization={"source": "engagement_scope", "scope_object_id": scope_id},
+        discovery={"source": "explicit_scope"},
+    )
+    return propose_action(
+        conn, engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
+        policy=_policy(), agent_id="worker-1",
+    )
+
+
+def test_the_approval_record_matches_the_capability_it_authorized(
+    engagement_id, registry
+):
+    """§4.7's object must say what was granted — field by field (D30).
+
+    Before D30 these disagreed on every execution parameter. The proposal asked
+    for ports 443 and a version scan; ``approvals.constraints`` recorded
+    ``{ports: null, scan_type: null}`` and the capability was issued for ports
+    8080 with a connect scan, because ``_persist_proposal`` stored only the
+    canonical target and the approval path — holding just that row — fell
+    through to the defaults.
+
+    Asserted as equality on the shared keys rather than "neither is null": a
+    both-non-null check passes for two values that disagree, which is the
+    failure being guarded against.
+    """
+    scope_id = f"SCOPE-{engagement_id[-10:]}"
+    registry.scope(scope_object_id=scope_id, type="cidr", value=CIDR,
+                   allowed_actions=["network.recon", "network.scan"])
+    with engagement_scope(engagement_id) as conn:
+        outcome = _escalated_with_params(conn, engagement_id, scope_id,
+                                         ports="443", scan_type="version")
+    assert outcome.decision == "HUMAN_APPROVAL"
+
+    with engagement_scope(engagement_id) as conn:
+        grant_approval(conn, engagement_id=engagement_id,
+                       proposal_id=outcome.proposal_id, approver="operator-x",
+                       approved_scope="this_task")
+
+    with engagement_scope(engagement_id) as conn:
+        approval = conn.execute(
+            text("SELECT resource, constraints FROM approvals WHERE proposal_id = :p"),
+            {"p": outcome.proposal_id},
+        ).mappings().one()
+        capability = conn.execute(
+            text("SELECT constraints FROM capabilities WHERE proposal_id = :p"),
+            {"p": outcome.proposal_id},
+        ).mappings().one()
+
+    granted = dict(capability["constraints"])
+    recorded = dict(approval["constraints"])
+
+    # 1. What was granted is what the proposal asked for -- not the defaults.
+    assert granted["ports"] == "443"
+    assert granted["scan_type"] == "version"
+
+    # 2. The record and the capability agree on every shared field.
+    for key, value in recorded.items():
+        assert granted[key] == value, (
+            f"§4.7 records {key}={value!r} but the capability granted "
+            f"{granted[key]!r}"
+        )
+
+    # 3. The record covers every execution parameter the capability carries.
+    #    `host` lives in `resource`, per §4.7's own shape.
+    assert set(recorded) == set(granted) - {"host"}
+    assert approval["resource"] == f"ip:{granted['host']}"
+
+
+def test_a_proposal_naming_no_parameters_still_records_what_was_granted(
+    engagement_id, registry
+):
+    """The defaults are legitimate; recording something else is not.
+
+    A proposal that names no ports leaves the tool needing to be told how to
+    run, so a default is applied — and the §4.7 record must then say what that
+    default was, rather than reverting to nulls. The bug was never "defaults
+    exist", it was that the record and the grant disagreed.
+    """
+    scope_id = f"SCOPE-{engagement_id[-10:]}"
+    registry.scope(scope_object_id=scope_id, type="cidr", value=CIDR,
+                   allowed_actions=["network.recon", "network.scan"])
+    proposal = ProposedAction(
+        action="network.scan",
+        target={"logical_identity": {"type": "ip", "value": HOST}},
+        authorization={"source": "engagement_scope", "scope_object_id": scope_id},
+        discovery={"source": "explicit_scope"},
+    )
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
+            policy=_policy(), agent_id="worker-1",
+        )
+        grant_approval(conn, engagement_id=engagement_id,
+                       proposal_id=outcome.proposal_id, approver="operator-x",
+                       approved_scope="this_proposal_only")
+
+    with engagement_scope(engagement_id) as conn:
+        recorded = dict(conn.execute(
+            text("SELECT constraints FROM approvals WHERE proposal_id = :p"),
+            {"p": outcome.proposal_id}).scalar())
+        granted = dict(conn.execute(
+            text("SELECT constraints FROM capabilities WHERE proposal_id = :p"),
+            {"p": outcome.proposal_id}).scalar())
+
+    assert recorded == {"ports": "8080", "scan_type": "connect"}
+    assert {k: v for k, v in granted.items() if k != "host"} == recorded
+
+
+def test_the_allow_path_and_the_approval_path_grant_the_same_constraints(
+    engagement_id, registry, engagement_factory
+):
+    """One derivation, so a human in the loop changes nothing but the timing.
+
+    The D30 defect was two derivations that agreed until a proposal named
+    something other than the defaults, at which point the auto-ALLOW path
+    honoured the request and the human-approved path did not. Whether a human
+    was consulted must not change what is authorized.
+    """
+    scope_id = f"SCOPE-{engagement_id[-10:]}"
+    registry.scope(scope_object_id=scope_id, type="cidr", value=CIDR,
+                   allowed_actions=["network.recon", "network.scan"])
+    with engagement_scope(engagement_id) as conn:
+        escalated = _escalated_with_params(conn, engagement_id, scope_id,
+                                           ports="443", scan_type="version")
+        grant_approval(conn, engagement_id=engagement_id,
+                       proposal_id=escalated.proposal_id, approver="operator-x",
+                       approved_scope="this_task")
+
+    # The same proposal shape on a reviewer that raises no hint: a clean ALLOW.
+    eid2, registry2 = engagement_factory()
+    scope2 = f"SCOPE-{eid2[-10:]}"
+    registry2.scope(scope_object_id=scope2, type="cidr", value=CIDR,
+                    allowed_actions=["network.recon", "network.scan"])
+    allowed = ProposedAction(
+        action="network.scan",
+        target={"logical_identity": {"type": "ip", "value": HOST},
+                "ports": "443", "scan_type": "version"},
+        authorization={"source": "engagement_scope", "scope_object_id": scope2},
+        discovery={"source": "explicit_scope"},
+    )
+
+    class _NoSandbox:
+        def run(self, **kwargs):
+            from tool_gateway.sandbox import SandboxUnavailable
+
+            raise SandboxUnavailable("dispatch is not what this test measures")
+
+    with engagement_scope(eid2) as conn:
+        auto = propose_action(
+            conn, engagement_id=eid2, proposal=allowed,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="worker-1",
+            sandbox=_NoSandbox(), network_allowlist=[CIDR],
+        )
+    assert auto.decision == "ALLOW"
+
+    def constraints_of(eid, pid):
+        with engagement_scope(eid) as conn:
+            return dict(conn.execute(
+                text("SELECT constraints FROM capabilities WHERE proposal_id = :p"),
+                {"p": pid}).scalar())
+
+    assert constraints_of(engagement_id, escalated.proposal_id) == \
+        constraints_of(eid2, auto.proposal_id)
+
+
+# ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
 

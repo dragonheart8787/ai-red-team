@@ -49,6 +49,7 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from control_plane.api.function_api import execution_constraints
 from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
 from control_plane.canonicalizer.target import CanonicalTarget, normalize_target
@@ -175,15 +176,21 @@ def approval_fields(
     ``approved_scope`` is deliberately absent: it is the operator's choice, not
     a derivation, and the caller supplies it.
     """
+    # D30: the same derivation the capability is issued with, so the §4.7
+    # record describes what was actually authorized rather than a second,
+    # quieter opinion about it. `host` is dropped here because §4.7 carries the
+    # target in `resource`; what is left is exactly the execution parameters,
+    # which is the shape §4.7's own example has ({"endpoint": ..., "method":
+    # ...}) beside its separate "resource": "customer_api".
+    granted = execution_constraints(dict(row["target"]),
+                                    target.logical_identity.value)
     return {
         "action_class": row["action"],
         "resource": (
             f"{target.logical_identity.type}:{target.logical_identity.value}"
         ),
-        "constraints": {
-            "ports": dict(row["target"]).get("ports"),
-            "scan_type": dict(row["target"]).get("scan_type"),
-        },
+        "constraints": {k: v for k, v in granted.items() if k != "host"},
+        "capability_constraints": granted,
         "valid_until": datetime.now(UTC) + timedelta(seconds=valid_for_seconds),
     }
 
@@ -265,7 +272,6 @@ def grant_approval(
         )
 
     approval_id = f"APPR-{uuid.uuid4().hex[:10]}"
-    stored_target = dict(row["target"])
     fields = approval_fields(row, target, valid_for_seconds=valid_for_seconds)
     resource = fields["resource"]
     constraints = fields["constraints"]
@@ -300,9 +306,9 @@ def grant_approval(
     issued = issue_capability(
         conn, engagement_id=engagement_id, capability_id=capability_id,
         agent_id=row["agent_id"], action=row["action"], actor=approver,
-        constraints={"host": target.logical_identity.value,
-                     "ports": stored_target.get("ports", "8080"),
-                     "scan_type": stored_target.get("scan_type", "connect")},
+        # The same object the approval row above recorded (D30). Not a second
+        # derivation that happens to agree today.
+        constraints=fields["capability_constraints"],
         budget=Budget(max_duration_seconds=_APPROVED_BUDGET_SECONDS),
         ttl_seconds=row["requested_capability_ttl_seconds"] or 60,
         approval_id=approval_id, proposal_id=proposal_id,

@@ -57,8 +57,11 @@ def _escalate(engagement_id, registry):
                    allowed_actions=["network.recon", "network.scan"])
     proposal = ProposedAction(
         action="network.scan",
+        # Deliberately not the defaults ("8080"/"connect"): with those, a
+        # console showing the request and a console showing a fallback are
+        # indistinguishable, which is how D30's defect went unseen here.
         target={"logical_identity": {"type": "ip", "value": HOST},
-                "ports": "8080", "scan_type": "connect"},
+                "ports": "443", "scan_type": "version"},
         authorization={"source": "engagement_scope", "scope_object_id": scope_id},
         discovery={"source": "explicit_scope"},
     )
@@ -204,26 +207,16 @@ def test_the_preview_matches_what_the_grant_actually_writes(client, escalated):
     assert preview["action_class"] == "network.scan"
     assert preview["resource"] == f"ip:{HOST}"
 
-    # And here that anchoring finds something. The proposal carried
-    # ports="8080", scan_type="connect", but §4.7's `constraints` records
-    # neither: `_persist_proposal` stores `target.as_dict()`, the *canonical*
-    # target, whose keys are logical_identity / network_binding / port / path /
-    # normalized / address_count. The raw proposal's `ports` and `scan_type`
-    # never reach the row, so `grant_approval`'s `stored_target.get("ports")`
-    # is always None.
+    # This assertion is where D29 found the defect D30 then fixed. It used to
+    # read {"ports": None, "scan_type": None}: the console faithfully displayed
+    # a §4.7 record that described nothing, because `_persist_proposal` had
+    # dropped the proposal's execution parameters and `grant_approval` — holding
+    # only the stored row — recorded the resulting absence while issuing a
+    # capability built from defaults.
     #
-    # The capability issued in the same call does not agree with it: it reads
-    # `stored_target.get("ports", "8080")`, and because the key is *absent*
-    # rather than null it takes the default and mints {"ports": "8080",
-    # "scan_type": "connect"}. So the approval says one thing and the capability
-    # granted under it says another.
-    #
-    # Pinned as-is rather than fixed: that is D24's write path, and D29 was
-    # scoped to the interface over it. Reported instead. The console shows this
-    # field as it will actually be stored, which is the honest thing for it to
-    # do — it is not the console's place to render a value the record will not
-    # contain.
-    assert preview["constraints"] == {"ports": None, "scan_type": None}
+    # Now the console shows what the proposal asked for and what the capability
+    # will carry, because they are one derivation (D30).
+    assert preview["constraints"] == {"ports": "443", "scan_type": "version"}
 
 
 def test_the_console_refuses_a_scope_outside_section_4_7(client, escalated):
