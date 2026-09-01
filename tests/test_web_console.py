@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -288,6 +290,61 @@ def test_the_console_exposes_no_route_that_drives_an_agent(client):
 # ---------------------------------------------------------------------------
 # Requirement 2 / constraint 4 — the read role's boundary, asserted on the DB
 # ---------------------------------------------------------------------------
+
+def test_the_console_never_renders_a_granted_approvals_constraints(
+    client, escalated
+):
+    """Pins the reason historical NULL constraints cannot mislead anyone (D30).
+
+    Rows written before D30 carry ``constraints`` of NULL, meaning *unknown
+    scope* rather than *no constraints were imposed*, and they are deliberately
+    left that way (``ACCEPTANCE_MVP1_AGENTS.md`` §5). That decision rests on a
+    fact about this console: it has no surface that shows a granted approval's
+    constraints, so a NULL is never rendered as a blank that reads like "nothing
+    was restricted".
+
+    Asserted rather than described, because the fact is what makes the decision
+    safe and a sentence in a document does not fail when it stops being true —
+    which is lesson 1 in that same section. If a granted-approvals view is added
+    later, this goes red and the NULL handling has to be decided on purpose.
+    """
+    eid, _, pid = escalated
+    client.post(f"/api/engagements/{eid}/approvals/{pid}/approve",
+                json={"approver": "operator-x", "approved_scope": "this_task"})
+
+    # The approval now exists and carries constraints in the database.
+    with engagement_scope(eid) as conn:
+        stored = conn.execute(
+            text("SELECT constraints FROM approvals WHERE proposal_id = :p"),
+            {"p": pid},
+        ).scalar()
+    assert stored, "the approval should have been written"
+
+    # No read endpoint surfaces it. The queue is pending-only and now empty; the
+    # preview refuses a decided proposal; the task history carries the
+    # approval.granted event, whose payload has no constraints.
+    assert client.get(f"/api/engagements/{eid}/approvals").json() == []
+    assert client.get(
+        f"/api/engagements/{eid}/approvals/{pid}/preview"
+    ).status_code == 409
+
+    with engagement_scope(eid) as conn:
+        task_id = conn.execute(
+            text("SELECT task_id FROM action_proposals WHERE proposal_id = :p"),
+            {"p": pid},
+        ).scalar()
+    if task_id:
+        history = client.get(
+            f"/api/engagements/{eid}/tasks/{task_id}/history"
+        ).json()
+        assert "constraints" not in json.dumps(history), (
+            "the task history now exposes approval constraints; NULL rows from "
+            "before D30 would render here and must be handled explicitly"
+        )
+
+    overview = client.get(f"/api/engagements/{eid}/overview").json()
+    assert "constraints" not in json.dumps(overview)
+
 
 def test_ui_reader_can_read_the_dashboard_tables(escalated):
     eid, _, _ = escalated

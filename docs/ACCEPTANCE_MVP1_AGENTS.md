@@ -541,6 +541,78 @@ each taken through the design-then-build flow D19–D22 and are now in Class A.
 
 ---
 
+## 5. Why a green suite kept proving nothing — the recurring lesson
+
+Three defects in this stage shared a shape worth stating once, because they had
+different causes and the same symptom: **CI was green and guarding nothing, and
+nothing about the green told anyone.** They are listed together because the
+instinct each one defeats is the same — reading a passing suite as evidence that
+the property it names still holds.
+
+1. **A deleted test does not fail; it stops guarding** (D27/D28). The stateful
+   property suite was removed at `7c9295f`, bundled into an unrelated commit,
+   and was gone for three days behind a passing build. Failure needs a test to
+   run; absence is silent. The acceptance record went on asserting the coverage,
+   which is how the gap survived review as well as CI. See
+   `ACCEPTANCE_MVP_KERNEL.md` §4.1.
+
+2. **A test whose input equals the default cannot tell "honoured" from
+   "defaulted"** (D30). The human-approval path granted `ports=8080` for a
+   proposal asking `ports=443`, and every existing test passed, because every
+   existing test proposed `8080` — the default. A test that supplies the value
+   the system would have invented anyway is measuring nothing, however carefully
+   it asserts. **Where a test covers a user-supplied value the system is meant to
+   honour rather than default, the input must deliberately differ from the
+   default.** This one is the sharpest of the three: the suite was not merely
+   uninformative, it actively certified a live authorization-fidelity defect.
+
+3. **A test can be present, passing, and still assert nothing** (D29). Two tests
+   written that same session were shown by mutation testing to be hollow: one
+   spied on a name and would have passed with that name rebound to the write
+   role, and one compared two values that a shared derivation made equal by
+   construction, so both being wrong still agreed. Both were fixed. Neither
+   would have been noticed by running them.
+
+The common defence is not more tests. It is asking, of any test that matters,
+*what would have to break for this to go red* — which is what mutation testing
+answers mechanically, and what D9's `event()` instrumentation answers for
+branches that never execute. `ACCEPTANCE_MVP_KERNEL.md` §8 records the earlier
+four defects of a related shape, where the behaviour was covered and the
+operation did not exist.
+
+### D30 — historical `approvals.constraints`, and why they stay NULL
+
+Rows written before D30 carry `constraints` values of NULL, and are left that
+way: no backfill, no reconstruction, no extra marker column.
+
+The original request is not recoverable. `_persist_proposal` dropped the
+proposal's execution parameters before anything else saw them, and the
+`proposal.submitted` audit payload stores only the normalized target string
+(`"target": "ip:10.79.0.10"`), so neither the proposal row nor the audit trail
+retains what was asked for. A backfill would therefore be a guess written into
+an audit record.
+
+NULL already carries the whole meaning — *this record predates the fidelity fix,
+its scope detail is unknown* — so a marker column would add a second way to say
+one thing. This follows D11-7's principle for historical data: an honest absence
+is safer than a plausible reconstruction. The one binding requirement on anything
+that reads these rows is that NULL means **unknown scope**, never *no
+constraints were imposed*; it is stated in `approval_fields`' docstring beside
+the derivation, where a future reader meets it.
+
+The D29 console needs no change for this, and this was checked rather than
+assumed: it has no surface that displays a granted approval's constraints at all.
+`query_state` does not read `approvals`; `list_pending_approvals` reads
+`action_proposals` and returns proposals still awaiting a decision; the only
+constraints the console renders come from `preview_approval`, computed live by
+the D30 derivation for a proposal nobody has decided yet, which is never NULL.
+The `approval.granted` audit payload carries `approval_id`, `approved_scope`,
+`valid_until`, `action_class` and `resource` — no constraints. A regression test
+pins that absence, so if a granted-approvals view is ever added, the NULL
+handling has to be decided deliberately rather than inherited.
+
+---
+
 ## Go / No-Go
 
 **GO — the three-role-pluggable stage is complete.**

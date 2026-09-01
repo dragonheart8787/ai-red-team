@@ -175,6 +175,24 @@ def approval_fields(
 
     ``approved_scope`` is deliberately absent: it is the operator's choice, not
     a derivation, and the caller supplies it.
+
+    Reading rows written before D30
+    -------------------------------
+    An ``approvals`` row whose ``constraints`` values are NULL predates this
+    fidelity fix, and its scope detail cannot be trusted: at the time it was
+    written the proposal's execution parameters had already been dropped by
+    ``_persist_proposal``, so the record says nothing and the capability issued
+    beside it was built from defaults rather than from what was proposed.
+
+    Those rows are **not backfilled, and NULL is left as the signal.** The
+    original request is not recoverable from anywhere — not the proposal row,
+    not the ``proposal.submitted`` audit payload, which stores only the
+    normalized target string — so any backfill would be a guess written into an
+    audit record, which is the one place a guess must never go. This follows
+    D11-7's treatment of history: an honest absence is safer than a plausible
+    reconstruction, and a NULL that means "unknown" needs no extra column to say
+    so. Anything reading these rows should treat NULL as *unknown scope*, never
+    as *no constraints were imposed*.
     """
     # D30: the same derivation the capability is issued with, so the §4.7
     # record describes what was actually authorized rather than a second,

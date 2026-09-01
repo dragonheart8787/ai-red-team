@@ -479,6 +479,11 @@ none by reading the code:
    The stored Policy Pack and the enforced policy were unrelated artifacts: an
    overlay could be published perfectly and change no decision anywhere.
 
+Three later defects of a related shape — a suite that was green while guarding
+nothing — are recorded together in `ACCEPTANCE_MVP1_AGENTS.md` §5: a deleted test
+(D27/D28), a test whose input equalled the default it was meant to detect a
+fallback to (D30), and tests that passed while asserting nothing (D29).
+
 The common cause is that a test which manipulates state directly proves the
 *check* works while saying nothing about whether the *operation* exists. The
 countermeasure was structural: state transitions in the stateful test went
