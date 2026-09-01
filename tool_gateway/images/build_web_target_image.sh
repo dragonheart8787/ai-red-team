@@ -44,7 +44,34 @@ cp /lib64/ld-linux-x86-64.so.2 "$STAGE/lib64/" 2>/dev/null || true
 cp -r "$PYLIB" "$STAGE/usr/lib/python$PYVER"
 rm -rf "$STAGE/usr/lib/python$PYVER"/{test,idlelib,tkinter,turtledemo,ensurepip}
 find "$STAGE/usr/lib/python$PYVER" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-ln -sf "$(basename "$PY")" "$STAGE/usr/bin/python3"
+# Alias to python3 only when the interpreter is not already called that.
+#
+# `ln -sf python3 .../python3` is a symlink pointing at itself, and it replaces
+# the binary copy_with_libs just made -- the staged interpreter becomes a
+# 7-byte dangling link and the container exits immediately on start. The D11
+# script this technique came from never hit it because its PY was pinned to
+# python3.11, so the link had a different name to point at; generalising to
+# `command -v python3` introduced the collision, and CI caught it as a web
+# target that would not serve.
+PYBIN="$(basename "$PY")"
+if [ "$PYBIN" != "python3" ]; then
+    ln -sf "$PYBIN" "$STAGE/usr/bin/python3"
+fi
+
+# Fail here rather than at run time. A staged tree that cannot execute python
+# produces a container that starts, exits immediately, and leaves the web.get
+# tests reporting what looks like a network problem -- the most expensive shape
+# of failure to diagnose. `test -e` follows symlinks, so a dangling or
+# self-referential link fails this check.
+[ -e "$STAGE/usr/bin/python3" ] && [ -x "$STAGE/usr/bin/python3" ] || {
+    echo "error: staged /usr/bin/python3 is missing or not executable" >&2
+    ls -l "$STAGE/usr/bin/" >&2
+    exit 1
+}
+"$STAGE/usr/bin/python3" -c 'import http.server' || {
+    echo "error: staged python cannot import http.server; stdlib staging failed" >&2
+    exit 1
+}
 
 printf 'root:x:0:0:root:/:/bin/sh\n' > "$STAGE/etc/passwd"
 printf 'hosts: files\n' > "$STAGE/etc/nsswitch.conf"
