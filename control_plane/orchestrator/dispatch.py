@@ -35,7 +35,7 @@ from sqlalchemy import Connection, text
 from control_plane.audit.logger import record_audit
 from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
-from tool_gateway.adapters import nmap
+from tool_gateway.adapters import http_get, nmap
 from tool_gateway.sandbox import DockerSandbox, SandboxResult, SandboxUnavailable
 
 QUEUED = "queued"
@@ -147,6 +147,33 @@ def find_cached_run(
     ).mappings().one_or_none()
 
 
+#: Which adapter serves which capability action (§4.1.5, D31).
+#:
+#: Keyed on the action the *capability* carries, not on anything the Worker
+#: says at dispatch time — the action was fixed when OPA decided and the broker
+#: issued, so routing on it cannot be steered later.
+#:
+#: A capability whose action has no adapter is refused rather than defaulted to
+#: one. Defaulting is how a `web.get` capability would have executed as an nmap
+#: scan while every record said otherwise.
+ADAPTERS = {
+    "network.scan": nmap,
+    "network.recon": nmap,
+    http_get.ACTION: http_get,
+}
+
+#: Evidence id prefix per tool, so an id keeps saying what produced it.
+EVIDENCE_PREFIX = {nmap.TOOL: "NMAP", http_get.TOOL: "HTTP"}
+
+#: A capability naming an action no adapter implements.
+UNKNOWN_ACTION = "no_adapter_for_action"
+
+
+def adapter_for(action: str):
+    """The adapter that serves this action, or ``None``."""
+    return ADAPTERS.get(action)
+
+
 def dispatch_scan(
     conn: Connection,
     *,
@@ -169,12 +196,28 @@ def dispatch_scan(
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
 
+    adapter = adapter_for(capability.action)
+    if adapter is None:
+        # Refused for the same reason an unbuildable plan is (below): a
+        # capability the gateway cannot execute must not fall through to a tool
+        # that happens to be wired up.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNKNOWN_ACTION,),
+            payload={"action": capability.action,
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNKNOWN_ACTION)
+
     try:
-        plan = nmap.build_plan(
+        plan = adapter.build_plan(
             constraints=capability.constraints, budget=capability.budget.as_dict(),
             target=target,
         )
-    except nmap.AdapterError as exc:
+    except adapter.AdapterError as exc:
         # A capability the adapter cannot turn into a command. Refused, and
         # audited, rather than raised — D15 found this the hard way: a real
         # Worker proposed ``ports: "n/a"`` for a ping scan, the AdapterError
@@ -190,16 +233,16 @@ def dispatch_scan(
             event_type="tool_run.refused", subject_type="action_proposal",
             subject_id=proposal_id, decision=DENY_DECISION,
             reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": nmap.TOOL, "error": str(exc),
+            payload={"tool": adapter.TOOL, "error": str(exc),
                      "constraints": dict(capability.constraints),
                      "capability_id": capability.capability_id},
         )
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
-    tool_version = nmap.tool_version()
+    tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]
     fingerprint = execution_fingerprint(
-        engagement_id=engagement_id, tool=nmap.TOOL, tool_version=tool_version,
+        engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
         execution_context=fingerprint_context(execution_context, allowlist),
     )
@@ -231,7 +274,7 @@ def dispatch_scan(
         """),
         {
             "run": run_id, "eng": engagement_id, "pid": proposal_id,
-            "cap": capability.capability_id, "tool": nmap.TOOL, "tver": tool_version,
+            "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
             "target": target, "params": _json(plan.as_params()),
             "ctx": _json(dict(execution_context or {})), "fp": fingerprint,
             "status": RUNNING, "allowlist": allowlist,
@@ -241,7 +284,7 @@ def dispatch_scan(
     record_audit(
         engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
         subject_type="tool_run", subject_id=run_id,
-        payload={"tool": nmap.TOOL, "target": target, "command": list(plan.command),
+        payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
 
@@ -269,12 +312,13 @@ def dispatch_scan(
         f"$ {' '.join(plan.command)}\n"
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
     ).encode()
-    evidence_id = f"NMAP-{uuid.uuid4().hex[:12]}"
+    prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
+    evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
     record_evidence(
         conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
         evidence_type="tool_output", raw=raw,
-        derived_view=nmap.derive_view(result.stdout, result.stderr),
-        tool=nmap.TOOL, tool_version=tool_version,
+        derived_view=adapter.derive_view(result.stdout, result.stderr),
+        tool=adapter.TOOL, tool_version=tool_version,
     )
 
     status = SUCCEEDED if result.succeeded else FAILED

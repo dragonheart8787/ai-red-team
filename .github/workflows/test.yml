@@ -51,21 +51,30 @@ jobs:
           fi
           echo "CYBERORCH_ALLOW_DB_SKIP is unset — database tests will run or fail."
 
-      - name: Install PostgreSQL client, nmap and ncat
-        # nmap and ncat are installed on the runner, not pulled as an image:
-        # the sandbox image is built from the host's own installation (see
-        # below), and this environment has no route to a registry either.
+      - name: Install PostgreSQL client, nmap, ncat and curl
+        # Installed on the runner, not pulled as an image: the sandbox image is
+        # built from the host's own installation (see below), and this
+        # environment has no route to a registry either. curl joined the list at
+        # D31, which added the web.get adapter.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client nmap ncat
+          sudo apt-get install -y --no-install-recommends postgresql-client nmap ncat curl
           nmap --version | head -1
           ncat --version 2>&1 | head -1
+          curl --version | head -1
 
       - name: Build the sandbox tool image
         # Without this the §8.3 isolation tests fail rather than skip, which is
         # the intended behaviour -- a green run that never started a container
         # has verified nothing about the last physical boundary.
         run: ./tool_gateway/images/build_nmap_image.sh
+
+      - name: Build the web target image
+        # D31's web.get tests fetch from a real HTTP server over a real socket.
+        # Same reasoning as the line above: without the target they fail rather
+        # than skip, because a web.get test that never made a request has shown
+        # nothing about the new data path.
+        run: ./tool_gateway/images/build_web_target_image.sh
 
       - name: Verify Docker can enforce the network boundary
         # Checked explicitly and early so a runner without usable Docker
@@ -82,6 +91,29 @@ jobs:
             exit 1
           }
           echo "kernel refused egress outside the allowlist, as §8.3 requires"
+
+      - name: Verify the web target serves over the boundary
+        # The positive control for D31, checked here for the same reason the
+        # negative one is: if the target cannot serve, every web.get test fails
+        # in a way that looks like a confinement problem rather than a missing
+        # server.
+        run: |
+          docker network create --internal --subnet 10.78.0.0/24 ci-web-check
+          docker run -d --name ci-web-target --network ci-web-check --ip 10.78.0.10 \
+            cyberorch/web-target:local
+          sleep 2
+          docker run --rm --network ci-web-check cyberorch/nmap:local \
+            /usr/bin/curl --silent --show-error --include --proto '=http' \
+            --no-location --max-time 10 http://10.78.0.10:8080/index.html \
+            > /tmp/web.log 2>&1 || true
+          docker rm -f ci-web-target
+          docker network rm ci-web-check
+          head -1 /tmp/web.log
+          grep -q "200 OK" /tmp/web.log || {
+            echo "::error::the web target did not serve a 200 over the internal network"
+            exit 1
+          }
+          echo "the web target served a real response inside the allowlist"
 
       - name: Install Python dependencies
         run: make setup PYTHON=python
