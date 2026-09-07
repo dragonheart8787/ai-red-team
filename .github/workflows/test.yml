@@ -174,7 +174,6 @@ jobs:
           PGSUPER: postgres
           DB_HOST: 127.0.0.1
           DB_PORT: '5432'
-          SKIP_SCHEMA_DUMP: '1'
         run: ./scripts/init_db.sh
 
       - name: Run test suite

@@ -28,7 +28,6 @@ PGSUPER="${PGSUPER:-postgres}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
 PGSUPER_MODE="${PGSUPER_MODE:-peer}"
-SKIP_SCHEMA_DUMP="${SKIP_SCHEMA_DUMP:-0}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="$root/.env"
@@ -112,28 +111,5 @@ chmod 600 "$env_file"
 echo "==> running migrations as migration_owner"
 export MIGRATION_DATABASE_URL="postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 "$root/.venv/bin/alembic" -c "$root/alembic.ini" upgrade head
-
-if [ "$SKIP_SCHEMA_DUMP" != "1" ]; then
-    # Reference dump only. CI skips it: pg_dump client versions vary between
-    # machines, and a version-dependent diff would be noise, not signal.
-    echo "==> dumping reference schema to db/schema.sql"
-    if [ "$PGSUPER_MODE" = "tcp" ]; then
-        pg_dump --schema-only --no-owner --no-privileges \
-                -h "$DB_HOST" -p "$DB_PORT" -U "$PGSUPER" -d "$DB_NAME" \
-                > "$root/db/schema.sql.tmp" 2>/dev/null || true
-    else
-        su "$PGSUPER" -c "pg_dump --schema-only --no-owner --no-privileges -d $DB_NAME" \
-                > "$root/db/schema.sql.tmp" 2>/dev/null || true
-    fi
-    if [ -s "$root/db/schema.sql.tmp" ]; then
-        {
-            echo "-- GENERATED FILE — do not edit."
-            echo "-- Produced by scripts/init_db.sh from db/migrations. Reference only;"
-            echo "-- grants and RLS live in the migration, which is the source of truth."
-            cat "$root/db/schema.sql.tmp"
-        } > "$root/db/schema.sql"
-    fi
-    rm -f "$root/db/schema.sql.tmp"
-fi
 
 echo "==> done. Connection strings are in .env; nothing was printed here."

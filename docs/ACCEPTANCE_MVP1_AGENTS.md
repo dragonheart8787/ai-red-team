@@ -448,11 +448,28 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 | 5.8 | No middle state between "unknown" and "denied" for a **canonical sensitive class that is not on the deny list** | Open, and **general — not a web.get question**. Raised while deciding D32 and deliberately left out of it. |
 | 5.9 | A wildcard scope object authorizes but no capability can be issued against it | Open. The Authorization Resolver honours `web.*` / `network.*` patterns (§4.1.5); the Capability Broker checks the same `allowed_actions` by membership, so the run is refused with `scope_action_no_longer_allowed` for an authorization that was never withdrawn. Affects every namespace. Pinned by `test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against`. |
 
-### Found at D31 (CI cycle) — carried forward as a candidate
+### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |
 |---|---|---|
-| 5.10 | `db/schema.sql` no longer describes the schema the migrations build | Open, documentation integrity. The committed reference dump was last written at `4eccfe3` (D4.5) and predates migrations `0005`–`0008`: it has no `audit_log.scope` / `audit_scope_consistent` (D21 global audit attribution), no D19 task-identity columns and no `ui_reader` grants (D29). Nothing detects the drift — `init_db.sh` regenerates the file locally, but CI runs it with `SKIP_SCHEMA_DUMP=1`, so the dump is never compared against the migrations it is supposed to mirror. Surfaced when a local `init_db.sh` run produced a 149-line diff against the committed file; kept out of the D31 commit as unrelated. The fix is either to refresh it and have CI fail on a difference, or to delete it and let the migrations be the single description. |
+| 5.10 | `db/schema.sql` no longer describes the schema the migrations build | **Closed at D33 — by deleting the file.** The committed dump was last written at `4eccfe3` (D4.5) and had fallen four migrations behind: no `audit_log.scope` / `audit_scope_consistent` (D21), no D19 task-identity columns, no `ui_reader` grants (D29). Nothing read it, nothing detected the drift (CI ran `init_db.sh` with `SKIP_SCHEMA_DUMP=1`), and its own header said it was reference-only. Deleted rather than refreshed: see below. |
+
+**5.10, and why deletion rather than a freshness check.** The two options were to
+regenerate the dump and make CI fail on any difference, or to remove it. Refreshing
+keeps a second description of the schema that has to be held equal to the first, and
+this stage's record is largely a list of what happens to two things that are supposed
+to agree: the approval record and the capability it authorized (D30), the acceptance
+claim and the test suite it described (D27/D28), the preview and the stored row (D29).
+Each was closed by making one derivation serve both readers, and the same move applies
+here with the second reader removed entirely: `db/migrations/` builds the schema, so it
+*is* the schema, and it cannot drift from itself. The dump's grants and `FORCE ROW LEVEL
+SECURITY` lines were never authoritative anyway — the migrations write them, which is why
+the file's own header called itself reference-only.
+
+What was removed with it: the dump block and the `SKIP_SCHEMA_DUMP` switch in
+`scripts/init_db.sh`, the `SKIP_SCHEMA_DUMP: '1'` line in the CI job that existed only to
+turn that block off, and the file's mentions in `README.md` and `ARCHITECTURE.md`'s tree,
+which now point at `db/migrations/`. No test referenced it; nothing reads it at runtime.
 
 **5.8, with the evidence it rests on.** The question was whether `web.get`
 should escalate when a target carries an AUTHORITATIVE *sensitive* class, as a

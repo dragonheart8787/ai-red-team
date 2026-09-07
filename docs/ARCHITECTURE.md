@@ -195,9 +195,10 @@ cyber-orch/
 │   ├── sandbox.py               # container exec wrapper（Docker SDK, namespace CIDR）
 │   └── adapters/                # nmap.py, nuclei.py, playwright.py, zap.py...
 ├── db/
-│   ├── migrations/               # alembic，migration_owner 角色跑（table owner）
-│   ├── roles.sql                 # cyberorch_app：NOSUPERUSER NOBYPASSRLS，非 table owner（見 §8.6）
-│   └── schema.sql                # 含每張 sensitive table 的 ENABLE + FORCE ROW LEVEL SECURITY
+│   ├── migrations/               # alembic，migration_owner 角色跑（table owner）；
+│   │                             # 每張 sensitive table 的 ENABLE + FORCE ROW LEVEL
+│   │                             # SECURITY 也在這裡，這是 schema 的唯一權威描述（D33）
+│   └── roles.sql                 # cyberorch_app：NOSUPERUSER NOBYPASSRLS，非 table owner（見 §8.6）
 ├── policy_tests/                 # rego unit tests（opa test），含 adversarial fixture（§10）
 └── tests/
     └── stateful/                 # Hypothesis RuleBasedStateMachine（§11）
