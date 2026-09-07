@@ -98,9 +98,14 @@ HTML
 mkdir -p "$STAGE/srv/www/backup"
 printf 'db_user=inventory\ndb_host=10.77.0.10\n' > "$STAGE/srv/www/backup/settings.txt"
 
+# --directory is passed explicitly rather than relying on WORKDIR alone. If the
+# working directory does not take effect on an imported scratch image, the
+# server silently serves / instead of /srv/www -- every request 404s and the
+# failure looks like a network problem rather than a wrong document root. Naming
+# the root on the command line makes it independent of the image config.
 tar -C "$STAGE" -c . \
   | docker import \
       --change 'WORKDIR /srv/www' \
-      --change 'CMD ["/usr/bin/python3", "-m", "http.server", "8080", "--bind", "0.0.0.0"]' \
+      --change 'CMD ["/usr/bin/python3", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/www"]' \
       - "$IMAGE" >/dev/null
 echo "built $IMAGE (python $PYVER)"

@@ -101,14 +101,28 @@ jobs:
           docker network create --internal --subnet 10.78.0.0/24 ci-web-check
           docker run -d --name ci-web-target --network ci-web-check --ip 10.78.0.10 \
             cyberorch/web-target:local
-          sleep 2
+          sleep 3
+
+          # Diagnostics first, unconditionally. The previous two failures of this
+          # step were blind: it tore the container down before printing anything,
+          # so a container that exited on startup and a container that served a
+          # 404 produced the same output -- nothing. The dev container has no
+          # Docker, so CI is the only place this can be observed at all.
+          echo "--- container state ---"
+          docker ps -a --filter name=ci-web-target \
+            --format '{{.Status}} | {{.Image}} | {{.Command}}'
+          echo "--- container stdout/stderr ---"
+          docker logs ci-web-target 2>&1 | head -20 || true
+
+          echo "--- fetch ---"
           docker run --rm --network ci-web-check cyberorch/nmap:local \
             /usr/bin/curl --silent --show-error --include --proto '=http' \
             --no-location --max-time 10 http://10.78.0.10:8080/index.html \
             > /tmp/web.log 2>&1 || true
+          head -5 /tmp/web.log
+
           docker rm -f ci-web-target
           docker network rm ci-web-check
-          head -1 /tmp/web.log
           grep -q "200 OK" /tmp/web.log || {
             echo "::error::the web target did not serve a 200 over the internal network"
             exit 1
