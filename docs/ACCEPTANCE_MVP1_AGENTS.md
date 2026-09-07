@@ -448,6 +448,12 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 | 5.8 | No middle state between "unknown" and "denied" for a **canonical sensitive class that is not on the deny list** | Open, and **general — not a web.get question**. Raised while deciding D32 and deliberately left out of it. |
 | 5.9 | A wildcard scope object authorizes but no capability can be issued against it | Open. The Authorization Resolver honours `web.*` / `network.*` patterns (§4.1.5); the Capability Broker checks the same `allowed_actions` by membership, so the run is refused with `scope_action_no_longer_allowed` for an authorization that was never withdrawn. Affects every namespace. Pinned by `test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against`. |
 
+### Found at D31 (CI cycle) — carried forward as a candidate
+
+| # | Item | Status |
+|---|---|---|
+| 5.10 | `db/schema.sql` no longer describes the schema the migrations build | Open, documentation integrity. The committed reference dump was last written at `4eccfe3` (D4.5) and predates migrations `0005`–`0008`: it has no `audit_log.scope` / `audit_scope_consistent` (D21 global audit attribution), no D19 task-identity columns and no `ui_reader` grants (D29). Nothing detects the drift — `init_db.sh` regenerates the file locally, but CI runs it with `SKIP_SCHEMA_DUMP=1`, so the dump is never compared against the migrations it is supposed to mirror. Surfaced when a local `init_db.sh` run produced a 149-line diff against the committed file; kept out of the D31 commit as unrelated. The fix is either to refresh it and have CI fail on a difference, or to delete it and let the migrations be the single description. |
+
 **5.8, with the evidence it rests on.** The question was whether `web.get`
 should escalate when a target carries an AUTHORITATIVE *sensitive* class, as a
 middle state between passive recon and `data.read`. Measuring the current
@@ -604,6 +610,27 @@ the property it names still holds.
    role, and one compared two values that a shared derivation made equal by
    construction, so both being wrong still agreed. Both were fixed. Neither
    would have been noticed by running them.
+
+4. **A verification that runs in the wrong environment proves nothing** (D31).
+   The web-target image is a scratch tree assembled from the host's own python.
+   After the first CI failure (a self-referential symlink that replaced the
+   staged interpreter with a 7-byte dangling link, which no build-time check
+   existed to catch), `build_web_target_image.sh` gained one: run the staged
+   interpreter and `import http.server`. It ran *on the build host*, where the
+   loader resolves out of `/lib` anything the staged tree is missing — so the
+   import succeeded at build time while the identical import died inside the
+   container, on `libz.so.1`. Re-checking it with `PYTHONHOME` pinned to the
+   staged tree, as the second fix did, still passed: `PYTHONHOME` selects which
+   stdlib is used, not which shared libraries are reachable. The check was not
+   weak, it was **asking a different question than the one that mattered**, and
+   it went on passing while the artifact it certified could not start. Fixed by
+   two checks that ask the container's question: a static pass asserting every
+   library every staged ELF needs is itself staged (on this repo's build host
+   the old staging omits thirteen — `libbz2`, `libssl`, `libsqlite3`, `libffi`
+   and the rest, all belonging to stdlib C extension modules that `ldd` on the
+   interpreter never mentions), and one `docker run --network none` against the
+   imported image. **A check of an artifact's self-containment has to run
+   somewhere that cannot supply the missing pieces.**
 
 The common defence is not more tests. It is asking, of any test that matters,
 *what would have to break for this to go red* — which is what mutation testing

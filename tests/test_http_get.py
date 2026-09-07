@@ -26,6 +26,7 @@ has verified nothing about isolation and looks exactly like success.
 from __future__ import annotations
 
 import subprocess
+import time
 import uuid
 
 import pytest
@@ -177,6 +178,45 @@ def sandbox():
     return box
 
 
+def _wait_until_serving(name, timeout_seconds=20.0):
+    """Block until the target's HTTP server has bound its socket.
+
+    ``docker run -d`` returns when the container has been created, not when the
+    process inside it is listening. Without this the first test to request the
+    fixture raced the interpreter's startup: CI failed the positive control with
+    ``no_answer`` while every later test against the same module-scoped
+    container passed, which reads like an intermittent boundary problem and is
+    not one.
+
+    The gate is the server's own startup line, deliberately not a successful
+    connection. Retrying ``probe_egress`` until it answers would make the
+    positive control assert a reachability it had already waited for -- the
+    check would pass by construction rather than by evidence.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        logs = subprocess.run(["docker", "logs", name],
+                              capture_output=True, text=True)
+        if "Serving HTTP" in logs.stdout + logs.stderr:
+            return
+        alive = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if alive != "true":
+            break
+        time.sleep(0.2)
+
+    logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    pytest.fail(
+        "the web target never started serving.\n"
+        f"--- container stdout ---\n{logs.stdout}\n"
+        f"--- container stderr ---\n{logs.stderr}",
+        pytrace=False,
+    )
+
+
 @pytest.fixture(scope="module")
 def web_target(sandbox):
     """A real HTTP server inside the allowlisted range, serving the lure page."""
@@ -194,6 +234,7 @@ def web_target(sandbox):
             "Build it with tool_gateway/images/build_web_target_image.sh.",
             pytrace=False,
         )
+    _wait_until_serving(name)
     yield TARGET_IP
     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
     sandbox.remove_network([ALLOWED_CIDR])
