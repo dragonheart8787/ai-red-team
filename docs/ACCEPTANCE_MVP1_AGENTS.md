@@ -441,6 +441,38 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 | D11-8 | The derived view drops the nmap VERSION column | Open, minor. Cosmetic loss in the derived view; evidence retains the raw. |
 | D11-9 | Nothing creates an engagement | Open, gap. Engagements are seeded by tests and harnesses; no operation creates one. A stage boundary, surfaced when the live runs each had to construct their own. |
 
+### Found at D32 — carried forward as candidates
+
+| # | Item | Status |
+|---|---|---|
+| 5.8 | No middle state between "unknown" and "denied" for a **canonical sensitive class that is not on the deny list** | Open, and **general — not a web.get question**. Raised while deciding D32 and deliberately left out of it. |
+| 5.9 | A wildcard scope object authorizes but no capability can be issued against it | Open. The Authorization Resolver honours `web.*` / `network.*` patterns (§4.1.5); the Capability Broker checks the same `allowed_actions` by membership, so the run is refused with `scope_action_no_longer_allowed` for an authorization that was never withdrawn. Affects every namespace. Pinned by `test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against`. |
+
+**5.8, with the evidence it rests on.** The question was whether `web.get`
+should escalate when a target carries an AUTHORITATIVE *sensitive* class, as a
+middle state between passive recon and `data.read`. Measuring the current
+policy showed the middle state cannot be a `web.get` rule:
+
+* **Deny dominance leaves almost nothing for it to catch.** A deny-listed
+  AUTHORITATIVE class is already `DENY` via `forbidden_data`, and §5's
+  precedence (`DENY > HUMAN_APPROVAL > ALLOW`) makes HUMAN_APPROVAL unreachable
+  for it. The only cases left are classes that are sensitive but *not*
+  deny-listed.
+* **Those cases are `ALLOW` for every action, not just `web.get`.** Measured:
+  a target classified AUTHORITATIVE with a non-deny-listed class returns ALLOW
+  for `web.get` *and* for `web.post`, which already lists a known classification
+  as a prerequisite. So a web.get-only rule would treat a GET more cautiously
+  than a POST on the same resource.
+* **`network.passive_identification` cannot serve as the precedent.** It
+  appears exactly once in the repository — one row of §5's table in
+  `ARCHITECTURE.md` — and is implemented nowhere: no Rego rule, no action
+  string, no Python. "Treat web.get like passive_identification" is therefore
+  the status quo, not an exemption that could be joined.
+
+The real gap is that the policy has no way to say "the customer declared this
+sensitive, and it is not forbidden, but a human should look". That is worth
+deciding once, across all actions, rather than per tool.
+
 ### Still open — the ones that need a decision before work starts
 
 These are the items where implementing anything first requires an architecture

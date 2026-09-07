@@ -284,6 +284,96 @@ test_unknown_classification_does_not_block_recon if {
 	r.decision == "ALLOW"
 }
 
+# §5 row 2, applied to a read (D32). web.get returns the resource's whole
+# document -- the thing data_class describes -- so it lists a known
+# classification as a prerequisite, unlike the banner-fragment recon above.
+web_get_base := object.union(base, {
+	"action": {"action": "web.get"},
+	"policy": {
+		"actions": {"web.get": "ALLOW"},
+		"scope_objects": [{
+			"id": "SCOPE-2",
+			"type": "cidr",
+			"value": "10.20.0.0/24",
+			"allowed_actions": ["network.recon", "network.scan", "web.get"],
+		}],
+	},
+})
+
+test_web_get_without_a_classification_needs_a_human if {
+	r := authz.result with input as object.union(web_get_base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [],
+	}})
+
+	r.decision == "HUMAN_APPROVAL"
+	"unknown_classification_for_action_class" in r.approval_reasons
+}
+
+# The measured cost of the rule above, pinned. web.get targets are ip/fqdn, and
+# those are the types the registry classifies in practice -- the D11 live target
+# carries AUTHORITATIVE network_service -- so the ordinary case still runs
+# unattended and the tool is not made unusable by the prerequisite.
+test_web_get_against_a_classified_host_still_runs_unattended if {
+	r := authz.result with input as web_get_base
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+# Deny still dominates: a denied class is refused outright rather than offered
+# to a human, exactly as it is for every other action.
+test_web_get_against_denied_data_is_denied_not_escalated if {
+	r := authz.result with input as object.union(web_get_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["PII"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "DENY"
+	"forbidden_data" in r.deny_reasons
+}
+
+# The precedence check the new prerequisite could have disturbed: when the
+# classification is unknown *and* an observation names a denied class, both a
+# deny reason and an approval reason are collected, and DENY must win.
+#
+# Mutation testing found this is guarded twice, which is worth recording so the
+# result is not misread. Weakening only the explicit rule -- adding
+# `count(approval_reasons) == 0` to the DENY branch -- leaves this test green,
+# because no branch then matches and `default decision := "DENY"` catches it.
+# Flipping the explicit rule *and* the default together turns it red. So the
+# test does hold the property; the surviving single mutant is the fail-closed
+# default doing its job, not a gap.
+test_web_get_deny_dominates_when_both_reasons_are_present if {
+	r := authz.result with input as object.union(web_get_base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [{"authority": "OBSERVED", "source": "banner", "data_class": ["PII"]}],
+	}})
+
+	r.decision == "DENY"
+	"forbidden_data_observed" in r.deny_reasons
+	"unknown_classification_for_action_class" in r.approval_reasons
+}
+
+# Adding web.get must not widen the namespace: a scan of an unclassified host
+# is still unattended recon, which is the distinction §5's table draws.
+test_adding_web_get_did_not_make_recon_require_a_classification if {
+	r := authz.result with input as object.union(base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [],
+	}})
+
+	r.decision == "ALLOW"
+}
+
 test_unknown_classification_blocks_actions_that_write if {
 	r := authz.result with input as object.union(base, {
 		"action": {"writes_data": true},

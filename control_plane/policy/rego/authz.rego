@@ -121,9 +121,25 @@ observed_data_class contains class if {
 # unknown can never satisfy a prerequisite, and prerequisites are defined per
 # action class. Actions that touch content need a known data_class before they
 # run. Actions that exist to discover classification do not.
+#
+# web.get joined the list at D32, and it is the first *read* here rather than a
+# mutation. §5's table splits on "任何會實際觸碰內容的 action" -- anything that
+# actually touches content -- not on whether the target is modified. A GET
+# returns the resource's whole document, which is the thing data_class
+# describes; an Nmap banner is a fragment incidental to identifying a service,
+# which is why network.scan stays out. D31 put it plainly from the other side:
+# a fetched body is the first evidence that is a whole document the target
+# chose to serve.
+#
+# The cost of adding it was measured before it was added, because the failure
+# mode to avoid was making the tool unusable. web.get targets are ip/fqdn (the
+# adapter takes a host and builds the URL; it never produces a url-typed
+# identity), and those are exactly the types the registry classifies in
+# practice -- so a classified host still ALLOWs, and D25's inheritance means one
+# AUTHORITATIVE cidr row covers every host inside it.
 
 requires_known_classification if {
-	some pattern in {"data.*", "web.post", "web.put", "web.delete"}
+	some pattern in {"data.*", "web.get", "web.post", "web.put", "web.delete"}
 	pattern_matches(pattern, input.action.action)
 }
 

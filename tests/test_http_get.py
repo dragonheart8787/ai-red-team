@@ -507,3 +507,134 @@ def test_the_flags_are_a_property_of_the_tool_not_a_claim():
         flag in plan.command
         for flag in ("--data", "--data-raw", "--form", "-d", "-F", "--upload-file", "-T")
     )
+
+
+# ---------------------------------------------------------------------------
+# D32 — web.get lists a known classification as a prerequisite (§5 row 2)
+# ---------------------------------------------------------------------------
+
+def _web_get_decision(engagement_id, registry, *, data_class, register):
+    """Run one web.get proposal through OPA with a given classification state."""
+    from agents.base_agent import ProposedAction
+    from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
+    from control_plane.api.function_api import propose_action
+    from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
+    from control_plane.state.db import engagement_scope
+
+    scope_id = f"SCOPE-{engagement_id[-10:]}"
+    # Explicit "web.get" rather than the "web.*" pattern §4.1.5 also allows.
+    # Both authorize at the resolver, but only the explicit form survives the
+    # broker, which matches allowed_actions by membership -- see
+    # test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against.
+    # Using the wildcard here would make these tests fail on that unrelated
+    # defect instead of on the classification rule they exist to check.
+    registry.scope(scope_object_id=scope_id, type="cidr", value=ALLOWED_CIDR,
+                   allowed_actions=["web.get"])
+    if register:
+        # Exactly the shape scripts/live_run/live_run.py and d13_worker.py use:
+        # an AUTHORITATIVE row on the *ip*, resource_class network_host,
+        # data_class network_service.
+        registry.metadata(asset_id=f"ASSET-{uuid.uuid4().hex[:8]}",
+                          identity_type="ip", identity_value=TARGET_IP,
+                          authority="AUTHORITATIVE", source="operator_declared",
+                          resource_class=["network_host"], data_class=data_class)
+
+    policy = merge_policy(
+        PolicyLayer(name="baseline_global", data_deny=frozenset({"PII"}),
+                    actions={"web.get": ALLOW}),
+        PolicyLayer(name="emergency_overlay"), PolicyLayer(name="customer"),
+        PolicyLayer(name="engagement"),
+    )
+    proposal = ProposedAction(
+        action="web.get",
+        target={"logical_identity": {"type": "ip", "value": TARGET_IP},
+                "port": TARGET_PORT, "path": "/index.html"},
+        authorization={"source": "engagement_scope", "scope_object_id": scope_id},
+        discovery={"source": "explicit_scope"},
+        writes_data=False, changes_state=False,
+    )
+
+    class _NoSandbox:
+        def run(self, **kwargs):
+            raise SandboxUnavailable("dispatch is not what this test measures")
+
+    with engagement_scope(engagement_id) as conn:
+        return propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
+            sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
+        )
+
+
+def test_a_get_against_an_unclassified_host_needs_a_human(engagement_id, registry):
+    """§5: unknown cannot satisfy the prerequisite a content-touching read has.
+
+    Before D32 this was ALLOW. A GET returns the resource's whole document, so
+    "cannot confirm it is not sensitive" has to mean a human looks first --
+    the same answer data.read has always had.
+    """
+    outcome = _web_get_decision(engagement_id, registry,
+                                data_class=[], register=False)
+    assert outcome.decision == "HUMAN_APPROVAL"
+    assert "unknown_classification_for_action_class" in outcome.approval_reasons
+
+
+def test_the_d11_live_target_classification_still_runs_unattended(
+    engagement_id, registry
+):
+    """The measured cost of D32, against the real live-run shape.
+
+    scripts/live_run/live_run.py and d13_worker.py both register an
+    AUTHORITATIVE row on the target ip with data_class ["network_service"].
+    That is known and not deny-listed, so those cases keep their ALLOW and the
+    existing live-run scripts need no change -- which is the whole reason this
+    rule was affordable to add.
+    """
+    outcome = _web_get_decision(engagement_id, registry,
+                                data_class=["network_service"], register=True)
+    assert outcome.decision == "ALLOW"
+    assert outcome.approval_reasons == ()
+
+
+def test_a_get_against_denied_data_is_still_denied(engagement_id, registry):
+    """Deny dominance survives the new prerequisite (§5 precedence)."""
+    outcome = _web_get_decision(engagement_id, registry,
+                                data_class=["PII"], register=True)
+    assert outcome.decision == "DENY"
+    assert "forbidden_data" in outcome.deny_reasons
+
+
+def test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against():
+    """A pre-existing resolver/broker disagreement, pinned rather than fixed.
+
+    §4.1.5 supports patterns like ``web.*`` in a scope object's
+    ``allowed_actions``, and the Authorization Resolver honours them --
+    ``action_matches`` does the namespace-boundary match. The Capability Broker
+    then checks the same list by **membership**, deliberately:
+
+        Membership, not pattern matching. Narrowing allowed_actions after issue
+        is a withdrawal of exactly this capability's authorization; the wildcard
+        semantics that decided the original grant live in the resolver.
+
+    The reasoning is sound for its own case (a *narrowing* after issue), but the
+    consequence is that a scope object written only as ``web.*`` passes
+    authorization and can never have a capability issued against it: the run is
+    refused with ``scope_action_no_longer_allowed`` for an authorization that was
+    never withdrawn. It affects every namespace, not just web -- ``network.*``
+    behaves identically.
+
+    Surfaced by D32 and left alone: it is a broker/resolver semantics question
+    predating this deliverable, and every existing test writes explicit action
+    lists, which is why nothing had reached it. Pinned so the report of it does
+    not quietly stop being true, and so whoever resolves it has to change a test
+    on purpose.
+    """
+    from control_plane.canonicalizer.authorization import action_matches
+
+    for action, allowed in (("web.get", ["web.*"]), ("network.scan", ["network.*"])):
+        assert action_matches(action, allowed) is True, "the resolver authorizes"
+        assert action not in allowed, "and the broker's membership test refuses"
+
+    # The explicit form is the one that works end to end today.
+    assert action_matches("web.get", ["web.get"]) is True
+    assert "web.get" in ["web.get"]
