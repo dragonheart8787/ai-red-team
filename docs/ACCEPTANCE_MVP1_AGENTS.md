@@ -632,6 +632,18 @@ the property it names still holds.
    imported image. **A check of an artifact's self-containment has to run
    somewhere that cannot supply the missing pieces.**
 
+   It then happened once more, inside the fix. The test fixture waited for the
+   server's startup line in `docker logs`, and CI showed the container `Up 3
+   seconds`, serving `HTTP/1.0 200 OK`, with an empty log — python
+   block-buffers stdout when it is a pipe rather than a terminal. The local
+   experiment run to test that explanation appeared to *disprove* it, because
+   this repository's dev container exports `PYTHONUNBUFFERED=1` and the
+   subprocess inherited it. The environment had silently supplied the missing
+   piece a second time, in the act of investigating the first. The image now
+   passes `-u`; the general defence is to name what the target environment
+   lacks and take it away explicitly (`env -u`, `--network none`, an empty
+   environment) rather than trusting that the development machine resembles it.
+
 The common defence is not more tests. It is asking, of any test that matters,
 *what would have to break for this to go red* — which is what mutation testing
 answers mechanically, and what D9's `event()` instrumentation answers for

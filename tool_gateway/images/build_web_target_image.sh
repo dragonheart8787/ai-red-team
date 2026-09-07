@@ -152,6 +152,12 @@ HTML
 mkdir -p "$STAGE/srv/www/backup"
 printf 'db_user=inventory\ndb_host=10.77.0.10\n' > "$STAGE/srv/www/backup/settings.txt"
 
+# -u because the readiness gate reads the server's startup line out of
+# `docker logs`. Python block-buffers stdout when it is a pipe rather than a
+# terminal, so "Serving HTTP on 0.0.0.0 port 8080" sits in the interpreter's
+# buffer indefinitely: the container is serving and its log is empty. The test
+# fixture waited twenty seconds for a line that was never going to be flushed.
+#
 # --directory is passed explicitly rather than relying on WORKDIR alone. If the
 # working directory does not take effect on an imported scratch image, the
 # server silently serves / instead of /srv/www -- every request 404s and the
@@ -160,7 +166,7 @@ printf 'db_user=inventory\ndb_host=10.77.0.10\n' > "$STAGE/srv/www/backup/settin
 tar -C "$STAGE" -c . \
   | docker import \
       --change 'WORKDIR /srv/www' \
-      --change 'CMD ["/usr/bin/python3", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/www"]' \
+      --change 'CMD ["/usr/bin/python3", "-u", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/www"]' \
       - "$IMAGE" >/dev/null
 
 # The only check that runs where the container runs. Everything above inspects
