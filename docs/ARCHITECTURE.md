@@ -191,9 +191,13 @@ cyber-orch/
 │   ├── policy_reviewer.py
 │   └── evidence_verifier.py
 ├── tool_gateway/
-│   ├── registry.py              # tool capability/budget schema per tool（§4.6）
-│   ├── sandbox.py               # container exec wrapper（Docker SDK, namespace CIDR）
-│   └── adapters/                # nmap.py, nuclei.py, playwright.py, zap.py...
+│   ├── registry.py              # action→adapter、tool capability/budget schema（§4.6）；
+│   │                             # side-effect profile 也從這裡查（D34）
+│   ├── sandbox.py               # container exec wrapper（Docker SDK, namespace CIDR
+│   │                             # + D34 的 tool-side/target-side 雙網路拓樸）
+│   ├── egress_proxy.py          # policy-aware egress proxy（§8.3，D34 建立，HTTP only）
+│   └── adapters/                # http_get.py, http_post.py, nmap.py,
+│                                 # playwright.py, zap.py...
 ├── db/
 │   ├── migrations/               # alembic，migration_owner 角色跑（table owner）；
 │   │                             # 每張 sensitive table 的 ENABLE + FORCE ROW LEVEL
@@ -712,6 +716,18 @@ HTTP/S 流量  → Tool Container → Policy-aware Egress Proxy（知道 engagem
 Raw TCP/UDP  → Tool Container → Network Namespace，出口綁定 explicit CIDR allowlist（不透過 hostname resolve）
 ```
 Egress Proxy 對 HTTP(S) 可行，因為協議本身有 Host header 可以核對；但對 Playwright/ZAP 這類需要執行 JS、處理 WebSocket、可能撞到 cert pinning 的工具，做 application-aware proxy 的工程成本不小，**MVP-0 階段不需要做這層**——只用 Nuclei/Nmap 對 IP/CIDR scope 的話，直接用 network namespace + CIDR allowlist 就夠，Egress Proxy 排進 Phase 2（加入 Web Agent 時）再做。
+
+**實作狀態（D34）。** 上面那條 HTTP 路徑已經建立：`tool_gateway/egress_proxy.py`
+逐請求核對 hostname / port / method / 次數，跑在自己的容器裡，跨接兩段 internal
+network——工具側只看得到 proxy，目標側才有目標。所以「工具繞過 proxy 直連目標」
+不是被過濾掉而是**沒有路由**，kernel 回 ENETUNREACH，跟 D6 建立 CIDR allowlist
+時用的是同一個事實。拒絕的證據不看 proxy 自己的日誌，而是看目標自己的 access
+log 裡沒有那筆請求。
+
+這一層目前**只做 plain HTTP**：CONNECT 明確拒絕並說明原因。原因就是上面那句話的
+反面——method、path、Host 都在 TLS 裡面看不到，只核對 SNI 的話就退化成「相信工具
+自己宣稱要連哪裡」，那正是 D31 立下「用 kernel 而不是用工具的回報當證據」這條規則
+要擋的形狀。TLS termination 是 D35，Playwright 是 D36。
 
 ### 8.4 Policy Bypass
 最大風險不是 OPA 被繞過（那是 code review 可以抓的），而是 **Policy Reviewer AI 把危險 action 錯誤分類成低風險**（misclassification）。緩解方式：

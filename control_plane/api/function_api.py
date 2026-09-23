@@ -72,6 +72,7 @@ from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
 from control_plane.registry.scope_registry import list_scope_objects
+from tool_gateway.registry import side_effect_floor
 
 ALLOW = "ALLOW"
 DENY = "DENY"
@@ -347,6 +348,11 @@ def propose_action(
     # The same object then goes to the broker, so what OPA judged and what was
     # issued cannot come apart.
     requested_budget = budget or Budget(max_duration_seconds=120)
+    side_effects = side_effect_floor(
+        action=proposal.action,
+        writes_data=proposal.writes_data,
+        changes_state=proposal.changes_state,
+    )
     policy_input = build_policy_input(
         target=target, action=proposal.action, authorization=authorization,
         metadata=metadata, policy=policy,
@@ -357,8 +363,27 @@ def propose_action(
         risk_hint=opinion.risk_hint,
         possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,
         discovery=proposal.discovery,
-        writes_data=proposal.writes_data,
-        changes_state=proposal.changes_state,
+        # The Worker's claim, floored by what the action's tool actually does
+        # (D34). Before this, worker_base's own docstring was the whole story:
+        # "they are the Worker's description of its own action, they drive
+        # requires_known_classification, and nothing checks them against what
+        # the tool will really do." A Worker proposing web.post with
+        # writes_data=False therefore skipped §5's prerequisite for an action
+        # that writes to the target.
+        #
+        # D31 had an answer for web.get that D34 ended: the flags were
+        # trustworthy because the adapter was structurally incapable of
+        # emitting anything with side effects. Adding web.post makes something
+        # in web.* capable, so the authority moved to the action -- fixed here,
+        # before the decision, and read back off the issued capability at
+        # dispatch, with no parameter on either path that could carry a
+        # different value.
+        #
+        # The floor only raises. A Worker claiming True for a web.get keeps its
+        # caution; lowering it would be the system overriding an agent's
+        # caution with its own optimism, the one direction I6c forbids.
+        writes_data=side_effects.writes_data,
+        changes_state=side_effects.changes_state,
         capability_request=requested_budget.as_dict(),
     )
     decision = evaluate(policy_input)

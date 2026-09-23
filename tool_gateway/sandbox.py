@@ -2,9 +2,25 @@
 
 §8.3 splits egress enforcement by protocol. HTTP goes through a policy-aware
 egress proxy that can check Host headers per request; raw TCP/UDP goes through
-a network namespace whose egress is bound to an explicit CIDR allowlist. Only
-the second is in scope here — the egress proxy is explicitly deferred (§10),
-and Nmap needs the namespace path anyway.
+a network namespace whose egress is bound to an explicit CIDR allowlist. D6
+built the second; D34 added the first, and both live here because both are
+realized the same way — by what routes exist in a namespace.
+
+**The two-network topology (D34).** A web.* run no longer puts the tool on the
+network its targets are on. Two internal networks are created instead:
+
+    tool container ──[ tool-side network ]── egress proxy ──[ target-side ]── target
+
+The proxy is the only thing on both. The tool container's namespace therefore
+holds a route to the proxy and to nothing else, so a tool that ignored its
+``--proxy`` flag and addressed the target directly gets ENETUNREACH from the
+kernel — the same fact ``probe_egress`` already knows how to establish, reused
+rather than reasoned about again. That is the kernel-level half of D34's
+evidence; the other half is the target's own access log, which is outside the
+proxy's control and is where a refusal is actually proven.
+
+Nmap keeps the single-network path: §8.3 routes raw TCP through the namespace
+precisely because there is no application protocol for a proxy to read.
 
 The allowlist is a list of CIDRs, never a hostname. §8.3 rejected the
 "resolve the hostname, then write an iptables rule for the address" design
@@ -68,9 +84,11 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
+import socket
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,6 +100,12 @@ except ImportError:  # pragma: no cover
     DockerException = ImageNotFound = NotFound = Exception
 
 DEFAULT_IMAGE = "cyberorch/nmap:local"
+
+#: Image for the policy-aware egress proxy (§8.3, D34).
+PROXY_IMAGE = "cyberorch/egress-proxy:local"
+
+#: Port the proxy listens on inside its container.
+PROXY_PORT = 3128
 
 
 class SandboxUnavailable(RuntimeError):
@@ -153,6 +177,17 @@ def target_within_allowlist(target: str, allowlist: Sequence[str]) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class ProxyEndpoint:
+    """A running egress proxy, and the two networks it bridges (D34)."""
+
+    container_id: str
+    name: str
+    url: str
+    tool_side: tuple[str, ...]
+    target_side: tuple[str, ...]
+
+
 @dataclass
 class DockerSandbox:
     """Runs one command in a network-confined container."""
@@ -219,6 +254,117 @@ class DockerSandbox:
                 self.network_name(validate_allowlist(allowlist))
             ).remove()
         except (DockerException, NotFound, ValueError):
+            pass
+
+    def start_egress_proxy(
+        self, *, grant: Mapping[str, Any], tool_side: Sequence[str],
+        target_side: Sequence[str], run_id: str | None = None,
+    ) -> ProxyEndpoint:
+        """Start the proxy bridging the tool-side and target-side networks.
+
+        The grant is passed as one JSON argument at start time and cannot be
+        changed afterwards: the proxy's life is one capability's life. There is
+        no control socket, no reload, and no flag that widens it — a proxy that
+        could be reconfigured while running would be a second place where
+        authorization is decided, and §8.3 puts that decision upstream.
+
+        The tool-side network is the *only* one the tool container joins, so
+        the proxy is the only address it can reach. That is what makes the
+        kernel the witness for "the tool cannot go around the proxy": the
+        route is absent, not filtered.
+        """
+        tool_side = validate_allowlist(tool_side)
+        target_side = validate_allowlist(target_side)
+        if set(tool_side) & set(target_side):
+            raise ValueError(
+                "the tool-side and target-side networks must be different "
+                "ranges; sharing one would put the tool back on the target's "
+                "network and leave the proxy advisory"
+            )
+
+        client = self.client()
+        try:
+            client.images.get(PROXY_IMAGE)
+        except ImageNotFound as exc:
+            raise SandboxUnavailable(
+                f"image {PROXY_IMAGE!r} is not present. Build it with "
+                "tool_gateway/images/build_egress_proxy_image.sh"
+            ) from exc
+
+        tool_network = self.ensure_network(tool_side)
+        target_network = self.ensure_network(target_side)
+        name = f"cyberorch-egress-{run_id or uuid.uuid4().hex[:12]}"
+
+        container = client.containers.create(
+            image=PROXY_IMAGE,
+            command=[
+                "/usr/bin/python3", "-u", "/opt/egress_proxy.py",
+                "--grant", json.dumps(grant, sort_keys=True),
+                "--bind", "0.0.0.0", "--port", str(PROXY_PORT),
+            ],
+            name=name,
+            network=tool_network.name,
+            # The proxy is confined exactly as the tool is. It holds no
+            # credential and owns no decision the control plane did not
+            # already make, so there is nothing it needs that the tool does
+            # not, and a privileged proxy would be a way around the boundary
+            # it exists to enforce.
+            cap_drop=["ALL"],
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            read_only=True,
+            mem_limit=self.memory_limit,
+            pids_limit=self.pids_limit,
+            labels={"cyberorch.egress_proxy": "1",
+                    "cyberorch.run_id": run_id or ""},
+        )
+        try:
+            target_network.connect(container)
+            container.start()
+            container.reload()
+            networks = container.attrs["NetworkSettings"]["Networks"]
+            address = networks[tool_network.name]["IPAddress"]
+        except Exception:
+            try:
+                container.remove(force=True)
+            except (DockerException, NotFound):
+                pass
+            raise
+
+        if not address:
+            try:
+                container.remove(force=True)
+            except (DockerException, NotFound):
+                pass
+            raise SandboxUnavailable(
+                "the egress proxy has no address on the tool-side network"
+            )
+
+        return ProxyEndpoint(
+            container_id=container.id, name=name,
+            url=f"http://{address}:{PROXY_PORT}",
+            tool_side=tool_side, target_side=target_side,
+        )
+
+    def proxy_logs(self, endpoint: ProxyEndpoint) -> str:
+        """The proxy container's output.
+
+        Provided for operators and for diagnosing a failing run. Deliberately
+        *not* what any test asserts a refusal with: a proxy reporting that it
+        refused something is a proxy reporting on itself. The refusal is proven
+        with the target's log, where the request is absent.
+        """
+        try:
+            container = self.client().containers.get(endpoint.container_id)
+            return container.logs(stdout=True, stderr=True).decode(errors="replace")
+        except (DockerException, NotFound):
+            return ""
+
+    def stop_egress_proxy(self, endpoint: ProxyEndpoint) -> None:
+        """Remove the proxy container. The networks outlive it by design."""
+        try:
+            self.client().containers.get(endpoint.container_id).remove(force=True)
+        except (DockerException, NotFound):
             pass
 
     def probe_egress(
@@ -288,12 +434,21 @@ class DockerSandbox:
         network_allowlist: Sequence[str],
         max_duration_seconds: int,
         run_id: str | None = None,
+        stdin: str | None = None,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
 
         ``max_duration_seconds`` is enforced by killing the container, not by
         asking the tool to stop. A budget the tool could ignore is a number in
         a database, not a limit.
+
+        ``stdin`` feeds a request body to the tool without it appearing in
+        argv (D34). web.post needs this: a body on the command line is visible
+        in the process table and in the ``tool_run.started`` audit payload,
+        argv has a length limit a legitimate body can exceed, and curl's
+        ``--data-binary @<value>`` reads a *file* unless the value is exactly
+        ``-``. Feeding stdin lets the sigil stay fixed at ``@-``, so no body
+        value can ever name a path.
         """
         allowlist = validate_allowlist(network_allowlist)
         self.ensure_image()
@@ -309,6 +464,9 @@ class DockerSandbox:
                 image=self.image,
                 command=list(command),
                 network=network.name,
+                # Only opened when there is something to write. A container
+                # with an open stdin nobody closes is a container waiting.
+                stdin_open=stdin is not None,
                 # The tool must not be able to widen its own confinement.
                 cap_drop=["ALL"],
                 privileged=False,
@@ -318,7 +476,28 @@ class DockerSandbox:
                 pids_limit=self.pids_limit,
                 labels={"cyberorch.run_id": run_id},
             )
+            # Attached before start, not after: a container that runs to
+            # completion between start() and attach() leaves the write with
+            # nowhere to go, and the tool waits on a stdin that never closes
+            # until the sandbox kills it.
+            payload_socket = None
+            if stdin is not None:
+                payload_socket = container.attach_socket(
+                    params={"stdin": 1, "stream": 1}
+                )
+
             container.start()
+
+            if payload_socket is not None:
+                raw = payload_socket._sock  # noqa: SLF001 - the SDK exposes no other handle
+                try:
+                    raw.sendall(stdin.encode("utf-8", "surrogatepass"))
+                    # Without the shutdown the tool blocks reading a stdin that
+                    # is never going to end, and the run dies on its deadline
+                    # looking like a slow target.
+                    raw.shutdown(socket.SHUT_WR)
+                finally:
+                    payload_socket.close()
 
             timed_out = False
             try:

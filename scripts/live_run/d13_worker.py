@@ -171,9 +171,12 @@ def collect_scan_evidence(*, engagement_id: str, scope_object_id: str,
 def fetch_page(target_ip: str, network: str) -> str:
     """Fetch the target's index page from inside the allowlisted network.
 
-    Not the Tool Gateway. See the module docstring: MVP-Kernel has no HTTP tool
-    and §8.3's egress proxy is deferred, so this is the harness collecting real
-    content over a path production does not have.
+    Not the Tool Gateway. See the module docstring: at D13 MVP-Kernel had no
+    HTTP tool and §8.3's egress proxy did not exist, so this is the harness
+    collecting real content over a path production did not have. Both have
+    since been built (D31, D34) and this script has deliberately not been
+    rewritten onto them: it is the record of an experiment that ran, and
+    re-pointing it at today's code would change what its results describe.
     """
     code = (
         "import urllib.request,sys;"

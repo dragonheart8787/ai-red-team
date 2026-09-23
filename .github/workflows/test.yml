@@ -76,6 +76,14 @@ jobs:
         # nothing about the new data path.
         run: ./tool_gateway/images/build_web_target_image.sh
 
+      - name: Build the egress proxy image
+        # D34's proxy runs in a container of its own, bridging the tool-side
+        # and target-side networks. Built here for the same reason as the two
+        # above: without it the topology tests fail rather than skip, because a
+        # test that never started a proxy has shown nothing about whether the
+        # tool can go around one.
+        run: ./tool_gateway/images/build_egress_proxy_image.sh
+
       - name: Verify Docker can enforce the network boundary
         # Checked explicitly and early so a runner without usable Docker
         # networking reports that, rather than surfacing as a wall of
@@ -128,6 +136,73 @@ jobs:
             exit 1
           }
           echo "the web target served a real response inside the allowlist"
+
+      - name: Verify the proxy is the only way to the target
+        # D34's two claims, checked at the workflow level for the same reason
+        # D31's were: if either is broken, every test in test_egress_proxy.py
+        # fails in a way that looks like a container problem.
+        #
+        # The kernel half and the independent-witness half, in that order.
+        run: |
+          docker network create --internal --subnet 10.78.0.0/24 ci-target-side
+          docker network create --internal --subnet 10.81.0.0/24 ci-tool-side
+          docker run -d --name ci-web-target --network ci-target-side \
+            --ip 10.78.0.10 cyberorch/web-target:local
+          sleep 3
+
+          docker run -d --name ci-egress --network ci-tool-side \
+            cyberorch/egress-proxy:local \
+            --grant '{"capability_id":"CAP-CI","host":"10.78.0.10","port":8080,"methods":["GET"],"max_requests":5}' \
+            --bind 0.0.0.0 --port 3128
+          docker network connect ci-target-side ci-egress
+          sleep 2
+          PROXY_IP="$(docker inspect -f \
+            '{{(index .NetworkSettings.Networks "ci-tool-side").IPAddress}}' ci-egress)"
+          echo "--- proxy at $PROXY_IP ---"
+          docker logs ci-egress 2>&1 | head -5 || true
+
+          # 1. The kernel: from the tool side there is no route to the target.
+          docker run --rm --network ci-tool-side cyberorch/nmap:local \
+            /usr/bin/ncat -w 2 -v 10.78.0.10 8080 2>&1 | tee /tmp/direct.log || true
+
+          # 2. Through the proxy, an authorized request arrives.
+          docker run --rm --network ci-tool-side cyberorch/nmap:local \
+            /usr/bin/curl --silent --show-error --include --proto '=http' \
+            --proxy "http://$PROXY_IP:3128" --max-time 10 \
+            http://10.78.0.10:8080/index.html > /tmp/allowed.log 2>&1 || true
+
+          # 3. A refused request, with a marker the target would have to log.
+          docker run --rm --network ci-tool-side cyberorch/nmap:local \
+            /usr/bin/curl --silent --show-error --include --proto '=http' \
+            --proxy "http://$PROXY_IP:3128" --max-time 10 \
+            http://198.51.100.23:8080/ci-never-arrives > /tmp/refused.log 2>&1 || true
+
+          echo "--- target access log ---"
+          docker logs ci-web-target 2>&1 | tail -20 || true
+          docker logs ci-web-target > /tmp/target.log 2>&1 || true
+
+          docker rm -f ci-web-target ci-egress
+          docker network rm ci-tool-side ci-target-side
+
+          grep -q "Network is unreachable" /tmp/direct.log || {
+            echo "::error::the tool side has a route to the target; the proxy is advisory"
+            exit 1
+          }
+          grep -q "200 OK" /tmp/allowed.log || {
+            echo "::error::an authorized request did not reach the target through the proxy"
+            exit 1
+          }
+          grep -q "403" /tmp/refused.log || {
+            echo "::error::the proxy did not refuse an off-capability host"
+            exit 1
+          }
+          # The witness: the target, which knows nothing about a proxy, never
+          # logged the refused path.
+          if grep -q "ci-never-arrives" /tmp/target.log; then
+            echo "::error::the target logged a request the proxy was to refuse"
+            exit 1
+          fi
+          echo "kernel: no route around the proxy; target: refused request never arrived"
 
       - name: Install Python dependencies
         run: make setup PYTHON=python
