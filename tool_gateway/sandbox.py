@@ -297,8 +297,14 @@ class DockerSandbox:
 
         container = client.containers.create(
             image=PROXY_IMAGE,
+            # Arguments only. The image sets an ENTRYPOINT of
+            # ["/usr/bin/python3", "-u", "/opt/egress_proxy.py"], so `command`
+            # is *appended* to it rather than replacing it -- passing the
+            # interpreter and script again put them in the proxy's own argv,
+            # argparse refused them, and the container exited before binding.
+            # The tests then reported an unreachable proxy, which is a true
+            # statement about the wrong thing.
             command=[
-                "/usr/bin/python3", "-u", "/opt/egress_proxy.py",
                 "--grant", json.dumps(grant, sort_keys=True),
                 "--bind", "0.0.0.0", "--port", str(PROXY_PORT),
             ],
@@ -340,10 +346,46 @@ class DockerSandbox:
                 "the egress proxy has no address on the tool-side network"
             )
 
+        self._wait_until_listening(container)
+
         return ProxyEndpoint(
             container_id=container.id, name=name,
             url=f"http://{address}:{PROXY_PORT}",
             tool_side=tool_side, target_side=target_side,
+        )
+
+    @staticmethod
+    def _wait_until_listening(container, timeout_seconds: float = 15.0) -> None:
+        """Block until the proxy says it has bound its socket.
+
+        ``start()`` returns when the container is created, not when the process
+        inside it is listening, so without this the first request races the
+        interpreter and the caller sees a connection refused. D31 learned this
+        with the web target; the same gate is applied here rather than
+        rediscovered.
+
+        More importantly it makes a proxy that *never* starts report itself as
+        that, with its own output attached. The alternative was what CI showed:
+        four tests failing with "no_answer", which is a true statement about
+        an unreachable address and says nothing about why.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+            if "egress proxy listening" in logs:
+                return
+            container.reload()
+            if container.status != "running":
+                break
+            time.sleep(0.2)
+
+        logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+        try:
+            container.remove(force=True)
+        except (DockerException, NotFound):
+            pass
+        raise SandboxUnavailable(
+            "the egress proxy never started listening. Its output was:\n" + logs
         )
 
     def proxy_logs(self, endpoint: ProxyEndpoint) -> str:
