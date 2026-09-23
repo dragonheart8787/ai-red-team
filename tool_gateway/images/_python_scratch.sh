@@ -137,10 +137,18 @@ scratch_verify_stage() {
 scratch_verify_image() {
     local image="$1"
     shift
+    # --entrypoint, because one of these images has one.
+    #
+    # Without it the arguments are *appended* to the image's ENTRYPOINT rather
+    # than replacing it, so the proxy image ran its own proxy script with
+    # "-c import http.server" as argv and argparse refused the missing
+    # --grant. The check then reported "cannot import http.server", which was
+    # not true and pointed at the wrong file entirely. A verification step that
+    # can report the wrong cause is worth one flag.
     local module
     for module in "$@"; do
-        docker run --rm --network none "$image" \
-            /usr/bin/python3 -c "import $module" || {
+        docker run --rm --network none --entrypoint /usr/bin/python3 "$image" \
+            -c "import $module" || {
             echo "error: $image cannot import $module inside the container" >&2
             return 1
         }
