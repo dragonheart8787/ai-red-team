@@ -40,7 +40,7 @@ from tool_gateway.egress_proxy import (
     METHOD_NOT_AUTHORIZED,
     NOT_ABSOLUTE_FORM,
     PORT_NOT_AUTHORIZED,
-    TLS_NOT_SUPPORTED,
+    TLS_NO_MATERIAL,
     Grant,
     LocalBudget,
     PolicyProxy,
@@ -231,22 +231,23 @@ def test_an_origin_form_request_is_refused_rather_than_guessed_at(target):
     assert target.served == []
 
 
-def test_connect_is_refused_with_the_reason_named(target):
-    """TLS is D35, and the refusal says so (D34 scope decision).
+def test_connect_is_refused_when_the_proxy_has_no_leaf(target):
+    """An HTTP-only proxy cannot inspect a tunnel, so it refuses CONNECT.
 
-    The requirement this satisfies: a silent limitation becomes an explicit
-    boundary. A generic connection failure here would read as "the target is
-    down" and send a Worker into retries against a wall.
+    D34's honest answer, kept for the case where no TLS material was provided:
+    a generic connection failure would read as "the target is down" and send a
+    Worker into retries against a wall. The reason is named instead. When a
+    leaf *is* provided the TLS section below shows CONNECT is terminated, not
+    refused.
     """
-    with make_proxy(target) as proxy:
+    with make_proxy(target) as proxy:  # make_proxy builds an HTTP-only proxy
         status, refusal, body = via_proxy(
             proxy, "CONNECT", f"127.0.0.1:{target.port}"
         )
     assert status == 501
-    assert refusal == TLS_NOT_SUPPORTED
+    assert refusal == TLS_NO_MATERIAL
     detail = json.loads(body)["detail"]
-    assert "TLS session" in detail
-    assert "D35" in detail
+    assert "TLS" in detail
     assert target.served == []
 
 
@@ -411,6 +412,292 @@ def test_a_capability_with_no_host_cannot_produce_a_grant():
 
     with pytest.raises(ValueError, match="names no host"):
         grant_from_capability(_Capability(), methods=["GET"])
+
+
+# ---------------------------------------------------------------------------
+# 3b. TLS termination (D35) — decrypt, check the plaintext, re-originate
+# ---------------------------------------------------------------------------
+#
+# In-process, hermetic. The client is a raw socket doing CONNECT + TLS + HTTP
+# by hand, deliberately not curl and not http.client.set_tunnel: this dev
+# container's no_proxy covers 127.0.0.1 (so curl bypasses the proxy), and
+# http.client.set_tunnel has its own quirks. A raw socket is what gives the
+# tests full control over exactly what the tool sends. The real tool (curl) is
+# exercised against containers in the topology section and in CI.
+
+import datetime as _dt  # noqa: E402
+import ipaddress as _ip  # noqa: E402
+import socket as _socket  # noqa: E402
+import ssl as _ssl  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+from cryptography import x509 as _x509  # noqa: E402
+from cryptography.hazmat.primitives import hashes as _hashes  # noqa: E402
+from cryptography.hazmat.primitives import serialization as _ser  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ec as _ec  # noqa: E402
+from cryptography.x509.oid import NameOID as _NameOID  # noqa: E402
+
+from control_plane.tls.engagement_ca import generate_ca, sign_leaf  # noqa: E402
+from tool_gateway.egress_proxy import server_tls_context_from_pem  # noqa: E402
+
+LOCAL = "127.0.0.1"
+
+
+def _self_signed(host: str) -> tuple[str, str]:
+    """A throwaway self-signed cert+key for the in-process HTTPS target."""
+    key = _ec.generate_private_key(_ec.SECP256R1())
+    now = _dt.datetime.now(_dt.UTC)
+    name = _x509.Name([_x509.NameAttribute(_NameOID.COMMON_NAME, "target")])
+    cert = (
+        _x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(1)
+        .not_valid_before(now - _dt.timedelta(minutes=5))
+        .not_valid_after(now + _dt.timedelta(days=1))
+        .add_extension(_x509.SubjectAlternativeName(
+            [_x509.IPAddress(_ip.ip_address(host))]), False)
+        .sign(key, _hashes.SHA256())
+    )
+    cf = _tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+    cf.write(cert.public_bytes(_ser.Encoding.PEM))
+    cf.close()
+    kf = _tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+    kf.write(key.private_bytes(_ser.Encoding.PEM, _ser.PrivateFormat.PKCS8,
+                               _ser.NoEncryption()))
+    kf.close()
+    return cf.name, kf.name
+
+
+class RecordingTlsTarget:
+    """A self-signed HTTPS server that records what actually reached it.
+
+    Same role as RecordingTarget but over TLS, so the proxy has a real
+    handshake to re-originate. ``served`` is the witness: a line exists only if
+    a request arrived and was answered inside the terminated tunnel.
+    """
+
+    def __init__(self) -> None:
+        self.served: list[tuple[str, str]] = []
+        target = self
+        cert, key = _self_signed(LOCAL)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a: object) -> None:
+                pass
+
+            def do_GET(self) -> None:  # noqa: N802
+                target.served.append(("GET", self.path))
+                b = b"<p>secret inventory</p>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def do_POST(self) -> None:  # noqa: N802
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n) if n else b""
+                target.served.append(("POST", self.path))
+                b = b"echo:" + body
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        self._server = http.server.ThreadingHTTPServer((LOCAL, 0), Handler)
+        self._server.socket = ctx.wrap_socket(self._server.socket, server_side=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> RecordingTlsTarget:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    @property
+    def port(self) -> int:
+        return self._server.server_address[1]
+
+
+def _ca_trust_ctx(ca_cert_pem: str) -> _ssl.SSLContext:
+    f = _tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+    f.write(ca_cert_pem.encode())
+    f.close()
+    return _ssl.create_default_context(cafile=f.name)
+
+
+def _tunnel(proxy, host, port, requests, *, client_ctx):
+    """CONNECT to the proxy, TLS-handshake, send requests, read responses.
+
+    Returns (connect_status_line, [(status_line, body_bytes), ...]). Raises the
+    ssl error if the handshake is rejected — which is what the pinning test
+    asserts on, a failure at the TLS layer distinct from a 403 body.
+    """
+    raw = _socket.create_connection((proxy.bind[0], proxy.port), timeout=8)
+    raw.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = raw.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    connect_status = buf.split(b"\r\n", 1)[0].decode()
+    if " 200 " not in connect_status:
+        raw.close()
+        return connect_status, []
+    tls = client_ctx.wrap_socket(raw, server_hostname=host)
+    out = []
+    try:
+        for method, path, body in requests:
+            req = f"{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            if body is not None:
+                req += f"Content-Length: {len(body)}\r\n"
+            req += "\r\n"
+            data = req.encode() + (body or b"")
+            tls.sendall(data)
+            rb = b""
+            while b"\r\n\r\n" not in rb:
+                chunk = tls.recv(65536)
+                if not chunk:
+                    break
+                rb += chunk
+            head, _, rest = rb.partition(b"\r\n\r\n")
+            cl = 0
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    cl = int(line.split(b":", 1)[1])
+            while len(rest) < cl:
+                rest += tls.recv(65536)
+            out.append((head.split(b"\r\n")[0].decode(), rest[:cl]))
+    finally:
+        tls.close()
+    return connect_status, out
+
+
+def _tls_proxy(target, *, methods=("GET",), max_requests=5):
+    grant = Grant(capability_id="CAP-TLS", host=LOCAL, port=target.port,
+                  methods=frozenset(methods), max_requests=max_requests)
+    ca = generate_ca("ENG-TLS")
+    leaf = sign_leaf(ca, LOCAL)
+    ctx = server_tls_context_from_pem(leaf.leaf_cert_pem, leaf.leaf_key_pem)
+    proxy = PolicyProxy(grant, bind=(LOCAL, 0), server_ctx=ctx)
+    return proxy, ca
+
+
+@pytest.fixture
+def tls_target():
+    with RecordingTlsTarget() as running:
+        yield running
+
+
+def test_tls_an_authorized_request_is_decrypted_and_reaches_the_target(tls_target):
+    """The positive control: the proxy terminates, checks, and re-originates.
+
+    Without it every TLS refusal below proves nothing.
+    """
+    proxy, ca = _tls_proxy(tls_target, methods=("GET",))
+    with proxy:
+        cstatus, out = _tunnel(proxy, LOCAL, tls_target.port,
+                               [("GET", "/x", None)],
+                               client_ctx=_ca_trust_ctx(ca.cert_pem))
+    assert "200" in cstatus
+    assert out[0][0].endswith("200 OK")
+    assert b"secret inventory" in out[0][1]
+    assert tls_target.served == [("GET", "/x")]
+
+
+def test_tls_a_method_the_capability_forbids_never_reaches_the_target(tls_target):
+    """The method check runs on the decrypted request, not the CONNECT."""
+    proxy, ca = _tls_proxy(tls_target, methods=("GET",))
+    with proxy:
+        _, out = _tunnel(proxy, LOCAL, tls_target.port,
+                         [("POST", "/submit", b"a=1")],
+                         client_ctx=_ca_trust_ctx(ca.cert_pem))
+    assert "403" in out[0][0]
+    assert tls_target.served == []
+
+
+def test_tls_a_host_the_capability_forbids_is_refused_at_connect(tls_target):
+    """The CONNECT target is checked before the tunnel is even established."""
+    grant = Grant(capability_id="C", host="10.99.0.1", port=tls_target.port,
+                  methods=frozenset({"GET"}), max_requests=5)
+    ca = generate_ca("E")
+    leaf = sign_leaf(ca, "10.99.0.1")
+    ctx = server_tls_context_from_pem(leaf.leaf_cert_pem, leaf.leaf_key_pem)
+    with PolicyProxy(grant, bind=(LOCAL, 0), server_ctx=ctx) as proxy:
+        cstatus, out = _tunnel(proxy, LOCAL, tls_target.port, [],
+                               client_ctx=_ca_trust_ctx(ca.cert_pem))
+    assert "403" in cstatus
+    assert out == []
+    assert tls_target.served == []
+
+
+def test_tls_keep_alive_requests_are_each_counted(tls_target):
+    """5.12: the count is per HTTP request, and TLS keep-alive does not loosen it.
+
+    Three GETs down one tunnel against a ceiling of two: the first two are
+    served, the third is refused for budget, and the target's own log shows
+    exactly two — the count survives socket reuse because each request in the
+    tunnel is checked and counted, not each connection.
+    """
+    proxy, ca = _tls_proxy(tls_target, methods=("GET",), max_requests=2)
+    with proxy:
+        _, out = _tunnel(
+            proxy, LOCAL, tls_target.port,
+            [("GET", "/1", None), ("GET", "/2", None), ("GET", "/3", None)],
+            client_ctx=_ca_trust_ctx(ca.cert_pem),
+        )
+    statuses = [line for line, _ in out]
+    assert statuses[0].endswith("200 OK")
+    assert statuses[1].endswith("200 OK")
+    assert "429" in statuses[2]
+    assert tls_target.served == [("GET", "/1"), ("GET", "/2")]
+
+
+def test_tls_a_client_that_does_not_trust_our_ca_is_refused_at_the_tls_layer(
+    tls_target,
+):
+    """Cert pinning, the documented §8.3 limit — and its distinct failure mode.
+
+    A client that pins the real certificate (or simply does not trust our
+    per-engagement CA) rejects the leaf during the handshake. The refusal is an
+    ``ssl`` error, raised *before* any HTTP request is formed — categorically
+    different from a 403 body a policy refusal returns — and the target logs
+    nothing, because nothing got past the handshake. That distinctness is the
+    property: "pinning, working as designed" must never look like "the proxy is
+    broken".
+    """
+    proxy, _ca = _tls_proxy(tls_target, methods=("GET",))
+    with proxy:
+        with pytest.raises(_ssl.SSLError):
+            _tunnel(proxy, LOCAL, tls_target.port, [("GET", "/x", None)],
+                    client_ctx=_ssl.create_default_context())
+    assert tls_target.served == []
+
+
+def test_tls_a_redirect_off_the_allowlist_is_refused_on_the_follow_up(tls_target):
+    """Enforcement is on the next request, not the response (D31, over TLS).
+
+    The proxy passes a 3xx back untouched; a client that follows it opens a new
+    CONNECT to the redirect's host, which is refused because the capability
+    names one host. Here the "follow" is explicit: a second tunnel to an
+    unauthorised host is refused at CONNECT.
+    """
+    proxy, ca = _tls_proxy(tls_target, methods=("GET",))
+    with proxy:
+        # First hop authorised.
+        _, out = _tunnel(proxy, LOCAL, tls_target.port, [("GET", "/redirect", None)],
+                         client_ctx=_ca_trust_ctx(ca.cert_pem))
+        assert out and out[0][0].endswith("200 OK")
+        # Following the redirect means a CONNECT to the lure host — refused.
+        cstatus, _ = _tunnel(proxy, "198.51.100.23", tls_target.port, [],
+                             client_ctx=_ca_trust_ctx(ca.cert_pem))
+    assert "403" in cstatus
+
 
 
 # ---------------------------------------------------------------------------
@@ -631,3 +918,113 @@ def test_the_allowlist_validation_still_refuses_a_hostname():
     """§8.3's original rule, unchanged by the second network."""
     with pytest.raises(ValueError, match="not a CIDR"):
         validate_allowlist(["app.example.com"])
+
+
+# ---------------------------------------------------------------------------
+# 4b. TLS termination against containers — real curl, kernel + witness (D35)
+# ---------------------------------------------------------------------------
+
+TARGET_HTTPS_PORT = 8443
+
+
+@pytest.fixture
+def tls_topology(sandbox):
+    """Like ``topology`` but the proxy terminates TLS for the HTTPS target.
+
+    The CA and leaf are generated directly (no database needed for the crypto),
+    the proxy is handed the leaf, and the CA's public cert is delivered to the
+    tool container so curl can verify the proxy's leaf.
+    """
+    from tool_gateway.egress_proxy import Grant, grant_from_capability  # noqa: F401
+
+    ca = generate_ca("ENG-CI-TLS")
+    leaf = sign_leaf(ca, TARGET_IP)
+
+    name = f"cyberorch-web-target-{uuid.uuid4().hex[:8]}"
+    target_network = sandbox.ensure_network([TARGET_CIDR])
+    sandbox.ensure_network([TOOL_CIDR])
+    started = subprocess.run(
+        ["docker", "run", "-d", "--name", name, "--network", target_network.name,
+         "--ip", TARGET_IP, WEB_TARGET_IMAGE],
+        capture_output=True, text=True,
+    )
+    if started.returncode != 0:
+        pytest.fail(f"could not start the web target: {started.stderr}", pytrace=False)
+    _wait_until_serving(name)
+
+    endpoint = sandbox.start_egress_proxy(
+        grant={
+            "capability_id": "CAP-TLS-CI", "host": TARGET_IP,
+            "port": TARGET_HTTPS_PORT, "methods": ["GET", "POST"],
+            "max_requests": 20,
+        },
+        tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
+        leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
+    )
+    try:
+        yield {"target_name": name, "proxy": endpoint, "ca_cert_pem": ca.cert_pem}
+    finally:
+        sandbox.stop_egress_proxy(endpoint)
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        sandbox.remove_network([TARGET_CIDR])
+        sandbox.remove_network([TOOL_CIDR])
+
+
+def _curl_https_through_proxy(sandbox, endpoint, ca_cert_pem, url, *extra):
+    from tool_gateway.sandbox import TOOL_CA_PATH
+    return sandbox.run(
+        command=["/usr/bin/curl", "--silent", "--show-error", "--include",
+                 "--proto", "=https", "--proxy", endpoint.url,
+                 "--cacert", TOOL_CA_PATH, "--max-time", "15", *extra, url],
+        network_allowlist=[TOOL_CIDR], max_duration_seconds=30,
+        ca_cert_pem=ca_cert_pem,
+    )
+
+
+def test_tls_an_authorized_https_request_reaches_the_target_through_the_proxy(
+    sandbox, tls_topology
+):
+    """The positive control for the container TLS path.
+
+    The proxy is marked TLS-capable, and an https GET verified against the
+    per-engagement CA reaches the target and is logged there.
+    """
+    assert tls_topology["proxy"].tls is True
+    result = _curl_https_through_proxy(
+        sandbox, tls_topology["proxy"], tls_topology["ca_cert_pem"],
+        f"https://{TARGET_IP}:{TARGET_HTTPS_PORT}/index.html",
+    )
+    assert result.succeeded, result.stderr
+    assert "200 OK" in result.stdout
+    assert "/index.html" in target_access_log(tls_topology["target_name"])
+
+
+def test_tls_a_pinning_client_is_refused_and_the_target_never_sees_it(
+    sandbox, tls_topology
+):
+    """§8.3's documented limit, with the two failures kept distinct (D35).
+
+    curl pins the *real* target key with --pinnedpubkey. Through the MITM it is
+    handed the proxy's leaf key instead, so the pin mismatches and curl fails at
+    the TLS layer (exit 60 or 90) — not with a 200 and not with a policy 403.
+    The witness seals it: the target's access log has no line for this request,
+    because it died in the handshake before any HTTP was sent.
+
+    The marker path is a fresh UUID so its absence cannot be a coincidence.
+    """
+    marker = f"/pinned-{uuid.uuid4().hex[:12]}"
+    # Pin a key that is not the leaf's: the real target's cert is self-signed
+    # and unknown to us, so any wrong pin will do to model "client expected a
+    # different certificate". A syntactically valid but non-matching sha256 pin.
+    wrong_pin = "sha256//" + "A" * 43 + "="
+    result = _curl_https_through_proxy(
+        sandbox, tls_topology["proxy"], tls_topology["ca_cert_pem"],
+        f"https://{TARGET_IP}:{TARGET_HTTPS_PORT}{marker}",
+        "--pinnedpubkey", wrong_pin,
+    )
+    # A TLS-layer refusal: curl did not get a 200, and it is not a proxy 403.
+    assert not result.succeeded
+    assert "200 OK" not in result.stdout
+    assert "X-Cyberorch-Refusal" not in result.stdout
+    # The independent witness: nothing reached the target.
+    assert marker not in target_access_log(tls_topology["target_name"])

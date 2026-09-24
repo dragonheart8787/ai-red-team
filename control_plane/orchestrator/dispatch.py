@@ -38,7 +38,12 @@ from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
 from tool_gateway import registry
 from tool_gateway.adapters import http_get, http_post, nmap
-from tool_gateway.sandbox import DockerSandbox, SandboxResult, SandboxUnavailable
+from tool_gateway.sandbox import (
+    TOOL_CA_PATH,
+    DockerSandbox,
+    SandboxResult,
+    SandboxUnavailable,
+)
 
 QUEUED = "queued"
 DISPATCHING = "dispatching"
@@ -193,6 +198,7 @@ def dispatch_scan(
     execution_context: Mapping[str, Any] | None = None,
     fresh_for_seconds: int = 1800,
     proxy_url: str | None = None,
+    ca_cert_pem: str | None = None,
 ) -> DispatchOutcome:
     """Run one scan and record run, evidence and state transitions.
 
@@ -204,6 +210,14 @@ def dispatch_scan(
     D34). It is **required** for an adapter that declares ``REQUIRES_PROXY``:
     a web request with no proxy is not a degraded run, it is an unchecked one,
     so it is refused here rather than executed directly.
+
+    ``ca_cert_pem`` is the per-engagement CA the proxy terminates TLS with
+    (D35). When present the tool trusts the proxy's leaf (mounted at
+    ``TOOL_CA_PATH``, passed to the adapter as ``--cacert``) and an https
+    request is checkable; when absent the adapter refuses https with the reason
+    named, rather than a socket error. It is threaded here the same way
+    ``proxy_url`` is, and like it goes only to the adapters that use the
+    proxy.
 
     Note what this signature does *not* accept, because D34 rests a property on
     it: there is no ``action`` parameter and no ``writes_data`` /
@@ -252,9 +266,11 @@ def dispatch_scan(
     # build_plan has no proxy_url parameter and should not grow one: §8.3 routes
     # raw TCP through the namespace precisely because there is no application
     # protocol there for a proxy to read.
-    proxy_kwargs = (
-        {"proxy_url": proxy_url} if registry.requires_proxy(capability.action) else {}
-    )
+    proxy_kwargs: dict[str, Any] = {}
+    if registry.requires_proxy(capability.action):
+        proxy_kwargs["proxy_url"] = proxy_url
+        if ca_cert_pem is not None:
+            proxy_kwargs["ca_cert_path"] = TOOL_CA_PATH
     try:
         plan = adapter.build_plan(
             constraints=capability.constraints, budget=capability.budget.as_dict(),
@@ -366,6 +382,9 @@ def dispatch_scan(
             # body never reaches the process table or the audit payload below,
             # and curl's @- sigil stays fixed (see http_post.build_plan).
             stdin=getattr(plan, "stdin", None) or None,
+            # The public CA the tool verifies the proxy's leaf against (D35).
+            # None for nmap and for plain-HTTP web runs.
+            ca_cert_pem=ca_cert_pem,
         )
     except SandboxUnavailable as exc:
         # The tool may or may not have run — the sandbox failed at a point we

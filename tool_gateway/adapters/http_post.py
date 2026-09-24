@@ -215,6 +215,7 @@ def build_plan(
     target: str,
     action: str = ACTION,
     proxy_url: str | None = None,
+    ca_cert_path: str | None = None,
 ) -> HttpPostPlan:
     """Turn a capability into one concrete HTTP POST.
 
@@ -235,13 +236,15 @@ def build_plan(
         raise AdapterError("max_duration_seconds must be positive")
 
     limits = _http.http_budget(budget)
-    host, port, path, url = _http.request_target(constraints, target, default_port=80)
+    scheme, host, port, path, url = _http.request_target(
+        constraints, target, default_port=80, ca_cert_path=ca_cert_path)
     body, content_type = validate_body(constraints)
 
     command = _http.base_command(
-        method=METHOD, url=url, max_bytes=limits["max_bytes"],
+        method=METHOD, url=url, scheme=scheme, max_bytes=limits["max_bytes"],
         deadline_seconds=tool_deadline(max_duration),
         requests_per_second=limits["requests_per_second"], proxy_url=proxy_url,
+        ca_cert_path=ca_cert_path,
     )
     # Inserted before the URL, which base_command leaves last.
     insert_at = len(command) - 1

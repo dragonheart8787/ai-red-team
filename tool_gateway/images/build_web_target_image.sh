@@ -75,10 +75,15 @@ Three things D34 needs that ``python -m http.server`` does not do:
 """
 
 import http.server
+import ssl
 import sys
+import threading
 
 ROOT = "/srv/www"
 PORT = 8080
+HTTPS_PORT = 8443
+CERT = "/opt/target-cert.pem"
+KEY = "/opt/target-key.pem"
 
 # TEST-NET-3. A different address from the GET lure so a test can tell which
 # carrier a candidate target came from, and in no scope object anywhere.
@@ -119,8 +124,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(page)
 
 
+def _serve_https():
+    # The target's own certificate is self-signed and thrown away with the
+    # image. The egress proxy does not verify it (D35): the proxy authenticates
+    # the target by the grant's host binding, not by its cert, exactly as Burp
+    # and mitmproxy do upstream. So any cert works here; it exists only so the
+    # target speaks TLS at all.
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(CERT, KEY)
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", HTTPS_PORT), Handler)
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    srv.serve_forever()
+
+
 if __name__ == "__main__":
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    threading.Thread(target=_serve_https, daemon=True).start()
     # The readiness gate in the test fixture waits for this line in
     # `docker logs`. It is phrased like the stdlib's for that reason, and it is
     # flushed because python block-buffers a pipe: the container would be
@@ -128,9 +147,21 @@ if __name__ == "__main__":
     # a line that was never going to arrive.
     print(f"Serving HTTP on 0.0.0.0 port {PORT} (http://0.0.0.0:{PORT}/) ...",
           flush=True)
+    print(f"Serving HTTPS on 0.0.0.0 port {HTTPS_PORT} ...", flush=True)
     sys.stdout.flush()
     server.serve_forever()
 PYEOF
+
+# A self-signed certificate so the target can speak TLS (D35). openssl on the
+# build host rather than a Python dependency in the scratch image; the proxy
+# never verifies this cert, so its contents beyond "valid TLS cert" do not
+# matter. SAN covers the addresses tests reach it on.
+command -v openssl >/dev/null || { echo "error: openssl not found on the host" >&2; exit 1; }
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout "$STAGE/opt/target-key.pem" -out "$STAGE/opt/target-cert.pem" \
+    -days 365 -subj "/CN=cyberorch-web-target" \
+    -addext "subjectAltName=IP:10.78.0.10,IP:127.0.0.1,DNS:localhost" >/dev/null 2>&1
+chmod 600 "$STAGE/opt/target-key.pem"
 
 # -u for the same buffering reason the print above states; both, because this
 # cost a CI round once already.

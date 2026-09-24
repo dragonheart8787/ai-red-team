@@ -218,14 +218,14 @@ def test_the_content_type_is_an_allowlist():
     [{"scheme": "https"}, {"port": 443}],
     ids=["scheme", "port"],
 )
-def test_https_is_refused_with_the_reason_named(adapter, constraints):
-    """D34 requirement 4: a silent limitation becomes an explicit boundary.
+def test_https_without_a_ca_is_refused_with_the_reason_named(adapter, constraints):
+    """A silent limitation stays an explicit boundary (D34 →  D35).
 
-    Before this, ``--proto =http`` refused TLS at the socket and nothing said
-    why; a Worker saw a connection failure indistinguishable from an
-    unreachable target. The message now names the cause — the proxy reads
-    method, path and host out of every request and can read none of them inside
-    a TLS session — and names where it is fixed.
+    D34 refused all https and said so. D35 terminates TLS *when* the run has a
+    per-engagement CA to verify the proxy's leaf against; with no CA the tool
+    cannot verify anything, so https is still refused with the reason named
+    rather than failing at the socket like an unreachable target. This is the
+    no-CA case: build_plan is called without ``ca_cert_path``.
     """
     asked = {**_constraints(), **constraints}
     with pytest.raises(adapter.AdapterError) as raised:
@@ -233,8 +233,27 @@ def test_https_is_refused_with_the_reason_named(adapter, constraints):
                            target=TARGET_IP)
     message = str(raised.value)
     assert "TLS" in message
-    assert "D35" in message
-    assert "encrypted" in message or "TLS session" in message
+    assert "CA" in message
+    assert "TLS session" in message
+
+
+@pytest.mark.parametrize("adapter", [http_get, http_post])
+def test_https_with_a_ca_builds_a_verifying_request(adapter):
+    """D35: given the engagement CA, https is allowed and curl verifies against it.
+
+    The plan speaks https, pins the protocol to https, and passes --cacert so a
+    leaf signed by any other CA — including a real public one — is rejected.
+    That last property is what makes a pinning target's refusal clean.
+    """
+    asked = {**_constraints(), "scheme": "https", "port": 8443}
+    plan = adapter.build_plan(
+        constraints=asked, budget=_budget(max_requests=1), target=TARGET_IP,
+        proxy_url="http://10.81.0.2:3128", ca_cert_path="/etc/cyberorch/engagement-ca.pem",
+    )
+    assert plan.url == f"https://{TARGET_IP}:8443/submit"
+    assert plan.command[plan.command.index("--proto") + 1] == "=https"
+    assert plan.command[plan.command.index("--cacert") + 1] == \
+        "/etc/cyberorch/engagement-ca.pem"
 
 
 def test_an_https_target_string_is_refused_too():

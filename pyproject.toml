@@ -12,6 +12,14 @@ dependencies = [
     "alembic>=1.14",
     "httpx>=0.28",
     "docker>=7.1",
+    # D35: per-engagement CA generation and per-host leaf signing for the
+    # egress proxy's TLS termination. The control plane signs; the proxy only
+    # *loads* a pre-signed leaf through the stdlib ssl module, so this
+    # dependency never enters the scratch proxy image (its build rejects any
+    # non-stdlib import). Hand-rolling x509 with the openssl CLI is exactly the
+    # kind of thing that goes subtly wrong, which is why a real x509 library
+    # earns its place here.
+    "cryptography>=44",
     # MVP-0: the live Policy Reviewer. The kernel itself never calls a model
     # -- this is needed only by agents/llm/.
     "anthropic>=0.69",

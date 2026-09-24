@@ -52,40 +52,36 @@ class AdapterError(ValueError):
     """The capability cannot be turned into a request."""
 
 
-#: Raised for a target or constraint that asks for TLS.
+#: Message for an https request on a run that was given no CA to verify with.
 #:
-#: Its own message rather than a generic connection failure, because the whole
-#: point of D34's scoping decision was to turn a silent limitation into an
-#: explicit boundary. Until D35 the egress proxy terminates plain HTTP only: it
-#: reads the method, the path and the Host header out of every request, and an
-#: encrypted request would reduce it to trusting whatever hostname the tool
-#: itself claimed in a CONNECT line.
+#: D34 refused TLS outright and said so; D35 terminates it *when* the control
+#: plane has handed this run a per-engagement CA (see
+#: control_plane.tls.engagement_ca). Absent that CA the tool has nothing to
+#: verify the proxy's leaf against, so the honest answer is still an explicit
+#: refusal naming the reason, never a generic socket failure that reads like an
+#: unreachable target.
 TLS_REFUSAL = (
-    "TLS is not supported yet (D35). The policy-aware egress proxy checks the "
-    "method, path, host and request count of every request, and it cannot read "
-    "any of those inside a TLS session -- it would be left trusting the "
-    "hostname the tool itself asked for. https is therefore refused outright "
-    "rather than attempted and failed at the socket."
+    "an https request needs the per-engagement CA the egress proxy terminates "
+    "TLS with, and this run was given none. Without it the tool cannot verify "
+    "the proxy's leaf certificate, so the TLS session is refused rather than "
+    "trusted blindly. Supply the engagement CA (D35) to make https checkable."
 )
 
 
-def refuse_tls(*, scheme: str | None, port: int, url: str | None = None) -> None:
-    """Refuse anything that would need TLS, naming the reason (D34).
+def wants_tls(constraints: Mapping[str, Any], port: int) -> bool:
+    """Whether this request is for TLS, however it was spelled.
 
-    Called by both adapters before a plan is built. Checks the scheme it was
-    given, the port, and the target string, because a request for TLS can
-    arrive spelled three ways and a limitation that only catches one of them is
-    a limitation that surprises someone.
+    A request for TLS can arrive three ways -- an explicit ``scheme``, port
+    443, or an ``https://`` target -- and a check that caught only one would
+    surprise someone. Kept in one place so the adapters and the refusal agree.
     """
-    asked = []
-    if scheme is not None and scheme.lower() not in ("", "http"):
-        asked.append(f"scheme {scheme!r}")
+    scheme = constraints.get("scheme")
+    if scheme is not None and scheme.lower() == "https":
+        return True
     if port == 443:
-        asked.append("port 443")
-    if url and url.lower().startswith("https:"):
-        asked.append("an https:// target")
-    if asked:
-        raise AdapterError(f"{' and '.join(asked)} asks for TLS. {TLS_REFUSAL}")
+        return True
+    target = str(constraints.get("_target") or "")
+    return target.lower().startswith("https:")
 
 
 def curl_version() -> str:
@@ -147,20 +143,30 @@ def http_budget(budget: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def request_target(
-    constraints: Mapping[str, Any], target: str, *, default_port: int
-) -> tuple[str, int, str, str]:
-    """Validate the target and return ``(host, port, path, url)``.
+    constraints: Mapping[str, Any], target: str, *, default_port: int,
+    ca_cert_path: str | None = None,
+) -> tuple[str, str, int, str, str]:
+    """Validate the target and return ``(scheme, host, port, path, url)``.
 
     The target is an address or an in-scope name the Authorization Resolver
-    already matched to a scope object; no adapter resolves anything. Since D34
-    the request is addressed to the proxy rather than to the target, but the
-    URL stays absolute — that is what lets the proxy read the host out of the
-    request line and check it against the capability.
+    already matched to a scope object; no adapter resolves anything. The URL is
+    absolute — that is what lets the proxy read the host out of the request
+    line (plain HTTP) or the CONNECT target (https) and check it.
+
+    An https request is allowed only when ``ca_cert_path`` is set: the tool
+    verifies the proxy's leaf against that CA, and without it there is nothing
+    to verify against, so it is refused with the reason named (D35).
     """
     if not target:
         raise AdapterError("no target")
 
-    port = int(constraints.get("port") or default_port)
+    tls = wants_tls({**dict(constraints), "_target": target},
+                    int(constraints.get("port") or 0))
+    if tls and ca_cert_path is None:
+        raise AdapterError(TLS_REFUSAL)
+
+    scheme = "https" if tls else "http"
+    port = int(constraints.get("port") or (443 if tls else default_port))
     if not 0 < port < 65536:
         raise AdapterError(f"invalid port {port!r}")
 
@@ -168,13 +174,13 @@ def request_target(
     if not path.startswith("/"):
         raise AdapterError(f"path must start with '/': {path!r}")
 
-    refuse_tls(scheme=constraints.get("scheme"), port=port, url=target)
-    return target, port, path, f"http://{target}:{port}{path}"
+    return scheme, target, port, path, f"{scheme}://{target}:{port}{path}"
 
 
 def base_command(
-    *, method: str, url: str, max_bytes: int, deadline_seconds: int,
+    *, method: str, url: str, scheme: str, max_bytes: int, deadline_seconds: int,
     requests_per_second: float | None, proxy_url: str | None,
+    ca_cert_path: str | None = None,
 ) -> list[str]:
     """The curl invocation both adapters share, minus anything method-specific.
 
@@ -204,7 +210,10 @@ def base_command(
         # Headers on stdout ahead of the body, so one capture yields both and
         # the derived view does not have to guess where the body starts.
         "--include",
-        "--proto", "=http",
+        # curl speaks a dozen protocols; pin it to exactly the one this request
+        # is for so a target-supplied string cannot select another. https is
+        # permitted only when we also hand curl a CA to verify against, below.
+        "--proto", "=https" if scheme == "https" else "=http",
         "--no-location",
         # No credential material, no cookie jar, no netrc: these tools have
         # nothing to leak because they are never given anything.
@@ -215,6 +224,12 @@ def base_command(
         "--connect-timeout", str(min(10, deadline_seconds)),
         "--silent", "--show-error",
     ]
+    if scheme == "https" and ca_cert_path is not None:
+        # Verify the proxy's leaf against the per-engagement CA, and nothing
+        # else: --cacert replaces the default trust store, so a leaf signed by
+        # any other CA -- including a real public one -- is rejected. That is
+        # what makes a pinning target's refusal clean (D35).
+        command += ["--cacert", ca_cert_path]
     if proxy_url is not None:
         command += ["--proxy", proxy_url]
     if requests_per_second is not None:

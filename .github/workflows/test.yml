@@ -51,15 +51,17 @@ jobs:
           fi
           echo "CYBERORCH_ALLOW_DB_SKIP is unset — database tests will run or fail."
 
-      - name: Install PostgreSQL client, nmap, ncat and curl
+      - name: Install PostgreSQL client, nmap, ncat, curl and openssl
         # Installed on the runner, not pulled as an image: the sandbox image is
         # built from the host's own installation (see below), and this
         # environment has no route to a registry either. curl joined the list at
-        # D31, which added the web.get adapter.
+        # D31 (the web.get adapter); openssl at D35, where the web-target image
+        # build uses it to mint the target's self-signed HTTPS certificate.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client nmap ncat curl
+          sudo apt-get install -y --no-install-recommends postgresql-client nmap ncat curl openssl
           nmap --version | head -1
+          openssl version
           ncat --version 2>&1 | head -1
           curl --version | head -1
 

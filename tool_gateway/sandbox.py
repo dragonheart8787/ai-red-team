@@ -85,7 +85,9 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import socket
+import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -106,6 +108,39 @@ PROXY_IMAGE = "cyberorch/egress-proxy:local"
 
 #: Port the proxy listens on inside its container.
 PROXY_PORT = 3128
+
+#: Fixed in-container paths for the TLS material delivered by read-only bind
+#: mount (D35). Paths, not contents: the private keys never pass through argv
+#: or the environment, where `docker inspect` and the process table would
+#: expose them. The tool reads the CA at TOOL_CA_PATH via curl --cacert; the
+#: proxy reads its leaf at the two PROXY_LEAF_* paths.
+TOOL_CA_PATH = "/etc/cyberorch/engagement-ca.pem"
+PROXY_LEAF_CERT_PATH = "/etc/cyberorch/leaf-cert.pem"
+PROXY_LEAF_KEY_PATH = "/etc/cyberorch/leaf-key.pem"
+
+
+def _write_secret_tempfile(pem: str) -> str:
+    """Write PEM to a 0600 host temp file and return its path.
+
+    The file is bind-mounted read-only into a container; it must outlive the
+    container, so the caller removes it on teardown rather than here.
+    """
+    fd, path = tempfile.mkstemp(suffix=".pem", prefix="cyberorch-tls-")
+    try:
+        os.write(fd, pem.encode())
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    return path
+
+
+def _unlink_all(paths: Sequence[str]) -> None:
+    """Remove host temp files, ignoring ones already gone."""
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 class SandboxUnavailable(RuntimeError):
@@ -186,6 +221,11 @@ class ProxyEndpoint:
     url: str
     tool_side: tuple[str, ...]
     target_side: tuple[str, ...]
+    #: Host temp files (leaf cert + key) bind-mounted into the proxy, removed
+    #: by stop_egress_proxy. Empty when the proxy is HTTP-only (no TLS).
+    secret_files: tuple[str, ...] = ()
+    #: Whether the proxy was given a leaf and can terminate TLS.
+    tls: bool = False
 
 
 @dataclass
@@ -259,6 +299,7 @@ class DockerSandbox:
     def start_egress_proxy(
         self, *, grant: Mapping[str, Any], tool_side: Sequence[str],
         target_side: Sequence[str], run_id: str | None = None,
+        leaf_cert_pem: str | None = None, leaf_key_pem: str | None = None,
     ) -> ProxyEndpoint:
         """Start the proxy bridging the tool-side and target-side networks.
 
@@ -272,7 +313,16 @@ class DockerSandbox:
         the proxy is the only address it can reach. That is what makes the
         kernel the witness for "the tool cannot go around the proxy": the
         route is absent, not filtered.
+
+        ``leaf_cert_pem`` / ``leaf_key_pem`` enable TLS termination (D35). They
+        are written to 0600 host files and bind-mounted read-only, and only
+        their *paths* are passed as arguments — the key never enters argv. With
+        neither, the proxy is HTTP-only and refuses CONNECT, the honest D34
+        answer for "cannot inspect this tunnel". Both or neither: a cert
+        without a key is a misconfiguration, not a mode.
         """
+        if bool(leaf_cert_pem) != bool(leaf_key_pem):
+            raise ValueError("leaf_cert_pem and leaf_key_pem must be given together")
         tool_side = validate_allowlist(tool_side)
         target_side = validate_allowlist(target_side)
         if set(tool_side) & set(target_side):
@@ -295,6 +345,21 @@ class DockerSandbox:
         target_network = self.ensure_network(target_side)
         name = f"cyberorch-egress-{run_id or uuid.uuid4().hex[:12]}"
 
+        proxy_args = [
+            "--grant", json.dumps(grant, sort_keys=True),
+            "--bind", "0.0.0.0", "--port", str(PROXY_PORT),
+        ]
+        volumes: dict[str, dict[str, str]] = {}
+        secret_files: list[str] = []
+        if leaf_cert_pem and leaf_key_pem:
+            cert_path = _write_secret_tempfile(leaf_cert_pem)
+            key_path = _write_secret_tempfile(leaf_key_pem)
+            secret_files = [cert_path, key_path]
+            volumes[cert_path] = {"bind": PROXY_LEAF_CERT_PATH, "mode": "ro"}
+            volumes[key_path] = {"bind": PROXY_LEAF_KEY_PATH, "mode": "ro"}
+            proxy_args += ["--leaf-cert", PROXY_LEAF_CERT_PATH,
+                           "--leaf-key", PROXY_LEAF_KEY_PATH]
+
         container = client.containers.create(
             image=PROXY_IMAGE,
             # Arguments only. The image sets an ENTRYPOINT of
@@ -304,10 +369,8 @@ class DockerSandbox:
             # argparse refused them, and the container exited before binding.
             # The tests then reported an unreachable proxy, which is a true
             # statement about the wrong thing.
-            command=[
-                "--grant", json.dumps(grant, sort_keys=True),
-                "--bind", "0.0.0.0", "--port", str(PROXY_PORT),
-            ],
+            command=proxy_args,
+            volumes=volumes,
             name=name,
             network=tool_network.name,
             # The proxy is confined exactly as the tool is. It holds no
@@ -335,6 +398,7 @@ class DockerSandbox:
                 container.remove(force=True)
             except (DockerException, NotFound):
                 pass
+            _unlink_all(secret_files)
             raise
 
         if not address:
@@ -342,16 +406,22 @@ class DockerSandbox:
                 container.remove(force=True)
             except (DockerException, NotFound):
                 pass
+            _unlink_all(secret_files)
             raise SandboxUnavailable(
                 "the egress proxy has no address on the tool-side network"
             )
 
-        self._wait_until_listening(container)
+        try:
+            self._wait_until_listening(container)
+        except Exception:
+            _unlink_all(secret_files)
+            raise
 
         return ProxyEndpoint(
             container_id=container.id, name=name,
             url=f"http://{address}:{PROXY_PORT}",
             tool_side=tool_side, target_side=target_side,
+            secret_files=tuple(secret_files), tls=bool(leaf_cert_pem),
         )
 
     @staticmethod
@@ -403,11 +473,14 @@ class DockerSandbox:
             return ""
 
     def stop_egress_proxy(self, endpoint: ProxyEndpoint) -> None:
-        """Remove the proxy container. The networks outlive it by design."""
+        """Remove the proxy container and its leaf files. Networks outlive it."""
         try:
             self.client().containers.get(endpoint.container_id).remove(force=True)
         except (DockerException, NotFound):
             pass
+        # The leaf key file is short-lived by design; do not leave it on the
+        # host after the proxy that used it is gone.
+        _unlink_all(endpoint.secret_files)
 
     def probe_egress(
         self, *, target: str, port: int, network_allowlist: Sequence[str],
@@ -477,6 +550,7 @@ class DockerSandbox:
         max_duration_seconds: int,
         run_id: str | None = None,
         stdin: str | None = None,
+        ca_cert_pem: str | None = None,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
 
@@ -491,6 +565,12 @@ class DockerSandbox:
         ``--data-binary @<value>`` reads a *file* unless the value is exactly
         ``-``. Feeding stdin lets the sigil stay fixed at ``@-``, so no body
         value can ever name a path.
+
+        ``ca_cert_pem`` is the per-engagement CA the egress proxy signs its
+        leaf with (D35). It is bind-mounted read-only at ``TOOL_CA_PATH`` so the
+        tool can trust the proxy's TLS termination — the adapter passes
+        ``--cacert TOOL_CA_PATH``. It is the *public* certificate only; no
+        private key reaches the tool. Left off for a plain-HTTP or nmap run.
         """
         allowlist = validate_allowlist(network_allowlist)
         self.ensure_image()
@@ -500,12 +580,18 @@ class DockerSandbox:
         network = self.ensure_network(allowlist)
         container = None
         started = time.monotonic()
+        ca_file: str | None = None
+        volumes: dict[str, dict[str, str]] = {}
+        if ca_cert_pem:
+            ca_file = _write_secret_tempfile(ca_cert_pem)
+            volumes[ca_file] = {"bind": TOOL_CA_PATH, "mode": "ro"}
 
         try:
             container = client.containers.create(
                 image=self.image,
                 command=list(command),
                 network=network.name,
+                volumes=volumes,
                 # Only opened when there is something to write. A container
                 # with an open stdin nobody closes is a container waiting.
                 stdin_open=stdin is not None,
@@ -575,3 +661,7 @@ class DockerSandbox:
                     container.remove(force=True)
                 except (DockerException, NotFound):
                     pass
+            # The CA is public, but there is no reason to leave a copy of it on
+            # the host after the run that mounted it is gone.
+            if ca_file is not None:
+                _unlink_all([ca_file])

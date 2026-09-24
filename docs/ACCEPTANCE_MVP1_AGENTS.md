@@ -454,7 +454,32 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 |---|---|---|
 | **§4.6 request budget never spent** | `consume_request` was never called on any production path | **Closed at D34.** The broker's atomic check-and-increment (§8.5's exact `UPDATE ... WHERE requests_used < :maximum RETURNING`) had been written correctly since the capability work and called only from tests, so `max_requests` was a number in a database. D31 did not surface it because its adapter refuses any value above one. `dispatch_scan` now spends a request after the claim and before anything executes; the refusal is audited with the broker's own reason string. Pinned by a mutation test that stubs the call out and asserts the guarantee then fails. |
 | 5.11 | The side-effect floor changes no decision today | Open, defence in depth. D34 made the `writes_data` / `changes_state` OPA judges a lookup from the **action** rather than the Worker's claim. §5's `requires_known_classification` fires either when the action matches a named pattern *or* when a side-effect flag is set, and `web.post` is already in the pattern list — so for every action that currently has an adapter, the floor is redundant. It becomes load-bearing the moment an adapter with side effects has an action the pattern list does not name, which is checked by `test_the_flag_branch_is_load_bearing_for_an_action_the_list_does_not_name`. Recorded rather than left implicit: a mechanism whose effect is invisible is one nobody can tell has stopped working. |
-| 5.12 | The within-run request ceiling and the capability budget are two counters | Open, by design, and worth knowing about. The in-container proxy has no database connection — keeping credentials off the sandbox network is worth more than a single counter — so it bounds requests *within one run* against `max_requests` while the control plane spends one request per run against the persistent counter. Each bound is sound for what it bounds, and with today's adapters (exactly one request per run) they agree. A future adapter that made several requests per run would make them describe different things, and the reconciliation is not written. |
+| 5.12 | The within-run request ceiling and the capability budget are two counters | **Examined and settled at D35.** The two counters stay two, by the same reason 5.12 first gave — the in-container proxy has no database connection, and keeping credentials off the sandbox network is worth more than a single counter. What D35 had to check was whether TLS loosens the within-run ceiling: an https keep-alive connection can carry several HTTP requests down one socket, so if the proxy counted *connections* the ceiling would leak. It counts **requests**, on the decrypted plaintext, inside the tunnel — each request in a keep-alive tunnel goes through the same check-and-consume — so the ceiling holds regardless of socket reuse. Pinned by `test_tls_keep_alive_requests_are_each_counted` (three GETs down one tunnel against a ceiling of two → two served, one refused, target logs two). The persistent budget remains the cross-run authority spent once per run by the control plane; the ceiling remains the within-run bound. They still describe different things and still agree for today's one-request-per-run adapters — TLS did not change that. |
+
+### Found at D35 — a limit recorded, not a candidate
+
+| # | Item | Status |
+|---|---|---|
+| 5.13 | A cert-pinning target cannot be intercepted | **Recorded limit, not a defect and not a candidate to close.** §8.3 named it when it deferred the proxy: a target that pins a certificate — ships the real one and refuses anything else — rejects the proxy's leaf, because the leaf is signed by a per-engagement CA the target was never told to trust. There is no fix that keeps the pin honest; "intercept a pinned connection" and "the pin still means something" are the same sentence negated. For the disposable targets this platform tests it does not arise. For a real customer target that pins, the honest position is that the tool cannot see inside that connection, and it says so: the refusal happens at the **TLS handshake**, categorically distinct from a policy 403, and the target logs nothing because nothing got past the handshake. Pinned in two places — `test_tls_a_client_that_does_not_trust_our_ca_is_refused_at_the_tls_layer` (in-process, asserts an `ssl` error and an empty target log) and `test_tls_a_pinning_client_is_refused_and_the_target_never_sees_it` (container, curl `--pinnedpubkey`, asserts curl fails without a 200 and without the proxy's refusal header, and a fresh-UUID path is absent from the target's log). The distinctness is the property: "pinning, working as designed" must never read as "the proxy is broken". |
+
+**D35, and where the trust lives.** The egress proxy now terminates TLS
+(D34 refused it). One CA per engagement, in the RLS-scoped `engagement_ca`
+table reachable only by `cyberorch_app` bound to that engagement — the same
+protection as `credentials`, and never granted to `ui_reader`,
+`registry_admin` or `global_auditor` (migration `0009`). A global CA was
+rejected outright: one leaked key would impersonate any host in any
+engagement, above the I4 boundary the schema exists to hold. The CA private
+key never enters the sandbox — the control plane signs, the proxy is handed a
+single-host leaf valid for hours, delivered by read-only bind mount so the key
+never passes through argv. There is no per-host signing cadence to design,
+because "one capability, one host" (D34) means the proxy never faces a second
+host: the one leaf is minted when the grant is built and dies with the proxy.
+The library-default audit the brief asked for is in `egress_proxy.py`'s module
+docstring: forwarding is on `http.client` (no redirect logic at all, so the
+D34 urlopen footgun is gone by construction, not patched); no connection reuse
+upstream; and the upstream TLS context is *explicitly* unverified, with the
+reason stated — the proxy audits content, it does not authenticate the target,
+whose identity is the grant's host binding, exactly as Burp and mitmproxy do.
 
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 

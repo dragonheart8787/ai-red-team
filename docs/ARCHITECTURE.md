@@ -724,10 +724,26 @@ network——工具側只看得到 proxy，目標側才有目標。所以「工�
 時用的是同一個事實。拒絕的證據不看 proxy 自己的日誌，而是看目標自己的 access
 log 裡沒有那筆請求。
 
-這一層目前**只做 plain HTTP**：CONNECT 明確拒絕並說明原因。原因就是上面那句話的
-反面——method、path、Host 都在 TLS 裡面看不到，只核對 SNI 的話就退化成「相信工具
-自己宣稱要連哪裡」，那正是 D31 立下「用 kernel 而不是用工具的回報當證據」這條規則
-要擋的形狀。TLS termination 是 D35，Playwright 是 D36。
+**TLS termination（D35）。** 上面的顧慮——method/path/Host 在 TLS 裡看不到，只核對
+SNI 會退化成「相信工具自己宣稱要連哪裡」——現在的解法是 termination 而不是拒絕：proxy
+在 CONNECT 當下就先用 grant 核對 tunnel 的目的 host，通過才建立 tunnel，然後拿一張
+**per-engagement CA 簽的 leaf 憑證**假扮該 host，解密，對明文跑跟 plain HTTP 完全相同
+的逐請求核對。keep-alive 不會鬆動計數：計的是每個 HTTP request，不是每條 TCP 連線，所以
+一條 tunnel 裡塞多個 request 每個都被數（見 §12 5.12 的定案）。
+
+CA 的形狀刻意跟 I4 對齊：**一個 engagement 一組 CA**，存在 RLS scoped 的
+`engagement_ca` 表，只有 `cyberorch_app` 綁在該 engagement 時讀得到（比照 `credentials`
+的保護等級）；全域共用一組 CA 會是「一把外洩就能假扮任何 engagement 任何 host」的鑰匙，
+正好跨過整個系統在守的邊界。**CA 私鑰永遠不進 sandbox**：control plane 持私鑰簽發，proxy
+只拿到單一 host、數小時效期的 leaf（cert+key 經 read-only bind mount 送進去，路徑當參數、
+key 內容永不進 argv）。因為「一個 capability 一個 host」（D34），proxy 這輩子只面對一個
+host，不需要動態簽發也不需要快取——沒有第二個 host，就沒有簽發節奏這個問題。
+
+**cert pinning 是明確的限制，不是缺陷。** 目標若 pin 憑證（自帶一份真憑證只認它），我們的
+leaf 是它沒被告知要信任的 CA 簽的，連線會在 **TLS 握手層**被目標的 client 拒絕。對本平台
+測試的 disposable 目標這不是問題；對未來真實客戶目標若 pinning，這是硬限制——誠實的立場
+是「工具看不進這條連線」，不是假裝看得到。這個失敗模式要清楚區分於 policy 拒絕（403）：
+握手拒絕發生在任何 HTTP 成形之前，目標的 access log 完全沒有那筆請求。Playwright 是 D36。
 
 ### 8.4 Policy Bypass
 最大風險不是 OPA 被繞過（那是 code review 可以抓的），而是 **Policy Reviewer AI 把危險 action 錯誤分類成低風險**（misclassification）。緩解方式：
