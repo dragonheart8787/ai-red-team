@@ -926,6 +926,14 @@ def test_the_allowlist_validation_still_refuses_a_hostname():
 
 TARGET_HTTPS_PORT = 8443
 
+#: The TLS topology uses its own networks and IP, distinct from the D34
+#: ``topology`` fixture's. Both fixtures are function-scoped and pin a fixed
+#: container IP; sharing 10.78.0.10 between them raced on teardown and CI hit
+#: "address already in use". Separate ranges make the two independent.
+TLS_TARGET_CIDR = "10.79.0.0/24"
+TLS_TARGET_IP = "10.79.0.10"
+TLS_TOOL_CIDR = "10.82.0.0/24"
+
 
 @pytest.fixture
 def tls_topology(sandbox):
@@ -938,14 +946,14 @@ def tls_topology(sandbox):
     from tool_gateway.egress_proxy import Grant, grant_from_capability  # noqa: F401
 
     ca = generate_ca("ENG-CI-TLS")
-    leaf = sign_leaf(ca, TARGET_IP)
+    leaf = sign_leaf(ca, TLS_TARGET_IP)
 
-    name = f"cyberorch-web-target-{uuid.uuid4().hex[:8]}"
-    target_network = sandbox.ensure_network([TARGET_CIDR])
-    sandbox.ensure_network([TOOL_CIDR])
+    name = f"cyberorch-web-target-tls-{uuid.uuid4().hex[:8]}"
+    target_network = sandbox.ensure_network([TLS_TARGET_CIDR])
+    sandbox.ensure_network([TLS_TOOL_CIDR])
     started = subprocess.run(
         ["docker", "run", "-d", "--name", name, "--network", target_network.name,
-         "--ip", TARGET_IP, WEB_TARGET_IMAGE],
+         "--ip", TLS_TARGET_IP, WEB_TARGET_IMAGE],
         capture_output=True, text=True,
     )
     if started.returncode != 0:
@@ -954,11 +962,11 @@ def tls_topology(sandbox):
 
     endpoint = sandbox.start_egress_proxy(
         grant={
-            "capability_id": "CAP-TLS-CI", "host": TARGET_IP,
+            "capability_id": "CAP-TLS-CI", "host": TLS_TARGET_IP,
             "port": TARGET_HTTPS_PORT, "methods": ["GET", "POST"],
             "max_requests": 20,
         },
-        tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
+        tool_side=[TLS_TOOL_CIDR], target_side=[TLS_TARGET_CIDR],
         leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
     )
     try:
@@ -966,8 +974,8 @@ def tls_topology(sandbox):
     finally:
         sandbox.stop_egress_proxy(endpoint)
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-        sandbox.remove_network([TARGET_CIDR])
-        sandbox.remove_network([TOOL_CIDR])
+        sandbox.remove_network([TLS_TARGET_CIDR])
+        sandbox.remove_network([TLS_TOOL_CIDR])
 
 
 def _curl_https_through_proxy(sandbox, endpoint, ca_cert_pem, url, *extra):
@@ -976,7 +984,7 @@ def _curl_https_through_proxy(sandbox, endpoint, ca_cert_pem, url, *extra):
         command=["/usr/bin/curl", "--silent", "--show-error", "--include",
                  "--proto", "=https", "--proxy", endpoint.url,
                  "--cacert", TOOL_CA_PATH, "--max-time", "15", *extra, url],
-        network_allowlist=[TOOL_CIDR], max_duration_seconds=30,
+        network_allowlist=[TLS_TOOL_CIDR], max_duration_seconds=30,
         ca_cert_pem=ca_cert_pem,
     )
 
@@ -992,7 +1000,7 @@ def test_tls_an_authorized_https_request_reaches_the_target_through_the_proxy(
     assert tls_topology["proxy"].tls is True
     result = _curl_https_through_proxy(
         sandbox, tls_topology["proxy"], tls_topology["ca_cert_pem"],
-        f"https://{TARGET_IP}:{TARGET_HTTPS_PORT}/index.html",
+        f"https://{TLS_TARGET_IP}:{TARGET_HTTPS_PORT}/index.html",
     )
     assert result.succeeded, result.stderr
     assert "200 OK" in result.stdout
@@ -1019,7 +1027,7 @@ def test_tls_a_pinning_client_is_refused_and_the_target_never_sees_it(
     wrong_pin = "sha256//" + "A" * 43 + "="
     result = _curl_https_through_proxy(
         sandbox, tls_topology["proxy"], tls_topology["ca_cert_pem"],
-        f"https://{TARGET_IP}:{TARGET_HTTPS_PORT}{marker}",
+        f"https://{TLS_TARGET_IP}:{TARGET_HTTPS_PORT}{marker}",
         "--pinnedpubkey", wrong_pin,
     )
     # A TLS-layer refusal: curl did not get a 200, and it is not a proxy 403.
