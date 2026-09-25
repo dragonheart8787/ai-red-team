@@ -31,6 +31,19 @@ from tool_gateway.browser_runner import (
 )
 
 
+def test_self_check_parses_with_no_url():
+    """The image build runs `browser_runner.py --self-check` with no url. When
+    url was a required positional, argparse rejected that before the browser
+    ran, and the build reported "cannot launch" for four rounds. --self-check
+    must parse without a url; a real run must still require one."""
+    args = browser_runner.build_parser().parse_args(["--self-check"])
+    assert args.self_check is True
+    assert args.url is None
+    args = browser_runner.build_parser().parse_args(["http://10.78.0.10/"])
+    assert args.self_check is False
+    assert args.url == "http://10.78.0.10/"
+
+
 def test_the_module_runs_main_when_executed_as_a_script():
     """The container's ENTRYPOINT runs this file; without a __main__ guard it
     defined main() and exited silently, which the image self-check misread as a

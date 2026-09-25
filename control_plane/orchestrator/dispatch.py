@@ -37,7 +37,7 @@ from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request
 from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
 from tool_gateway import registry
-from tool_gateway.adapters import http_get, http_post, nmap
+from tool_gateway.adapters import browser, http_get, http_post, nmap
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
@@ -169,7 +169,10 @@ ADAPTERS = registry.ADAPTERS
 adapter_for = registry.adapter_for
 
 #: Evidence id prefix per tool, so an id keeps saying what produced it.
-EVIDENCE_PREFIX = {nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP"}
+EVIDENCE_PREFIX = {
+    nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP",
+    browser.TOOL: "BROWSER",
+}
 
 #: A capability naming an action no adapter implements.
 UNKNOWN_ACTION = registry.UNKNOWN_ACTION
@@ -183,6 +186,17 @@ PROXY_REQUIRED = registry.PROXY_REQUIRED
 #: audits the refusal with this reason and dispatch returns it; two spellings
 #: of one refusal is how a search for "why did this stop" finds half the
 #: answer.
+
+
+def _build_plan_params(adapter) -> frozenset[str]:
+    """The keyword names ``adapter.build_plan`` accepts.
+
+    Used to hand each adapter only the proxy-trust input it declares, so a tool
+    is never passed a parameter it does not use (D36).
+    """
+    import inspect
+
+    return frozenset(inspect.signature(adapter.build_plan).parameters)
 
 
 def dispatch_scan(
@@ -199,6 +213,7 @@ def dispatch_scan(
     fresh_for_seconds: int = 1800,
     proxy_url: str | None = None,
     ca_cert_pem: str | None = None,
+    proxy_cert_spki: str | None = None,
 ) -> DispatchOutcome:
     """Run one scan and record run, evidence and state transitions.
 
@@ -269,8 +284,16 @@ def dispatch_scan(
     proxy_kwargs: dict[str, Any] = {}
     if registry.requires_proxy(capability.action):
         proxy_kwargs["proxy_url"] = proxy_url
-        if ca_cert_pem is not None:
+        # How the tool trusts the proxy's terminated TLS differs by tool: curl
+        # verifies the CA at TOOL_CA_PATH (--cacert, D35); the browser pins the
+        # leaf's SPKI (D36). Each adapter's build_plan declares only the one it
+        # takes, so pass by signature rather than give a tool a trust input it
+        # does not use.
+        accepted = _build_plan_params(adapter)
+        if ca_cert_pem is not None and "ca_cert_path" in accepted:
             proxy_kwargs["ca_cert_path"] = TOOL_CA_PATH
+        if proxy_cert_spki is not None and "proxy_cert_spki" in accepted:
+            proxy_kwargs["proxy_cert_spki"] = proxy_cert_spki
     try:
         plan = adapter.build_plan(
             constraints=capability.constraints, budget=capability.budget.as_dict(),
@@ -373,7 +396,12 @@ def dispatch_scan(
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
 
-    sandbox = sandbox or DockerSandbox()
+    # A tool that ships its own image says so; the rest run in the shared one.
+    # When the caller passed a sandbox it already chose the image, so respect it.
+    adapter_image = getattr(adapter, "IMAGE", None)
+    sandbox = sandbox or (
+        DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
+    )
     try:
         result = sandbox.run(
             command=plan.command, network_allowlist=allowlist,
@@ -385,6 +413,9 @@ def dispatch_scan(
             # The public CA the tool verifies the proxy's leaf against (D35).
             # None for nmap and for plain-HTTP web runs.
             ca_cert_pem=ca_cert_pem,
+            # Writable tmpfs the tool's image needs over its read-only root
+            # (the browser; D36). None for tools that need no writable path.
+            tmpfs=getattr(adapter, "TMPFS", None),
         )
     except SandboxUnavailable as exc:
         # The tool may or may not have run — the sandbox failed at a point we

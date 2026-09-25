@@ -54,6 +54,15 @@ CHANGES_STATE = False
 #: Every web.* run goes through the policy-aware egress proxy (§8.3).
 REQUIRES_PROXY = True
 
+#: This tool runs in its own image, not the shared nmap/curl one (§一, D36).
+IMAGE = "cyberorch/browser:local"
+
+#: Writable tmpfs over the read-only root the browser needs (D36). Chromium
+#: writes a profile and caches under its HOME and /tmp; nothing sensitive lives
+#: on either, and each is discarded with the container. ``mode=1777`` so the
+#: image's non-root ``browser`` user can write them.
+TMPFS = {"/tmp": "rw,mode=1777", "/home/browser": "rw,mode=1777"}
+
 #: Grace between the browser's own deadline and the sandbox kill. This adapter's
 #: own constant (D11: two tools must not share a timeout by refactoring).
 TOOL_STOP_GRACE_SECONDS = 10

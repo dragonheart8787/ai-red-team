@@ -30,6 +30,7 @@ from control_plane.tls.engagement_ca import (
     LEAF_TTL_HOURS,
     ensure_engagement_ca,
     generate_ca,
+    leaf_spki_pin,
     mint_leaf_for_host,
     sign_leaf,
 )
@@ -111,6 +112,37 @@ def test_the_leaf_carries_the_ca_cert_but_not_the_ca_key():
     # The CA private key is nowhere in what the proxy receives.
     assert "PRIVATE KEY" in leaf.leaf_key_pem
     assert ca.key_pem not in (leaf.leaf_cert_pem + leaf.ca_cert_pem)
+
+
+def test_the_spki_pin_is_the_base64_sha256_of_the_leaf_public_key():
+    """The pin Chromium's --ignore-certificate-errors-spki-list expects (D36).
+
+    Cross-checked against OpenSSL's own computation rather than trusting our
+    code to agree with itself: the same value the browser will compute for the
+    leaf it is handed. A 32-byte SHA-256, base64 -> 44 characters.
+    """
+    import base64
+    import subprocess
+
+    leaf = sign_leaf(generate_ca("E"), "10.79.0.10")
+    pin = leaf_spki_pin(leaf.leaf_cert_pem)
+    assert len(base64.b64decode(pin)) == 32
+
+    # openssl: extract the public key, DER-encode the SPKI, sha256, base64.
+    proc = subprocess.run(
+        "openssl x509 -pubkey -noout | openssl pkey -pubin -outform der "
+        "| openssl dgst -sha256 -binary | openssl base64",
+        input=leaf.leaf_cert_pem, shell=True, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert pin == proc.stdout.strip()
+
+
+def test_the_pin_differs_between_two_leaves():
+    """Each per-run leaf has its own key, so its pin is its own."""
+    ca = generate_ca("E")
+    assert leaf_spki_pin(sign_leaf(ca, "a.example").leaf_cert_pem) != \
+        leaf_spki_pin(sign_leaf(ca, "b.example").leaf_cert_pem)
 
 
 # ---------------------------------------------------------------------------

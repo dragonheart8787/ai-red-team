@@ -582,6 +582,7 @@ class DockerSandbox:
         run_id: str | None = None,
         stdin: str | None = None,
         ca_cert_pem: str | None = None,
+        tmpfs: Mapping[str, str] | None = None,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
 
@@ -602,6 +603,15 @@ class DockerSandbox:
         tool can trust the proxy's TLS termination — the adapter passes
         ``--cacert TOOL_CA_PATH``. It is the *public* certificate only; no
         private key reaches the tool. Left off for a plain-HTTP or nmap run.
+
+        ``tmpfs`` maps in-container paths to mount options for writable tmpfs
+        mounts, over an otherwise read-only root (D36). The browser needs this:
+        Chromium writes a profile and caches under its HOME and /tmp, and the
+        rest of the root stays read-only. The mounts are ``mode=1777`` so the
+        image's non-root user can write them; nothing sensitive lives on a
+        tmpfs, and each is discarded with the container. nmap and curl pass
+        none — a read-only root with no writable path is the tighter default,
+        kept wherever it is enough.
         """
         allowlist = validate_allowlist(network_allowlist)
         self.ensure_image()
@@ -625,6 +635,9 @@ class DockerSandbox:
                 command=list(command),
                 network=network.name,
                 volumes=volumes,
+                # Writable tmpfs over a read-only root, for a tool that must
+                # write somewhere (the browser). Empty for nmap/curl.
+                tmpfs=dict(tmpfs) if tmpfs else None,
                 # Only opened when there is something to write. A container
                 # with an open stdin nobody closes is a container waiting.
                 stdin_open=stdin is not None,

@@ -191,6 +191,30 @@ def sign_leaf(ca: CAMaterial, host: str, *, ttl_hours: int = LEAF_TTL_HOURS) -> 
     )
 
 
+def leaf_spki_pin(leaf_cert_pem: str) -> str:
+    """The base64 SHA-256 of the leaf's SubjectPublicKeyInfo (D36).
+
+    This is exactly the value Chromium's
+    ``--ignore-certificate-errors-spki-list`` accepts: the browser trusts a
+    server certificate iff its SPKI hashes to one on the list. The browser tool
+    reaches the target only through the egress proxy, which presents this
+    per-run leaf (D35); pinning its SPKI means the browser trusts that leaf and
+    nothing else — not the engagement CA, not the public roots — the same "pin
+    our own leaf" shape as D35's curl ``--cacert``, one step tighter because it
+    names the exact key rather than the issuer. A pinning target's own leaf,
+    signed by a CA the browser was never told to trust, still fails cleanly.
+    """
+    import base64
+    import hashlib
+
+    cert = x509.load_pem_x509_certificate(leaf_cert_pem.encode())
+    spki_der = cert.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return base64.b64encode(hashlib.sha256(spki_der).digest()).decode()
+
+
 # ---------------------------------------------------------------------------
 # Persistence — control plane only, engagement-scoped, never reached by the proxy
 # ---------------------------------------------------------------------------

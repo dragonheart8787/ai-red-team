@@ -195,9 +195,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The argument parser, built separately so a test can check that
+    ``--self-check`` parses with no ``url`` — the mistake that broke the image
+    build (url was a required positional, so the build's ``--self-check``
+    invocation, which passes no url, failed argparse before the browser ran)."""
     parser = argparse.ArgumentParser(description="Playwright navigation tool (D36)")
-    parser.add_argument("url")
+    # Optional: --self-check takes no url. A real run requires one, checked below.
+    parser.add_argument("url", nargs="?", default=None)
     parser.add_argument("--proxy-url", default=None)
     parser.add_argument("--proxy-cert-spki", default=None,
                         help="base64 sha256 SPKI of the proxy leaf to trust")
@@ -206,7 +211,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--nav-timeout-seconds", type=int, default=30)
     parser.add_argument("--self-check", action="store_true",
                         help="launch the browser and exit; used by the image build")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+
+    if not args.self_check and args.url is None:
+        parser.error("a url is required unless --self-check is given")
 
     if args.self_check:
         # The build-time proof that the browser launches under the sandbox
