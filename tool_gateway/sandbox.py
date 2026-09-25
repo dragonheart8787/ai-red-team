@@ -119,8 +119,8 @@ PROXY_LEAF_CERT_PATH = "/etc/cyberorch/leaf-cert.pem"
 PROXY_LEAF_KEY_PATH = "/etc/cyberorch/leaf-key.pem"
 
 
-def _write_secret_tempfile(pem: str) -> str:
-    """Write PEM to a 0600 host temp file and return its path.
+def _write_pem_tempfile(pem: str, mode: int) -> str:
+    """Write PEM to a host temp file with ``mode`` and return its path.
 
     The file is bind-mounted read-only into a container; it must outlive the
     container, so the caller removes it on teardown rather than here.
@@ -130,8 +130,31 @@ def _write_secret_tempfile(pem: str) -> str:
         os.write(fd, pem.encode())
     finally:
         os.close(fd)
-    os.chmod(path, 0o600)
+    os.chmod(path, mode)
     return path
+
+
+def _write_secret_tempfile(pem: str) -> str:
+    """A private key: 0600, readable only by the uid that wrote it.
+
+    Whoever reads it inside a container must *be* that uid. Every container
+    here runs with ``cap_drop=["ALL"]``, so container root has no
+    CAP_DAC_OVERRIDE and is refused a 0600 file it does not own — which is why
+    :meth:`DockerSandbox.start_egress_proxy` runs the proxy as the host uid
+    rather than loosening the mode (D35; CI's runner is not uid 0, the dev
+    container is, and that difference is how this was found).
+    """
+    return _write_pem_tempfile(pem, 0o600)
+
+
+def _write_public_tempfile(pem: str) -> str:
+    """A certificate: 0644. It is public; hiding it protects nothing."""
+    return _write_pem_tempfile(pem, 0o644)
+
+
+def _host_user() -> str:
+    """``uid:gid`` of this process, the owner of every file it writes."""
+    return f"{os.getuid()}:{os.getgid()}"
 
 
 def _unlink_all(paths: Sequence[str]) -> None:
@@ -316,7 +339,8 @@ class DockerSandbox:
 
         ``leaf_cert_pem`` / ``leaf_key_pem`` enable TLS termination (D35). They
         are written to 0600 host files and bind-mounted read-only, and only
-        their *paths* are passed as arguments — the key never enters argv. With
+        their *paths* are passed as arguments — the key never enters argv. The
+        proxy runs as the host uid so it owns, and can read, that 0600 key. With
         neither, the proxy is HTTP-only and refuses CONNECT, the honest D34
         answer for "cannot inspect this tunnel". Both or neither: a cert
         without a key is a misconfiguration, not a mode.
@@ -371,6 +395,13 @@ class DockerSandbox:
             # statement about the wrong thing.
             command=proxy_args,
             volumes=volumes,
+            # The uid that wrote the leaf key, so the key can stay 0600. Not
+            # root: with every capability dropped, container root cannot read
+            # another uid's 0600 file, and the fix that keeps the key private
+            # is for the proxy to be its owner, not for the key to be readable
+            # by everyone. The proxy binds a high port and writes nothing, so
+            # it needs nothing root has.
+            user=_host_user(),
             name=name,
             network=tool_network.name,
             # The proxy is confined exactly as the tool is. It holds no
@@ -583,7 +614,9 @@ class DockerSandbox:
         ca_file: str | None = None
         volumes: dict[str, dict[str, str]] = {}
         if ca_cert_pem:
-            ca_file = _write_secret_tempfile(ca_cert_pem)
+            # Public, so 0644: the tool runs as cap-dropped container root and
+            # could not read a 0600 file owned by the host uid.
+            ca_file = _write_public_tempfile(ca_cert_pem)
             volumes[ca_file] = {"bind": TOOL_CA_PATH, "mode": "ro"}
 
         try:

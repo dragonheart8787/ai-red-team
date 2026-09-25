@@ -27,6 +27,7 @@ from __future__ import annotations
 import http.client
 import http.server
 import json
+import os
 import subprocess
 import threading
 import time
@@ -700,6 +701,35 @@ def test_tls_a_redirect_off_the_allowlist_is_refused_on_the_follow_up(tls_target
 
 
 
+def test_the_leaf_key_file_is_private_and_the_ca_cert_file_is_not():
+    """The two files delivered into containers have different secrecy (D35).
+
+    The leaf key is 0600 and stays that way; the proxy is made its owner
+    instead (``user=`` on the proxy container). The CA cert is public and is
+    0644 so the cap-dropped tool container can read it. CI run 75 is where the
+    first half was found: container root without CAP_DAC_OVERRIDE is refused a
+    0600 file owned by the runner's uid.
+    """
+    import stat
+
+    from tool_gateway.sandbox import (
+        _host_user,
+        _write_public_tempfile,
+        _write_secret_tempfile,
+    )
+
+    key = _write_secret_tempfile("-----BEGIN PRIVATE KEY-----\n")
+    cert = _write_public_tempfile("-----BEGIN CERTIFICATE-----\n")
+    try:
+        assert stat.S_IMODE(os.stat(key).st_mode) == 0o600
+        assert stat.S_IMODE(os.stat(cert).st_mode) == 0o644
+        assert os.stat(key).st_uid == os.getuid()
+    finally:
+        os.unlink(key)
+        os.unlink(cert)
+    assert _host_user() == f"{os.getuid()}:{os.getgid()}"
+
+
 # ---------------------------------------------------------------------------
 # 4. The two-network topology — kernel evidence, containers required
 # ---------------------------------------------------------------------------
@@ -782,25 +812,32 @@ def topology(sandbox):
          "--ip", TARGET_IP, WEB_TARGET_IMAGE],
         capture_output=True, text=True,
     )
-    if started.returncode != 0:
-        pytest.fail(f"could not start the web target: {started.stderr}",
-                    pytrace=False)
-    _wait_until_serving(name)
-
-    endpoint = sandbox.start_egress_proxy(
-        grant={
-            "capability_id": "CAP-TOPOLOGY",
-            "host": TARGET_IP,
-            "port": TARGET_PORT,
-            "methods": ["GET", "POST"],
-            "max_requests": 20,
-        },
-        tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
-    )
+    endpoint = None
+    # The try opens *before* setup finishes. A fixture that raises before its
+    # yield never runs its teardown, so a proxy that failed to start left the
+    # target holding its fixed IP, and the next fixture's target failed with
+    # "address already in use" -- a second error reporting the first one's
+    # leftovers (CI run 75).
     try:
+        if started.returncode != 0:
+            pytest.fail(f"could not start the web target: {started.stderr}",
+                        pytrace=False)
+        _wait_until_serving(name)
+
+        endpoint = sandbox.start_egress_proxy(
+            grant={
+                "capability_id": "CAP-TOPOLOGY",
+                "host": TARGET_IP,
+                "port": TARGET_PORT,
+                "methods": ["GET", "POST"],
+                "max_requests": 20,
+            },
+            tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
+        )
         yield {"target_name": name, "proxy": endpoint}
     finally:
-        sandbox.stop_egress_proxy(endpoint)
+        if endpoint is not None:
+            sandbox.stop_egress_proxy(endpoint)
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         sandbox.remove_network([TARGET_CIDR])
         sandbox.remove_network([TOOL_CIDR])
@@ -956,23 +993,26 @@ def tls_topology(sandbox):
          "--ip", TLS_TARGET_IP, WEB_TARGET_IMAGE],
         capture_output=True, text=True,
     )
-    if started.returncode != 0:
-        pytest.fail(f"could not start the web target: {started.stderr}", pytrace=False)
-    _wait_until_serving(name)
+    endpoint = None
+    try:  # opened before setup completes; see ``topology``
+        if started.returncode != 0:
+            pytest.fail(f"could not start the web target: {started.stderr}",
+                        pytrace=False)
+        _wait_until_serving(name)
 
-    endpoint = sandbox.start_egress_proxy(
-        grant={
-            "capability_id": "CAP-TLS-CI", "host": TLS_TARGET_IP,
-            "port": TARGET_HTTPS_PORT, "methods": ["GET", "POST"],
-            "max_requests": 20,
-        },
-        tool_side=[TLS_TOOL_CIDR], target_side=[TLS_TARGET_CIDR],
-        leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
-    )
-    try:
+        endpoint = sandbox.start_egress_proxy(
+            grant={
+                "capability_id": "CAP-TLS-CI", "host": TLS_TARGET_IP,
+                "port": TARGET_HTTPS_PORT, "methods": ["GET", "POST"],
+                "max_requests": 20,
+            },
+            tool_side=[TLS_TOOL_CIDR], target_side=[TLS_TARGET_CIDR],
+            leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
+        )
         yield {"target_name": name, "proxy": endpoint, "ca_cert_pem": ca.cert_pem}
     finally:
-        sandbox.stop_egress_proxy(endpoint)
+        if endpoint is not None:
+            sandbox.stop_egress_proxy(endpoint)
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         sandbox.remove_network([TLS_TARGET_CIDR])
         sandbox.remove_network([TLS_TOOL_CIDR])
@@ -998,6 +1038,10 @@ def test_tls_an_authorized_https_request_reaches_the_target_through_the_proxy(
     per-engagement CA reaches the target and is logged there.
     """
     assert tls_topology["proxy"].tls is True
+    # The proxy runs as the owner of its 0600 leaf key, not as root.
+    proxy_user = sandbox.client().containers.get(
+        tls_topology["proxy"].container_id).attrs["Config"]["User"]
+    assert proxy_user == f"{os.getuid()}:{os.getgid()}"
     result = _curl_https_through_proxy(
         sandbox, tls_topology["proxy"], tls_topology["ca_cert_pem"],
         f"https://{TLS_TARGET_IP}:{TARGET_HTTPS_PORT}/index.html",

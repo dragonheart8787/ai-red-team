@@ -84,4 +84,17 @@ docker run --rm --network none --entrypoint /usr/bin/python3 "$IMAGE" \
     exit 1
 }
 
+# And again the way the sandbox actually runs it: as a non-root uid, every
+# capability dropped, read-only root (D35). The check above runs as root with
+# default capabilities, which can read anything; the proxy never runs like
+# that. 65534 is deliberately not the build user, so it passes only if the
+# staged tree is readable by "other" -- whatever uid the control plane turns
+# out to be.
+docker run --rm --network none --user 65534:65534 --cap-drop ALL \
+    --security-opt no-new-privileges:true --read-only \
+    --entrypoint /usr/bin/python3 "$IMAGE" /opt/egress_proxy.py --help >/dev/null || {
+    echo "error: $IMAGE cannot start the proxy module as a non-root, cap-dropped uid" >&2
+    exit 1
+}
+
 echo "built $IMAGE (python $PYVER)"
