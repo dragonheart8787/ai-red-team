@@ -86,6 +86,16 @@ jobs:
         # tool can go around one.
         run: ./tool_gateway/images/build_egress_proxy_image.sh
 
+      - name: Build the browser image
+        # D36's Playwright tool runs in a container of its own. Unlike the three
+        # images above it is a real Dockerfile (Chromium is too large and too
+        # dynamic for the docker-import scratch route -- see browser.Dockerfile),
+        # so this step needs registry and PyPI access the others do not; the
+        # GitHub runner has both. The build script's own check launches the
+        # browser as a non-root, cap-dropped, read-only container, so a browser
+        # that cannot start under the sandbox restriction fails here.
+        run: ./tool_gateway/images/build_browser_image.sh
+
       - name: Verify Docker can enforce the network boundary
         # Checked explicitly and early so a runner without usable Docker
         # networking reports that, rather than surfacing as a wall of
