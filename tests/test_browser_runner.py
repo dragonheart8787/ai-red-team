@@ -16,14 +16,35 @@ has to hold independently of anything the browser does.
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+
 import pytest
 
+from tool_gateway import browser_runner
 from tool_gateway.browser_runner import (
     REFUSED_SCHEME,
     REFUSED_WEBSOCKET,
     build_launch_kwargs,
     classify_target,
 )
+
+
+def test_the_module_runs_main_when_executed_as_a_script():
+    """The container's ENTRYPOINT runs this file; without a __main__ guard it
+    defined main() and exited silently, which the image self-check misread as a
+    browser launch failure through three CI rounds. Executing it on a refused
+    target (file://, rejected before Playwright is even imported) proves main()
+    actually runs end to end and prints its structured result."""
+    proc = subprocess.run(
+        [sys.executable, browser_runner.__file__, "file:///etc/passwd"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["refused"] is True
+    assert result["reason"] == REFUSED_SCHEME
 
 
 @pytest.mark.parametrize("url", [

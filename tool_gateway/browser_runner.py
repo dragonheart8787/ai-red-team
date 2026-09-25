@@ -236,7 +236,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     result = run(args)
-    print(json.dumps(result))
+    print(json.dumps(result), flush=True)
     # A refusal is a completed run that refused, not a crash: exit 0 so the
     # adapter reads the structured reason rather than a generic failure.
     return 0
+
+
+if __name__ == "__main__":
+    # The image ENTRYPOINT is the interpreter and this script, so the container
+    # runs it as __main__. Without this guard the module only *defined* main and
+    # exited 0 with no output, which the self-check read as "browser cannot
+    # launch" through three CI rounds — the failure was never the browser.
+    raise SystemExit(main())
