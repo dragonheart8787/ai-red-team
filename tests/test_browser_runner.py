@@ -74,6 +74,18 @@ def test_a_proxy_and_an_spki_pin_are_wired_when_given():
     assert "--ignore-certificate-errors-spki-list=Zm9vYmFy" in kwargs["args"]
 
 
+def test_the_launch_never_opens_a_remote_debugging_port():
+    """P3 boundary (D36 §四): the CDP channel stays a pipe between the driver
+    and the browser. A --remote-debugging-port would open a TCP listener that
+    page content, or anything else on the network, could reach. The probe
+    confirmed launch() uses pipe transport and port 9222 is closed; this keeps
+    it that way by construction, for both the proxied and the self-check paths."""
+    for spki, proxy in [(None, None), ("PIN", "http://p:3128")]:
+        args = build_launch_kwargs(proxy_url=proxy, proxy_cert_spki=spki)["args"]
+        assert not any("remote-debugging-port" in a for a in args)
+        assert not any("remote-debugging-address" in a for a in args)
+
+
 def test_the_spki_pin_trusts_exactly_one_key_not_a_ca_or_the_public_roots():
     """The pin lists our leaf's SPKI only. There is no flag that trusts a CA or
     disables verification wholesale, so a leaf with any other key is rejected --

@@ -64,7 +64,7 @@ docker run --rm --entrypoint /bin/cat "$IMAGE" /etc/cyberorch/browser-manifest.t
 # check that hides the container's own error reports the wrong thing).
 selfcheck="$(docker run --rm --network none \
     --cap-drop ALL --security-opt no-new-privileges:true \
-    --read-only --tmpfs /tmp --tmpfs /home/browser \
+    --read-only --tmpfs /tmp:rw,mode=1777 --tmpfs /home/browser:rw,mode=1777 \
     "$IMAGE" --self-check 2>&1)" || true
 echo "--- self-check output ---"
 echo "$selfcheck"

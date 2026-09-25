@@ -167,16 +167,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(**launch_kwargs)
         try:
-            context = browser.new_context(ignore_https_errors=False)
-            # Refuse a WebSocket the page tries to open, loudly. Playwright
-            # surfaces ws opens as an event; there is no partial-allow.
-            context.on("websocket", lambda ws: setattr(ws, "_refused", True))
+            # accept_downloads=False: a response that triggers a download is
+            # cancelled, so nothing is written to disk at all (D36 §四, P2).
+            # The probe showed the page cannot control a download's path anyway
+            # -- Chromium strips path separators from the suggested name and
+            # Playwright picks a random path under its own temp dir -- but not
+            # writing it is stronger than writing it somewhere harmless, and it
+            # keeps a page from filling the container's tmpfs.
+            context = browser.new_context(
+                ignore_https_errors=False, accept_downloads=False)
+            # A page may still *try* to open a WebSocket. The boundary that
+            # refuses it is the egress proxy (the grant permits no upgrade, D36
+            # §三); this listener only records the attempt for the derived view,
+            # it is not the enforcement and does not pretend to be.
+            ws_attempts: list[str] = []
+            context.on("websocket", lambda ws: ws_attempts.append(getattr(ws, "url", "")))
             page = context.new_page()
             result = _navigate(
                 page, args.url,
                 max_subresources=args.max_subresources,
                 nav_timeout_ms=args.nav_timeout_seconds * 1000,
             )
+            if ws_attempts:
+                result["websocket_attempted"] = True
         finally:
             browser.close()
     return result
@@ -198,16 +211,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_check:
         # The build-time proof that the browser launches under the sandbox
         # restriction it will actually run with (D35 habit). No network.
+        #
+        # Wrapped so a launch failure prints its reason rather than an empty
+        # result: the first CI attempt failed with the browser producing no
+        # output at all under a read-only root, which said nothing about why.
+        # A named exception on stdout is the difference between "cannot launch"
+        # and "cannot launch because <path> is not writable".
+        import traceback
+
         from playwright.sync_api import sync_playwright
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(**build_launch_kwargs(
-                proxy_url=None, proxy_cert_spki=None))
-            page = browser.new_context().new_page()
-            page.goto("data:text/html,<h1>ok</h1>")
-            ok = "ok" in page.content()
-            browser.close()
-        print(json.dumps({"self_check": ok}))
-        return 0 if ok else 1
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(**build_launch_kwargs(
+                    proxy_url=None, proxy_cert_spki=None))
+                page = browser.new_context(accept_downloads=False).new_page()
+                page.goto("data:text/html,<h1>ok</h1>")
+                ok = "ok" in page.content()
+                browser.close()
+            print(json.dumps({"self_check": bool(ok)}), flush=True)
+            return 0 if ok else 1
+        except Exception as exc:  # noqa: BLE001 - the point is to report any failure
+            traceback.print_exc()
+            print(json.dumps({"self_check": False, "error": str(exc)[:400]}), flush=True)
+            return 1
 
     result = run(args)
     print(json.dumps(result))
