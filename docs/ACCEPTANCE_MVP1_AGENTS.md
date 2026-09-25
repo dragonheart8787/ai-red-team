@@ -481,6 +481,32 @@ upstream; and the upstream TLS context is *explicitly* unverified, with the
 reason stated — the proxy audits content, it does not authenticate the target,
 whose identity is the grant's host binding, exactly as Burp and mitmproxy do.
 
+### Found at D36 — the browser is not the boundary; the container is
+
+| # | Item | Status |
+|---|---|---|
+| 5.14 | A headless browser reads a `file://` it is pointed at | **Recorded threat, addressed at the container — not a defect in the browser to fix.** Probed with the real Playwright: a headless Chromium navigated to `file:///…` reads any file its uid can read; it does not refuse, and no browser flag makes it refuse in general. So the isolation cannot rest on the browser. Two layers hold instead, both proven by evidence outside the browser: the runner refuses any non-http/https target before launch (`classify_target`), and the browser container carries nothing worth reading — no private key, and not the D35 leaf-key path, which lives only in the proxy container. Pinned in `tests/test_browser_escape.py`: a `grep` over the container filesystem (a non-browser witness) finds no private key; the leaf-key path is absent (`test -e`); the runner returns a structured refusal for `file://` with no file content; and a raw browser driven at `file:///etc/hostname` *does* read it, which is what makes the runner's refusal the load-bearing boundary rather than an incidental browser default. |
+| 5.15 | Downloads could write to an arbitrary container path | **Tested, judged not a path-control surface — recorded like a fail-open branch, not skipped.** A download whose `Content-Disposition` filename was `../../../../tmp/MARKER` came back with the separators flattened to underscores (Chromium sanitises the name) and was stored at a random-UUID path under Playwright's own temp dir; the traversal target was never created. The page can only relocate a download if our code calls `save_as`, which the runner never does. Residual risk is only tmpfs consumption in a secret-free container; closed further with `accept_downloads=False`, so a triggered download is cancelled and nothing is written. |
+| 5.16 | The DevTools/CDP channel could be reached by page content | **Tested, judged not reachable — recorded, not skipped.** `chromium.launch()` uses pipe transport: no ws endpoint, DevTools TCP port 9222 closed. The control channel is file descriptors between the Playwright driver process and the browser; the renderer where page JavaScript runs has neither those fds nor any listening socket to reach. The boundary that keeps it so — never launching with `--remote-debugging-port` — is pinned by a structural test on the launch args (`test_the_launch_never_opens_a_remote_debugging_port`), for the proxied and self-check paths both. |
+| 5.17 | WebSocket is unhandled | **Excluded deliberately, like PUT/DELETE (D34).** No caller needs a WebSocket; opening one would carry bidirectional traffic past the per-request counting the whole model rests on. A `ws://`/`wss://` target is refused with its own named reason (`REFUSED_WEBSOCKET`), distinct from an unknown scheme, so the refusal reads as "not offered" rather than "not understood". |
+
+**D36, and why the image build fought back.** The browser image is a self-built
+Dockerfile, not the docker-import scratch route the other three use — Chromium
+is too large and too dynamic for hand-staging, and that route buys no
+traceability when the browser blobs are Playwright-distributed either way; what
+is auditable (packages, browser revision) is recorded in a baked-in manifest
+(Playwright 1.56.0, Chromium 1194). The self-check — run the browser as the
+image's non-root user, cap-dropped, read-only root with tmpfs, the D35 habit —
+took several CI rounds, and every failure was a build/wrapper bug, never the
+browser: the pip package version was the Node one (PyPI has 1.56.0, not
+1.56.1); a root-owned tmpfs HOME the browser uid could not write; then, with
+diagnostics finally printing, the module had no `__main__` guard so it defined
+`main()` and exited silently; then `url` was a required positional so the
+build's `--self-check` (no url) failed argparse before the browser ran. Each is
+pinned by a hermetic test now (a module-runs-as-script test, a --self-check
+parses-with-no-url test), so this class of "the wrapper never ran the code"
+bug fails on every machine, not only in CI.
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |

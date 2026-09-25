@@ -459,6 +459,16 @@ def merge_policy(baseline_global, emergency_overlay, customer_p, engagement_p) -
 
 1. **`max_requests` 對 HTTP 合理，對 Nmap/BloodHound/CodeQL 這種工具沒有意義**（「一次 request」是什麼？）。改成 `budget` 物件，Control Plane 只管跟工具無關的通用欄位（`max_duration_seconds`、`max_targets`、`max_concurrency`），工具特有的維度（HTTP 的 `max_requests`/`requests_per_second`、network 工具的 `allowed_ports` 等）由各自的 Tool Adapter 定義自己的 sub-schema。**MVP-Kernel 階段只有一個工具，budget 先做最小可用（duration + 一個相關維度）就好，不要一次把所有工具的 budget schema 都設計出來**——這個抽象現在先立好，具體 schema 隨 Phase 1 加新工具時再逐一補。
 
+   **`budget.tool.browser`（D36）。** Playwright 的計數不能沿用 `http.max_requests`：一次
+   `page.goto()` 會扇出成 CSS/JS/XHR/字型等 sub-request，agent 沒有逐一提案，用單一 request
+   budget 去數等於把「導覽一次」跟「這頁 import 了四十個東西」混為一談，讓預算由目標決定。
+   所以導覽是計數單位，sub-request 有自己的上限：`max_navigations`（頂層文件載入）、
+   `max_subresources_per_navigation`（單次導覽的扇出上限，超過中止該次導覽、fail-closed）、
+   `max_navigation_duration_seconds`（單次導覽時間窗）。越界拒絕、不 clamp（clamp 等於跑一個
+   跟核准的不同的預算）。proxy 仍逐請求計數當 backstop（D34），plan 帶一個導出的上限
+   （navigations × subresources）過去，免得 proxy 拒絕一個 browser budget 已允許的扇出。
+   sub-resource 上限這個新概念由 mutation test 釘住，比照 D34 對 `consume_request` 的規格。
+
 2. **Capability renewal（heartbeat 續租）不能只是延長 TTL，必須重新過一次授權檢查。** 原本設計沒處理「capability 發出後，剛好遇到 Emergency Overlay 生效／approval 過期／credential 被撤銷／engagement 被 pause／kill switch 觸發」這幾種情況——如果 heartbeat 只是機械式地延長時間，capability 就會帶著「發出當下」已經過期的授權繼續跑。續租流程必須是：
 
 ```
@@ -744,6 +754,37 @@ leaf 是它沒被告知要信任的 CA 簽的，連線會在 **TLS 握手層**�
 測試的 disposable 目標這不是問題；對未來真實客戶目標若 pinning，這是硬限制——誠實的立場
 是「工具看不進這條連線」，不是假裝看得到。這個失敗模式要清楚區分於 policy 拒絕（403）：
 握手拒絕發生在任何 HTTP 成形之前，目標的 access log 完全沒有那筆請求。Playwright 是 D36。
+
+**Playwright（D36）。** Web Agent 第三步跑真的瀏覽器（`web.render`）：導覽頁面、讓 JS
+執行、把 render 結果帶回。它的風險跟前面四次 injection 不同——不是「內容可不可信」，是
+「執行內容的環境夠不夠隔離」。所以 adapter 很薄，隔離放在鏡像、sandbox、容器內 runner
+（`tool_gateway/browser_runner.py`）。
+
+鏡像是自建 Dockerfile（不是其他三個鏡像的 docker-import scratch 路線）：Chromium 太大、
+執行時 dlopen 的函式庫 `ldd` 看不到、還按內容讀一整棵字型/fontconfig/nss 設定樹，手工拼
+是 D31「容器不會 serve」的坑放大四十倍，而且換不到可追溯性——瀏覽器 blob 反正是 Playwright
+發布的。可追溯的是「哪些套件、哪個瀏覽器 revision」，烤進鏡像的 manifest 記下來（釘
+Playwright 1.56.0 / Chromium 1194）。代價是接受一層 base image 當信任根。
+
+**容器才是邊界，不是瀏覽器（§四 的實測結論）。** headless Chromium 被指向 `file://` 會
+讀它 uid 讀得到的檔案——瀏覽器自己不擋（實測確認）。所以隔離不能靠瀏覽器拒絕，靠兩件事、
+用容器層級的獨立證據（不是瀏覽器自報）：(1) runner 在啟動瀏覽器前就拒絕非 http/https 的
+target；(2) 瀏覽器容器裡沒有值得偷的東西——沒有私鑰、沒有 D35 leaf key 路徑，leaf key 只在
+proxy 容器裡，所以就算瀏覽器繞過 runner 也讀不到。瀏覽器以非 root、擁有零機密的 uid 執行，
+Chromium 自帶的 sandbox 因 `cap_drop=ALL` 用不了（`--no-sandbox`），這正是為什麼容器必須
+是邊界。TLS 靠 SPKI pin 信任 proxy 的 per-run leaf（比 D35 的 CA 信任更緊，只認那一把 leaf
+的公鑰）。
+
+**下載與 DevTools 都實測過、判斷不構成攻擊面（跟 fail-open 分支一樣明確記錄，不是想不到就
+跳過）。** 下載：頁面控制不了寫入路徑——Chromium 把 Content-Disposition 檔名的路徑分隔符
+砍成底線，Playwright 用隨機 UUID 路徑存到自己的 temp 目錄，路徑穿越靶檔從未被建立；再加
+`accept_downloads=False`，觸發下載直接取消、什麼都不寫。DevTools/CDP：`chromium.launch()`
+用 pipe transport（無 ws endpoint、9222 埠關閉），控制管道是 driver 與瀏覽器行程間的 fd，
+頁面 JS 跑的 renderer 既碰不到那些 fd、也沒有可連的 socket；守住這點的邊界（永不用
+`--remote-debugging-port`）由 launch 參數的結構測試釘住。
+
+**WebSocket 明確排除（比照 PUT/DELETE）。** 沒有呼叫者需要，就不開；遇到 `ws://`/`wss://`
+以具名原因拒絕並記錄，不靜默放行——靜默放行等於開一條繞過逐請求計數的雙向管道。
 
 ### 8.4 Policy Bypass
 最大風險不是 OPA 被繞過（那是 code review 可以抓的），而是 **Policy Reviewer AI 把危險 action 錯誤分類成低風險**（misclassification）。緩解方式：
