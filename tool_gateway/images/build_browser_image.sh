@@ -52,10 +52,23 @@ docker run --rm --entrypoint /bin/cat "$IMAGE" /etc/cyberorch/browser-manifest.t
 # dropped, read-only root with tmpfs for the paths Chromium must write. If the
 # browser cannot start under exactly these restrictions, the tool would fail at
 # dispatch with traffic already arriving; catch it here.
-docker run --rm --network none \
+#
+# The writable set is a whole tmpfs HOME plus /tmp, not just ~/.cache: a fresh
+# Chromium writes a profile, config, crash dumps and font caches across several
+# dirs under $HOME, and Playwright's driver writes a temp profile under /tmp.
+# The rest of the root stays read-only, which is the point. These same mounts
+# are what the sandbox gives the browser at run time (stage 3).
+#
+# The output is captured and printed whatever happens, then the gate runs on
+# it: a browser that failed to launch prints *why* (the D31/D35 lesson -- a
+# check that hides the container's own error reports the wrong thing).
+selfcheck="$(docker run --rm --network none \
     --cap-drop ALL --security-opt no-new-privileges:true \
-    --read-only --tmpfs /tmp --tmpfs /home/browser/.cache \
-    "$IMAGE" --self-check | grep -q '"self_check": true' || {
+    --read-only --tmpfs /tmp --tmpfs /home/browser \
+    "$IMAGE" --self-check 2>&1)" || true
+echo "--- self-check output ---"
+echo "$selfcheck"
+echo "$selfcheck" | grep -q '"self_check": true' || {
     echo "error: $IMAGE cannot launch the browser as a non-root, cap-dropped, read-only container" >&2
     exit 1
 }
