@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from tool_gateway.adapters import http_get, http_post, nmap
+from tool_gateway.adapters import browser, http_get, http_post, nmap
 
 #: Action → adapter module.
 #:
@@ -61,6 +61,7 @@ ADAPTERS = MappingProxyType({
     "network.recon": nmap,
     http_get.ACTION: http_get,
     http_post.ACTION: http_post,
+    browser.ACTION: browser,
 })
 
 #: A capability naming an action no adapter implements.

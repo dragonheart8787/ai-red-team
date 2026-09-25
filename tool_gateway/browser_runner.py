@@ -94,13 +94,25 @@ def build_launch_kwargs(
     return kwargs
 
 
+def _over_ceiling(count: int, ceiling: int) -> bool:
+    """Whether ``count`` sub-resources has passed the per-navigation ceiling.
+
+    A named function, not an inline ``>``, on purpose: it is the one place the
+    sub-resource budget is enforced, so a mutation test can stub it out and
+    prove the guarantee then fails — the same way D34 pinned ``consume_request``
+    (§二.3). If this returned ``False`` always, a page could fetch without
+    limit; the test asserts exactly that regression.
+    """
+    return count > ceiling
+
+
 def _navigate(page, url: str, *, max_subresources: int, nav_timeout_ms: int) -> dict[str, Any]:
     """Drive one top-level navigation, counting and bounding its sub-resources."""
     counter = {"n": 0, "over": False}
 
     def _on_request(request) -> None:
         counter["n"] += 1
-        if counter["n"] > max_subresources:
+        if _over_ceiling(counter["n"], max_subresources):
             counter["over"] = True
             # Abort the run-away navigation rather than let the page decide how
             # much budget it spends: the ceiling is the system's, not the
@@ -111,7 +123,18 @@ def _navigate(page, url: str, *, max_subresources: int, nav_timeout_ms: int) -> 
                 pass
 
     page.on("request", _on_request)
-    response = page.goto(url, wait_until="load", timeout=nav_timeout_ms)
+    try:
+        response = page.goto(url, wait_until="load", timeout=nav_timeout_ms)
+    except Exception:
+        # A ceiling abort closes the context, which makes goto raise; that is a
+        # refusal, not a crash. Any other exception is a real failure and
+        # propagates.
+        if counter["over"]:
+            return _reason(
+                BUDGET_SUBRESOURCES,
+                f"navigation fetched more than {max_subresources} sub-resources",
+            )
+        raise
     if counter["over"]:
         return _reason(
             BUDGET_SUBRESOURCES,

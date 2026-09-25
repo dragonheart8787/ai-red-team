@@ -33,9 +33,11 @@ ARG BASE=ubuntu:24.04
 FROM ${BASE}
 
 # Pinned so the browser revision is fixed, not "whatever is latest at build".
-# Playwright 1.56.1 ships Chromium revision 1194 (browserVersion 141.0.7390.37);
-# pinning the pip version pins the browser it installs.
-ARG PLAYWRIGHT_VERSION=1.56.1
+# The Python package patch-numbers independently of the Node one: pip's
+# playwright 1.56.0 is the release that ships Chromium revision 1194
+# (browserVersion 141.0.7390.37) -- there is no 1.56.1 on PyPI. Pinning the pip
+# version pins the browser it installs; the RUN below verifies the revision.
+ARG PLAYWRIGHT_VERSION=1.56.0
 ARG CHROMIUM_REVISION=1194
 
 ENV DEBIAN_FRONTEND=noninteractive \

@@ -13,7 +13,7 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-cyberorch/browser:local}"
 BASE="${BASE:-ubuntu:24.04}"
-PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.56.1}"
+PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.56.0}"
 CHROMIUM_REVISION="${CHROMIUM_REVISION:-1194}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
