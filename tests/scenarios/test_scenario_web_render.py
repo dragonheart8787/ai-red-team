@@ -146,8 +146,7 @@ def _authorize(registry, engagement_id):
     return scope_id
 
 
-def _render(conn, engagement_id, registry, topology, *, path, budget):
-    scope_id = _authorize(registry, engagement_id)
+def _render(conn, engagement_id, scope_id, topology, *, path, budget):
     proposal = ProposedAction(
         action="web.render",
         target={"logical_identity": {"type": "ip", "value": TARGET_IP},
@@ -172,9 +171,14 @@ def test_web_render_reads_js_generated_content_end_to_end(
     """The ALLOW path reaches a real browser, which renders the page and reads
     content that only exists after its JavaScript ran — content a static GET
     could not see. SPKI pin + tmpfs + budget all applied in a real dispatch."""
+    # Authorize before opening the propose_action transaction: the registry
+    # rows are committed on their own connection, and a transaction opened
+    # first would not see them (target_out_of_scope). Same order as the
+    # hermetic e2e.
+    scope_id = _authorize(registry, engagement_id)
     with engagement_scope(engagement_id) as conn:
         outcome = _render(
-            conn, engagement_id, registry, render_topology,
+            conn, engagement_id, scope_id, render_topology,
             path="/dynamic.html",
             budget=Budget(tool={"browser": {
                 "max_navigations": 1, "max_subresources_per_navigation": 10}}))
@@ -203,9 +207,10 @@ def test_the_subresource_ceiling_aborts_a_real_fanout(
     """A real gallery page fetching 40 sub-resources against a ceiling of 5:
     the navigation is aborted, fail-closed, in the real dispatch path — not
     only in the runner's unit test."""
+    scope_id = _authorize(registry, engagement_id)
     with engagement_scope(engagement_id) as conn:
         outcome = _render(
-            conn, engagement_id, registry, render_topology,
+            conn, engagement_id, scope_id, render_topology,
             path="/fanout.html",
             budget=Budget(tool={"browser": {
                 "max_navigations": 1, "max_subresources_per_navigation": 5}}))
