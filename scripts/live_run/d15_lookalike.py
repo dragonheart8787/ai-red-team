@@ -51,13 +51,13 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy import text  # noqa: E402
 
 from agents.base_agent import ProposedTask  # noqa: E402
 from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer  # noqa: E402
 from agents.llm.selection import build_worker  # noqa: E402
 from agents.llm.worker_base import Observation, ScopeCandidate  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
+from control_plane.orchestrator.engagement import create_engagement  # noqa: E402
 from control_plane.policy.layers import load_effective_policy  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import (  # noqa: E402
@@ -119,14 +119,12 @@ def uid(prefix: str) -> str:
 
 def setup(engagement_id: str, target_ip: str, scope_plan=SCOPE_PLAN
          ) -> dict[str, str]:
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-D15-LOCAL', 1)"),
-            {"e": engagement_id},
-        )
     registered: dict[str, str] = {}
     with registry_admin_scope(engagement_id) as conn:
+        create_engagement(
+            conn, engagement_id=engagement_id, customer_id="CUST-D15-LOCAL",
+            actor=ACTOR,
+        )
         for stype, value, actions, _why in scope_plan:
             scope_object_id = uid("SCOPE")
             register_scope_object(

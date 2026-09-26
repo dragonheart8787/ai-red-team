@@ -160,8 +160,15 @@ def test_engagement_lifecycle_is_audited(engagement_id):
     The broker had checked status and kill_switch_engaged since D5. Nothing
     could set them, so nothing could be audited, and "who stopped this
     engagement" had no answer.
+
+    ``engagement.created`` (D11-9, D39) is already on the record by the time
+    this test body runs: the ``engagement_id`` fixture creates it through the
+    real operation now, on a ``registry_admin`` connection, before handing the
+    id here. It is visible from this engagement-scoped connection under the
+    same RLS the rest of the row is.
     """
     with engagement_scope(engagement_id) as conn:
+        assert "engagement.created" in audited_event_types(conn)
         issue_capability(
             conn, engagement_id=engagement_id, capability_id=_uid("CAP"),
             agent_id="fake-worker", action="network.scan", actor="orchestrator",

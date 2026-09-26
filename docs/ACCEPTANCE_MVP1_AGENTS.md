@@ -549,6 +549,13 @@ ceiling of 5 is aborted, fail-closed, and the evidence's derived view carries
 is set generous in that scenario precisely so the abort is attributable to the
 browser budget and not to the proxy's request count.
 
+### Found at D39 — D11-9 closed; one design decision recorded, not resolved
+
+| # | Item | Status |
+|---|---|---|
+| **D11-9** | Nothing creates an engagement | **Closed at D39.** `create_engagement` (`control_plane/orchestrator/engagement.py`) runs on `registry_admin` — the Engagement Manager role, the same one that already registers scope and metadata — audits `engagement.created` with the actor, the customer, and the computed policy version, and refuses a duplicate id with `EngagementAlreadyExists` rather than a raw constraint violation. Migration `0010` moved the write there and, in the same pass, revoked INSERT/DELETE on `engagements` from `cyberorch_app`, which had held both since migration 0001's blanket grant and had never had a legitimate caller for either — the same "rests on application code choosing not to" gap D5 closed for the registries, just never noticed for this table. Pinned directly: `test_app_role_cannot_insert_an_engagement` / `test_app_role_cannot_delete_an_engagement` assert `InsufficientPrivilege` from PostgreSQL, not merely that the application does not try; `test_app_role_can_still_update_and_select_an_engagement` is the explicit negative control proving `pause`/`resume`/`kill`/`complete` are untouched. All five D11/D17 live-run scripts, and the roughly twenty test call sites that wrote the row directly, now call the real operation — rebuilding each script's construction logic against `create_engagement` and running it against a real database confirmed the resulting engagement is identical in shape (`active`, not killed, a real audited creation) to what the raw INSERT produced, for every one of them. |
+| **5.20** | The §4.5 frozen Baseline Snapshot has never been built | **Open, Class C — a decision, not a defect.** Checked rather than assumed: `load_effective_policy` live-merges whatever `baseline_global` / `customer` / `engagement` / `emergency_overlay` layers are `active IS TRUE` on every call, filtered only by `engagement_id IS NULL OR engagement_id = :eid`; it has never read `engagements.policy_snapshot_version`, which every pre-D39 caller wrote as the literal `1`. Only `emergency_overlay` has a database-level tighten-only constraint — `baseline_global` has none, so a later global-policy publish already applies retroactively to every open engagement, which is the opposite of what §4.5 v0.2 describes ("Global Policy 之後更新不應該回溯影響正在進行的 Engagement"). D39 makes the stored column honest — `create_engagement` computes it from the broker's own `current_policy_version` rather than a placeholder — and deliberately stops there: making `load_effective_policy` actually consult it means splitting D14's `_APPLICABLE` predicate (built specifically so enforcement and the listing function can never disagree) into two different rules for two layer categories, and deciding what a `baseline_global` publish should do to engagements already open under an earlier one, which the current merge algebra does not express. `test_load_effective_policy_does_not_read_the_snapshot` pins the current (unfrozen) behaviour so this cannot get silently built without the claim being updated. Not required for anything shipped so far; a real-deployment decision, D25-shaped, if a customer's signed baseline needs to hold against a later global change. |
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |
@@ -601,14 +608,16 @@ deciding once, across all actions, rather than per tool.
 
 These are the items where implementing anything first requires an architecture
 or design decision the documents do not make. Guessing would invent semantics,
-which is the failure mode the whole project has refused since D6. **After D19–D22
-this list is down to two, and neither has a known security consequence** — the
-four items that did (11.2, 11.3, 11.4, `discovery_source`) are closed above.
+which is the failure mode the whole project has refused since D6. **After
+D19–D22 this list held two with no known security consequence** — the four
+items that did (11.2, 11.3, 11.4, `discovery_source`) are closed above; **D25
+then closed 5.1** (see the pointer note at the top of this document), and D39
+added a third design-priority item, 5.20.
 
 | # | Item | The decision that gates it |
 |---|---|---|
-| **5.1** | Hierarchical classification fallback (D3) | Whether a classification inherits downward (a host's class to a path beneath it, a network's to an enclosed ip). Both answers are wrong in a different direction: inheriting lets a statement about a parent stand in for an unregistered child; not inheriting means a host declared PII does not by itself protect those paths. Binding constraints if built: inherit only from an **AUTHORITATIVE** parent; only ever **tighten**; its own tests, not an extension of the exact-match ones. A design-priority choice, not a live gap — MVP-1 targets are registered directly. |
 | **5.3** | `reconstruct_decision` does not walk back to the task (D8) | Whether a task's events (`task.created/claimed/completed`) belong to *every* proposal that task produced — which would make one task's claim appear in several chains and stop the chain being a partition. MVP-1's planners still emit one proposal per task, so there is no case to design against yet. `by_stage()` must stay a partition and the diff against the whole-engagement query stays pinned whatever is chosen. D19–D22 added no new pressure here. |
+| **5.20** | The §4.5 frozen Baseline Snapshot has never been built (D39) | Whether a `baseline_global` publish should apply retroactively to engagements already open under an earlier one, or only to engagements created after it — §4.5 v0.2 describes the latter, nothing enforces either today, and deciding means splitting D14's single enforcement/listing predicate into two rules for two layer categories. No live gap: `create_engagement` now records the real version in force at creation, so the moment the decision is made, the stored number is already the pointer the fix would consult. |
 
 ### Interface note — §2 completed, not extended (D17)
 
@@ -686,12 +695,15 @@ D24's approval flow is now also covered under interleaving, which it never was.
 
 Work must not start until the decision is made, because any implementation
 encodes an answer to a question the design leaves open, and a wrong guess invents
-authorization or access-control semantics. **After D19–D22 this class holds two
-items, and neither has a known security consequence:** 5.1 (classification
-inheritance) and 5.3 (does a task's events belong to every proposal it produced).
-Both are design-priority choices, not live gaps — MVP-1 registers targets
-directly and emits one proposal per task, so nothing is currently wrong; the
-decision is what it would *mean* to build them. The four Class-C items that did
+authorization or access-control semantics. **After D19–D22 this class held two
+items with no known security consequence** — 5.1 (classification inheritance,
+closed at D25) and 5.3 (does a task's events belong to every proposal it
+produced) — **and D39 added a third, 5.20** (whether a `baseline_global` publish
+should apply retroactively to engagements already open). All are design-priority
+choices, not live gaps — MVP-1 registers targets directly, emits one proposal
+per task, and has never needed the frozen baseline to hold against a later
+global change — so nothing is currently wrong; the decision is what it would
+*mean* to build them. The four Class-C items that did
 carry a security consequence — 11.2, 11.3, 11.4 and `discovery_source` — were
 each taken through the design-then-build flow D19–D22 and are now in Class A.
 

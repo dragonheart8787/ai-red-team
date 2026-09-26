@@ -16,6 +16,19 @@ the kill switch does not wait for the next heartbeat: it revokes every live
 capability immediately, and renewal remains the backstop for anything issued in
 the same instant. A control that only takes effect at the next heartbeat is a
 control with a delay measured in whatever the lease happens to be.
+
+``create_engagement`` (D11-9, D39) closes the one lifecycle stage that had no
+operation at all. Every caller — test fixtures, the stateful machine, five
+live-run scripts — wrote the row directly, on ``cyberorch_app``, because
+migration 0001's blanket grant was never narrowed for this table the way D5
+narrowed it for the registries. See ``db/migrations/versions/
+0010_engagement_creation.py`` for the grant change and the reasoning; the
+short version is that the role every agent-facing operation runs as has always
+had raw INSERT and DELETE on ``engagements``, unused only because nothing
+called it, which is exactly the "rests on application code choosing not to"
+shape D5 closed for the Scope Registry. The write now belongs to
+``registry_admin`` — the Engagement Manager role, already the one that
+registers scope and metadata immediately afterward — not to any agent path.
 """
 
 from __future__ import annotations
@@ -23,18 +36,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
 
 from control_plane.audit.logger import record_audit
 from control_plane.capability.broker import (
     CREDENTIAL_REVOKED,
     KILL_SWITCH,
     SCOPE_OBJECT_DEACTIVATED,
+    current_policy_version,
     revoke_all_for_engagement,
     revoke_capabilities_for_credential,
     revoke_capabilities_for_scope_object,
 )
 from control_plane.registry.scope_registry import deactivate_scope_object
-from control_plane.state.db import engagement_scope, registry_admin_scope
+from control_plane.state.db import (
+    assert_registry_admin,
+    engagement_scope,
+    registry_admin_scope,
+)
 
 ACTIVE = "active"
 PAUSED = "paused"
@@ -43,6 +62,18 @@ KILLED = "killed"
 
 PAUSE_REASON = "engagement_paused"
 COMPLETION_REASON = "engagement_completed"
+
+
+class EngagementAlreadyExists(ValueError):
+    """Raised by :func:`create_engagement` for a duplicate id.
+
+    A named exception rather than the raw ``IntegrityError`` PostgreSQL raises
+    for the primary-key collision: a caller (a CLI, a live-run script) should
+    be able to catch "this id is taken" without parsing a database driver's
+    error text, the same reason :func:`control_plane.state.db.
+    assert_registry_admin` turns a permission-denied three frames deep into a
+    message naming the actual mistake.
+    """
 
 
 @dataclass(frozen=True)
@@ -69,6 +100,75 @@ def get_engagement(conn: Connection, engagement_id: str) -> EngagementState | No
         engagement_id=row["engagement_id"], status=row["status"],
         kill_switch_engaged=row["kill_switch_engaged"],
     )
+
+
+def create_engagement(
+    conn: Connection, *, engagement_id: str, customer_id: str, actor: str,
+) -> EngagementState:
+    """Open an engagement, as the Engagement Manager (§5, D11-9, D39).
+
+    ``conn`` must be a ``registry_admin_scope(engagement_id)`` connection —
+    checked here, the same defence-in-depth ``register_scope_object`` and
+    ``register_metadata`` apply, on top of the grant migration 0010 makes the
+    real enforcement. It works before the row exists: RLS only compares the
+    session's ``cyberorch.engagement_id`` GUC against the row being written,
+    never checks that the id was already known, which is what let every prior
+    raw-SQL caller open a scope bound to an id that did not exist yet.
+
+    No scope object is registered here, and none is required. Every existing
+    caller already treats "create the engagement" and "register scope against
+    it" as two calls in sequence — ``register_scope_object`` /
+    ``register_metadata`` are independent operations on the same connection —
+    and folding scope into creation would invent a one-scope-at-creation shape
+    nothing has asked for. An engagement with no scope yet is exactly as valid
+    a state as one whose only scope object was later retired.
+
+    ``policy_snapshot_version`` is computed from :func:`current_policy_version`
+    — the same function the broker already uses for capability re-
+    authorization — rather than a second implementation of "what version is
+    this" (the D30/D33 lesson about two things that must independently agree).
+    Stated plainly because the column's own comment claims more than this
+    does: it is *recorded*, honestly, as the version in force at this moment.
+    It is not *consulted* by anything — ``load_effective_policy`` live-merges
+    the currently active ``baseline_global`` / ``customer`` / ``engagement`` /
+    ``emergency_overlay`` layers on every decision, exactly as it did before
+    this function existed, and does not read this column. The frozen-baseline
+    enforcement §4.5 describes (a later global-policy publish should not
+    retroactively affect an already-open engagement's baseline) has never been
+    built; making the stored number real does not build it. That gap is
+    tracked separately as DEFERRED 5.20 rather than left to look resolved
+    because the placeholder is gone.
+    """
+    assert_registry_admin(conn)
+    version = current_policy_version(conn, engagement_id)
+    try:
+        conn.execute(
+            text("""
+                INSERT INTO engagements (engagement_id, customer_id, policy_snapshot_version)
+                VALUES (:eid, :cid, :version)
+            """),
+            {"eid": engagement_id, "cid": customer_id, "version": version},
+        )
+    except IntegrityError as exc:
+        raise EngagementAlreadyExists(
+            f"engagement {engagement_id!r} already exists"
+        ) from exc
+
+    record_audit(
+        engagement_id=engagement_id, actor=actor, event_type="engagement.created",
+        subject_type="engagement", subject_id=engagement_id, decision="ALLOW",
+        payload={
+            "customer_id": customer_id,
+            "policy_snapshot_version": version,
+            # Explicit rather than omitted: a reader of the trail should see
+            # "no scope was registered at creation" as a stated fact, not
+            # infer it from the key's absence (§8.9's own standard for
+            # provenance — a fact the pipeline states, not one a consumer
+            # guesses at).
+            "initial_scope_object_id": None,
+        },
+    )
+    return EngagementState(engagement_id, ACTIVE, False)
 
 
 def pause_engagement(

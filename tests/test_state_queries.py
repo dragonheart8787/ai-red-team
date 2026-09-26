@@ -28,6 +28,7 @@ from control_plane.api.function_api import (
     query_state,
 )
 from control_plane.state.db import engagement_scope
+from tests.helpers import make_engagement
 
 
 def _finding(conn, engagement_id, *, claim, state="candidate", strength="E2",
@@ -86,12 +87,8 @@ def test_query_findings_sees_nothing_from_another_engagement(engagement_id):
     on the function and not only on the table.
     """
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+    make_engagement(other, "CUST-OTHER")
     with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
         _finding(conn, other, claim="not yours")
 
     with engagement_scope(engagement_id) as conn:
@@ -216,12 +213,8 @@ def test_every_documented_task_status_is_accepted(engagement_id):
 
 def test_query_state_sees_no_other_engagement_s_tasks(engagement_id):
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+    make_engagement(other, "CUST-OTHER")
     with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
         create_task(conn, engagement_id=other, task=_task("not yours"),
                     created_by="supervisor")
 

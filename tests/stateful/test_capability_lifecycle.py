@@ -100,6 +100,7 @@ from control_plane.capability.broker import (
 )
 from control_plane.orchestrator.dispatch import claim_for_dispatch
 from control_plane.orchestrator.engagement import (
+    create_engagement,
     engage_kill_switch,
     pause_engagement,
     resume_engagement,
@@ -192,12 +193,12 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         a live capability makes the retirement cascade and its precision check
         reachable from step zero. Hypothesis still explores freely on top.
         """
-        with engagement_scope(self.engagement_id) as conn:
-            conn.execute(
-                text("INSERT INTO engagements (engagement_id, customer_id, "
-                     "policy_snapshot_version) VALUES (:e, 'CUST-SM', 1)"),
-                {"e": self.engagement_id},
+        with registry_admin_scope(self.engagement_id) as conn:
+            create_engagement(
+                conn, engagement_id=self.engagement_id, customer_id="CUST-SM",
+                actor="engagement-manager",
             )
+        with engagement_scope(self.engagement_id) as conn:
             conn.execute(
                 text("INSERT INTO credentials (credential_id, engagement_id, label) "
                      "VALUES (:c, :e, 'stateful test credential')"),

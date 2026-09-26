@@ -53,6 +53,7 @@ from control_plane.capability.broker import (
 )
 from control_plane.policy.layers import EMERGENCY_OVERLAY, publish_policy_layer
 from control_plane.state.db import engagement_scope
+from tests.helpers import make_engagement
 
 
 def _uid(prefix: str) -> str:
@@ -727,12 +728,8 @@ def test_capabilities_are_engagement_scoped(engagement_id):
     """I4 still applies: another engagement's capability does not exist here."""
     capability = _issued(engagement_id)
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+    make_engagement(other, "CUST-OTHER")
     with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
         assert get_capability(conn, capability.capability_id) is None
         result = renew_capability(
             conn, engagement_id=other, capability_id=capability.capability_id,

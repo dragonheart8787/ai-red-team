@@ -53,6 +53,7 @@ from control_plane.canonicalizer.target import (  # noqa: E402
 )
 from control_plane.capability.broker import Budget  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
+from control_plane.orchestrator.engagement import create_engagement  # noqa: E402
 from control_plane.policy.layers import load_effective_policy  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import register_scope_object  # noqa: E402
@@ -265,11 +266,10 @@ def main() -> int:
     network = sandbox.network_name([ALLOWLIST])
     target_ip = container_ip("d11-target", network)
     engagement_id = uid("ENG-D125")
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-D12-LOCAL', 1)"),
-            {"e": engagement_id},
+    with registry_admin_scope(engagement_id) as conn:
+        create_engagement(
+            conn, engagement_id=engagement_id, customer_id="CUST-D12-LOCAL",
+            actor=ACTOR,
         )
     scope_object_id = setup(engagement_id, target_ip)
     policy_layer_id, published_now = publish_baseline(engagement_id)

@@ -33,7 +33,7 @@ from control_plane.registry.scope_registry import (
     register_scope_object,
 )
 from control_plane.state.db import engagement_scope, registry_admin_scope
-from tests.helpers import EngagementManager
+from tests.helpers import EngagementManager, make_engagement
 
 
 def _target(itype: str, value: str, **kw):
@@ -372,12 +372,7 @@ def test_the_bypass_helper_really_does_write_a_row_the_api_would_refuse():
     there, really unparseable, and really refused by the front door.
     """
     eid = _uid("ENG-BYPASS")
-    with engagement_scope(eid) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-BYPASS', 1)"),
-            {"e": eid},
-        )
+    make_engagement(eid, "CUST-BYPASS")
     sid = _uid("SCOPE")
     _insert_scope_object_bypassing_validation(
         eid, sid, type="cidr", value="not-a-network",
@@ -612,12 +607,7 @@ def test_scope_object_from_another_engagement_is_invisible(engagement_id):
     """
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
     sid = _uid("SCOPE")
-    with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
+    make_engagement(other, "CUST-OTHER")
     EngagementManager(other).scope(
         scope_object_id=sid, type="fqdn", value="app.customer-a.com",
         allowed_actions=["web.*"],
@@ -784,12 +774,7 @@ def test_metadata_is_engagement_scoped(engagement_id):
     """I4: another engagement's classification must not leak in."""
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
     ident = "shared-name.example.com"
-    with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
+    make_engagement(other, "CUST-OTHER")
     EngagementManager(other).metadata(
         asset_id=_uid("ASSET"), identity_type="fqdn", identity_value=ident,
         authority="AUTHORITATIVE", source="customer_declared", data_class=["PII"],

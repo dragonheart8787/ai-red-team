@@ -25,6 +25,7 @@ from sqlalchemy import text
 from agents.base_agent import ProposedTask
 from control_plane.api.function_api import create_task, query_tasks
 from control_plane.state.db import engagement_scope
+from tests.helpers import make_engagement
 
 D17_RUNS = Path(__file__).resolve().parent.parent / "docs" / "d17_runs"
 
@@ -48,13 +49,7 @@ def _overlaps(conn, task_id):
 def other_engagement_id(db_available) -> str:
     """A second throwaway engagement, for the RLS confinement test."""
     eid = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
-    with engagement_scope(eid) as conn:
-        conn.execute(
-            text("INSERT INTO engagements "
-                 "(engagement_id, customer_id, policy_snapshot_version) "
-                 "VALUES (:eid, 'CUST-TEST', 1)"),
-            {"eid": eid},
-        )
+    make_engagement(eid)
     return eid
 
 

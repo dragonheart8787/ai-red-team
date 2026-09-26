@@ -32,6 +32,7 @@ from control_plane.policy.layers import (
 )
 from control_plane.policy.merge import ALLOW, DENY, UNIVERSE
 from control_plane.state.db import engagement_scope
+from tests.helpers import make_engagement
 
 
 def _uid(prefix: str) -> str:
@@ -112,13 +113,9 @@ def test_a_global_layer_is_visible_from_every_engagement(engagement_id):
             version=_version(), document={"data_deny": [token]},
             actor="incident-commander",
         )
+    make_engagement(other, "CUST")
     try:
         with engagement_scope(other) as conn:
-            conn.execute(
-                text("INSERT INTO engagements (engagement_id, customer_id, "
-                     "policy_snapshot_version) VALUES (:e, 'CUST', 1)"),
-                {"e": other},
-            )
             assert token in load_effective_policy(conn, other).data_deny
     finally:
         with engagement_scope(engagement_id) as conn:
@@ -139,12 +136,8 @@ def test_an_engagement_scoped_layer_stays_in_its_engagement(engagement_id):
         )
         assert "local_only" in load_effective_policy(conn, engagement_id).data_deny
 
+    make_engagement(other, "CUST")
     with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST', 1)"),
-            {"e": other},
-        )
         assert "local_only" not in load_effective_policy(conn, other).data_deny
 
 
@@ -525,12 +518,8 @@ def layered_engagement(engagement_id):
             actor="engagement-manager",
         )
 
+    make_engagement(other_engagement, "CUST-OTHER")
     with engagement_scope(other_engagement) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other_engagement},
-        )
         foreign_id = publish_policy_layer(
             conn, engagement_id=other_engagement, layer="engagement",
             version=_version(), document={"data_deny": [_token("class")]},
@@ -635,12 +624,8 @@ def test_an_invisible_attribution_says_so_rather_than_being_blank(layered_engage
     eid = layered_engagement["engagement_id"]
     foreign = _uid("ENG-FOREIGN")
 
+    make_engagement(foreign, "CUST-FOREIGN")
     with engagement_scope(foreign) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-FOREIGN', 1)"),
-            {"e": foreign},
-        )
         invisible_id = publish_policy_layer(
             conn, engagement_id=foreign, layer="baseline_global",
             version=_version(), document={"actions": {_token("action"): ALLOW}},
@@ -727,12 +712,8 @@ def test_the_listing_writes_nothing(layered_engagement):
 def test_an_engagement_with_no_layers_lists_nothing_and_denies_everything():
     """The empty case reads the same both ways (§4.5, I10)."""
     eid = _uid("ENG-EMPTY")
+    make_engagement(eid, "CUST-EMPTY")
     with engagement_scope(eid) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-EMPTY', 1)"),
-            {"e": eid},
-        )
         # Retire everything global so this engagement genuinely sees nothing.
         globals_ = [
             r[0] for r in conn.execute(

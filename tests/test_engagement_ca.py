@@ -35,15 +35,6 @@ from control_plane.tls.engagement_ca import (
     sign_leaf,
 )
 
-
-def _make_engagement(conn, eid: str) -> None:
-    conn.execute(
-        text("INSERT INTO engagements (engagement_id, customer_id, "
-             "policy_snapshot_version) VALUES (:e, 'CUST-TEST', 1)"),
-        {"e": eid},
-    )
-
-
 # ---------------------------------------------------------------------------
 # 1. The crypto is real
 # ---------------------------------------------------------------------------

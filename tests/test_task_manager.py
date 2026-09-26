@@ -27,6 +27,7 @@ from sqlalchemy import text
 from agents.base_agent import ProposedTask
 from control_plane.api.function_api import claim_task, create_task
 from control_plane.state.db import engagement_scope
+from tests.helpers import make_engagement
 
 
 def _task(goal, *, target="10.79.0.0/24", action="network.scan",
@@ -138,12 +139,8 @@ def test_priority_then_age_decides_who_is_claimed_first(engagement_id):
 def test_an_agent_cannot_claim_another_engagement_s_task(engagement_id):
     """I4 on the claim path. RLS decides this, not the query."""
     other = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+    make_engagement(other, "CUST-OTHER")
     with engagement_scope(other) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-OTHER', 1)"),
-            {"e": other},
-        )
         create_task(conn, engagement_id=other, task=_task("not yours"),
                     created_by="s")
 

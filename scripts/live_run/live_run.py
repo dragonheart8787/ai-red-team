@@ -8,8 +8,9 @@ it rather than describe it.
 
 Three things it deliberately does not do:
 
-* **No raw SQL for anything that has an operation.** The scope object and the
-  asset classification go in through ``register_scope_object`` /
+* **No raw SQL for anything that has an operation.** The engagement itself goes
+  in through ``create_engagement`` (D11-9, closed at D39); the scope object and
+  the asset classification go in through ``register_scope_object`` /
   ``register_metadata`` over a ``registry_admin`` connection, and the policy
   through ``publish_policy_layer`` / ``load_effective_policy``. The point of a
   live run is to exercise the real path; seeding it by hand would verify the
@@ -20,10 +21,6 @@ Three things it deliberately does not do:
   unconfigured, or the target is outside the allowlist, this stops and says so.
   A live run that quietly degrades into a simulated one is worse than no live
   run.
-
-The one gap it cannot close: there is no production function that creates an
-engagement row. Every caller in the tree writes it with an ``INSERT``, this
-one included, and that is written up as a finding rather than papered over.
 """
 
 from __future__ import annotations
@@ -55,6 +52,7 @@ from control_plane.api.function_api import (  # noqa: E402
 from control_plane.audit.query import engagement_timeline, reconstruct_decision  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.evidence.store import read_raw_artifact, verify_artifact  # noqa: E402
+from control_plane.orchestrator.engagement import create_engagement  # noqa: E402
 from control_plane.policy.layers import load_effective_policy, publish_policy_layer  # noqa: E402
 from control_plane.provenance import graph  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
@@ -88,21 +86,19 @@ def container_ip(name: str, network: str) -> str:
     return out
 
 
-def create_engagement(engagement_id: str, customer_id: str) -> None:
-    """Insert the engagement row.
+def seed_engagement(engagement_id: str, customer_id: str) -> None:
+    """Open the engagement through the real operation (D11-9, closed at D39).
 
-    FINDING (D11-3): this is the one step with no production operation behind
-    it. ``pause``/``resume``/``kill``/``complete`` all exist in
-    control_plane.orchestrator.engagement; creation does not, so every caller
-    — the test fixtures, the stateful machine, and this script — writes the row
-    directly. Left as raw SQL rather than hidden behind a helper here, so the
-    gap is visible in the live run instead of being smoothed over by it.
+    Until D39 this wrote the row directly, because no production operation
+    existed. It now runs the same ``registry_admin``-scoped
+    ``create_engagement`` every other caller uses — this live run exercises the
+    real path rather than a stand-in for it, which is the whole point of a
+    live run. Named to match ``seed_registries`` below it, its sibling for the
+    scope object and the classification.
     """
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:eid, :cid, 1)"),
-            {"eid": engagement_id, "cid": customer_id},
+    with registry_admin_scope(engagement_id) as conn:
+        create_engagement(
+            conn, engagement_id=engagement_id, customer_id=customer_id, actor=ACTOR,
         )
 
 
@@ -327,7 +323,7 @@ def main() -> int:
 
     engagement_id = uid("ENG-D11")
     customer_id = "CUST-D11-LOCAL"
-    create_engagement(engagement_id, customer_id)
+    seed_engagement(engagement_id, customer_id)
     scope_object_id, asset_id = seed_registries(
         engagement_id, allowlist_cidr=args.allowlist, target_ip=target_ip,
         actions=["network.recon", "network.scan"],
