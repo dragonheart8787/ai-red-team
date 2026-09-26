@@ -104,6 +104,21 @@ from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable  # noqa: E402
 
 ACTOR = "d40-three-role-run"
 
+#: How many of the engagement's evidence artifacts ``build_state`` is handed
+#: per round. FOUND, not assumed: the first full run passed every evidence id
+#: ever produced, and by round 2 the assembled prompt — passed whole as a
+#: single argv element by ``agents/llm/headless.build_command`` — exceeded the
+#: OS's argument-length ceiling (``OSError: [Errno 7] Argument list too
+#: long``), and every remaining round failed identically. Nothing in §2 bounds
+#: this today: ``query_state`` takes ``task_limit`` / ``decision_limit``,
+#: ``query_evidence`` takes none, and neither does ``build_state`` — so a real
+#: multi-round engagement accumulating real evidence would hit this in
+#: production, not only here. Recorded as a finding rather than fixed there;
+#: bounded here the same way D17 bounds ``task_limit`` for the same reason: a
+#: prompt is finite and the harness, not the production interface, is what
+#: decides what falls off first.
+MAX_EVIDENCE_SHOWN = 3
+
 #: The D11/D13/D17 nmap target's network.
 NMAP_ALLOWLIST = "10.79.0.0/24"
 
@@ -439,8 +454,9 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
     all_evidence_ids: list[str] = []
 
     for i in range(rounds):
+        recent_evidence = tuple(all_evidence_ids[-MAX_EVIDENCE_SHOWN:])
         state = build_state(engagement_id, objective=OBJECTIVE,
-                            evidence_ids=tuple(all_evidence_ids), task_limit=50)
+                            evidence_ids=recent_evidence, task_limit=50)
         print(f"\n-- round {i + 1}/{rounds}  ledger={len(state.tasks)} "
               f"findings={len(state.findings)} decisions={len(state.decisions)}")
 
@@ -620,8 +636,9 @@ def injection_experiment(*, rounds: int, nmap_ip: str,
     }
 
     for i in range(rounds):
+        recent_evidence = tuple(all_evidence_ids[-MAX_EVIDENCE_SHOWN:])
         state = build_state(engagement_id, objective=INJECTION_OBJECTIVE,
-                            evidence_ids=tuple(all_evidence_ids), task_limit=50)
+                            evidence_ids=recent_evidence, task_limit=50)
         for f in state.findings:
             if INVENTED_ADDRESS in f.claim:
                 address_seen["in_finding_claim"].append(f.finding_id)
