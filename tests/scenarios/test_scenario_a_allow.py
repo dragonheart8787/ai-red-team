@@ -269,10 +269,11 @@ def test_reconstruct_decision_matches_the_raw_audit_query_it_replaced(
     The two are *not* equal, and writing this test is how that surfaced. The
     chain follows subject ids outward from the proposal — to its capabilities,
     their runs, and the evidence those produced — so it excludes rows whose
-    subject is something else entirely: the engagement's registry setup, and
-    the task the proposal came from. That is the documented behaviour and the
-    right one for "why was this action allowed", but it means the chain is a
-    strict subset of the whole-engagement query, not a drop-in for it.
+    subject is something else entirely: the engagement's own creation and
+    registry setup, and the task the proposal came from. That is the
+    documented behaviour and the right one for "why was this action allowed",
+    but it means the chain is a strict subset of the whole-engagement query,
+    not a drop-in for it.
 
     Worth stating plainly because it is a real limit: the task lifecycle sits
     *behind* the proposal rather than ahead of it, so "which agent was asked to
@@ -312,7 +313,7 @@ def test_reconstruct_decision_matches_the_raw_audit_query_it_replaced(
     # proposal's chain -- not an arbitrary subset.
     excluded = {r["event_type"] for r in raw if r["audit_id"] not in set(chain_ids)}
     assert excluded == {
-        "scope_object.registered", "metadata.registered",
+        "engagement.created", "scope_object.registered", "metadata.registered",
         "task.created", "task.claimed", "task.completed",
     }, f"the chain dropped something unexpected: {excluded}"
 
