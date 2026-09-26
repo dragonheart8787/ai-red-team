@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from tool_gateway import browser_runner
+from tool_gateway.adapters import _http
 from tool_gateway.adapters._http import AdapterError  # re-exported: callers catch it
 
 TOOL = "chromium"
@@ -181,18 +182,25 @@ def _parse_target(
     """Return ``(scheme, host, port, path, url)`` for an http/https target.
 
     The URL is absolute so the proxy can read the host, exactly as the http
-    adapters build it. A bare ``host`` defaults to http; an explicit
-    ``https://`` or port 443 makes it https.
+    adapters build it. The scheme comes from an explicit ``https://`` on the
+    target, an explicit ``scheme`` constraint, or port 443; otherwise http. The
+    explicit constraint is what lets a capability run https on a non-443 port
+    (e.g. the D35 target on 8443), the same field the http adapters read through
+    ``wants_tls``.
     """
     if not target:
         raise AdapterError("no target")
     has_scheme = "://" in target
-    scheme = "https" if str(target).lower().startswith("https:") else "http"
+    constraint_scheme = str(constraints.get("scheme") or "").lower()
+    scheme = (
+        "https" if str(target).lower().startswith("https:")
+        or constraint_scheme == "https" else "http"
+    )
     bare = target.split("://", 1)[1] if has_scheme else target
     bare = bare.split("/", 1)[0].split(":", 1)[0]
 
     port = int(constraints.get("port") or (443 if scheme == "https" else 80))
-    if port == 443 and not has_scheme:
+    if port == 443 and not has_scheme and not constraint_scheme:
         scheme = "https"
     if not 0 < port < 65536:
         raise AdapterError(f"invalid port {port!r}")
@@ -289,6 +297,7 @@ def derive_view(stdout: str, stderr: str, *, truncated_at: int = 4000) -> dict[s
     except json.JSONDecodeError:
         parsed = {"parse_error": True}
 
+    content = parsed.get("content_excerpt") or ""
     return {
         "untrusted_content": True,
         "action": ACTION,
@@ -297,6 +306,13 @@ def derive_view(stdout: str, stderr: str, *, truncated_at: int = 4000) -> dict[s
         "status_code": parsed.get("status"),
         "final_url": parsed.get("final_url"),
         "subresource_count": parsed.get("subresource_count"),
-        "body_excerpt": (parsed.get("content_excerpt") or "")[:truncated_at],
+        "body_excerpt": content[:truncated_at],
+        # Addresses in the *rendered* DOM, computed by the harness for discovery
+        # (I8, D20) — the same extractor the GET/POST bodies go through, not a
+        # new one for the browser. The point of web.render is that this content
+        # only exists after the page's JavaScript ran, so an address a page
+        # injects at runtime lands here; being listed authorizes nothing, it is
+        # input to introduced_by_untrusted and still needs a scope object.
+        "candidate_targets": _http.extract_candidate_targets(content),
         "stderr_excerpt": stderr[:truncated_at],
     }

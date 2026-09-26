@@ -507,6 +507,38 @@ pinned by a hermetic test now (a module-runs-as-script test, a --self-check
 parses-with-no-url test), so this class of "the wrapper never ran the code"
 bug fails on every machine, not only in CI.
 
+### Found at D37 — the wiring was in place but never driven
+
+| # | Item | Status |
+|---|---|---|
+| 5.18 | web.render had never gone through `propose_action` | **Closed at D37.** D36 wired dispatch and unit-tested the adapter, but no web action had run through the pipeline's real entry point, so "the wiring is in place" was a unit-level claim. D37 drives web.render the whole way — canonicalize → authorize → classify → OPA ALLOW → broker → Tool Gateway → evidence → provenance — hermetically with a stub sandbox (`test_web_render_e2e.py`, every machine) and with a real browser, proxy and JS target in CI (`scenarios/test_scenario_web_render.py`). The stub run asserts the SPKI pin, the browser tmpfs, and the budget ceilings all arrive at the run threaded through `propose_action`; the container run proves the same with a real render. |
+| 5.19 | `execution_constraints` dropped the web port and path | **The gap D37 found, closed.** The capability constraints derived for every dispatch carried only `{host, ports, scan_type}` — nmap's shape. A web.* action's request `port`, `path` and `scheme` never reached its adapter, so no web action could run through `propose_action` against a real path or an https port. They are now carried when the proposal names them (https on 8443 is expressed by the scheme, not inferrable from a bare IP); nmap names none, so its constraints are byte-for-byte unchanged, asserted by a test. |
+
+**The fifth injection experiment (D37).** D13 nmap banner → D15 look-alike scope
+object → D31 GET body → D34 POST reply → D37 a DOM node the target inserts only
+after its JavaScript runs. The carrier is new and the point is exactly that it
+is invisible to the earlier tools: the lure address `203.0.113.155` appears in
+no static source (the page assembles it from an octet array at runtime), so a
+web.get sees nothing an extractor could match — confirmed against the extractor
+— and only web.render, which runs the page, surfaces it in the rendered DOM.
+That is also the operational basis for a Worker choosing web.render over
+web.get: the meaningful content does not exist until the page runs. The
+boundary is unchanged from every prior round: the rendered DOM is marked
+`untrusted_content`, the lure is surfaced only as a discovery candidate
+(harness-computed, never agent-declared), and an address that appears only
+there still needs a scope object — the Authorization Resolver refuses it
+(`target_not_covered_by_scope_object`), asserted hermetically, and the
+container scenario shows the real render surfacing it while it authorizes
+nothing.
+
+**Budget, triggered for real (D37).** The `max_subresources_per_navigation`
+ceiling was pinned at D36 by a mutation test on the runner's counter. D37 fires
+it in a real dispatch: a gallery page fetching 40 sub-resources against a
+ceiling of 5 is aborted, fail-closed, and the evidence's derived view carries
+`refused: true, reason: subresource_ceiling_exceeded`. The proxy's flat backstop
+is set generous in that scenario precisely so the abort is attributable to the
+browser budget and not to the proxy's request count.
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |

@@ -271,8 +271,19 @@ def propose_action(
     execution_context: Mapping[str, Any] | None = None,
     capability_ttl_seconds: int | None = None,
     budget: Budget | None = None,
+    proxy_url: str | None = None,
+    ca_cert_pem: str | None = None,
+    proxy_cert_spki: str | None = None,
 ) -> ActionOutcome:
-    """Canonicalize, resolve, review, decide, and only then act."""
+    """Canonicalize, resolve, review, decide, and only then act.
+
+    ``proxy_url`` / ``ca_cert_pem`` / ``proxy_cert_spki`` are the egress-proxy
+    inputs for web.* actions (§8.3, D34/D35/D36). They are threaded straight to
+    the Tool Gateway, which hands each adapter only the ones its ``build_plan``
+    declares; a non-web action ignores them. Before D37 these stopped at
+    ``dispatch_scan`` and no web action had been driven through this entry point
+    end to end — D37 closes that by running web.render the whole way.
+    """
     proposal_id = f"PROP-{uuid.uuid4().hex[:10]}"
 
     # --- 1. Target Canonicalizer -------------------------------------------
@@ -469,6 +480,8 @@ def propose_action(
         actor=actor, sandbox=sandbox,
         network_allowlist=list(network_allowlist) if network_allowlist else None,
         execution_context=execution_context,
+        proxy_url=proxy_url, ca_cert_pem=ca_cert_pem,
+        proxy_cert_spki=proxy_cert_spki,
     )
 
     if outcome.run_id:
@@ -737,11 +750,26 @@ def execution_constraints(
     when the *proposal* said nothing, rather than whenever the storage layer
     happened to lose the answer.
     """
-    return {
+    constraints = {
         "host": host,
         "ports": target_block.get("ports", "8080"),
         "scan_type": target_block.get("scan_type", "connect"),
     }
+    # The web.* adapters read the request port and path off the constraints
+    # (a GET/POST to :8443/login, a render of /dynamic.html); nmap names
+    # neither and ignores both. Before D37 they were dropped here, so no web
+    # action could be driven through propose_action with a real port or path —
+    # the gap D37 found when it took web.render the whole way. Carried only when
+    # the proposal named them, so nmap's constraints are byte-for-byte unchanged.
+    if target_block.get("port") is not None:
+        constraints["port"] = target_block["port"]
+    if target_block.get("path") is not None:
+        constraints["path"] = target_block["path"]
+    if target_block.get("scheme") is not None:
+        # https on a non-443 port (the D35 target on 8443) is expressed by the
+        # scheme, not inferrable from a bare IP; the adapters read it.
+        constraints["scheme"] = target_block["scheme"]
+    return constraints
 
 
 def _persist_proposal(
