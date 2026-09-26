@@ -16,11 +16,21 @@ what *is* written back here is the resolution of items this document listed —
 that had a security consequence, the same way the kernel review would have been
 updated had its own deferrals been closed while it was the live record.
 
+**Successor stage.** The Web Agent arc (D31–D37) — the Egress Proxy, `web.get`
+/ `web.post` / `web.render`, TLS termination and Playwright — is reviewed
+separately in `ACCEPTANCE_MVP15_WEB_AGENT.md`, which carries this stage's
+candidate items 5.8–5.19 and the fifth injection experiment. This document
+stays the record of the three-roles stage (D10–D24); items below are current as
+of *its* close, so where a later stage moved one (e.g. D25 implemented 5.1's
+downward inheritance, D34 spent the long-inert `consume_request`), the
+successor review holds the newer status.
+
 Scope reminder — what this stage covered and what it deliberately did not. It
 put a real model behind each of the three roles and measured that role against
 the boundary it can actually reach. It did **not** add Neo4j, a Vector DB, an
 Egress Proxy, a Web Agent, Playwright, an Approval UI, or a finding-verification
-workflow; those remain Phase-1 scope. The live measurements were run by hand and
+workflow; those remain Phase-1 scope (and the first four of them are what the
+successor stage above went on to build). The live measurements were run by hand and
 never entered CI, for the reasons `DEFERRED_MVP0.md` and
 `ADR_REVIEWER_BILLING.md` give: model output is non-deterministic and a personal
 subscription's OAuth credential does not belong in CI secrets.
