@@ -108,6 +108,62 @@ def lookup(
     ]
 
 
+def list_authoritative(
+    conn: Connection, *, identity_types: Sequence[str]
+) -> list[MetadataRow]:
+    """Every live AUTHORITATIVE row whose identity is one of ``identity_types``.
+
+    Read-only, and scoped to the caller's engagement by RLS exactly like
+    :func:`lookup` — this adds no grant and no write path. It exists for D25's
+    classification inheritance, which needs the *candidate ancestors* of an
+    identity and cannot express the test in SQL: containment for a text column
+    holding CIDRs and domains is arithmetic, not a LIKE pattern, and the one
+    implementation of that arithmetic lives in
+    :mod:`control_plane.canonicalizer.containment`.
+
+    So the narrowing here is by the two things SQL can decide honestly — tier
+    and identity type — and the geometry is applied by the caller. The result
+    set is bounded by what one Engagement Manager registered for one engagement,
+    which is small by construction; a registry large enough for this to matter
+    would want an ``inet``-typed column and a GiST index, not a cleverer text
+    query.
+
+    AUTHORITATIVE only, and that filter belongs here rather than in the caller.
+    D3's first binding constraint is that inheritance may only descend from an
+    AUTHORITATIVE parent — a lower tier reaching a child would be the I6b
+    laundering route reopened from the side — and a filter the caller has to
+    remember to apply is a filter that eventually gets forgotten.
+    """
+    rows = conn.execute(
+        text("""
+            SELECT asset_id, engagement_id, identity_type, identity_value,
+                   resource_class, data_class, classification_source,
+                   classification_authority, classification_version
+            FROM metadata_registry
+            WHERE active IS TRUE
+              AND valid_from <= now()
+              AND classification_authority = 'AUTHORITATIVE'
+              AND identity_type = ANY(:itypes)
+            ORDER BY identity_type, identity_value, asset_id
+        """),
+        {"itypes": list(identity_types)},
+    ).mappings().all()
+    return [
+        MetadataRow(
+            asset_id=r["asset_id"],
+            engagement_id=r["engagement_id"],
+            identity_type=r["identity_type"],
+            identity_value=r["identity_value"],
+            resource_class=tuple(r["resource_class"]),
+            data_class=tuple(r["data_class"]),
+            classification_source=r["classification_source"],
+            classification_authority=r["classification_authority"],
+            classification_version=r["classification_version"],
+        )
+        for r in rows
+    ]
+
+
 def deactivate_metadata(
     conn: Connection,
     *,

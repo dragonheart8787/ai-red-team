@@ -2,7 +2,9 @@
 
 Nmap rather than Nuclei for MVP-Kernel: §4.1.5's scope types are fqdn and cidr,
 and a network scan exercises the CIDR allowlist directly. Nuclei's budget is
-HTTP-shaped, and §8.3 routes HTTP through the egress proxy that §10 defers.
+HTTP-shaped, and §8.3 routes HTTP through an egress proxy that did not exist
+until D34 -- and still would not serve Nuclei, whose budget needs more than
+the one request per run the HTTP adapters emit.
 
 The adapter owns the tool-specific half of §4.6's budget. The control plane
 knows about duration, targets and concurrency; what a port range means is the
@@ -20,6 +22,28 @@ from dataclasses import dataclass
 from typing import Any
 
 TOOL = "nmap"
+
+#: This tool's side-effect profile, for §4.1's ``writes_data`` /
+#: ``changes_state`` (D34).
+#:
+#: Declared here, rather than assumed absent, because
+#: :mod:`tool_gateway.registry` reads every adapter's profile to floor what the
+#: Worker claimed — and an adapter that simply omitted the constants would
+#: raise on the authorization path, which is not a failure mode any adapter
+#: should be able to introduce by being written incompletely.
+#:
+#: A port scan sends packets and reads the responses. It writes nothing to the
+#: target and changes none of its state, and unlike D31's argument for web.get
+#: this does not rest on the adapter being unable to do otherwise — nmap can be
+#: told to do a great deal more. It rests on the command this adapter builds,
+#: which is a connect or version scan and has no ``--script`` of any kind.
+WRITES_DATA = False
+CHANGES_STATE = False
+
+#: Raw TCP goes through the namespace, not the egress proxy (§8.3). There is no
+#: application protocol in a port scan for a proxy to read, which is exactly
+#: why §8.3 splits enforcement by protocol in the first place.
+REQUIRES_PROXY = False
 
 # Scan techniques the adapter will emit. -sT (TCP connect) is the default
 # because the sandbox drops every capability including NET_RAW: a SYN scan

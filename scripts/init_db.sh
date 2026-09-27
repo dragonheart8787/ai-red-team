@@ -28,7 +28,6 @@ PGSUPER="${PGSUPER:-postgres}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
 PGSUPER_MODE="${PGSUPER_MODE:-peer}"
-SKIP_SCHEMA_DUMP="${SKIP_SCHEMA_DUMP:-0}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="$root/.env"
@@ -44,6 +43,7 @@ gen_password() {
 : "${CYBERORCH_APP_PASSWORD:=$(gen_password)}"
 : "${REGISTRY_ADMIN_PASSWORD:=$(gen_password)}"
 : "${GLOBAL_AUDITOR_PASSWORD:=$(gen_password)}"
+: "${UI_READER_PASSWORD:=$(gen_password)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
 super_psql() {
@@ -77,6 +77,7 @@ super_psql \
     -v "cyberorch_app_password=$CYBERORCH_APP_PASSWORD" \
     -v "registry_admin_password=$REGISTRY_ADMIN_PASSWORD" \
     -v "global_auditor_password=$GLOBAL_AUDITOR_PASSWORD" \
+    -v "ui_reader_password=$UI_READER_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -98,38 +99,17 @@ MIGRATION_OWNER_PASSWORD=${MIGRATION_OWNER_PASSWORD}
 CYBERORCH_APP_PASSWORD=${CYBERORCH_APP_PASSWORD}
 REGISTRY_ADMIN_PASSWORD=${REGISTRY_ADMIN_PASSWORD}
 GLOBAL_AUDITOR_PASSWORD=${GLOBAL_AUDITOR_PASSWORD}
+UI_READER_PASSWORD=${UI_READER_PASSWORD}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 REGISTRY_ADMIN_DATABASE_URL=postgresql+psycopg://registry_admin:${REGISTRY_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 GLOBAL_AUDITOR_DATABASE_URL=postgresql+psycopg://global_auditor:${GLOBAL_AUDITOR_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+UI_READER_DATABASE_URL=postgresql+psycopg://ui_reader:${UI_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 
 echo "==> running migrations as migration_owner"
 export MIGRATION_DATABASE_URL="postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 "$root/.venv/bin/alembic" -c "$root/alembic.ini" upgrade head
-
-if [ "$SKIP_SCHEMA_DUMP" != "1" ]; then
-    # Reference dump only. CI skips it: pg_dump client versions vary between
-    # machines, and a version-dependent diff would be noise, not signal.
-    echo "==> dumping reference schema to db/schema.sql"
-    if [ "$PGSUPER_MODE" = "tcp" ]; then
-        pg_dump --schema-only --no-owner --no-privileges \
-                -h "$DB_HOST" -p "$DB_PORT" -U "$PGSUPER" -d "$DB_NAME" \
-                > "$root/db/schema.sql.tmp" 2>/dev/null || true
-    else
-        su "$PGSUPER" -c "pg_dump --schema-only --no-owner --no-privileges -d $DB_NAME" \
-                > "$root/db/schema.sql.tmp" 2>/dev/null || true
-    fi
-    if [ -s "$root/db/schema.sql.tmp" ]; then
-        {
-            echo "-- GENERATED FILE — do not edit."
-            echo "-- Produced by scripts/init_db.sh from db/migrations. Reference only;"
-            echo "-- grants and RLS live in the migration, which is the source of truth."
-            cat "$root/db/schema.sql.tmp"
-        } > "$root/db/schema.sql"
-    fi
-    rm -f "$root/db/schema.sql.tmp"
-fi
 
 echo "==> done. Connection strings are in .env; nothing was printed here."

@@ -12,6 +12,12 @@
 --                    cyberorch_app except that it may write scope_registry and
 --                    metadata_registry (§5). Not an administrator: same RLS,
 --                    same engagement boundary, two extra tables it can write.
+--   ui_reader        the web console's read connection (D29). SELECT on the
+--                    tables the dashboard shows, and nothing else: no INSERT
+--                    anywhere, not even audit_log. Same RLS, same engagement
+--                    boundary. The console's approve/deny actions do NOT use
+--                    this role -- they run through the D24 path as
+--                    cyberorch_app -- so a bug in a read endpoint cannot write.
 --   global_auditor   reads the globally-scoped audit rows and nothing else
 --                    (D11-7). NOSUPERUSER, NOBYPASSRLS, owner of nothing; an
 --                    RLS policy limits it to SELECT on audit_log WHERE
@@ -37,6 +43,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'global_auditor') THEN
         CREATE ROLE global_auditor LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ui_reader') THEN
+        CREATE ROLE ui_reader LOGIN;
     END IF;
 END
 $$;
@@ -68,3 +77,15 @@ ALTER ROLE registry_admin
 ALTER ROLE global_auditor
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'global_auditor_password';
+
+-- The web console's read connection (D29). NOBYPASSRLS for the same reason as
+-- every other role here: its reach is defined by the engagement_isolation
+-- policy, not by trusting a web process to stay in its lane. It owns nothing
+-- and -- unlike cyberorch_app -- holds no INSERT on any table, so the read
+-- endpoints of a browser-facing service are structurally incapable of writing.
+-- The console still needs to approve and deny, and does that through the
+-- existing D24 functions on the cyberorch_app connection; splitting the two
+-- means a defect in a read path is a read defect.
+ALTER ROLE ui_reader
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'ui_reader_password';

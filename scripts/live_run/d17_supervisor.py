@@ -90,6 +90,7 @@ from control_plane.canonicalizer.target import (  # noqa: E402
 )
 from control_plane.capability.broker import Budget  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
+from control_plane.orchestrator.engagement import create_engagement  # noqa: E402
 from control_plane.policy.layers import load_effective_policy  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import (  # noqa: E402
@@ -156,14 +157,12 @@ def uid(prefix: str) -> str:
 
 
 def setup(engagement_id: str, target_ip: str) -> dict[str, str]:
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-D17-LOCAL', 1)"),
-            {"e": engagement_id},
-        )
     registered: dict[str, str] = {}
     with registry_admin_scope(engagement_id) as conn:
+        create_engagement(
+            conn, engagement_id=engagement_id, customer_id="CUST-D17-LOCAL",
+            actor=ACTOR,
+        )
         for stype, value, actions, _why in scope_plan(target_ip):
             scope_object_id = uid("SCOPE")
             register_scope_object(

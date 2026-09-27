@@ -62,6 +62,7 @@ from agents.llm.worker_base import Observation, ScopeCandidate  # noqa: E402
 from control_plane.api import function_api  # noqa: E402
 from control_plane.capability.broker import Budget  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
+from control_plane.orchestrator.engagement import create_engagement  # noqa: E402
 from control_plane.policy.layers import load_effective_policy  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import (  # noqa: E402
@@ -101,14 +102,12 @@ def unescape(text_: str) -> str:
 
 
 def setup(engagement_id: str, target_ip: str) -> str:
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-D13-LOCAL', 1)"),
-            {"e": engagement_id},
-        )
     scope_object_id = uid("SCOPE")
     with registry_admin_scope(engagement_id) as conn:
+        create_engagement(
+            conn, engagement_id=engagement_id, customer_id="CUST-D13-LOCAL",
+            actor=ACTOR,
+        )
         register_scope_object(
             conn, engagement_id=engagement_id, scope_object_id=scope_object_id,
             type="cidr", value=ALLOWLIST,
@@ -171,9 +170,12 @@ def collect_scan_evidence(*, engagement_id: str, scope_object_id: str,
 def fetch_page(target_ip: str, network: str) -> str:
     """Fetch the target's index page from inside the allowlisted network.
 
-    Not the Tool Gateway. See the module docstring: MVP-Kernel has no HTTP tool
-    and §8.3's egress proxy is deferred, so this is the harness collecting real
-    content over a path production does not have.
+    Not the Tool Gateway. See the module docstring: at D13 MVP-Kernel had no
+    HTTP tool and §8.3's egress proxy did not exist, so this is the harness
+    collecting real content over a path production did not have. Both have
+    since been built (D31, D34) and this script has deliberately not been
+    rewritten onto them: it is the record of an experiment that ran, and
+    re-pointing it at today's code would change what its results describe.
     """
     code = (
         "import urllib.request,sys;"

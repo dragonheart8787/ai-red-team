@@ -191,13 +191,18 @@ cyber-orch/
 │   ├── policy_reviewer.py
 │   └── evidence_verifier.py
 ├── tool_gateway/
-│   ├── registry.py              # tool capability/budget schema per tool（§4.6）
-│   ├── sandbox.py               # container exec wrapper（Docker SDK, namespace CIDR）
-│   └── adapters/                # nmap.py, nuclei.py, playwright.py, zap.py...
+│   ├── registry.py              # action→adapter、tool capability/budget schema（§4.6）；
+│   │                             # side-effect profile 也從這裡查（D34）
+│   ├── sandbox.py               # container exec wrapper（Docker SDK, namespace CIDR
+│   │                             # + D34 的 tool-side/target-side 雙網路拓樸）
+│   ├── egress_proxy.py          # policy-aware egress proxy（§8.3，D34 建立，HTTP only）
+│   └── adapters/                # http_get.py, http_post.py, nmap.py,
+│                                 # playwright.py, zap.py...
 ├── db/
-│   ├── migrations/               # alembic，migration_owner 角色跑（table owner）
-│   ├── roles.sql                 # cyberorch_app：NOSUPERUSER NOBYPASSRLS，非 table owner（見 §8.6）
-│   └── schema.sql                # 含每張 sensitive table 的 ENABLE + FORCE ROW LEVEL SECURITY
+│   ├── migrations/               # alembic，migration_owner 角色跑（table owner）；
+│   │                             # 每張 sensitive table 的 ENABLE + FORCE ROW LEVEL
+│   │                             # SECURITY 也在這裡，這是 schema 的唯一權威描述（D33）
+│   └── roles.sql                 # cyberorch_app：NOSUPERUSER NOBYPASSRLS，非 table owner（見 §8.6）
 ├── policy_tests/                 # rego unit tests（opa test），含 adversarial fixture（§10）
 └── tests/
     └── stateful/                 # Hypothesis RuleBasedStateMachine（§11）
@@ -358,6 +363,12 @@ GRANT INSERT, SELECT ON evidence, audit_log TO cyberorch_app;
 ```
 真正需要 cryptographic/physical immutability（例如客戶要求符合特定鑑識標準）留到有真實需求時再評估 WORM storage，不要在 MVP 就過度承諾。
 
+**審計讀取介面（audit read interfaces）：兩個問題，兩個函式，一份 append-only log。** `audit_log` 是唯一事實來源，讀取它的邏輯集中在 `control_plane/audit/query.py`，不散落在各個 caller 手寫的 SELECT 裡。目前有兩個由 subject 決定範圍的重建介面，各回答一個不同的問題：
+
+- **`reconstruct_decision(proposal_id)` — 「這個 proposal 發生了什麼、為什麼」。** 從 proposal 本身的事件往外追它造成的東西：capability → tool_run → evidence。它**刻意**在 proposal 邊界停住，不往回走到 task：`task.created/claimed/completed` 的 subject 是 task_id，位在 proposal 的**後方**而非前方，納入它們會讓「屬於某個 proposal 的事件」不再是一個乾淨的 partition（`by_stage()` 依賴這個性質）。這是 Scenario A/B、D8 audit report、D24 Approval CLI 都在用的 canonical 重建。
+
+- **`reconstruct_task_history(task_id)` — 「這個 task 做了什麼，從被建立到結束」。** task 層級的對應介面。它是一個**純聚合器**：先取 task 自己的 lifecycle 事件（正是 `reconstruct_decision` 排除掉的那三個），再對 task 底下每一個 proposal **呼叫 `reconstruct_decision`** 並原封不動地收集回來的 `DecisionChain`。它不重寫任何 trace 邏輯、不新增寫入路徑、不需要新的 grant（read-only，RLS 已把它限制在當前 engagement）；兩份介面因此永遠不會對同一個 proposal 給出兩種答案。它是 §5.3 一直 deferred 的「往回走到 task」，做成獨立函式而不是加寬既有的那個，正是為了不擾動上面那個 partition。CLI：`scripts/task_history.py --engagement <id> <task_id>`。
+
 ### 4.5 Engagement / Policy Pack
 沿用你原本 §17-18 的設計，基本正確，補三點：
 
@@ -447,6 +458,16 @@ def merge_policy(baseline_global, emergency_overlay, customer_p, engagement_p) -
 **修正（v0.3）：兩處補強。**
 
 1. **`max_requests` 對 HTTP 合理，對 Nmap/BloodHound/CodeQL 這種工具沒有意義**（「一次 request」是什麼？）。改成 `budget` 物件，Control Plane 只管跟工具無關的通用欄位（`max_duration_seconds`、`max_targets`、`max_concurrency`），工具特有的維度（HTTP 的 `max_requests`/`requests_per_second`、network 工具的 `allowed_ports` 等）由各自的 Tool Adapter 定義自己的 sub-schema。**MVP-Kernel 階段只有一個工具，budget 先做最小可用（duration + 一個相關維度）就好，不要一次把所有工具的 budget schema 都設計出來**——這個抽象現在先立好，具體 schema 隨 Phase 1 加新工具時再逐一補。
+
+   **`budget.tool.browser`（D36）。** Playwright 的計數不能沿用 `http.max_requests`：一次
+   `page.goto()` 會扇出成 CSS/JS/XHR/字型等 sub-request，agent 沒有逐一提案，用單一 request
+   budget 去數等於把「導覽一次」跟「這頁 import 了四十個東西」混為一談，讓預算由目標決定。
+   所以導覽是計數單位，sub-request 有自己的上限：`max_navigations`（頂層文件載入）、
+   `max_subresources_per_navigation`（單次導覽的扇出上限，超過中止該次導覽、fail-closed）、
+   `max_navigation_duration_seconds`（單次導覽時間窗）。越界拒絕、不 clamp（clamp 等於跑一個
+   跟核准的不同的預算）。proxy 仍逐請求計數當 backstop（D34），plan 帶一個導出的上限
+   （navigations × subresources）過去，免得 proxy 拒絕一個 browser budget 已允許的扇出。
+   sub-resource 上限這個新概念由 mutation test 釘住，比照 D34 對 `consume_request` 的規格。
 
 2. **Capability renewal（heartbeat 續租）不能只是延長 TTL，必須重新過一次授權檢查。** 原本設計沒處理「capability 發出後，剛好遇到 Emergency Overlay 生效／approval 過期／credential 被撤銷／engagement 被 pause／kill switch 觸發」這幾種情況——如果 heartbeat 只是機械式地延長時間，capability 就會帶著「發出當下」已經過期的授權繼續跑。續租流程必須是：
 
@@ -706,6 +727,65 @@ Raw TCP/UDP  → Tool Container → Network Namespace，出口綁定 explicit CI
 ```
 Egress Proxy 對 HTTP(S) 可行，因為協議本身有 Host header 可以核對；但對 Playwright/ZAP 這類需要執行 JS、處理 WebSocket、可能撞到 cert pinning 的工具，做 application-aware proxy 的工程成本不小，**MVP-0 階段不需要做這層**——只用 Nuclei/Nmap 對 IP/CIDR scope 的話，直接用 network namespace + CIDR allowlist 就夠，Egress Proxy 排進 Phase 2（加入 Web Agent 時）再做。
 
+**實作狀態（D34）。** 上面那條 HTTP 路徑已經建立：`tool_gateway/egress_proxy.py`
+逐請求核對 hostname / port / method / 次數，跑在自己的容器裡，跨接兩段 internal
+network——工具側只看得到 proxy，目標側才有目標。所以「工具繞過 proxy 直連目標」
+不是被過濾掉而是**沒有路由**，kernel 回 ENETUNREACH，跟 D6 建立 CIDR allowlist
+時用的是同一個事實。拒絕的證據不看 proxy 自己的日誌，而是看目標自己的 access
+log 裡沒有那筆請求。
+
+**TLS termination（D35）。** 上面的顧慮——method/path/Host 在 TLS 裡看不到，只核對
+SNI 會退化成「相信工具自己宣稱要連哪裡」——現在的解法是 termination 而不是拒絕：proxy
+在 CONNECT 當下就先用 grant 核對 tunnel 的目的 host，通過才建立 tunnel，然後拿一張
+**per-engagement CA 簽的 leaf 憑證**假扮該 host，解密，對明文跑跟 plain HTTP 完全相同
+的逐請求核對。keep-alive 不會鬆動計數：計的是每個 HTTP request，不是每條 TCP 連線，所以
+一條 tunnel 裡塞多個 request 每個都被數（見 §12 5.12 的定案）。
+
+CA 的形狀刻意跟 I4 對齊：**一個 engagement 一組 CA**，存在 RLS scoped 的
+`engagement_ca` 表，只有 `cyberorch_app` 綁在該 engagement 時讀得到（比照 `credentials`
+的保護等級）；全域共用一組 CA 會是「一把外洩就能假扮任何 engagement 任何 host」的鑰匙，
+正好跨過整個系統在守的邊界。**CA 私鑰永遠不進 sandbox**：control plane 持私鑰簽發，proxy
+只拿到單一 host、數小時效期的 leaf（cert+key 經 read-only bind mount 送進去，路徑當參數、
+key 內容永不進 argv）。因為「一個 capability 一個 host」（D34），proxy 這輩子只面對一個
+host，不需要動態簽發也不需要快取——沒有第二個 host，就沒有簽發節奏這個問題。
+
+**cert pinning 是明確的限制，不是缺陷。** 目標若 pin 憑證（自帶一份真憑證只認它），我們的
+leaf 是它沒被告知要信任的 CA 簽的，連線會在 **TLS 握手層**被目標的 client 拒絕。對本平台
+測試的 disposable 目標這不是問題；對未來真實客戶目標若 pinning，這是硬限制——誠實的立場
+是「工具看不進這條連線」，不是假裝看得到。這個失敗模式要清楚區分於 policy 拒絕（403）：
+握手拒絕發生在任何 HTTP 成形之前，目標的 access log 完全沒有那筆請求。Playwright 是 D36。
+
+**Playwright（D36）。** Web Agent 第三步跑真的瀏覽器（`web.render`）：導覽頁面、讓 JS
+執行、把 render 結果帶回。它的風險跟前面四次 injection 不同——不是「內容可不可信」，是
+「執行內容的環境夠不夠隔離」。所以 adapter 很薄，隔離放在鏡像、sandbox、容器內 runner
+（`tool_gateway/browser_runner.py`）。
+
+鏡像是自建 Dockerfile（不是其他三個鏡像的 docker-import scratch 路線）：Chromium 太大、
+執行時 dlopen 的函式庫 `ldd` 看不到、還按內容讀一整棵字型/fontconfig/nss 設定樹，手工拼
+是 D31「容器不會 serve」的坑放大四十倍，而且換不到可追溯性——瀏覽器 blob 反正是 Playwright
+發布的。可追溯的是「哪些套件、哪個瀏覽器 revision」，烤進鏡像的 manifest 記下來（釘
+Playwright 1.56.0 / Chromium 1194）。代價是接受一層 base image 當信任根。
+
+**容器才是邊界，不是瀏覽器（§四 的實測結論）。** headless Chromium 被指向 `file://` 會
+讀它 uid 讀得到的檔案——瀏覽器自己不擋（實測確認）。所以隔離不能靠瀏覽器拒絕，靠兩件事、
+用容器層級的獨立證據（不是瀏覽器自報）：(1) runner 在啟動瀏覽器前就拒絕非 http/https 的
+target；(2) 瀏覽器容器裡沒有值得偷的東西——沒有私鑰、沒有 D35 leaf key 路徑，leaf key 只在
+proxy 容器裡，所以就算瀏覽器繞過 runner 也讀不到。瀏覽器以非 root、擁有零機密的 uid 執行，
+Chromium 自帶的 sandbox 因 `cap_drop=ALL` 用不了（`--no-sandbox`），這正是為什麼容器必須
+是邊界。TLS 靠 SPKI pin 信任 proxy 的 per-run leaf（比 D35 的 CA 信任更緊，只認那一把 leaf
+的公鑰）。
+
+**下載與 DevTools 都實測過、判斷不構成攻擊面（跟 fail-open 分支一樣明確記錄，不是想不到就
+跳過）。** 下載：頁面控制不了寫入路徑——Chromium 把 Content-Disposition 檔名的路徑分隔符
+砍成底線，Playwright 用隨機 UUID 路徑存到自己的 temp 目錄，路徑穿越靶檔從未被建立；再加
+`accept_downloads=False`，觸發下載直接取消、什麼都不寫。DevTools/CDP：`chromium.launch()`
+用 pipe transport（無 ws endpoint、9222 埠關閉），控制管道是 driver 與瀏覽器行程間的 fd，
+頁面 JS 跑的 renderer 既碰不到那些 fd、也沒有可連的 socket；守住這點的邊界（永不用
+`--remote-debugging-port`）由 launch 參數的結構測試釘住。
+
+**WebSocket 明確排除（比照 PUT/DELETE）。** 沒有呼叫者需要，就不開；遇到 `ws://`/`wss://`
+以具名原因拒絕並記錄，不靜默放行——靜默放行等於開一條繞過逐請求計數的雙向管道。
+
 ### 8.4 Policy Bypass
 最大風險不是 OPA 被繞過（那是 code review 可以抓的），而是 **Policy Reviewer AI 把危險 action 錯誤分類成低風險**（misclassification）。緩解方式：
 - Policy Reviewer 的分類準確度要有離線 benchmark（用歷史 proposal + 人工標註的 ground truth risk level），CI 裡跑迴歸測試。
@@ -784,6 +864,8 @@ TASK-39 ──▶ Nuclei RUN-44 ──▶ Evidence E-84 ──▶ Finding F-2
 - **Audit**：任何 confirmed finding 都能回答「這個結論的每一步是從哪個 raw evidence 來的」，不是只看最後一個 evidence，而是整條產生鏈。
 - **Hallucination debugging**：如果 Supervisor 說「WEB01 存在某服務」，可以直接追問 `why(WEB01, service_X)`，沿著 graph 走到最初的 Nmap run 和 raw evidence hash，快速判斷是真的觀察到，還是 AI 憑空推論後被當成事實寫進 state。
 - 這對資安報告的可信度、以及對「AI 決策是否可解釋」這件事，重要性不亞於 Security Graph（甚至更早需要），MVP 階段就該用一張 `provenance_edges (from_type, from_id, to_type, to_id, relation, created_at)` 的 Postgres table 記錄，不需要等 Neo4j。
+
+Provenance Graph 回答「這個結論從哪來」；`audit_log` 的重建介面（見 §4.4 審計讀取介面）回答「這個決策為什麼這樣判、以及在哪一個範圍內判」。兩者互補：`reconstruct_decision(proposal_id)` 給單一 proposal 的決策鏈，`reconstruct_task_history(task_id)` 給整個 task 從建立到結束、涵蓋它所有 proposal 的歷史。可解釋性同時需要「為什麼相信」（provenance）與「為什麼允許/拒絕」（audit 重建）兩條線。
 
 ---
 

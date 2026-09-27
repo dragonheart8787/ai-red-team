@@ -12,6 +12,18 @@ does not assess: no real LLM (Fake Planner / Fake Worker / Adversarial Fake
 Reviewer only), no Neo4j, no Vector DB, no Egress Proxy, no multi-provider
 abstraction, no Web Agent, no Playwright, no Approval UI.
 
+> **Post-acceptance correction (D27), resolved (D28).** The stateful
+> property-test suite this review credits throughout —
+> `tests/stateful/test_capability_lifecycle.py`, the D9 deliverable — was
+> **deleted at `7c9295f` (D17)**, bundled into an unrelated commit, and this
+> document went on asserting coverage that had stopped running for three days.
+> It is **restored and modernised as of D28**; see
+> [§4.1](#41-stateful-coverage--lost-at-d17-restored-at-d28) for the incident
+> record, the root cause, and what changed on the way back. The invariant table
+> in §4 is accurate again. Kept rather than deleted because the failure mode —
+> a record asserting coverage proves the assertion was written, not that the
+> coverage exists — is the most useful thing this stage produced.
+
 ---
 
 ## 1. Scenario A — the ALLOW path end to end
@@ -87,20 +99,107 @@ Coverage level, tests, and whether that level is sufficient. The sufficiency
 column is a judgement, not a default: not every invariant needs stateful
 coverage, and the reasoning is given rather than assumed.
 
+**Corrected at D27, restored at D28.** The `Stateful` column read ✅ for six
+invariants when this review was written; every one of those cells became false at
+`7c9295f` (D17) without anyone noticing, and was marked `✖ (was ✅)` at D27 while
+the suite was missing. D28 restored the suite, so the ✅ marks below are true
+again — and are now true of a suite that also covers §4.6's approval branch,
+which the original never did. §4.1 records what happened and what changed.
+
 | Inv | Stateful | Scenario | Unit | Principal tests | Sufficient? |
 |---|:--:|:--:|:--:|---|---|
-| **I1** Scope Safety | ✅ | ✅ | ✅ | `i1_live_capabilities_stay_in_scope`; `test_renewal_fails_once_the_authorizing_scope_object_is_retired`; `test_issue_is_refused_against_a_retired_scope_object` | **Yes.** The last gap (a capability outliving its scope object) was found by the D9 state machine and closed. |
-| **I2** Policy Monotonicity | ✅ | — | ✅ | `i2_policy_only_tightens`; `test_publishing_an_overlay_tightens_the_merged_policy`; `tests/test_merge_properties.py` (9 properties, 400 examples each) | **Yes.** Algebra covered by generated combinations; the operation covered end to end through `publish_policy_layer`. |
-| **I3** Capability Confinement | ✅ | — | ✅ | `i3_no_lease_outlives_its_budget`; `test_lease_never_exceeds_the_duration_budget`; `renew_repeatedly` control rule | **Yes.** Temporal by nature, so stateful is the right level. |
+| **I1** Scope Safety | ✅ | ✅ | ✅ | `i1_live_capabilities_stay_in_scope`; `test_renewal_fails_once_the_authorizing_scope_object_is_retired`; `test_issue_is_refused_against_a_retired_scope_object`; `test_retiring_one_scope_object_leaves_capabilities_from_another_alone`; `test_broker_reads_scope_only_as_a_liveness_check` | **Yes.** The gap (a capability outliving its scope object) was found by the D9 state machine and closed by a three-part fix — `capabilities.scope_object_id` (migration 0004), `_check_scope_object_still_live`, and eager cascades — which `git log` confirms was never touched while the suite was missing. D28 mutation testing re-verified the machine catches removal of the eager cascade. The broker's *lazy* backstop is covered by unit tests rather than by the machine, for the reason recorded in the suite's docstring: the uncascaded path has no production caller. |
+| **I2** Policy Monotonicity | ✅ | — | ✅ | `i2_policy_only_tightens`; `emergency_tighten` rule (via `publish_policy_layer`); `test_publishing_an_overlay_tightens_the_merged_policy`; `tests/test_merge_properties.py` (9 properties, 400 examples each) | **Yes.** Algebra covered by generated combinations; the operation covered end to end; and the whole-run invariant re-checks that the *effective* policy never shrank. Global publishes and `deactivate_policy_layer` stay out of the machine on purpose — see the suite docstring. |
+| **I3** Capability Confinement | ✅ | — | ✅ | `i3_no_lease_outlives_its_budget`; `renew_repeatedly` control rule; `test_lease_never_exceeds_the_duration_budget`; `test_repeated_heartbeats_never_push_the_lease_past_the_budget` | **Yes.** Temporal by nature, so stateful is the right level: the bound is asserted after every step of a random walk, not only in a deterministic renewal sequence. |
 | **I4** Engagement Isolation | — | — | ✅ | `test_cross_engagement_read_is_blocked`; `test_cannot_write_into_another_engagement`; `test_runtime_role_cannot_bypass_rls`; `test_registry_admin_cannot_bypass_rls`; `test_registry_admin_cannot_write_into_another_engagement`; `test_retire_scope_object_cannot_reach_into_another_engagement`; `test_revoke_credential_cannot_reach_into_another_engagement` | **Yes**, after re-checking. RLS is enforced by the database, so it holds for every operation rather than per code path — but the two-role `retire_scope_object` needed its own test, since existing coverage proved each role individually confined, not the pair. Mutation showed RLS is the load-bearing mechanism; the cascades' own `engagement_id` predicates are defence in depth. |
 | **I5** Evidence Provenance | — | ✅ | ✅ | `test_scenario_a_provenance_chain_is_written_and_traversable`; `test_successful_scan_writes_evidence_run_and_state` | **Yes.** Fully verifiable within one decision chain; nothing about it is order-dependent, so forcing it into the state machine would cost runtime and prove nothing extra. |
 | **I6a** Decision Non-Override | — | ✅ | ✅ | rego `test_ai_cannot_override_deny_via_misclassification`; `test_adversarial_reviewer_cannot_talk_a_pii_host_into_allow` | **Yes.** Same reasoning as I5 — a single decision suffices. The permanent adversarial fixture is the right instrument. |
 | **I6b** Attribute Non-Escalation | — | ✅ | ✅ | Scenario B (8 tests); `test_scenario_b_lower_tier_observation_cannot_dilute_the_deny`; registry privilege tests | **Yes.** Enforced structurally too: `ReviewerOpinion` has no field able to assert a data class, and `cyberorch_app` holds no write on either registry. |
 | **I6c** Trust Monotonicity | — | ✅ | ✅ | `test_scenario_b_lower_tier_observation_cannot_dilute_the_deny`; resolver precedence tests; rego `test_low_tier_hint_can_tighten_into_deny` | **Yes.** Same level as I6b. |
-| **I7** Idempotent Dispatch | ✅ | — | ✅ | `duplicate_dispatch` rule; `test_a_second_identical_scan_is_deduplicated` | **Yes.** Concurrency-shaped, so stateful matters here. |
-| **I8** Authorization Provenance | ✅ | ✅ | ✅ | `resolve_authorization` has no `discovery` parameter (asserted on the signature); `test_capability_records_the_scope_object_that_authorized_it`; rego discovery tests | **Yes.** Partly enforced by the type system: the information is not available to the function, which is stronger than remembering not to read it. |
-| **I9** Revocation Safety | ✅ | — | ✅ | `i9_revocation_is_terminal`; `test_revocation_has_no_way_back`; four cascades (pause / kill switch / credential / scope); resume-after-kill refusal | **Yes.** This is the invariant §11 names as only findable in sequence, and it has the deepest stateful coverage. |
+| **I7** Idempotent Dispatch | ✅ | — | ✅ | `duplicate_dispatch` rule; `test_a_second_identical_scan_is_deduplicated`; `test_the_same_host_scanned_for_different_ports_is_not_deduplicated` | **Yes.** Concurrency-shaped, so stateful matters here — the rule replays one idempotency key across arbitrary interleavings, and `event()` confirms both the first-claim and repeat-claim branches fire. |
+| **I8** Authorization Provenance | ✅ | ✅ | ✅ | `i1_live_capabilities_stay_in_scope` (asserts every live capability records a scope object); `resolve_authorization` has no `discovery` parameter (asserted on the signature); `test_capability_records_the_scope_object_that_authorized_it`; `test_a_capability_with_no_recorded_scope_object_abstains`; rego discovery tests | **Yes.** Partly enforced by the type system: the information is not available to the function, which is stronger than remembering not to read it. |
+| **I9** Revocation Safety | ✅ | — | ✅ | `i9_revocation_is_terminal`; `scope_retirement_is_precise`; five cascades (pause / kill switch / credential / scope / **approval**, new at D28); `test_revocation_has_no_way_back`; `test_the_kill_switch_cannot_be_undone` | **Yes.** This is the invariant §11 names as only findable in sequence, and it has the deepest stateful coverage: revoked capabilities are re-checked after *every* step, and `scope_retirement_is_precise` covers the "borrowed reason" case — a capability killed by the kill switch and later caught by a scope retirement must keep the earlier reason. D28 mutation testing confirmed a borrowed reason turns the suite red. |
 | **I10** Fail-Closed Ambiguity | — | ✅ | ✅ | See table below | **Yes**, after the integration-layer gap was closed. |
+
+### 4.1 Stateful coverage — lost at D17, restored at D28
+
+**Status: restored.** `tests/stateful/` is back in the tree, runs at D9's scale
+(300 examples × 30 steps), and covers one thing the original never did. This
+section is kept as the incident record rather than deleted, because the failure
+mode it documents is the most useful thing this stage produced.
+
+**What happened.** `7c9295f` ("D17: say something useful when the CLI fails, and
+mark §7's dedup boundary") deleted `tests/stateful/__init__.py` and
+`tests/stateful/test_capability_lifecycle.py` as pure deletions — status `D`, no
+rename — alongside unrelated edits to `agents/llm/headless.py`, two
+`scripts/live_run/` files, `tests/test_dispatch.py` and
+`tests/test_supervisor_boundary.py`. CI stayed green throughout, because a
+deleted test does not fail; it stops guarding. For three days the pass/fail
+signal was identical whether the suite existed or not.
+
+**How it was found.** 2026-08-25, as a by-product of the D25 work: a stop-hook
+flagged an untracked file, the file was `tests/stateful/test_capability_lifecycle.py`,
+and tracing why a path with four commits of history showed as *untracked*
+surfaced the deletion.
+
+**Root cause: accidental, not a decision.** The commit message describes CLI
+error reporting and dedup boundaries and never mentions removing a property-test
+suite, closing instead with "567 tests, rego 34/34, ruff clean" — a count
+reported as healthy. This document went on citing the suite as principal
+coverage for six invariants and naming it by path; `hypothesis>=6.115` stayed in
+`pyproject.toml`; `ARCHITECTURE.md` §3 still listed `stateful/` in the tree. A
+deliberate removal would have taken at least one of those with it. The probable
+mechanism is a `git add -A` after a container reclaim, at a moment when the slow,
+database-backed directory was not on disk.
+
+**Impact while it was missing — verified, not assumed.** Nothing was changed
+while unguarded: `git log 7c9295f..HEAD` over `capability/broker.py` and
+`orchestrator/engagement.py` returns nothing, and both were last touched *before*
+the deletion (`26ff2af` and `86b18bb` respectively). The three-part I1 fix was
+intact throughout, and the concrete bugs the machine found stayed covered by
+single-operation tests. So the worse scenario — the fix silently broken during
+the gap — did not occur. What was absent was the *method*: arbitrary interleaving
+with invariants re-checked after every step.
+
+**Two traps on the way back, both avoided.**
+
+1. *The copy on disk was not the suite.* The file whose untracked status exposed
+   the deletion was an earlier draft from during D9's development — 561 lines
+   against 762, with no `retire_scope_object`/`revoke_credential`, no
+   `SCOPE_OBJECT_DEACTIVATED`, no `scope_retirement_is_precise`, and one scope
+   object rather than two. D9's own commit message says why the last one matters:
+   *"With a single scope object 'revoke everything in the engagement' and 'revoke
+   what this scope object authorized' are indistinguishable, and the over-broad
+   implementation passes."* Restoring from disk would have produced a suite that
+   looks right, passes, and cannot catch the over-broad cascade.
+2. *D9's original was not the right revision either.* This document initially
+   named `86b18bb` as the source to restore from. That was wrong, and it is the
+   same mistake in a smaller form: two later commits changed the suite —
+   `8b6af07` added the `event()` branch instrumentation and `26ff2af` moved
+   `emergency_tighten` onto `publish_policy_layer`. **The authoritative revision
+   is `26ff2af`**, the last before the deletion, and that is what D28 restored.
+
+**What changed on the way back.** Every API the suite calls was re-checked
+against the current tree; none had drifted, so the rules test what they always
+tested. One rule was added — `expire_approval`, covering the one item on §4.6's
+renewal checklist the original machine never drove, since capabilities were
+issued with `approval_id` NULL. Three further candidates were considered and
+deliberately rejected, with reasons recorded in the suite's own docstring: a
+global policy-layer publish (D21) would perturb every other engagement sharing
+the database; `deactivate_policy_layer` is a widening and would require
+redefining what `i2_policy_only_tightens` means; and an uncascaded scope
+deactivation has no production caller and would manufacture an I1 violation the
+design has already closed.
+
+**Verification.** 300 examples at 30 steps, `event()` statistics confirming every
+meaningful branch fires rather than passing on air — the D9 lesson where
+`deactivate_scope` fired 95 times in 100 examples and revoked nothing every time
+while the suite reported success. Cascades are observed revoking 1–4
+capabilities, `resume: REFUSED after kill switch` fires at 29%, and the new
+`expire_approval` rule reaches outstanding capabilities in ~15% of examples.
+Mutation testing turns the suite red for: the eager scope cascade removed, a
+borrowed `revoked_reason` on the scope cascade, and the approval-expiry check
+disabled.
 
 ### I9 — revocation reasons and their regression tests
 
@@ -117,9 +216,15 @@ Related, from the same scope check but distinct in meaning:
 `scope_action_no_longer_allowed`
 (`test_renewal_fails_when_the_action_is_withdrawn_from_the_scope_object`).
 
-The stateful rule `scope_retirement_is_precise` additionally asserts that a
+The stateful rule `scope_retirement_is_precise` additionally asserted that a
 capability revoked by the scope cascade records `scope_object_deactivated` and
 not a borrowed reason — a wrong reason sends an investigator to the wrong table.
+That rule was absent between D17 and D28 (§4.1) and is running again. It is the
+only thing that reaches the *contested* case: a capability revoked by one route
+and later reached by another must keep the earlier reason, which needs two
+cascades in one sequence and so is out of reach of any single-operation test. D28
+mutation testing confirmed it has teeth — pointing the scope cascade at a
+borrowed `POLICY_CHANGED` turns the suite red.
 
 ### I10 — every place an attribute can be UNKNOWN / CONFLICT / ERROR
 
@@ -260,19 +365,25 @@ wires them up assuming the absent behaviour was a bug.
 
 `tests/stateful/test_capability_lifecycle.py`
 
-The `emergency_tighten` rule publishes a fixed-shape overlay (one `data_deny`
-entry plus one action DENY). It varies only by counter, not by content.
+**Status: open again as of D28.** Between D17 and D28 this item described a
+limitation of a rule inside a suite that did not exist (§4.1), and was marked
+blocked. The suite is restored, so the item is live again and the reasoning below
+is unchanged.
+
+The `emergency_tighten` rule published a fixed-shape overlay (one `data_deny`
+entry plus one action DENY). It varied only by counter, not by content.
 
 *Why not now:* the algebra over varied content is covered by
 `tests/test_merge_properties.py` at 400 generated combinations per property,
 which reaches far more shapes than a state machine would. What the stateful rule
-exists to test is the *interaction* — that publishing moves the policy version
+existed to test is the *interaction* — that publishing moves the policy version
 and outstanding capabilities are re-checked — and that does not need varied
-content.
+content. `test_merge_properties.py` is unaffected by the deletion and still runs,
+so the algebra half of this argument holds today.
 
-*Binding constraint:* if content is randomized later, the generator must respect
-the tighten-only rule, or the CHECK constraint will reject the write and the
-failure will look like a state-machine bug rather than a generator bug.
+*Binding constraint:* if content is randomized, the generator must respect the
+tighten-only rule, or the CHECK constraint will reject the write and the failure
+will look like a state-machine bug rather than a generator bug.
 
 ### Deferred items found after this stage closed
 
@@ -368,13 +479,26 @@ none by reading the code:
    The stored Policy Pack and the enforced policy were unrelated artifacts: an
    overlay could be published perfectly and change no decision anywhere.
 
+Three later defects of a related shape — a suite that was green while guarding
+nothing — are recorded together in `ACCEPTANCE_MVP1_AGENTS.md` §5: a deleted test
+(D27/D28), a test whose input equalled the default it was meant to detect a
+fallback to (D30), and tests that passed while asserting nothing (D29).
+
 The common cause is that a test which manipulates state directly proves the
 *check* works while saying nothing about whether the *operation* exists. The
-standing countermeasure is now structural: state transitions in the stateful
-test go through public interfaces, and every rule emits `event()` naming the
-branch it took — after that instrumentation caught `deactivate_scope` firing 95
-times in 100 examples and revoking nothing every time, while the suite reported
-success.
+countermeasure was structural: state transitions in the stateful test went
+through public interfaces, and every rule emitted `event()` naming the branch it
+took — after that instrumentation caught `deactivate_scope` firing 95 times in
+100 examples and revoking nothing every time, while the suite reported success.
+
+**D27/D28 postscript: the countermeasure lapsed and was restored.** The suite
+carrying it was deleted at D17 and absent for three days (§4.1). The lesson
+generalised further than its authors expected, and this document became the
+fourth instance of it: a record asserting that something is covered proves the
+assertion was written, not that the coverage still exists. The suite and its
+`event()` instrumentation are back as of D28, and §4.1 keeps the record of how
+the gap opened — including the two wrong revisions that were nearly restored
+instead.
 
 A fifth, softer finding is recorded honestly rather than quietly fixed:
 `current_policy_version`'s docstring had claimed since D5 that deactivating a
@@ -402,6 +526,13 @@ corrected.
    decision chain where they are fully determined, I4 by database-enforced RLS
    re-checked against every role and operation added since D2, I10 at every site
    where an attribute can be ambiguous.
+
+> **D27/D28 note on point 3.** This verdict was correct when it was made, stopped
+> being true at `7c9295f` (D17) after this stage had closed, and is true again as
+> of D28 (§4.1). The GO decision is left as it stood — rewriting a past verdict to
+> match later facts would destroy the record of what was known when — and point 3
+> now also describes the tree today, against a suite that additionally covers
+> §4.6's approval branch.
 
 Nothing on the DEFERRED list blocks the stage. Items 5.1, 5.2 and 5.4 are
 deliberate non-decisions where the design is silent and guessing would invent

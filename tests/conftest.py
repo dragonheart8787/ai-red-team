@@ -15,8 +15,8 @@ import pytest
 from sqlalchemy import text
 
 from control_plane.config import load_dotenv
-from control_plane.state.db import engagement_scope, get_engine
-from tests.helpers import EngagementManager
+from control_plane.state.db import get_engine
+from tests.helpers import EngagementManager, make_engagement
 
 # Credentials come from the environment or the gitignored .env that
 # scripts/init_db.sh writes — never from a literal in the test suite.
@@ -52,15 +52,7 @@ def db_available() -> bool:
 def engagement_id(db_available) -> str:
     """Create a throwaway engagement and return its id."""
     eid = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
-    with engagement_scope(eid) as conn:
-        conn.execute(
-            text("""
-                INSERT INTO engagements
-                    (engagement_id, customer_id, policy_snapshot_version)
-                VALUES (:eid, 'CUST-TEST', 1)
-            """),
-            {"eid": eid},
-        )
+    make_engagement(eid)
     return eid
 
 
@@ -68,3 +60,19 @@ def engagement_id(db_available) -> str:
 @pytest.fixture
 def registry(engagement_id) -> EngagementManager:
     return EngagementManager(engagement_id)
+
+
+@pytest.fixture
+def engagement_factory(db_available):
+    """Build additional engagements on demand, each with its own manager.
+
+    The ``engagement_id`` fixture gives a test one engagement, which is what
+    almost every test wants. Anything asserting an *isolation* property needs
+    two — a second engagement to be excluded from — and a test that fabricates
+    the second one by hand tends to skip the parts that make the first one real.
+    """
+    def make() -> tuple[str, EngagementManager]:
+        eid = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+        make_engagement(eid)
+        return eid, EngagementManager(eid)
+    return make

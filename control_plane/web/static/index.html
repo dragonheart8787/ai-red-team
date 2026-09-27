@@ -1,0 +1,248 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cyberorch console</title>
+<!--
+  D29. Deliberately one file, no framework, no build step, no npm.
+
+  The console shows four read views and drives two existing actions. A bundler,
+  a component library and a virtual DOM would all be machinery in service of
+  roughly two hundred lines of rendering, and every one of them is a dependency
+  an internal tool would then carry forever. FastAPI and uvicorn were already
+  dependencies of this project; this file adds nothing.
+
+  It cannot do anything the API does not expose, which is the point: there is no
+  task-creation form and no free-text field, because there is no endpoint behind
+  either.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #5c5c5c; --line: #d8d8d8;
+    --panel: #f7f7f7; --accent: #1f4e79; --deny: #8b1a1a; --ok: #1a6b2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181c; --fg: #e8e8e8; --muted: #a0a4ab; --line: #33373d;
+      --panel: #1e2126; --accent: #7fb3e0; --deny: #e08585; --ok: #7fce96;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line);
+           display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  input, select, button { font: inherit; padding: 5px 8px;
+        background: var(--bg); color: var(--fg); border: 1px solid var(--line); }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  main { padding: 16px; display: grid; gap: 16px;
+         grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); }
+  section { border: 1px solid var(--line); background: var(--panel); }
+  h2 { font-size: 13px; margin: 0; padding: 8px 12px;
+       border-bottom: 1px solid var(--line); font-weight: 600; }
+  .body { padding: 12px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-block; padding: 0 6px; border: 1px solid var(--line); }
+  .deny { color: var(--deny); }
+  .ok { color: var(--ok); }
+  .counts { display: flex; gap: 18px; flex-wrap: wrap; }
+  .counts b { font-size: 20px; display: block; font-weight: 600; }
+  fieldset { border: 1px solid var(--line); margin: 8px 0; padding: 8px; }
+  legend { color: var(--muted); padding: 0 4px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+  .err { color: var(--deny); white-space: pre-wrap; }
+  .scopes label { display: block; padding: 2px 0; }
+</style>
+
+<header>
+  <h1>Cyberorch console</h1>
+  <label>engagement <input id="eid" size="26" placeholder="ENG-..."></label>
+  <button id="load">Load</button>
+  <span id="status" class="muted"></span>
+</header>
+
+<main>
+  <section><h2>Engagement</h2><div class="body" id="overview">—</div></section>
+  <section><h2>Pending approvals (§4.7)</h2><div class="body" id="approvals">—</div></section>
+  <section><h2>Findings (§4.3)</h2><div class="body" id="findings">—</div></section>
+  <section><h2>Task decision history</h2><div class="body" id="history">—</div></section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const eid = () => $("eid").value.trim();
+
+// Every read goes through here so one place reports failure. A console that
+// silently renders an empty table when the API refused is worse than one that
+// says it refused: an empty pending queue and an unreachable backend must not
+// look the same.
+async function api(path, opts) {
+  const r = await fetch(`/api/engagements/${encodeURIComponent(eid())}${path}`, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || `${r.status} ${r.statusText}`);
+  return body;
+}
+const setStatus = (m, bad) => {
+  $("status").textContent = m;
+  $("status").className = bad ? "err" : "muted";
+};
+
+function renderOverview(d) {
+  const s = d.state || {}, c = d.counts || {};
+  const tasks = s.tasks || [];
+  $("overview").innerHTML = `
+    <div class="counts">
+      <div><b>${esc(tasks.length)}</b><span class="muted">tasks</span></div>
+      <div><b>${esc(c.findings)}</b><span class="muted">findings</span></div>
+      <div><b>${esc(c.pending_approvals)}</b><span class="muted">pending approvals</span></div>
+    </div>
+    <table><tr><th>task</th><th>status</th><th>action</th><th>goal</th></tr>
+    ${tasks.map((t) => `<tr>
+        <td><a href="#" data-task="${esc(t.task_id)}">${esc(t.task_id)}</a></td>
+        <td>${esc(t.status)}</td><td>${esc(t.action ?? "—")}</td>
+        <td>${esc(t.goal)}</td></tr>`).join("") ||
+      `<tr><td colspan="4" class="muted">no tasks</td></tr>`}
+    </table>`;
+  $("overview").querySelectorAll("a[data-task]").forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      loadHistory(a.dataset.task);
+    }));
+}
+
+// evidence_strength and verifier_state, not a confidence number: §4.3 removed
+// the column, and a console that invented one back would be reintroducing the
+// false precision the schema change existed to remove.
+function renderFindings(rows) {
+  $("findings").innerHTML = `<table>
+    <tr><th>finding</th><th>state</th><th>evidence_strength</th>
+        <th>verifier_state</th><th>claim</th></tr>
+    ${rows.map((f) => `<tr>
+        <td>${esc(f.finding_id)}</td><td>${esc(f.state)}</td>
+        <td>${esc(f.evidence_strength)}</td>
+        <td>${esc(f.verifier_state ?? "—")}</td>
+        <td>${esc(f.claim)}</td></tr>`).join("") ||
+      `<tr><td colspan="5" class="muted">no findings</td></tr>`}
+  </table>`;
+}
+
+function renderPending(rows) {
+  $("approvals").innerHTML = rows.length
+    ? rows.map((p) => `<fieldset>
+        <legend>${esc(p.proposal_id)}</legend>
+        <dl class="kv">
+          <dt>action</dt><dd>${esc(p.action)}</dd>
+          <dt>agent</dt><dd>${esc(p.agent_id)}</dd>
+          <dt>OPA reasons</dt><dd>${(p.decision_reasons || [])
+            .map((r) => `<span class="pill">${esc(r)}</span>`).join(" ") || "—"}</dd>
+        </dl>
+        <button data-preview="${esc(p.proposal_id)}">Review…</button>
+        <div class="detail"></div>
+      </fieldset>`).join("")
+    : `<span class="muted">nothing awaiting a human</span>`;
+  $("approvals").querySelectorAll("button[data-preview]").forEach((b) =>
+    b.addEventListener("click", () => showPreview(b.dataset.preview,
+      b.parentElement.querySelector(".detail"))));
+}
+
+// §4.7 in full. The operator sees action_class, resource, constraints and
+// valid_until as they will be written, and picks approved_scope from the three
+// §4.7 values -- one control each, never a single "approve" that silently
+// chooses the broadest. D29 constraint 3.
+async function showPreview(pid, host) {
+  host.innerHTML = `<span class="muted">loading…</span>`;
+  let p;
+  try {
+    p = await api(`/approvals/${encodeURIComponent(pid)}/preview`);
+  } catch (e) { host.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+
+  host.innerHTML = `
+    <dl class="kv">
+      <dt>action_class</dt><dd>${esc(p.action_class)}</dd>
+      <dt>resource</dt><dd>${esc(p.resource)}</dd>
+      <dt>constraints</dt><dd>${esc(JSON.stringify(p.constraints))}</dd>
+      <dt>valid_until</dt><dd>${esc(p.valid_until)}</dd>
+      <dt>authorization</dt><dd class="${p.authorization_still_holds ? "ok" : "deny"}">
+        ${p.authorization_still_holds ? "still holds"
+          : "NO LONGER HOLDS — " + esc((p.authorization_reasons || []).join(", "))}</dd>
+    </dl>
+    <fieldset class="scopes"><legend>approved_scope (§4.7)</legend>
+      ${p.approved_scope_options.map((s, i) => `<label>
+        <input type="radio" name="scope-${esc(pid)}" value="${esc(s)}"
+          ${i === 0 ? "checked" : ""}> ${esc(s)}</label>`).join("")}
+    </fieldset>
+    <label>valid for <input class="secs" type="number" value="${esc(p.valid_for_seconds)}"
+      min="1" max="86400" size="7"> s</label>
+    <label>who <input class="who" size="14" placeholder="your name"></label>
+    <div><button class="do-approve">Approve</button>
+         <button class="do-deny">Deny</button></div>
+    <div class="out"></div>`;
+
+  const out = host.querySelector(".out");
+  const who = () => host.querySelector(".who").value.trim();
+  const act = async (fn) => {
+    if (!who()) { out.innerHTML = `<div class="err">name required — an approval must record who granted it (§4.4)</div>`; return; }
+    out.innerHTML = `<span class="muted">…</span>`;
+    try { out.innerHTML = `<span class="ok">${esc(JSON.stringify(await fn()))}</span>`; await refresh(); }
+    catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  };
+  host.querySelector(".do-approve").addEventListener("click", () => act(() =>
+    api(`/approvals/${encodeURIComponent(pid)}/approve`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        approver: who(),
+        approved_scope: host.querySelector(`input[name="scope-${pid}"]:checked`).value,
+        valid_for_seconds: Number(host.querySelector(".secs").value),
+      }),
+    })));
+  host.querySelector(".do-deny").addEventListener("click", () => act(() =>
+    api(`/approvals/${encodeURIComponent(pid)}/deny`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ denier: who(), reason: "" }),
+    })));
+}
+
+async function loadHistory(taskId) {
+  $("history").innerHTML = `<span class="muted">loading…</span>`;
+  try {
+    const h = await api(`/tasks/${encodeURIComponent(taskId)}/history`);
+    $("history").innerHTML = `
+      <div><b>${esc(h.task_id)}</b> — ${h.completed ? "completed" : "in progress"}</div>
+      <table><tr><th>event</th><th>actor</th><th>at</th></tr>
+        ${(h.lifecycle_events || []).map((e) => `<tr><td>${esc(e.event_type)}</td>
+          <td>${esc(e.actor)}</td><td>${esc(e.ts)}</td></tr>`).join("")}</table>
+      <table><tr><th>proposal</th><th>decision</th><th>reasons</th><th>reached</th></tr>
+        ${(h.proposals || []).map((p) => `<tr><td>${esc(p.proposal_id)}</td>
+          <td>${esc(p.decision ?? "PENDING")}</td>
+          <td>${esc((p.reasons || []).join(", ")) || "—"}</td>
+          <td>${esc((p.reached_stages || []).join(" → "))}</td></tr>`).join("") ||
+          `<tr><td colspan="4" class="muted">no proposals</td></tr>`}</table>`;
+  } catch (e) { $("history").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function refresh() {
+  if (!eid()) { setStatus("enter an engagement id", true); return; }
+  setStatus("loading…");
+  try {
+    const [o, f, p] = await Promise.all([
+      api("/overview"), api("/findings?limit=200"), api("/approvals?limit=200"),
+    ]);
+    renderOverview(o); renderFindings(f); renderPending(p);
+    setStatus(`loaded ${new Date().toLocaleTimeString()}`);
+  } catch (e) { setStatus(e.message, true); }
+}
+
+$("load").addEventListener("click", refresh);
+$("eid").addEventListener("keydown", (e) => { if (e.key === "Enter") refresh(); });
+const preset = new URLSearchParams(location.search).get("engagement");
+if (preset) { $("eid").value = preset; refresh(); }
+</script>

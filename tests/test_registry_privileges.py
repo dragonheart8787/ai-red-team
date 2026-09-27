@@ -30,6 +30,7 @@ from control_plane.state.db import (
     get_registry_admin_engine,
     registry_admin_scope,
 )
+from tests.helpers import make_engagement
 
 REGISTRY_TABLES = ["scope_registry", "metadata_registry"]
 
@@ -217,6 +218,88 @@ def test_registry_admin_cannot_touch_findings_or_evidence(engagement_id):
 
 
 # ---------------------------------------------------------------------------
+# engagements: creation moved to registry_admin (D11-9, D39)
+# ---------------------------------------------------------------------------
+#
+# Migration 0001's blanket grant gave cyberorch_app INSERT and DELETE on this
+# table like every other, and it was never narrowed the way D5 narrowed it for
+# the registries -- so the role every Worker/Reviewer/Supervisor call runs as
+# has always been able to create or delete an engagement outright, unused only
+# because nothing called it. Migration 0010 closes that the same way D5 closed
+# the registries: the write moves to registry_admin, cyberorch_app keeps only
+# what pause/resume/kill/complete have ever needed.
+
+def test_app_role_cannot_insert_an_engagement(db_available):
+    """The gap D39 closed: this has always been reachable, never refused.
+
+    Opens ``engagement_scope`` on an id that does not exist yet -- RLS only
+    compares the session's GUC against the row being written, never checks
+    prior existence, which is what let every pre-D39 raw-SQL caller do exactly
+    this. The privilege check happens before RLS is even consulted, so this
+    fails on the grant, not on the policy.
+    """
+    eid = _uid("ENG-ATTACK")
+    with pytest.raises(ProgrammingError) as err:
+        with engagement_scope(eid) as conn:
+            conn.execute(
+                text("INSERT INTO engagements (engagement_id, customer_id, "
+                     "policy_snapshot_version) VALUES (:e, 'CUST-ATTACK', 0)"),
+                {"e": eid},
+            )
+    assert _insufficient_privilege(err)
+
+
+def test_app_role_cannot_delete_an_engagement(engagement_id):
+    """Rows are retired by status (§1.2e), never removed. Nothing legitimate
+    has ever needed DELETE here, and now nothing can reach it."""
+    with pytest.raises(ProgrammingError) as err:
+        with engagement_scope(engagement_id) as conn:
+            conn.execute(
+                text("DELETE FROM engagements WHERE engagement_id = :e"),
+                {"e": engagement_id},
+            )
+    assert _insufficient_privilege(err)
+
+
+def test_app_role_can_still_update_and_select_an_engagement(engagement_id):
+    """The negative control: tightening INSERT/DELETE must not touch the two
+    privileges pause/resume/kill/complete actually use."""
+    with engagement_scope(engagement_id) as conn:
+        conn.execute(
+            text("UPDATE engagements SET updated_at = now() WHERE engagement_id = :e"),
+            {"e": engagement_id},
+        )
+        row = conn.execute(
+            text("SELECT status FROM engagements WHERE engagement_id = :e"),
+            {"e": engagement_id},
+        ).scalar_one()
+    assert row == "active"
+
+
+def test_registry_admin_can_create_an_engagement(db_available):
+    """The positive control: the role the operation actually runs as."""
+    eid = _uid("ENG-ADMIN")
+    make_engagement(eid, "CUST-ADMIN")
+    with engagement_scope(eid) as conn:
+        row = conn.execute(
+            text("SELECT customer_id FROM engagements WHERE engagement_id = :e"),
+            {"e": eid},
+        ).scalar_one()
+    assert row == "CUST-ADMIN"
+
+
+def test_registry_admin_cannot_delete_an_engagement(engagement_id):
+    """registry_admin gained INSERT, not DELETE — retirement is by status."""
+    with pytest.raises(ProgrammingError) as err:
+        with registry_admin_scope(engagement_id) as conn:
+            conn.execute(
+                text("DELETE FROM engagements WHERE engagement_id = :e"),
+                {"e": engagement_id},
+            )
+    assert _insufficient_privilege(err)
+
+
+# ---------------------------------------------------------------------------
 # I4 across the two-role operation D9 added
 # ---------------------------------------------------------------------------
 
@@ -249,12 +332,7 @@ def test_retire_scope_object_cannot_reach_into_another_engagement(engagement_id)
     victim_scope = _uid("SCOPE")
     victim_capability = _uid("CAP")
 
-    with engagement_scope(victim) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-VICTIM', 1)"),
-            {"e": victim},
-        )
+    make_engagement(victim, "CUST-VICTIM")
     with registry_admin_scope(victim) as conn:
         register_scope_object(
             conn, engagement_id=victim, scope_object_id=victim_scope,
@@ -303,12 +381,8 @@ def test_revoke_credential_cannot_reach_into_another_engagement(engagement_id):
     victim_credential = _uid("CRED")
     victim_capability = _uid("CAP")
 
+    make_engagement(victim, "CUST-VICTIM")
     with engagement_scope(victim) as conn:
-        conn.execute(
-            text("INSERT INTO engagements (engagement_id, customer_id, "
-                 "policy_snapshot_version) VALUES (:e, 'CUST-VICTIM', 1)"),
-            {"e": victim},
-        )
         conn.execute(
             text("INSERT INTO credentials (credential_id, engagement_id, label) "
                  "VALUES (:c, :e, 'victim credential')"),

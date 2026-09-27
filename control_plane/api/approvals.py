@@ -42,15 +42,17 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, text
 
+from control_plane.api.function_api import execution_constraints
 from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
-from control_plane.canonicalizer.target import normalize_target
+from control_plane.canonicalizer.target import CanonicalTarget, normalize_target
 from control_plane.capability.broker import Budget, issue_capability
 
 HUMAN_APPROVAL = "HUMAN_APPROVAL"
@@ -153,6 +155,104 @@ def _load_resolvable(conn: Connection, proposal_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def approval_fields(
+    row: Mapping[str, Any], target: CanonicalTarget, *, valid_for_seconds: int
+) -> dict[str, Any]:
+    """The §4.7 Approval object a grant would write, derived from the proposal.
+
+    Extracted at D29 so the web console can *show* an operator the structured
+    object before they commit to it, without a second copy of the derivation.
+    D29's constraint 3 is that the console must present the full §4.7 shape —
+    action_class, resource, constraints, valid_until, and an explicit
+    approved_scope — rather than collapsing it to one "approve" button. Showing
+    fields that were computed differently from the ones actually stored would be
+    a worse failure than not showing them: the operator would be consenting to
+    something other than what happens.
+
+    So :func:`grant_approval` and :func:`preview_approval` both call this, and
+    ``test_the_preview_matches_what_the_grant_actually_writes`` compares a
+    preview against the row a real grant produces, field for field.
+
+    ``approved_scope`` is deliberately absent: it is the operator's choice, not
+    a derivation, and the caller supplies it.
+
+    Reading rows written before D30
+    -------------------------------
+    An ``approvals`` row whose ``constraints`` values are NULL predates this
+    fidelity fix, and its scope detail cannot be trusted: at the time it was
+    written the proposal's execution parameters had already been dropped by
+    ``_persist_proposal``, so the record says nothing and the capability issued
+    beside it was built from defaults rather than from what was proposed.
+
+    Those rows are **not backfilled, and NULL is left as the signal.** The
+    original request is not recoverable from anywhere — not the proposal row,
+    not the ``proposal.submitted`` audit payload, which stores only the
+    normalized target string — so any backfill would be a guess written into an
+    audit record, which is the one place a guess must never go. This follows
+    D11-7's treatment of history: an honest absence is safer than a plausible
+    reconstruction, and a NULL that means "unknown" needs no extra column to say
+    so. Anything reading these rows should treat NULL as *unknown scope*, never
+    as *no constraints were imposed*.
+    """
+    # D30: the same derivation the capability is issued with, so the §4.7
+    # record describes what was actually authorized rather than a second,
+    # quieter opinion about it. `host` is dropped here because §4.7 carries the
+    # target in `resource`; what is left is exactly the execution parameters,
+    # which is the shape §4.7's own example has ({"endpoint": ..., "method":
+    # ...}) beside its separate "resource": "customer_api".
+    granted = execution_constraints(dict(row["target"]),
+                                    target.logical_identity.value)
+    return {
+        "action_class": row["action"],
+        "resource": (
+            f"{target.logical_identity.type}:{target.logical_identity.value}"
+        ),
+        "constraints": {k: v for k, v in granted.items() if k != "host"},
+        "capability_constraints": granted,
+        "valid_until": datetime.now(UTC) + timedelta(seconds=valid_for_seconds),
+    }
+
+
+def preview_approval(
+    conn: Connection, *, proposal_id: str,
+    valid_for_seconds: int = DEFAULT_APPROVAL_SECONDS,
+) -> dict[str, Any]:
+    """What approving this proposal would write, without writing it (D29).
+
+    Read-only: it runs the same ``_load_resolvable`` refusals as
+    :func:`grant_approval`, so a proposal that is absent, not escalated, already
+    approved or already denied raises here too rather than rendering a form that
+    could only fail on submit. It re-resolves authorization for the same reason
+    and reports the answer, so an operator can see that a scope object moved
+    under a queued escalation before they act on it.
+
+    It writes nothing and audits nothing. Looking at a pending approval is not a
+    decision, and recording it as one would put noise in the trail that §4.4
+    readers would have to learn to ignore.
+    """
+    row = _load_resolvable(conn, proposal_id)
+    target = normalize_target(dict(row["target"]))
+    resolution = resolve_authorization(
+        conn, target=target, action=row["action"],
+        authorization=dict(row["authorization"]),
+    )
+    fields = approval_fields(row, target, valid_for_seconds=valid_for_seconds)
+    return {
+        "proposal_id": proposal_id,
+        "task_id": row["task_id"],
+        "agent_id": row["agent_id"],
+        "action_class": fields["action_class"],
+        "resource": fields["resource"],
+        "constraints": fields["constraints"],
+        "valid_until": fields["valid_until"].isoformat(),
+        "valid_for_seconds": valid_for_seconds,
+        # Offered, not chosen. The console renders one control per option.
+        "approved_scope_options": list(APPROVED_SCOPES),
+        "authorization_still_holds": resolution.authorized,
+        "authorization_reasons": list(resolution.reasons),
+    }
+
+
 def grant_approval(
     conn: Connection, *, engagement_id: str, proposal_id: str, approver: str,
     approved_scope: str, valid_for_seconds: int = DEFAULT_APPROVAL_SECONDS,
@@ -190,13 +290,10 @@ def grant_approval(
         )
 
     approval_id = f"APPR-{uuid.uuid4().hex[:10]}"
-    resource = f"{target.logical_identity.type}:{target.logical_identity.value}"
-    stored_target = dict(row["target"])
-    constraints = {
-        "ports": stored_target.get("ports"),
-        "scan_type": stored_target.get("scan_type"),
-    }
-    valid_until = datetime.now(UTC) + timedelta(seconds=valid_for_seconds)
+    fields = approval_fields(row, target, valid_for_seconds=valid_for_seconds)
+    resource = fields["resource"]
+    constraints = fields["constraints"]
+    valid_until = fields["valid_until"]
 
     conn.execute(
         text("""
@@ -227,9 +324,9 @@ def grant_approval(
     issued = issue_capability(
         conn, engagement_id=engagement_id, capability_id=capability_id,
         agent_id=row["agent_id"], action=row["action"], actor=approver,
-        constraints={"host": target.logical_identity.value,
-                     "ports": stored_target.get("ports", "8080"),
-                     "scan_type": stored_target.get("scan_type", "connect")},
+        # The same object the approval row above recorded (D30). Not a second
+        # derivation that happens to agree today.
+        constraints=fields["capability_constraints"],
         budget=Budget(max_duration_seconds=_APPROVED_BUDGET_SECONDS),
         ttl_seconds=row["requested_capability_ttl_seconds"] or 60,
         approval_id=approval_id, proposal_id=proposal_id,

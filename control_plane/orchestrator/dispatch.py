@@ -33,10 +33,17 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
+from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request
 from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
-from tool_gateway.adapters import nmap
-from tool_gateway.sandbox import DockerSandbox, SandboxResult, SandboxUnavailable
+from tool_gateway import registry
+from tool_gateway.adapters import browser, http_get, http_post, nmap
+from tool_gateway.sandbox import (
+    TOOL_CA_PATH,
+    DockerSandbox,
+    SandboxResult,
+    SandboxUnavailable,
+)
 
 QUEUED = "queued"
 DISPATCHING = "dispatching"
@@ -147,6 +154,51 @@ def find_cached_run(
     ).mappings().one_or_none()
 
 
+#: Which adapter serves which capability action (§4.1.5, D31).
+#:
+#: Keyed on the action the *capability* carries, not on anything the Worker
+#: says at dispatch time — the action was fixed when OPA decided and the broker
+#: issued, so routing on it cannot be steered later.
+#:
+#: Re-exported from :mod:`tool_gateway.registry`, which owns the table since
+#: D34 because the authorization path reads it too: the side-effect floor looks
+#: up what an action actually does, and that lookup and this routing must be
+#: the same fact. Two tables would let OPA judge one tool and dispatch run
+#: another.
+ADAPTERS = registry.ADAPTERS
+adapter_for = registry.adapter_for
+
+#: Evidence id prefix per tool, so an id keeps saying what produced it.
+EVIDENCE_PREFIX = {
+    nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP",
+    browser.TOOL: "BROWSER",
+}
+
+#: A capability naming an action no adapter implements.
+UNKNOWN_ACTION = registry.UNKNOWN_ACTION
+
+#: A web.* capability dispatched with no egress proxy to route it through.
+PROXY_REQUIRED = registry.PROXY_REQUIRED
+
+#: The capability's §4.6 request budget is spent.
+#:
+#: The broker's constant, re-exported rather than restated. consume_request
+#: audits the refusal with this reason and dispatch returns it; two spellings
+#: of one refusal is how a search for "why did this stop" finds half the
+#: answer.
+
+
+def _build_plan_params(adapter) -> frozenset[str]:
+    """The keyword names ``adapter.build_plan`` accepts.
+
+    Used to hand each adapter only the proxy-trust input it declares, so a tool
+    is never passed a parameter it does not use (D36).
+    """
+    import inspect
+
+    return frozenset(inspect.signature(adapter.build_plan).parameters)
+
+
 def dispatch_scan(
     conn: Connection,
     *,
@@ -159,22 +211,95 @@ def dispatch_scan(
     network_allowlist: list[str] | None = None,
     execution_context: Mapping[str, Any] | None = None,
     fresh_for_seconds: int = 1800,
+    proxy_url: str | None = None,
+    ca_cert_pem: str | None = None,
+    proxy_cert_spki: str | None = None,
 ) -> DispatchOutcome:
     """Run one scan and record run, evidence and state transitions.
 
     The capability supplies the constraints and the budget; the sandbox
     supplies the network boundary. Both are required — a scan with neither is
     an unbounded command with a route to everywhere.
+
+    ``proxy_url`` is the policy-aware egress proxy for web.* actions (§8.3,
+    D34). It is **required** for an adapter that declares ``REQUIRES_PROXY``:
+    a web request with no proxy is not a degraded run, it is an unchecked one,
+    so it is refused here rather than executed directly.
+
+    ``ca_cert_pem`` is the per-engagement CA the proxy terminates TLS with
+    (D35). When present the tool trusts the proxy's leaf (mounted at
+    ``TOOL_CA_PATH``, passed to the adapter as ``--cacert``) and an https
+    request is checkable; when absent the adapter refuses https with the reason
+    named, rather than a socket error. It is threaded here the same way
+    ``proxy_url`` is, and like it goes only to the adapters that use the
+    proxy.
+
+    Note what this signature does *not* accept, because D34 rests a property on
+    it: there is no ``action`` parameter and no ``writes_data`` /
+    ``changes_state`` parameter. The action comes off the issued capability,
+    which was fixed when OPA decided, and the side effects are looked up from
+    it. There is no argument on this path that could carry a different value —
+    the same shape as D13's Worker interface, which has no ``discovery``
+    argument to falsify.
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
 
-    try:
-        plan = nmap.build_plan(
-            constraints=capability.constraints, budget=capability.budget.as_dict(),
-            target=target,
+    adapter = adapter_for(capability.action)
+    if adapter is None:
+        # Refused for the same reason an unbuildable plan is (below): a
+        # capability the gateway cannot execute must not fall through to a tool
+        # that happens to be wired up.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNKNOWN_ACTION,),
+            payload={"action": capability.action,
+                     "capability_id": capability.capability_id},
         )
-    except nmap.AdapterError as exc:
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNKNOWN_ACTION)
+
+    if registry.requires_proxy(capability.action) and not proxy_url:
+        # Refused, not downgraded to a direct request. The tool container has
+        # no route to the target anyway (§8.3's two-network topology), so this
+        # would fail at the socket a moment later and read as an unreachable
+        # target; saying it here keeps the reason attached to the cause.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(PROXY_REQUIRED,),
+            payload={"action": capability.action,
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=PROXY_REQUIRED)
+
+    # Only the adapters that go through the proxy are told about it. nmap's
+    # build_plan has no proxy_url parameter and should not grow one: §8.3 routes
+    # raw TCP through the namespace precisely because there is no application
+    # protocol there for a proxy to read.
+    proxy_kwargs: dict[str, Any] = {}
+    if registry.requires_proxy(capability.action):
+        proxy_kwargs["proxy_url"] = proxy_url
+        # How the tool trusts the proxy's terminated TLS differs by tool: curl
+        # verifies the CA at TOOL_CA_PATH (--cacert, D35); the browser pins the
+        # leaf's SPKI (D36). Each adapter's build_plan declares only the one it
+        # takes, so pass by signature rather than give a tool a trust input it
+        # does not use.
+        accepted = _build_plan_params(adapter)
+        if ca_cert_pem is not None and "ca_cert_path" in accepted:
+            proxy_kwargs["ca_cert_path"] = TOOL_CA_PATH
+        if proxy_cert_spki is not None and "proxy_cert_spki" in accepted:
+            proxy_kwargs["proxy_cert_spki"] = proxy_cert_spki
+    try:
+        plan = adapter.build_plan(
+            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            target=target, **proxy_kwargs,
+        )
+    except adapter.AdapterError as exc:
         # A capability the adapter cannot turn into a command. Refused, and
         # audited, rather than raised — D15 found this the hard way: a real
         # Worker proposed ``ports: "n/a"`` for a ping scan, the AdapterError
@@ -190,16 +315,16 @@ def dispatch_scan(
             event_type="tool_run.refused", subject_type="action_proposal",
             subject_id=proposal_id, decision=DENY_DECISION,
             reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": nmap.TOOL, "error": str(exc),
+            payload={"tool": adapter.TOOL, "error": str(exc),
                      "constraints": dict(capability.constraints),
                      "capability_id": capability.capability_id},
         )
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
-    tool_version = nmap.tool_version()
+    tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]
     fingerprint = execution_fingerprint(
-        engagement_id=engagement_id, tool=nmap.TOOL, tool_version=tool_version,
+        engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
         execution_context=fingerprint_context(execution_context, allowlist),
     )
@@ -217,6 +342,32 @@ def dispatch_scan(
         ).scalar_one_or_none()
         return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
 
+    # §4.6's request budget, spent here (D34).
+    #
+    # **This is the repair of an existing defect, not a mechanism D34
+    # invented.** consume_request and its atomic check-and-increment have been
+    # in the broker since the capability work, written exactly as §8.5
+    # specifies, and nothing on any production path called it: grep found it
+    # only in tests. max_requests was a number in a database. D31 did not
+    # notice because its adapter refuses any value above one, so a run was
+    # always exactly one request.
+    #
+    # Placed after the claim and before anything executes. Before the claim and
+    # a lost race would burn a request nothing used; after the run and a
+    # crashed control plane would execute without ever counting it.
+    #
+    # Nmap is exempt by §4.6's own reasoning -- "one request" has no meaning
+    # for a port scan, which is why the budget object separates tool-specific
+    # dimensions from the universal ones. The adapters that count declare a
+    # max_requests on their plan; the ones that do not, do not.
+    max_requests = getattr(plan, "max_requests", None)
+    if max_requests is not None and not consume_request(
+        conn, capability_id=capability.capability_id, max_requests=max_requests,
+        engagement_id=engagement_id, actor=actor,
+    ):
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=BUDGET_EXHAUSTED)
+
     run_id = f"RUN-{uuid.uuid4().hex[:12]}"
 
     conn.execute(
@@ -231,7 +382,7 @@ def dispatch_scan(
         """),
         {
             "run": run_id, "eng": engagement_id, "pid": proposal_id,
-            "cap": capability.capability_id, "tool": nmap.TOOL, "tver": tool_version,
+            "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
             "target": target, "params": _json(plan.as_params()),
             "ctx": _json(dict(execution_context or {})), "fp": fingerprint,
             "status": RUNNING, "allowlist": allowlist,
@@ -241,15 +392,30 @@ def dispatch_scan(
     record_audit(
         engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
         subject_type="tool_run", subject_id=run_id,
-        payload={"tool": nmap.TOOL, "target": target, "command": list(plan.command),
+        payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
 
-    sandbox = sandbox or DockerSandbox()
+    # A tool that ships its own image says so; the rest run in the shared one.
+    # When the caller passed a sandbox it already chose the image, so respect it.
+    adapter_image = getattr(adapter, "IMAGE", None)
+    sandbox = sandbox or (
+        DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
+    )
     try:
         result = sandbox.run(
             command=plan.command, network_allowlist=allowlist,
             max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
+            # web.post feeds its body here rather than through argv, so the
+            # body never reaches the process table or the audit payload below,
+            # and curl's @- sigil stays fixed (see http_post.build_plan).
+            stdin=getattr(plan, "stdin", None) or None,
+            # The public CA the tool verifies the proxy's leaf against (D35).
+            # None for nmap and for plain-HTTP web runs.
+            ca_cert_pem=ca_cert_pem,
+            # Writable tmpfs the tool's image needs over its read-only root
+            # (the browser; D36). None for tools that need no writable path.
+            tmpfs=getattr(adapter, "TMPFS", None),
         )
     except SandboxUnavailable as exc:
         # The tool may or may not have run — the sandbox failed at a point we
@@ -269,12 +435,13 @@ def dispatch_scan(
         f"$ {' '.join(plan.command)}\n"
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
     ).encode()
-    evidence_id = f"NMAP-{uuid.uuid4().hex[:12]}"
+    prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
+    evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
     record_evidence(
         conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
         evidence_type="tool_output", raw=raw,
-        derived_view=nmap.derive_view(result.stdout, result.stderr),
-        tool=nmap.TOOL, tool_version=tool_version,
+        derived_view=adapter.derive_view(result.stdout, result.stderr),
+        tool=adapter.TOOL, tool_version=tool_version,
     )
 
     status = SUCCEEDED if result.succeeded else FAILED

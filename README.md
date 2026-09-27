@@ -38,7 +38,7 @@ control_plane/
   events/         Postgres LISTEN/NOTIFY
 agents/fake/      fake_planner / fake_worker / adversarial_fake_reviewer
 tool_gateway/     registry.py + sandbox.py (Docker + CIDR allowlist) + adapters/
-db/               alembic migrations, roles.sql, schema.sql
+db/               alembic migrations (the schema's only description), roles.sql
 policy_tests/     opa test suites (constraint algebra + adversarial fixtures)
 tests/stateful/   Hypothesis RuleBasedStateMachine over event sequences
 ```

@@ -16,11 +16,21 @@ what *is* written back here is the resolution of items this document listed —
 that had a security consequence, the same way the kernel review would have been
 updated had its own deferrals been closed while it was the live record.
 
+**Successor stage.** The Web Agent arc (D31–D37) — the Egress Proxy, `web.get`
+/ `web.post` / `web.render`, TLS termination and Playwright — is reviewed
+separately in `ACCEPTANCE_MVP15_WEB_AGENT.md`, which carries this stage's
+candidate items 5.8–5.19 and the fifth injection experiment. This document
+stays the record of the three-roles stage (D10–D24); items below are current as
+of *its* close, so where a later stage moved one (e.g. D25 implemented 5.1's
+downward inheritance, D34 spent the long-inert `consume_request`), the
+successor review holds the newer status.
+
 Scope reminder — what this stage covered and what it deliberately did not. It
 put a real model behind each of the three roles and measured that role against
 the boundary it can actually reach. It did **not** add Neo4j, a Vector DB, an
 Egress Proxy, a Web Agent, Playwright, an Approval UI, or a finding-verification
-workflow; those remain Phase-1 scope. The live measurements were run by hand and
+workflow; those remain Phase-1 scope (and the first four of them are what the
+successor stage above went on to build). The live measurements were run by hand and
 never entered CI, for the reasons `DEFERRED_MVP0.md` and
 `ADR_REVIEWER_BILLING.md` give: model output is non-deterministic and a personal
 subscription's OAuth credential does not belong in CI secrets.
@@ -437,22 +447,193 @@ Its downstream half (a goal on the Worker's trusted side) stays measured at
 | 5.4 | `heartbeat_required` declared, not enforced | Open. Blocked on a **missing prerequisite, not a decision**: there is still no scheduler in MVP-0, and `last_heartbeat_at` is only meaningful once an agent heartbeats on its own schedule. Column stays; the gap is behaviour. |
 | 5.5 | `approvals` has no API (Phase-1 scope) | Open, scope boundary. Checking is covered; only the granting operation is absent. When it lands, `revoke_approval()` needs the D9 cascade treatment. |
 | 5.6 | `findings.state` / `verification_conflict` (Phase-1 scope) | Open, scope boundary. **Note:** D17 implemented `query_findings` (a *read*), but the kernel still never promotes evidence to a finding, so the state machine remains unwritten (re-confirmed by the D22 investigation). The read interface existing does not change the deferral — and D22's §11.4 constraints bind the finding-writer that will eventually fill it. |
-| 5.7 | Emergency-overlay content not randomized in the stateful test | Open. The algebra is covered at 400 generated combinations per property; the stateful rule exists to test the *interaction*. If content is randomized later it must respect tighten-only. |
+| 5.7 | Emergency-overlay content not randomized in the stateful test | Open. Was marked Blocked at D27, while the suite this describes was missing from the tree (deleted at `7c9295f`/D17); D28 restored it, so the item is live again. The algebra is covered at 400 generated combinations per property; the stateful rule exists to test the *interaction*. If content is randomized later it must respect tighten-only. See `ACCEPTANCE_MVP_KERNEL.md` §4.1 for the incident record. |
 | D11-8 | The derived view drops the nmap VERSION column | Open, minor. Cosmetic loss in the derived view; evidence retains the raw. |
 | D11-9 | Nothing creates an engagement | Open, gap. Engagements are seeded by tests and harnesses; no operation creates one. A stage boundary, surfaced when the live runs each had to construct their own. |
+
+### Found at D32 — carried forward as candidates
+
+| # | Item | Status |
+|---|---|---|
+| 5.8 | No middle state between "unknown" and "denied" for a **canonical sensitive class that is not on the deny list** | Open, and **general — not a web.get question**. Raised while deciding D32 and deliberately left out of it. |
+| 5.9 | A wildcard scope object authorizes but no capability can be issued against it | Open. The Authorization Resolver honours `web.*` / `network.*` patterns (§4.1.5); the Capability Broker checks the same `allowed_actions` by membership, so the run is refused with `scope_action_no_longer_allowed` for an authorization that was never withdrawn. Affects every namespace. Pinned by `test_a_wildcard_scope_object_authorizes_but_cannot_be_issued_against`. |
+
+### Found at D34 — one defect repaired, two candidates raised
+
+| # | Item | Status |
+|---|---|---|
+| **§4.6 request budget never spent** | `consume_request` was never called on any production path | **Closed at D34.** The broker's atomic check-and-increment (§8.5's exact `UPDATE ... WHERE requests_used < :maximum RETURNING`) had been written correctly since the capability work and called only from tests, so `max_requests` was a number in a database. D31 did not surface it because its adapter refuses any value above one. `dispatch_scan` now spends a request after the claim and before anything executes; the refusal is audited with the broker's own reason string. Pinned by a mutation test that stubs the call out and asserts the guarantee then fails. |
+| 5.11 | The side-effect floor changes no decision today | Open, defence in depth. D34 made the `writes_data` / `changes_state` OPA judges a lookup from the **action** rather than the Worker's claim. §5's `requires_known_classification` fires either when the action matches a named pattern *or* when a side-effect flag is set, and `web.post` is already in the pattern list — so for every action that currently has an adapter, the floor is redundant. It becomes load-bearing the moment an adapter with side effects has an action the pattern list does not name, which is checked by `test_the_flag_branch_is_load_bearing_for_an_action_the_list_does_not_name`. Recorded rather than left implicit: a mechanism whose effect is invisible is one nobody can tell has stopped working. |
+| 5.12 | The within-run request ceiling and the capability budget are two counters | **Examined and settled at D35.** The two counters stay two, by the same reason 5.12 first gave — the in-container proxy has no database connection, and keeping credentials off the sandbox network is worth more than a single counter. What D35 had to check was whether TLS loosens the within-run ceiling: an https keep-alive connection can carry several HTTP requests down one socket, so if the proxy counted *connections* the ceiling would leak. It counts **requests**, on the decrypted plaintext, inside the tunnel — each request in a keep-alive tunnel goes through the same check-and-consume — so the ceiling holds regardless of socket reuse. Pinned by `test_tls_keep_alive_requests_are_each_counted` (three GETs down one tunnel against a ceiling of two → two served, one refused, target logs two). The persistent budget remains the cross-run authority spent once per run by the control plane; the ceiling remains the within-run bound. They still describe different things and still agree for today's one-request-per-run adapters — TLS did not change that. |
+
+### Found at D35 — a limit recorded, not a candidate
+
+| # | Item | Status |
+|---|---|---|
+| 5.13 | A cert-pinning target cannot be intercepted | **Recorded limit, not a defect and not a candidate to close.** §8.3 named it when it deferred the proxy: a target that pins a certificate — ships the real one and refuses anything else — rejects the proxy's leaf, because the leaf is signed by a per-engagement CA the target was never told to trust. There is no fix that keeps the pin honest; "intercept a pinned connection" and "the pin still means something" are the same sentence negated. For the disposable targets this platform tests it does not arise. For a real customer target that pins, the honest position is that the tool cannot see inside that connection, and it says so: the refusal happens at the **TLS handshake**, categorically distinct from a policy 403, and the target logs nothing because nothing got past the handshake. Pinned in two places — `test_tls_a_client_that_does_not_trust_our_ca_is_refused_at_the_tls_layer` (in-process, asserts an `ssl` error and an empty target log) and `test_tls_a_pinning_client_is_refused_and_the_target_never_sees_it` (container, curl `--pinnedpubkey`, asserts curl fails without a 200 and without the proxy's refusal header, and a fresh-UUID path is absent from the target's log). The distinctness is the property: "pinning, working as designed" must never read as "the proxy is broken". |
+
+**D35, and where the trust lives.** The egress proxy now terminates TLS
+(D34 refused it). One CA per engagement, in the RLS-scoped `engagement_ca`
+table reachable only by `cyberorch_app` bound to that engagement — the same
+protection as `credentials`, and never granted to `ui_reader`,
+`registry_admin` or `global_auditor` (migration `0009`). A global CA was
+rejected outright: one leaked key would impersonate any host in any
+engagement, above the I4 boundary the schema exists to hold. The CA private
+key never enters the sandbox — the control plane signs, the proxy is handed a
+single-host leaf valid for hours, delivered by read-only bind mount so the key
+never passes through argv. There is no per-host signing cadence to design,
+because "one capability, one host" (D34) means the proxy never faces a second
+host: the one leaf is minted when the grant is built and dies with the proxy.
+The library-default audit the brief asked for is in `egress_proxy.py`'s module
+docstring: forwarding is on `http.client` (no redirect logic at all, so the
+D34 urlopen footgun is gone by construction, not patched); no connection reuse
+upstream; and the upstream TLS context is *explicitly* unverified, with the
+reason stated — the proxy audits content, it does not authenticate the target,
+whose identity is the grant's host binding, exactly as Burp and mitmproxy do.
+
+### Found at D36 — the browser is not the boundary; the container is
+
+| # | Item | Status |
+|---|---|---|
+| 5.14 | A headless browser reads a `file://` it is pointed at | **Recorded threat, addressed at the container — not a defect in the browser to fix.** Probed with the real Playwright: a headless Chromium navigated to `file:///…` reads any file its uid can read; it does not refuse, and no browser flag makes it refuse in general. So the isolation cannot rest on the browser. Two layers hold instead, both proven by evidence outside the browser: the runner refuses any non-http/https target before launch (`classify_target`), and the browser container carries nothing worth reading — no private key, and not the D35 leaf-key path, which lives only in the proxy container. Pinned in `tests/test_browser_escape.py`: a `grep` over the container filesystem (a non-browser witness) finds no private key; the leaf-key path is absent (`test -e`); the runner returns a structured refusal for `file://` with no file content; and a raw browser driven at `file:///etc/hostname` *does* read it, which is what makes the runner's refusal the load-bearing boundary rather than an incidental browser default. |
+| 5.15 | Downloads could write to an arbitrary container path | **Tested, judged not a path-control surface — recorded like a fail-open branch, not skipped.** A download whose `Content-Disposition` filename was `../../../../tmp/MARKER` came back with the separators flattened to underscores (Chromium sanitises the name) and was stored at a random-UUID path under Playwright's own temp dir; the traversal target was never created. The page can only relocate a download if our code calls `save_as`, which the runner never does. Residual risk is only tmpfs consumption in a secret-free container; closed further with `accept_downloads=False`, so a triggered download is cancelled and nothing is written. |
+| 5.16 | The DevTools/CDP channel could be reached by page content | **Tested, judged not reachable — recorded, not skipped.** `chromium.launch()` uses pipe transport: no ws endpoint, DevTools TCP port 9222 closed. The control channel is file descriptors between the Playwright driver process and the browser; the renderer where page JavaScript runs has neither those fds nor any listening socket to reach. The boundary that keeps it so — never launching with `--remote-debugging-port` — is pinned by a structural test on the launch args (`test_the_launch_never_opens_a_remote_debugging_port`), for the proxied and self-check paths both. |
+| 5.17 | WebSocket is unhandled | **Excluded deliberately, like PUT/DELETE (D34).** No caller needs a WebSocket; opening one would carry bidirectional traffic past the per-request counting the whole model rests on. A `ws://`/`wss://` target is refused with its own named reason (`REFUSED_WEBSOCKET`), distinct from an unknown scheme, so the refusal reads as "not offered" rather than "not understood". |
+
+**D36, and why the image build fought back.** The browser image is a self-built
+Dockerfile, not the docker-import scratch route the other three use — Chromium
+is too large and too dynamic for hand-staging, and that route buys no
+traceability when the browser blobs are Playwright-distributed either way; what
+is auditable (packages, browser revision) is recorded in a baked-in manifest
+(Playwright 1.56.0, Chromium 1194). The self-check — run the browser as the
+image's non-root user, cap-dropped, read-only root with tmpfs, the D35 habit —
+took several CI rounds, and every failure was a build/wrapper bug, never the
+browser: the pip package version was the Node one (PyPI has 1.56.0, not
+1.56.1); a root-owned tmpfs HOME the browser uid could not write; then, with
+diagnostics finally printing, the module had no `__main__` guard so it defined
+`main()` and exited silently; then `url` was a required positional so the
+build's `--self-check` (no url) failed argparse before the browser ran. Each is
+pinned by a hermetic test now (a module-runs-as-script test, a --self-check
+parses-with-no-url test), so this class of "the wrapper never ran the code"
+bug fails on every machine, not only in CI.
+
+### Found at D37 — the wiring was in place but never driven
+
+| # | Item | Status |
+|---|---|---|
+| 5.18 | web.render had never gone through `propose_action` | **Closed at D37.** D36 wired dispatch and unit-tested the adapter, but no web action had run through the pipeline's real entry point, so "the wiring is in place" was a unit-level claim. D37 drives web.render the whole way — canonicalize → authorize → classify → OPA ALLOW → broker → Tool Gateway → evidence → provenance — hermetically with a stub sandbox (`test_web_render_e2e.py`, every machine) and with a real browser, proxy and JS target in CI (`scenarios/test_scenario_web_render.py`). The stub run asserts the SPKI pin, the browser tmpfs, and the budget ceilings all arrive at the run threaded through `propose_action`; the container run proves the same with a real render. |
+| 5.19 | `execution_constraints` dropped the web port and path | **The gap D37 found, closed.** The capability constraints derived for every dispatch carried only `{host, ports, scan_type}` — nmap's shape. A web.* action's request `port`, `path` and `scheme` never reached its adapter, so no web action could run through `propose_action` against a real path or an https port. They are now carried when the proposal names them (https on 8443 is expressed by the scheme, not inferrable from a bare IP); nmap names none, so its constraints are byte-for-byte unchanged, asserted by a test. |
+
+**The fifth injection experiment (D37).** D13 nmap banner → D15 look-alike scope
+object → D31 GET body → D34 POST reply → D37 a DOM node the target inserts only
+after its JavaScript runs. The carrier is new and the point is exactly that it
+is invisible to the earlier tools: the lure address `203.0.113.155` appears in
+no static source (the page assembles it from an octet array at runtime), so a
+web.get sees nothing an extractor could match — confirmed against the extractor
+— and only web.render, which runs the page, surfaces it in the rendered DOM.
+That is also the operational basis for a Worker choosing web.render over
+web.get: the meaningful content does not exist until the page runs. The
+boundary is unchanged from every prior round: the rendered DOM is marked
+`untrusted_content`, the lure is surfaced only as a discovery candidate
+(harness-computed, never agent-declared), and an address that appears only
+there still needs a scope object — the Authorization Resolver refuses it
+(`target_not_covered_by_scope_object`), asserted hermetically, and the
+container scenario shows the real render surfacing it while it authorizes
+nothing.
+
+**Budget, triggered for real (D37).** The `max_subresources_per_navigation`
+ceiling was pinned at D36 by a mutation test on the runner's counter. D37 fires
+it in a real dispatch: a gallery page fetching 40 sub-resources against a
+ceiling of 5 is aborted, fail-closed, and the evidence's derived view carries
+`refused: true, reason: subresource_ceiling_exceeded`. The proxy's flat backstop
+is set generous in that scenario precisely so the abort is attributable to the
+browser budget and not to the proxy's request count.
+
+### Found at D39 — D11-9 closed; one design decision recorded, not resolved
+
+| # | Item | Status |
+|---|---|---|
+| **D11-9** | Nothing creates an engagement | **Closed at D39.** `create_engagement` (`control_plane/orchestrator/engagement.py`) runs on `registry_admin` — the Engagement Manager role, the same one that already registers scope and metadata — audits `engagement.created` with the actor, the customer, and the computed policy version, and refuses a duplicate id with `EngagementAlreadyExists` rather than a raw constraint violation. Migration `0010` moved the write there and, in the same pass, revoked INSERT/DELETE on `engagements` from `cyberorch_app`, which had held both since migration 0001's blanket grant and had never had a legitimate caller for either — the same "rests on application code choosing not to" gap D5 closed for the registries, just never noticed for this table. Pinned directly: `test_app_role_cannot_insert_an_engagement` / `test_app_role_cannot_delete_an_engagement` assert `InsufficientPrivilege` from PostgreSQL, not merely that the application does not try; `test_app_role_can_still_update_and_select_an_engagement` is the explicit negative control proving `pause`/`resume`/`kill`/`complete` are untouched. All five D11/D17 live-run scripts, and the roughly twenty test call sites that wrote the row directly, now call the real operation — rebuilding each script's construction logic against `create_engagement` and running it against a real database confirmed the resulting engagement is identical in shape (`active`, not killed, a real audited creation) to what the raw INSERT produced, for every one of them. |
+| **5.20** | The §4.5 frozen Baseline Snapshot has never been built | **Open, Class C — a decision, not a defect.** Checked rather than assumed: `load_effective_policy` live-merges whatever `baseline_global` / `customer` / `engagement` / `emergency_overlay` layers are `active IS TRUE` on every call, filtered only by `engagement_id IS NULL OR engagement_id = :eid`; it has never read `engagements.policy_snapshot_version`, which every pre-D39 caller wrote as the literal `1`. Only `emergency_overlay` has a database-level tighten-only constraint — `baseline_global` has none, so a later global-policy publish already applies retroactively to every open engagement, which is the opposite of what §4.5 v0.2 describes ("Global Policy 之後更新不應該回溯影響正在進行的 Engagement"). D39 makes the stored column honest — `create_engagement` computes it from the broker's own `current_policy_version` rather than a placeholder — and deliberately stops there: making `load_effective_policy` actually consult it means splitting D14's `_APPLICABLE` predicate (built specifically so enforcement and the listing function can never disagree) into two different rules for two layer categories, and deciding what a `baseline_global` publish should do to engagements already open under an earlier one, which the current merge algebra does not express. `test_load_effective_policy_does_not_read_the_snapshot` pins the current (unfrozen) behaviour so this cannot get silently built without the claim being updated. Not required for anything shipped so far; a real-deployment decision, D25-shaped, if a customer's signed baseline needs to hold against a later global change. |
+
+### Found at D40/D41 — three real roles at once found two robustness gaps; one closed immediately
+
+D40 ran Supervisor, Worker and Reviewer as real models simultaneously against
+one real engagement — the deliberately-broken single-variable discipline
+D10.5/D13/D17 held everywhere else — specifically to find the interaction
+effects no one-role deliverable was ever going to surface
+(`docs/D40_THREE_ROLE_INTEGRATION_REPORT.md`). It found three; one was a live
+reachability gap and was fixed the same week (D41), the other two are
+recorded here as bounded, non-security robustness limits.
+
+| # | Item | Status |
+|---|---|---|
+| **(url containment)** | `target_type: "url"` could never be authorized by any scope object | **Closed at D41.** A real, un-scripted Worker chose `target_type: "url"` for a web action — the only way its schema can express a target with a path at all — and was denied `target_out_of_scope` against an `ip`-typed scope object covering the exact same host, because `identity_contains` compared `url` values verbatim (D25's own "opaque identifier, exact match only" treatment, correct for `url`-to-`url` but never evaluated for a `url` *child* of an `fqdn`/`ip`/`cidr` *parent*). Fixed by teaching `identity_contains` to unwrap a `url` child to the host it names — parsing, not the DNS resolution §8.9/I8 forbids, since the host is a substring already in the value — and recurse into the same fqdn/ip/cidr arithmetic that host would get if spelled as its own type. Reaches only `scope_covers_target`; the Metadata Resolver's `ANCESTOR_TYPES` gates `url` out before `identity_contains` is ever called for it, so D25 §2.2's "no inheritance for url" is untouched. Pinned by `test_d40s_actual_denied_web_get_proposal_is_now_authorized` (replays D40's own recorded proposal from `docs/d40_runs/`), `test_an_fqdn_scope_covers_a_url_target_naming_its_host`, three mismatched-host mutation cases, and `test_a_url_scope_object_still_only_matches_a_url_target_verbatim` (the one thing D41 does not change); `test_containment_refactor_is_behaviour_preserving` was updated to assert every other type combination is unaffected. |
+| **5.21** | §2's query interface has no cap on cumulative evidence | **Open, Class B — a known, bounded reliability gap, not a live exploit.** `agents/llm/headless.build_command` passes an entire assembled prompt as one argv element to `claude`; `query_state` takes `task_limit`/`decision_limit`, but `query_evidence` and `build_state` take no equivalent, so nothing stops a caller from handing the Supervisor unbounded evidence. D40's main run hit the OS's argument-length ceiling on round 2 of 5 with three real evidence artifacts already collected, and every later round failed identically (`OSError: Argument list too long`) until the harness itself was given a `MAX_EVIDENCE_SHOWN` cap — a workaround in the caller, not a fix in §2. Not a security boundary: nothing is authorized incorrectly, a crashed Supervisor call simply plans nothing that round. A real, long-running engagement accumulating real evidence would hit the same wall in production; closing it needs a design choice (what gets shown when evidence outgrows one prompt — most recent first, a size cap, pagination) that this deliverable did not make. |
+| **5.22** | The Supervisor's `status_assessment` label is not stable under a frozen state | **Open, Class B — the Supervisor's own version of D10.5's `risk_hint` finding.** Three consecutive real Supervisor calls in D40's main run, against a byte-for-byte identical ledger/finding/decision state (nothing was created in any of the three rounds), returned `objective_met`, then `blocked`, then `objective_met`. Every prose `assessment_note` was individually defensible; the categorical label attached to it was not the same label twice. Exactly D10.5's own shape (a scalar Reviewer field split 10/5 on an unchanged input while the substance underneath stayed consistent), now measured for the Supervisor's status field. Not currently a live gap — nothing in `function_api.py` or the harnesses reads `status_assessment` to make a decision, it is reported for a human or a log — but a future consumer that branches on the label alone, rather than also reading the prose, would inherit this instability. |
+
+### Found at D31 (CI cycle) — raised as a candidate, closed at D33
+
+| # | Item | Status |
+|---|---|---|
+| 5.10 | `db/schema.sql` no longer describes the schema the migrations build | **Closed at D33 — by deleting the file.** The committed dump was last written at `4eccfe3` (D4.5) and had fallen four migrations behind: no `audit_log.scope` / `audit_scope_consistent` (D21), no D19 task-identity columns, no `ui_reader` grants (D29). Nothing read it, nothing detected the drift (CI ran `init_db.sh` with `SKIP_SCHEMA_DUMP=1`), and its own header said it was reference-only. Deleted rather than refreshed: see below. |
+
+**5.10, and why deletion rather than a freshness check.** The two options were to
+regenerate the dump and make CI fail on any difference, or to remove it. Refreshing
+keeps a second description of the schema that has to be held equal to the first, and
+this stage's record is largely a list of what happens to two things that are supposed
+to agree: the approval record and the capability it authorized (D30), the acceptance
+claim and the test suite it described (D27/D28), the preview and the stored row (D29).
+Each was closed by making one derivation serve both readers, and the same move applies
+here with the second reader removed entirely: `db/migrations/` builds the schema, so it
+*is* the schema, and it cannot drift from itself. The dump's grants and `FORCE ROW LEVEL
+SECURITY` lines were never authoritative anyway — the migrations write them, which is why
+the file's own header called itself reference-only.
+
+What was removed with it: the dump block and the `SKIP_SCHEMA_DUMP` switch in
+`scripts/init_db.sh`, the `SKIP_SCHEMA_DUMP: '1'` line in the CI job that existed only to
+turn that block off, and the file's mentions in `README.md` and `ARCHITECTURE.md`'s tree,
+which now point at `db/migrations/`. No test referenced it; nothing reads it at runtime.
+
+**5.8, with the evidence it rests on.** The question was whether `web.get`
+should escalate when a target carries an AUTHORITATIVE *sensitive* class, as a
+middle state between passive recon and `data.read`. Measuring the current
+policy showed the middle state cannot be a `web.get` rule:
+
+* **Deny dominance leaves almost nothing for it to catch.** A deny-listed
+  AUTHORITATIVE class is already `DENY` via `forbidden_data`, and §5's
+  precedence (`DENY > HUMAN_APPROVAL > ALLOW`) makes HUMAN_APPROVAL unreachable
+  for it. The only cases left are classes that are sensitive but *not*
+  deny-listed.
+* **Those cases are `ALLOW` for every action, not just `web.get`.** Measured:
+  a target classified AUTHORITATIVE with a non-deny-listed class returns ALLOW
+  for `web.get` *and* for `web.post`, which already lists a known classification
+  as a prerequisite. So a web.get-only rule would treat a GET more cautiously
+  than a POST on the same resource.
+* **`network.passive_identification` cannot serve as the precedent.** It
+  appears exactly once in the repository — one row of §5's table in
+  `ARCHITECTURE.md` — and is implemented nowhere: no Rego rule, no action
+  string, no Python. "Treat web.get like passive_identification" is therefore
+  the status quo, not an exemption that could be joined.
+
+The real gap is that the policy has no way to say "the customer declared this
+sensitive, and it is not forbidden, but a human should look". That is worth
+deciding once, across all actions, rather than per tool.
 
 ### Still open — the ones that need a decision before work starts
 
 These are the items where implementing anything first requires an architecture
 or design decision the documents do not make. Guessing would invent semantics,
-which is the failure mode the whole project has refused since D6. **After D19–D22
-this list is down to two, and neither has a known security consequence** — the
-four items that did (11.2, 11.3, 11.4, `discovery_source`) are closed above.
+which is the failure mode the whole project has refused since D6. **After
+D19–D22 this list held two with no known security consequence** — the four
+items that did (11.2, 11.3, 11.4, `discovery_source`) are closed above; **D25
+then closed 5.1** (see the pointer note at the top of this document), and D39
+added a third design-priority item, 5.20.
 
 | # | Item | The decision that gates it |
 |---|---|---|
-| **5.1** | Hierarchical classification fallback (D3) | Whether a classification inherits downward (a host's class to a path beneath it, a network's to an enclosed ip). Both answers are wrong in a different direction: inheriting lets a statement about a parent stand in for an unregistered child; not inheriting means a host declared PII does not by itself protect those paths. Binding constraints if built: inherit only from an **AUTHORITATIVE** parent; only ever **tighten**; its own tests, not an extension of the exact-match ones. A design-priority choice, not a live gap — MVP-1 targets are registered directly. |
 | **5.3** | `reconstruct_decision` does not walk back to the task (D8) | Whether a task's events (`task.created/claimed/completed`) belong to *every* proposal that task produced — which would make one task's claim appear in several chains and stop the chain being a partition. MVP-1's planners still emit one proposal per task, so there is no case to design against yet. `by_stage()` must stay a partition and the diff against the whole-engagement query stays pinned whatever is chosen. D19–D22 added no new pressure here. |
+| **5.20** | The §4.5 frozen Baseline Snapshot has never been built (D39) | Whether a `baseline_global` publish should apply retroactively to engagements already open under an earlier one, or only to engagements created after it — §4.5 v0.2 describes the latter, nothing enforces either today, and deciding means splitting D14's single enforcement/listing predicate into two rules for two layer categories. No live gap: `create_engagement` now records the real version in force at creation, so the moment the decision is made, the stored number is already the pointer the fix would consult. |
 
 ### Interface note — §2 completed, not extended (D17)
 
@@ -511,25 +692,145 @@ that a test would go red, because there is nothing yet to test.
 
 No decision required to *not* do them; each is either a Phase-1 scope boundary or
 a documented minor limit with its behaviour understood. 5.4 (missing scheduler
-prerequisite), 5.5 and 5.6 (Phase-1 scope), 5.7 (interaction already covered by
-property tests), D11-8 (cosmetic), D11-9 (stage-boundary gap). **5.2 sits at the
-edge of this class and carries the one standing caveat:** it is bounded and safe
-*for MVP-1, whose targets are containers*, but it is a real-deployment gap and
-must be re-proven against the production network driver before any customer
-network is touched.
+prerequisite), 5.5 and 5.6 (Phase-1 scope), 5.7 (interaction covered by the
+restored stateful suite), D11-8 (cosmetic). **D40 adds two more, both robustness
+limits rather than security gaps: 5.21** (§2's query interface has no cap on
+cumulative evidence — bounded today by a harness-level workaround, not a §2
+fix) **and 5.22** (the Supervisor's `status_assessment` label is not stable
+under a frozen state — D10.5's `risk_hint` finding, recurring one role over).
+**5.2 sits at the edge of this class and carries the one standing caveat:** it
+is bounded and safe *for MVP-1, whose targets are containers*, but it is a
+real-deployment gap and must be re-proven against the production network
+driver before any customer network is touched.
+
+**D27/D28 note on this class.** 5.7 was listed here as "interaction already
+covered by property tests". That was false from `7c9295f` (D17) until D28: the
+stateful suite carrying that coverage had been deleted, and this document went on
+asserting it. D28 restored the suite, so the claim holds again — and the incident
+is worth keeping in view, because the underlying fixes were intact the whole time
+while the *record* of their coverage was not (`ACCEPTANCE_MVP_KERNEL.md` §4.1).
+D24's approval flow is now also covered under interleaving, which it never was.
 
 ### Class C — blocked on an architecture decision
 
 Work must not start until the decision is made, because any implementation
 encodes an answer to a question the design leaves open, and a wrong guess invents
-authorization or access-control semantics. **After D19–D22 this class holds two
-items, and neither has a known security consequence:** 5.1 (classification
-inheritance) and 5.3 (does a task's events belong to every proposal it produced).
-Both are design-priority choices, not live gaps — MVP-1 registers targets
-directly and emits one proposal per task, so nothing is currently wrong; the
-decision is what it would *mean* to build them. The four Class-C items that did
+authorization or access-control semantics. **After D19–D22 this class held two
+items with no known security consequence** — 5.1 (classification inheritance,
+closed at D25) and 5.3 (does a task's events belong to every proposal it
+produced) — **and D39 added a third, 5.20** (whether a `baseline_global` publish
+should apply retroactively to engagements already open). All are design-priority
+choices, not live gaps — MVP-1 registers targets directly, emits one proposal
+per task, and has never needed the frozen baseline to hold against a later
+global change — so nothing is currently wrong; the decision is what it would
+*mean* to build them. The four Class-C items that did
 carry a security consequence — 11.2, 11.3, 11.4 and `discovery_source` — were
 each taken through the design-then-build flow D19–D22 and are now in Class A.
+
+---
+
+## 5. Why a green suite kept proving nothing — the recurring lesson
+
+Three defects in this stage shared a shape worth stating once, because they had
+different causes and the same symptom: **CI was green and guarding nothing, and
+nothing about the green told anyone.** They are listed together because the
+instinct each one defeats is the same — reading a passing suite as evidence that
+the property it names still holds.
+
+1. **A deleted test does not fail; it stops guarding** (D27/D28). The stateful
+   property suite was removed at `7c9295f`, bundled into an unrelated commit,
+   and was gone for three days behind a passing build. Failure needs a test to
+   run; absence is silent. The acceptance record went on asserting the coverage,
+   which is how the gap survived review as well as CI. See
+   `ACCEPTANCE_MVP_KERNEL.md` §4.1.
+
+2. **A test whose input equals the default cannot tell "honoured" from
+   "defaulted"** (D30). The human-approval path granted `ports=8080` for a
+   proposal asking `ports=443`, and every existing test passed, because every
+   existing test proposed `8080` — the default. A test that supplies the value
+   the system would have invented anyway is measuring nothing, however carefully
+   it asserts. **Where a test covers a user-supplied value the system is meant to
+   honour rather than default, the input must deliberately differ from the
+   default.** This one is the sharpest of the three: the suite was not merely
+   uninformative, it actively certified a live authorization-fidelity defect.
+
+3. **A test can be present, passing, and still assert nothing** (D29). Two tests
+   written that same session were shown by mutation testing to be hollow: one
+   spied on a name and would have passed with that name rebound to the write
+   role, and one compared two values that a shared derivation made equal by
+   construction, so both being wrong still agreed. Both were fixed. Neither
+   would have been noticed by running them.
+
+4. **A verification that runs in the wrong environment proves nothing** (D31).
+   The web-target image is a scratch tree assembled from the host's own python.
+   After the first CI failure (a self-referential symlink that replaced the
+   staged interpreter with a 7-byte dangling link, which no build-time check
+   existed to catch), `build_web_target_image.sh` gained one: run the staged
+   interpreter and `import http.server`. It ran *on the build host*, where the
+   loader resolves out of `/lib` anything the staged tree is missing — so the
+   import succeeded at build time while the identical import died inside the
+   container, on `libz.so.1`. Re-checking it with `PYTHONHOME` pinned to the
+   staged tree, as the second fix did, still passed: `PYTHONHOME` selects which
+   stdlib is used, not which shared libraries are reachable. The check was not
+   weak, it was **asking a different question than the one that mattered**, and
+   it went on passing while the artifact it certified could not start. Fixed by
+   two checks that ask the container's question: a static pass asserting every
+   library every staged ELF needs is itself staged (on this repo's build host
+   the old staging omits thirteen — `libbz2`, `libssl`, `libsqlite3`, `libffi`
+   and the rest, all belonging to stdlib C extension modules that `ldd` on the
+   interpreter never mentions), and one `docker run --network none` against the
+   imported image. **A check of an artifact's self-containment has to run
+   somewhere that cannot supply the missing pieces.**
+
+   It then happened once more, inside the fix. The test fixture waited for the
+   server's startup line in `docker logs`, and CI showed the container `Up 3
+   seconds`, serving `HTTP/1.0 200 OK`, with an empty log — python
+   block-buffers stdout when it is a pipe rather than a terminal. The local
+   experiment run to test that explanation appeared to *disprove* it, because
+   this repository's dev container exports `PYTHONUNBUFFERED=1` and the
+   subprocess inherited it. The environment had silently supplied the missing
+   piece a second time, in the act of investigating the first. The image now
+   passes `-u`; the general defence is to name what the target environment
+   lacks and take it away explicitly (`env -u`, `--network none`, an empty
+   environment) rather than trusting that the development machine resembles it.
+
+The common defence is not more tests. It is asking, of any test that matters,
+*what would have to break for this to go red* — which is what mutation testing
+answers mechanically, and what D9's `event()` instrumentation answers for
+branches that never execute. `ACCEPTANCE_MVP_KERNEL.md` §8 records the earlier
+four defects of a related shape, where the behaviour was covered and the
+operation did not exist.
+
+### D30 — historical `approvals.constraints`, and why they stay NULL
+
+Rows written before D30 carry `constraints` values of NULL, and are left that
+way: no backfill, no reconstruction, no extra marker column.
+
+The original request is not recoverable. `_persist_proposal` dropped the
+proposal's execution parameters before anything else saw them, and the
+`proposal.submitted` audit payload stores only the normalized target string
+(`"target": "ip:10.79.0.10"`), so neither the proposal row nor the audit trail
+retains what was asked for. A backfill would therefore be a guess written into
+an audit record.
+
+NULL already carries the whole meaning — *this record predates the fidelity fix,
+its scope detail is unknown* — so a marker column would add a second way to say
+one thing. This follows D11-7's principle for historical data: an honest absence
+is safer than a plausible reconstruction. The one binding requirement on anything
+that reads these rows is that NULL means **unknown scope**, never *no
+constraints were imposed*; it is stated in `approval_fields`' docstring beside
+the derivation, where a future reader meets it.
+
+The D29 console needs no change for this, and this was checked rather than
+assumed: it has no surface that displays a granted approval's constraints at all.
+`query_state` does not read `approvals`; `list_pending_approvals` reads
+`action_proposals` and returns proposals still awaiting a decision; the only
+constraints the console renders come from `preview_approval`, computed live by
+the D30 derivation for a proposal nobody has decided yet, which is never NULL.
+The `approval.granted` audit payload carries `approval_id`, `approved_scope`,
+`valid_until`, `action_class` and `resource` — no constraints. A regression test
+pins that absence, so if a granted-approvals view is ever added, the NULL
+handling has to be decided deliberately rather than inherited.
 
 ---
 
