@@ -21,6 +21,13 @@ side-effect and budget authority for each is looked up from the action rather
 than taken from the agent. That is why a browser — the largest attack-surface
 addition in the project — needed no change to the kernel's decision path.
 
+**Successor work.** D39 closed D11-9 (§4 below); D40 ran all three real
+models at once against an engagement built through that new operation and is
+its own report, `docs/D40_THREE_ROLE_INTEGRATION_REPORT.md`; D41 closed one
+gap D40 found. None of the three is a Web Agent deliverable, so none is
+folded into this document's own arc — but where D39 moves a status this
+document records, the pointer is added at that entry rather than left stale.
+
 ---
 
 ## 1. D31–D37 technical summary
@@ -143,18 +150,16 @@ review:
   the web adapters do not use `_OPEN_PORT`, so the arc neither worsened nor
   fixed it.
 
-- **D11-9 — nothing creates an engagement.** Still open, a stage-boundary gap.
-  `control_plane/orchestrator/engagement.py` has `pause`, `resume`,
-  `engage_kill_switch`, `complete`, `revoke_credential`, `retire_scope_object`
-  — and no `create`. Every caller (test fixtures, the stateful machine, the live
-  harnesses, and each `scripts/live_run/*.py`) writes the row with a raw
-  `INSERT`. Same shape as D8/D9: a state the system depends on that no *operation*
-  sets, so there is no audit record answering "who opened this engagement, for
-  which customer, under what authorization". **Class B (stage-boundary gap, no
-  security consequence).** It grows more visible as the system matures — each
-  web deliverable's live/scenario setup had to seed its own engagement — and is
-  a natural candidate for the next stage that operates for real, but it blocks
-  nothing in MVP-1.5.
+- **D11-9 — nothing creates an engagement.** Was still open as of this review's
+  own close (D38); **closed at D39** (`ACCEPTANCE_MVP1_AGENTS.md`'s "Found at
+  D39" section carries the newer status, per that document's own stated
+  policy of holding it for anything a later stage moves). `create_engagement`
+  now runs on `registry_admin`, audits `engagement.created`, and refuses a
+  duplicate id with a named exception rather than a raw constraint violation;
+  migration `0010` closed the matching gap that let `cyberorch_app` insert or
+  delete an engagement row directly. Left here, unedited otherwise, as the
+  accurate record of what this review found *as of D37* — the pointer above is
+  what keeps a reader of this document from concluding it is still open.
 
 Neither was made worse by D31–D37. The adjacent D11-10 (`consume_request`
 inert), by contrast, *was* resolved this stage — at D34 — because the web budget
@@ -189,10 +194,10 @@ that is not a disposable container this platform owns:
    at the target). This is an inherent limit and must be surfaced pre-engagement,
    not discovered mid-run; the honest position is "the tool cannot inspect this
    connection", distinct from a policy denial.
-3. **D11-9 — engagement creation.** Operating for a real customer means an
-   engagement should be *opened by an audited operation*, not seeded by a
-   script. Not security-blocking for the stage, but the first thing a
-   real-operation stage needs.
+3. ~~**D11-9 — engagement creation.**~~ **Done, at D39** — `create_engagement`
+   is the audited operation this point asked for. Left struck through rather
+   than deleted: it was a real pre-deployment item when this review closed,
+   and the record should show it was cleared, not silently stop appearing.
 
 **Design-priority items that can wait until needed (no live gap).** 5.8
 (cross-action "sensitive but not denied → human" state), 5.9 (wildcard scope /

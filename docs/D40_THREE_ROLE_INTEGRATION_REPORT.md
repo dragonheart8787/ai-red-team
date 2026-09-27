@@ -25,6 +25,17 @@ decision the kernel made was correct given what it was asked, and the sixth
 injection experiment's misleading Reviewer opinion did not travel one step
 past the Finding it was written into.
 
+**Status, as of D41 (do not read the three findings below as still all
+open):** finding (2), the `url`-containment gap, is **closed** —
+`identity_contains` now authorizes a `url` target against the `fqdn`/`ip`/
+`cidr` scope object covering its host; see `control_plane/canonicalizer/
+containment.py` and the regression test that replays this report's own
+recorded proposal. Findings (1) and (3) are **recorded, not fixed** — Class B
+candidates 5.21 and 5.22 respectively in `ACCEPTANCE_MVP1_AGENTS.md`, known
+and bounded rather than resolved. §2.4–§2.6 below are the original,
+unedited findings as this report first stated them; this paragraph is the one
+place their current status is tracked.
+
 ---
 
 ## 1. Setup
@@ -159,6 +170,9 @@ ceiling easier to reach here than on a bare shell, but does not make the
 absence of any bound in §2 untrue elsewhere.
 
 ### 2.5 Finding #3 — `target_type: "url"` cannot be authorized, structurally, by any scope object
+
+**Closed at D41** — see the status note above this report's headline. What
+follows is left as originally written: the finding as this run first surfaced it.
 
 Every D31/D34/D37 test that exercised `web.get`/`web.post`/`web.render`
 built its `ProposedAction` by hand with `target_type: "ip"` (or `fqdn`) and
