@@ -6,6 +6,14 @@ the brief itself calls a bigger build than D31 or D34 — the brief's own
 instruction is to confirm the foundation before building on it, and this
 document is that confirmation pass, not a partial implementation.
 
+**Status update**: D42-1, D42-3, D42-4, and D42-6's direction have been
+signed off. D42-2 has been closed with a real measurement rather than the
+architectural argument alone — see `docs/D42_2_CTE_BENCHMARK.md` and
+`scripts/bench/d42_bloodhound_cte_bench.py`/`docs/d42_bench/`. D42-5
+(Neo4j vs. Postgres-only) is being decided against those numbers; see that
+document's own "Reading these numbers against D42-5" section rather than
+this ADR's §3/§5, which predate the measurement.
+
 This is the first tool this project has ever considered whose native output
 is a **relationship graph** (`User —MemberOf→ Group —GenericAll→ Computer`)
 rather than a classification of, or scan result against, one resource. Every
@@ -577,7 +585,7 @@ questions above — but it must not be silently assumed solved because a
 | # | Decision | Options on the table | This document's lean |
 |---|---|---|---|
 | **D42-1** | How does an AD domain enter scope? | (A) `ad_domain` authorizes the whole domain for any action; (B) no new type, per-computer `fqdn`/`ip` only; (C) `ad_domain` authorizes *collection* only, every follow-up action needs its own scope object | (C) |
-| **D42-2** | Should the Neo4j-vs-Postgres-CTE question be settled by a measured comparison (synthetic graph, same query, both engines) before committing? | Yes / no, the architectural argument in §2.2 is sufficient | Leaning yes, but not strongly held |
+| **D42-2** | Should the Neo4j-vs-Postgres-CTE question be settled by a measured comparison (synthetic graph, same query, both engines) before committing? | Yes / no, the architectural argument in §2.2 is sufficient | **Closed — measured, see `docs/D42_2_CTE_BENCHMARK.md`** |
 | **D42-3** | If Neo4j is adopted, how does classification authority divide? | (A) Neo4j opaque-identity-only, Postgres sole classification authority; (B) extend D25 inheritance across the database boundary; (C) Neo4j fully opaque, join deferred to query time | (A) |
 | **D42-4** | Does the Provenance/Security Graph split need any change for BloodHound? | Treat a collection run as one more `RUN --produced--> EVIDENCE` provenance edge, unchanged | No change needed (low-confidence decision point — flagged in case something was missed) |
 | **D42-5** | Neo4j at all, or stay on Postgres with purpose-built recursive CTEs for BloodHound's specific query shapes? | Neo4j (pick an access-control option below) / Postgres-only | Explicitly undecided — this is the one this document most wants your read on |

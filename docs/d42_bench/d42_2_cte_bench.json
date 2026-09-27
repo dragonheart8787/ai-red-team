@@ -1,0 +1,140 @@
+[
+  {
+    "scale": "mid",
+    "seed": 42,
+    "graph": {
+      "n_nodes": 6200,
+      "n_edges": 36599,
+      "edge_type_counts": {
+        "MemberOf": 33294,
+        "AdminTo": 3279,
+        "AddMember": 4,
+        "GenericAll": 8,
+        "Owns": 8,
+        "WriteDacl": 4,
+        "ForceChangePassword": 2
+      },
+      "n_users": 5000,
+      "n_computers": 800,
+      "n_groups": 400,
+      "n_guaranteed_reachable_users": 20
+    },
+    "bfs_query_audit_sweep": {
+      "description": "uniformly random users -- the realistic 'sweep everyone' case, where most queries are expected to find no path at all",
+      "max_depth": 10,
+      "n_samples": 50,
+      "n_timeouts_30s": 0,
+      "n_paths_found": 4,
+      "n_paths_not_found": 46,
+      "latency_seconds": {
+        "min": 9.096299993416324e-05,
+        "median": 0.00012310549999483555,
+        "p95": 0.02483414419995711,
+        "max": 0.030048717999989094
+      },
+      "hops_found": {
+        "min": 4,
+        "median": 4.0,
+        "max": 4
+      },
+      "explain_analyze": "Aggregate  (cost=789.15..789.16 rows=1 width=4) (actual time=0.061..0.062 rows=1 loops=1)\n  Buffers: shared hit=11\n  CTE bfs\n    ->  Recursive Union  (cost=0.00..784.85 rows=191 width=8) (actual time=0.002..0.058 rows=4 loops=1)\n          Buffers: shared hit=11\n          ->  Result  (cost=0.00..0.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=1)\n          ->  Nested Loop  (cost=4.34..78.29 rows=19 width=8) (actual time=0.009..0.011 rows=2 loops=2)\n                Buffers: shared hit=11\n                ->  WorkTable Scan on bfs bfs_1  (cost=0.00..0.22 rows=3 width=8) (actual time=0.000..0.001 rows=2 loops=2)\n                      Filter: (depth < '10'::smallint)\n                ->  Bitmap Heap Scan on bh_edges e  (cost=4.34..25.95 rows=6 width=8) (actual time=0.003..0.004 rows=1 loops=4)\n                      Recheck Cond: (src = bfs_1.node_id)\n                      Heap Blocks: exact=3\n                      Buffers: shared hit=11\n                      ->  Bitmap Index Scan on bh_edges_src_idx  (cost=0.00..4.33 rows=6 width=0) (actual time=0.002..0.002 rows=1 loops=4)\n                            Index Cond: (src = bfs_1.node_id)\n                            Buffers: shared hit=8\n  ->  CTE Scan on bfs  (cost=0.00..4.30 rows=1 width=4) (actual time=0.060..0.060 rows=0 loops=1)\n        Filter: (node_id = '5802'::smallint)\n        Rows Removed by Filter: 4\n        Buffers: shared hit=11\nPlanning Time: 0.146 ms\nExecution Time: 0.082 ms"
+    },
+    "bfs_query_known_positive": {
+      "description": "deliberately-planted users with a real path to Domain Admins (member of an IT-admin group nested into DA) -- measures found-path cost",
+      "max_depth": 10,
+      "n_samples": 20,
+      "n_timeouts_30s": 0,
+      "n_paths_found": 20,
+      "latency_seconds": {
+        "min": 0.028964602999963063,
+        "median": 0.02955433750003067,
+        "p95": 0.030105673499974728,
+        "max": 0.030921865999971487
+      },
+      "hops_found": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      }
+    },
+    "naive_path_array_query": {
+      "description": "cycle-prevention via a per-path visited array, at the same max_depth as the BFS query -- 5 audit-sweep + 5 known-positive samples",
+      "max_depth": 10,
+      "n_samples": 10,
+      "n_timeouts_20s": 0,
+      "latency_seconds": {
+        "min": 0.0002659719999655863,
+        "max": 8.735915740999985
+      }
+    }
+  },
+  {
+    "scale": "large",
+    "seed": 42,
+    "graph": {
+      "n_nodes": 19000,
+      "n_edges": 244732,
+      "edge_type_counts": {
+        "MemberOf": 226987,
+        "AdminTo": 17665,
+        "GenericAll": 14,
+        "WriteDacl": 13,
+        "Owns": 20,
+        "AddMember": 17,
+        "ForceChangePassword": 16
+      },
+      "n_users": 15000,
+      "n_computers": 3000,
+      "n_groups": 1000,
+      "n_guaranteed_reachable_users": 475
+    },
+    "bfs_query_audit_sweep": {
+      "description": "uniformly random users -- the realistic 'sweep everyone' case, where most queries are expected to find no path at all",
+      "max_depth": 10,
+      "n_samples": 50,
+      "n_timeouts_30s": 0,
+      "n_paths_found": 11,
+      "n_paths_not_found": 39,
+      "latency_seconds": {
+        "min": 0.00010800099994412449,
+        "median": 0.00022671549999131457,
+        "p95": 0.2341867009500447,
+        "max": 0.24977464500000224
+      },
+      "hops_found": {
+        "min": 2,
+        "median": 3,
+        "max": 4
+      },
+      "explain_analyze": "Aggregate  (cost=1727.18..1727.19 rows=1 width=4) (actual time=0.077..0.079 rows=1 loops=1)\n  Buffers: shared hit=62\n  CTE bfs\n    ->  Recursive Union  (cost=0.00..1717.71 rows=421 width=8) (actual time=0.002..0.071 rows=21 loops=1)\n          Buffers: shared hit=62\n          ->  Result  (cost=0.00..0.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=1)\n          ->  Nested Loop  (cost=4.40..171.35 rows=42 width=8) (actual time=0.006..0.016 rows=5 loops=4)\n                Buffers: shared hit=62\n                ->  WorkTable Scan on bfs bfs_1  (cost=0.00..0.22 rows=3 width=8) (actual time=0.000..0.001 rows=5 loops=4)\n                      Filter: (depth < '10'::smallint)\n                ->  Bitmap Heap Scan on bh_edges e  (cost=4.40..56.87 rows=14 width=8) (actual time=0.002..0.002 rows=1 loops=21)\n                      Recheck Cond: (src = bfs_1.node_id)\n                      Heap Blocks: exact=20\n                      Buffers: shared hit=62\n                      ->  Bitmap Index Scan on bh_edges_src_idx  (cost=0.00..4.40 rows=14 width=0) (actual time=0.001..0.001 rows=1 loops=21)\n                            Index Cond: (src = bfs_1.node_id)\n                            Buffers: shared hit=42\n  ->  CTE Scan on bfs  (cost=0.00..9.47 rows=2 width=4) (actual time=0.076..0.076 rows=0 loops=1)\n        Filter: (node_id = '18002'::smallint)\n        Rows Removed by Filter: 21\n        Buffers: shared hit=62\nPlanning Time: 0.174 ms\nExecution Time: 0.111 ms"
+    },
+    "bfs_query_known_positive": {
+      "description": "deliberately-planted users with a real path to Domain Admins (member of an IT-admin group nested into DA) -- measures found-path cost",
+      "max_depth": 10,
+      "n_samples": 20,
+      "n_timeouts_30s": 0,
+      "n_paths_found": 20,
+      "latency_seconds": {
+        "min": 0.22374293699999726,
+        "median": 0.24397100250001813,
+        "p95": 0.2627902454000662,
+        "max": 0.2740916239999933
+      },
+      "hops_found": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      }
+    },
+    "naive_path_array_query": {
+      "description": "cycle-prevention via a per-path visited array, at the same max_depth as the BFS query -- 5 audit-sweep + 5 known-positive samples",
+      "max_depth": 10,
+      "n_samples": 10,
+      "n_timeouts_20s": 7,
+      "latency_seconds": {
+        "min": 0.0003656290000435547,
+        "max": 0.0008852239999441736
+      }
+    }
+  }
+]
