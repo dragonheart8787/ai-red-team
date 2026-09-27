@@ -1,5 +1,26 @@
 # D42-2: Postgres recursive-CTE benchmark for BloodHound-shaped queries
 
+**Addendum, found during D42-6's implementation — read before trusting the
+numbers below on the real schema.** This report's numbers come from a
+throwaway database (`bh_bench`) with no RLS and a single-column index on
+the edge table's source column. When `control_plane/graph/queries.py` was
+implemented against the *real*, RLS-enabled, engagement-scoped
+`security_graph_edges` table with only a composite `(engagement_id,
+src_node_id)` index, the identical query at the identical "mid" scale took
+**28.9 seconds**, not the tens of milliseconds reported below — Postgres's
+planner chose a plan that filtered `src_node_id` row-by-row after
+materializing an engagement-only index scan, rather than using it as an
+index condition. A second, plain, single-column index on `src_node_id`
+alone (migration 0011) fixed it: the same query dropped to 57ms, consistent
+with the numbers below. Both indexes now ship. This is not a correction to
+the method or the conclusion — the BFS-dedup formulation is still the right
+one, and D42-5's Postgres-only decision still holds — but the specific
+millisecond figures in this document were not reproduced on the production
+schema without that additional index, and that gap is recorded here rather
+than silently patched away. See migration `0011_bloodhound_security_graph
+.py`'s module docstring for the full finding and
+`tests/test_graph_queries_structure.py` for the regression guard.
+
 This closes the measurement the D42 ADR (`docs/ADR_BLOODHOUND_NEO4J.md` §2.2)
 left open, per the explicit decision: measure before deciding D42-5, rather
 than proceed on the architectural argument alone.

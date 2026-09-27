@@ -299,19 +299,23 @@ exactly: `TEXT` primary keys, `engagement_id` FK, RLS via the existing
 
 ```sql
 CREATE TABLE security_graph_nodes (
-    node_id        TEXT PRIMARY KEY,
-    engagement_id  TEXT NOT NULL REFERENCES engagements(engagement_id),
-    run_id         TEXT NOT NULL REFERENCES tool_runs(run_id),
-    identity_type  TEXT NOT NULL,      -- 'fqdn' | 'ip' | opaque AD kind
-    identity_value TEXT NOT NULL,      -- opaque per D42-3 Option A: no
+    node_id           TEXT PRIMARY KEY,
+    engagement_id     TEXT NOT NULL REFERENCES engagements(engagement_id),
+    first_seen_run_id TEXT NOT NULL REFERENCES tool_runs(run_id),
+    identity_type     TEXT NOT NULL,   -- 'fqdn' | 'ip' | opaque AD kind
+    identity_value    TEXT NOT NULL,   -- opaque per D42-3 Option A: no
                                         -- resource_class/data_class column
                                         -- here, ever -- Postgres's existing
                                         -- metadata_registry stays the only
                                         -- classification authority
-    kind           TEXT NOT NULL,      -- 'user' | 'computer' | 'group'
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    kind              TEXT NOT NULL,   -- 'user' | 'computer' | 'group'
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX security_graph_nodes_identity ON security_graph_nodes
+-- UNIQUE on (engagement_id, identity_type, identity_value): a node is one
+-- identity across however many collection runs re-observe it. A plain index
+-- here would let a second run mint a second row for the same computer and
+-- silently fragment the graph -- caught and fixed during implementation.
+CREATE UNIQUE INDEX security_graph_nodes_identity ON security_graph_nodes
     (engagement_id, identity_type, identity_value);
 
 CREATE TABLE security_graph_edges (
@@ -325,11 +329,19 @@ CREATE TABLE security_graph_edges (
 );
 CREATE INDEX security_graph_edges_src ON security_graph_edges
     (engagement_id, src_node_id);
+-- Plus a second, single-column index on src_node_id alone -- found
+-- necessary during implementation, not part of this original design: the
+-- composite index above, alone, let Postgres's planner pick a plan that
+-- scanned by engagement_id and filtered src_node_id row-by-row, 28.9s
+-- instead of 57ms at "mid" scale. See migration 0011's module docstring.
+CREATE INDEX security_graph_edges_src_only ON security_graph_edges (src_node_id);
 ```
 
 The `security_graph_edges_src` index is not incidental — it is the exact
-index D42-2's benchmark ran against (`bh_edges_src_idx`) and its presence
-is load-bearing for every number in that report. D42-3 Option A is
+index D42-2's benchmark ran against (`bh_edges_src_idx`) — but, as it turned
+out, not sufficient on its own on the real RLS-enabled table; see the note
+above and the addenda added to both benchmark reports after implementation
+surfaced this. D42-3 Option A is
 enforced by *absence*: no classification column exists on either table to
 tempt a future writer.
 

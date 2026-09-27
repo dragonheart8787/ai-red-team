@@ -150,10 +150,12 @@ def generate_graph(cfg: ScaleConfig, *, seed: int) -> tuple[Graph, int, list[int
         g.edges.append((u, domain_admins, "MemberOf"))
 
     # Normal groups: heavy-tailed sizes, principals joined by weighted (skewed) draw.
-    group_weights = [pareto_size(rng, minimum=2, maximum=max(3, cfg.n_users // 20)) for _ in normal_groups]
+    group_weights = [
+        pareto_size(rng, minimum=2, maximum=max(3, cfg.n_users // 20)) for _ in normal_groups
+    ]
     principals = users + computers
     group_members: dict[int, list[int]] = {}
-    for group, weight in zip(normal_groups, group_weights):
+    for group, weight in zip(normal_groups, group_weights, strict=True):
         members = rng.sample(principals, min(weight, len(principals)))
         group_members[group] = members
         for m in members:
@@ -241,7 +243,7 @@ def load_graph(conn: psycopg.Connection, g: Graph) -> None:
         """
     )
     with conn.cursor().copy("COPY bh_nodes (id, kind, name) FROM STDIN") as copy:
-        for i, (kind, name) in enumerate(zip(g.node_kind, g.node_name)):
+        for i, (kind, name) in enumerate(zip(g.node_kind, g.node_name, strict=True)):
             copy.write_row((i, kind, name))
     with conn.cursor().copy("COPY bh_edges (src, dst, edge_type) FROM STDIN") as copy:
         for src, dst, edge_type in g.edges:
@@ -286,7 +288,9 @@ WHERE node_id = %(target)s
 """
 
 
-def timed_query(conn: psycopg.Connection, sql: str, params: dict, *, timeout_ms: int) -> tuple[float | None, int | None]:
+def timed_query(
+    conn: psycopg.Connection, sql: str, params: dict, *, timeout_ms: int,
+) -> tuple[float | None, int | None]:
     """Returns (elapsed_seconds, shortest_hops_or_None). elapsed is None on timeout."""
     with conn.cursor() as cur:
         cur.execute(f"SET LOCAL statement_timeout = {timeout_ms}")
@@ -331,13 +335,17 @@ def run_benchmark(cfg: ScaleConfig, *, seed: int, n_samples: int, max_depth: int
         known_positive_users = rng.sample(guaranteed_list, min(20, len(guaranteed_list)))
 
         def run_batch(label: str, batch: list[int]) -> tuple[list[float], list[int], int]:
-            print(f"[{cfg.name}] running {len(batch)} BFS queries ({label}, max_depth={max_depth})...")
+            print(
+                f"[{cfg.name}] running {len(batch)} BFS queries ({label}, max_depth={max_depth})..."
+            )
             lats: list[float] = []
             hops: list[int] = []
             n_timeout = 0
             for u in batch:
                 elapsed, h = timed_query(
-                    conn, BFS_QUERY, {"start": u, "target": domain_admins, "max_depth": max_depth}, timeout_ms=30_000
+                    conn, BFS_QUERY,
+                    {"start": u, "target": domain_admins, "max_depth": max_depth},
+                    timeout_ms=30_000,
                 )
                 if elapsed is None:
                     n_timeout += 1
@@ -348,7 +356,9 @@ def run_benchmark(cfg: ScaleConfig, *, seed: int, n_samples: int, max_depth: int
             return lats, hops, n_timeout
 
         latencies, hops_found, timeouts = run_batch("audit sweep, random users", sample_users)
-        pos_latencies, pos_hops_found, pos_timeouts = run_batch("known-positive users", known_positive_users)
+        pos_latencies, pos_hops_found, pos_timeouts = run_batch(
+            "known-positive users", known_positive_users
+        )
 
         # EXPLAIN ANALYZE for one representative query.
         rep_user = sample_users[0]
@@ -365,12 +375,17 @@ def run_benchmark(cfg: ScaleConfig, *, seed: int, n_samples: int, max_depth: int
         # since a real path (not just a bounded no-path search) is where per-path
         # duplication has the most edges to multiply across.
         naive_batch = sample_users[:5] + known_positive_users[:5]
-        print(f"[{cfg.name}] running naive path-array comparison ({len(naive_batch)} samples, max_depth={max_depth})...")
+        print(
+            f"[{cfg.name}] running naive path-array comparison "
+            f"({len(naive_batch)} samples, max_depth={max_depth})..."
+        )
         naive_latencies: list[float] = []
         naive_timeouts = 0
         for u in naive_batch:
             elapsed, _hops = timed_query(
-                conn, NAIVE_QUERY, {"start": u, "target": domain_admins, "max_depth": max_depth}, timeout_ms=20_000
+                conn, NAIVE_QUERY,
+                {"start": u, "target": domain_admins, "max_depth": max_depth},
+                timeout_ms=20_000,
             )
             if elapsed is None:
                 naive_timeouts += 1
@@ -412,7 +427,8 @@ def run_benchmark(cfg: ScaleConfig, *, seed: int, n_samples: int, max_depth: int
         },
         "bfs_query_known_positive": {
             "description": "deliberately-planted users with a real path to Domain Admins "
-                            "(member of an IT-admin group nested into DA) -- measures found-path cost",
+                            "(member of an IT-admin group nested into DA) -- "
+                            "measures found-path cost",
             "max_depth": max_depth,
             "n_samples": len(known_positive_users),
             "n_timeouts_30s": pos_timeouts,
@@ -456,7 +472,9 @@ def main() -> None:
     results = []
     for scale_name in args.scales:
         cfg = SCALES[scale_name]
-        results.append(run_benchmark(cfg, seed=args.seed, n_samples=args.samples, max_depth=args.max_depth))
+        results.append(
+            run_benchmark(cfg, seed=args.seed, n_samples=args.samples, max_depth=args.max_depth)
+        )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=2))
@@ -464,11 +482,12 @@ def main() -> None:
     for r in results:
         bfs = r["bfs_query_audit_sweep"]
         pos = r["bfs_query_known_positive"]
+        bfs_lat, pos_lat = bfs["latency_seconds"], pos["latency_seconds"]
         print(
             f"[{r['scale']}] nodes={r['graph']['n_nodes']} edges={r['graph']['n_edges']} | "
-            f"audit sweep: median={bfs['latency_seconds']['median']:.4f}s p95={bfs['latency_seconds']['p95']:.4f}s "
-            f"max={bfs['latency_seconds']['max']:.4f}s found={bfs['n_paths_found']}/{bfs['n_samples']} | "
-            f"known-positive: median={pos['latency_seconds']['median']:.4f}s max={pos['latency_seconds']['max']:.4f}s "
+            f"audit sweep: median={bfs_lat['median']:.4f}s p95={bfs_lat['p95']:.4f}s "
+            f"max={bfs_lat['max']:.4f}s found={bfs['n_paths_found']}/{bfs['n_samples']} | "
+            f"known-positive: median={pos_lat['median']:.4f}s max={pos_lat['max']:.4f}s "
             f"found={pos['n_paths_found']}/{pos['n_samples']}"
         )
 

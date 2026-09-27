@@ -1,0 +1,210 @@
+[
+  {
+    "scale": "mid",
+    "seed": 42,
+    "graph": {
+      "n_nodes": 6200,
+      "n_edges": 36599
+    },
+    "per_max_depth": {
+      "3": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.00014950199999930192,
+            "median": 0.00023923249999313612,
+            "p95": 0.001868261400001354,
+            "max": 0.0029661940000096365
+          },
+          "reachable_count": {
+            "min": 4,
+            "median": 8.5,
+            "max": 578
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.004033386999992672,
+            "max": 0.006181511999983513
+          },
+          "reachable_count": {
+            "min": 1072,
+            "max": 1092
+          }
+        }
+      },
+      "5": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.00015830600000299455,
+            "median": 0.00019536200001368798,
+            "p95": 0.005781688849998535,
+            "max": 0.007921829000025582
+          },
+          "reachable_count": {
+            "min": 4,
+            "median": 8.5,
+            "max": 1073
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.013272024999992027,
+            "max": 0.014903169999996635
+          },
+          "reachable_count": {
+            "min": 1117,
+            "max": 1117
+          }
+        }
+      },
+      "10": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.0001581829999963702,
+            "median": 0.00021381250000729324,
+            "p95": 0.02954572569999243,
+            "max": 0.03098102499998845
+          },
+          "reachable_count": {
+            "min": 4,
+            "median": 8.5,
+            "max": 1119
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.03898387600000319,
+            "max": 0.041227485999996816
+          },
+          "reachable_count": {
+            "min": 1117,
+            "max": 1117
+          }
+        }
+      }
+    },
+    "explain_analyze_at_max_depth": {
+      "max_depth": 10,
+      "plan": "HashAggregate  (cost=789.62..791.53 rows=191 width=8) (actual time=0.046..0.048 rows=11 loops=1)\n  Group Key: bfs.node_id\n  Batches: 1  Memory Usage: 40kB\n  Buffers: shared hit=32\n  CTE bfs\n    ->  Recursive Union  (cost=0.00..784.85 rows=191 width=8) (actual time=0.002..0.039 rows=11 loops=1)\n          Buffers: shared hit=32\n          ->  Result  (cost=0.00..0.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=1)\n          ->  Nested Loop  (cost=4.34..78.29 rows=19 width=8) (actual time=0.007..0.011 rows=3 loops=3)\n                Buffers: shared hit=32\n                ->  WorkTable Scan on bfs bfs_1  (cost=0.00..0.22 rows=3 width=8) (actual time=0.000..0.001 rows=4 loops=3)\n                      Filter: (depth < '10'::smallint)\n                ->  Bitmap Heap Scan on bh_edges e  (cost=4.34..25.95 rows=6 width=8) (actual time=0.002..0.002 rows=1 loops=11)\n                      Recheck Cond: (src = bfs_1.node_id)\n                      Heap Blocks: exact=10\n                      Buffers: shared hit=32\n                      ->  Bitmap Index Scan on bh_edges_src_idx  (cost=0.00..4.33 rows=6 width=0) (actual time=0.001..0.001 rows=1 loops=11)\n                            Index Cond: (src = bfs_1.node_id)\n                            Buffers: shared hit=22\n  ->  CTE Scan on bfs  (cost=0.00..3.82 rows=191 width=8) (actual time=0.002..0.041 rows=11 loops=1)\n        Buffers: shared hit=32\nPlanning Time: 0.158 ms\nExecution Time: 0.088 ms"
+    }
+  },
+  {
+    "scale": "large",
+    "seed": 42,
+    "graph": {
+      "n_nodes": 19000,
+      "n_edges": 244732
+    },
+    "per_max_depth": {
+      "3": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.0001624749999962205,
+            "median": 0.0003355179999999791,
+            "p95": 0.01802239370000079,
+            "max": 0.023519120999992538
+          },
+          "reachable_count": {
+            "min": 9,
+            "median": 19.5,
+            "max": 2799
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.02918130199998359,
+            "max": 0.029916590999988557
+          },
+          "reachable_count": {
+            "min": 3941,
+            "max": 3950
+          }
+        }
+      },
+      "5": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.0001589539999997669,
+            "median": 0.000238084500011837,
+            "p95": 0.0598731741000037,
+            "max": 0.06674857199999451
+          },
+          "reachable_count": {
+            "min": 9,
+            "median": 19.5,
+            "max": 3970
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.10408067700001311,
+            "max": 0.1077738489999831
+          },
+          "reachable_count": {
+            "min": 3969,
+            "max": 3969
+          }
+        }
+      },
+      "10": {
+        "random_users": {
+          "n_samples": 30,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.00016476899997996952,
+            "median": 0.00023352799999543095,
+            "p95": 0.31218783010001205,
+            "max": 0.35099876600000357
+          },
+          "reachable_count": {
+            "min": 9,
+            "median": 19.5,
+            "max": 3970
+          }
+        },
+        "wide_fanout_nodes": {
+          "description": "the highest-AdminTo-fanout source nodes -- worst case for result-set size, not a random sample",
+          "n_samples": 3,
+          "n_timeouts_30s": 0,
+          "latency_seconds": {
+            "min": 0.3291255949999936,
+            "max": 0.34272675199997593
+          },
+          "reachable_count": {
+            "min": 3969,
+            "max": 3969
+          }
+        }
+      }
+    },
+    "explain_analyze_at_max_depth": {
+      "max_depth": 10,
+      "plan": "HashAggregate  (cost=1728.23..1730.23 rows=200 width=8) (actual time=0.053..0.056 rows=12 loops=1)\n  Group Key: bfs.node_id\n  Batches: 1  Memory Usage: 40kB\n  Buffers: shared hit=35\n  CTE bfs\n    ->  Recursive Union  (cost=0.00..1717.71 rows=421 width=8) (actual time=0.002..0.046 rows=12 loops=1)\n          Buffers: shared hit=35\n          ->  Result  (cost=0.00..0.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=1)\n          ->  Nested Loop  (cost=4.40..171.35 rows=42 width=8) (actual time=0.007..0.010 rows=3 loops=4)\n                Buffers: shared hit=35\n                ->  WorkTable Scan on bfs bfs_1  (cost=0.00..0.22 rows=3 width=8) (actual time=0.000..0.001 rows=3 loops=4)\n                      Filter: (depth < '10'::smallint)\n                ->  Bitmap Heap Scan on bh_edges e  (cost=4.40..56.87 rows=14 width=8) (actual time=0.002..0.003 rows=1 loops=12)\n                      Recheck Cond: (src = bfs_1.node_id)\n                      Heap Blocks: exact=11\n                      Buffers: shared hit=35\n                      ->  Bitmap Index Scan on bh_edges_src_idx  (cost=0.00..4.40 rows=14 width=0) (actual time=0.001..0.001 rows=1 loops=12)\n                            Index Cond: (src = bfs_1.node_id)\n                            Buffers: shared hit=24\n  ->  CTE Scan on bfs  (cost=0.00..8.42 rows=421 width=8) (actual time=0.002..0.049 rows=12 loops=1)\n        Buffers: shared hit=35\nPlanning Time: 0.137 ms\nExecution Time: 0.086 ms"
+    }
+  }
+]

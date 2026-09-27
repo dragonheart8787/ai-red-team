@@ -71,11 +71,14 @@ from agents.llm.untrusted import BOUNDARY_EXPLANATION, wrap_untrusted
 #: surfaces as a parse failure rather than as a plausible partial proposal.
 MAX_TOKENS = 1024
 
-#: §4.1.5's identity types, as the Worker may name them. ``repo`` and
-#: ``ad_domain`` are omitted because MVP-Kernel's only tool is a network
-#: scanner and offering a type no adapter can execute invites a proposal that
-#: dies at the Tool Gateway instead of being refused up front.
-TARGET_TYPES = ("ip", "cidr", "fqdn", "url")
+#: §4.1.5's identity types, as the Worker may name them. ``repo`` stays
+#: omitted for the reason this comment used to give for both: no adapter
+#: can execute it, and offering a type nothing can act on invites a
+#: proposal that dies at the Tool Gateway instead of being refused up
+#: front. ``ad_domain`` joined this list at D42-1/D42-6, once ``ad.collect``
+#: gave it an adapter — a Worker with no offered ``ad_domain`` scope
+#: candidate still has nothing to select, the same as any other type.
+TARGET_TYPES = ("ip", "cidr", "fqdn", "url", "ad_domain")
 
 #: §4.1's discovery sources. ``explicit_scope`` means the target came from the
 #: engagement's own scope, everything else means it came from somewhere the

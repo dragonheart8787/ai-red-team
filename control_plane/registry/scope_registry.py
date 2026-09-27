@@ -135,6 +135,19 @@ def register_scope_object(
             f"cannot register scope object {scope_object_id!r}: {exc}"
         ) from exc
 
+    if type == "ad_domain" and set(allowed_actions) - {"ad.collect"}:
+        # The real backstop is migration 0011's ad_domain_collection_only
+        # CHECK constraint (D42-1 Option C: an ad_domain scope authorizes
+        # collection, never a downstream action against what it discovers) —
+        # this raises the same D16 way, at the one write path, so the
+        # violation reads as "ad_domain only grants ad.collect" instead of a
+        # bare CheckViolation three frames down.
+        raise ScopeValueError(
+            f"cannot register scope object {scope_object_id!r}: ad_domain scope "
+            f"objects may only grant ad.collect (D42-1); refused "
+            f"{sorted(set(allowed_actions) - {'ad.collect'})}"
+        )
+
     # Read the current row first so the audit record can say what changed, not
     # merely what it now says. "SCOPE-18 allows web.*" is far less useful after
     # an incident than "SCOPE-18 allowed web.get and now allows web.*".

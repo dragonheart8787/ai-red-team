@@ -36,8 +36,9 @@ from control_plane.audit.logger import record_audit
 from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request
 from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
+from control_plane.graph.store import record_batch
 from tool_gateway import registry
-from tool_gateway.adapters import browser, http_get, http_post, nmap
+from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
@@ -171,8 +172,14 @@ adapter_for = registry.adapter_for
 #: Evidence id prefix per tool, so an id keeps saying what produced it.
 EVIDENCE_PREFIX = {
     nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP",
-    browser.TOOL: "BROWSER",
+    browser.TOOL: "BROWSER", ad_collector.TOOL: "ADCOLLECT",
 }
+
+#: A malformed collection result: the run succeeded, but its stdout could
+#: not be turned into a graph batch. Distinct from UNBUILDABLE_PLAN (nothing
+#: ran) and from FAILED (the tool itself reported failure) -- this is the
+#: tool reporting success with output this adapter's parser refuses.
+UNPARSEABLE_COLLECTION_RESULT = "unparseable_collection_result"
 
 #: A capability naming an action no adapter implements.
 UNKNOWN_ACTION = registry.UNKNOWN_ACTION
@@ -445,6 +452,195 @@ def dispatch_scan(
     )
 
     status = SUCCEEDED if result.succeeded else FAILED
+    _finish_run(
+        conn, run_id, status, exit_code=result.exit_code,
+        fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
+    )
+    _set_state(conn, proposal_id, status)
+    record_audit(
+        engagement_id=engagement_id, actor=actor,
+        event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
+        decision="ALLOW" if status == SUCCEEDED else None,
+        payload={**result.as_dict(), "evidence_id": evidence_id},
+    )
+    return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+
+
+def dispatch_collection(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    sandbox: DockerSandbox | None = None,
+    network_allowlist: list[str] | None = None,
+    execution_context: Mapping[str, Any] | None = None,
+    fresh_for_seconds: int = 1800,
+) -> DispatchOutcome:
+    """Run one bulk collection (``ad.collect``) and record its two artifacts.
+
+    Parallel to :func:`dispatch_scan`, not a retrofit of it (D42-1/D42-6
+    design doc §2.5, Option B): reuses the same ``tool_runs`` row, the same
+    dispatch state machine, the same execution fingerprint and dedup, and
+    the same ``tool_run.*`` audit vocabulary, because a collection run is
+    still, mechanically, one proposal producing one tool run. What is new is
+    what happens after it succeeds — a second, unbounded write
+    (:func:`control_plane.graph.store.record_batch`) alongside the ordinary
+    bounded evidence record, exactly the shape §4.1/§4.2 of the ADR named.
+
+    No proxy handling: ``ad.collect`` is not proxy-routed (LDAP goes through
+    the sandbox's raw namespace, like nmap's TCP — ``ad_collector
+    .REQUIRES_PROXY`` is ``False``). No ``consume_request`` call: this is one
+    dispatch, one run, not the multi-request shape that budget dimension
+    exists for (nmap is exempt for the identical reason).
+    """
+    if capability.revoked or not capability.is_live():
+        return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+
+    adapter = ad_collector
+    if capability.action != adapter.ACTION:
+        # Routed here by the caller naming the action explicitly (unlike
+        # dispatch_scan, which routes any nmap/http/browser action through
+        # one function) -- refused rather than silently run under the wrong
+        # adapter if that ever drifts.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(registry.UNKNOWN_ACTION,),
+            payload={"action": capability.action, "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=registry.UNKNOWN_ACTION)
+
+    try:
+        plan = adapter.build_plan(
+            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            target=target,
+        )
+    except adapter.AdapterError as exc:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": adapter.TOOL, "error": str(exc),
+                     "constraints": dict(capability.constraints),
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
+    tool_version = adapter.tool_version()
+    allowlist = network_allowlist or [target]
+    fingerprint = execution_fingerprint(
+        engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
+        normalized_target=target, normalized_params=plan.as_params(),
+        execution_context=fingerprint_context(execution_context, allowlist),
+    )
+
+    cached = find_cached_run(conn, fingerprint)
+    if cached is not None:
+        _set_state(conn, proposal_id, SUCCEEDED)
+        return DispatchOutcome(False, cached["run_id"], SUCCEEDED, reason="dedup_hit")
+
+    if not claim_for_dispatch(conn, proposal_id):
+        state = conn.execute(
+            text("SELECT dispatch_state FROM action_proposals WHERE proposal_id = :p"),
+            {"p": proposal_id},
+        ).scalar_one_or_none()
+        return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
+
+    run_id = f"RUN-{uuid.uuid4().hex[:12]}"
+
+    conn.execute(
+        text("""
+            INSERT INTO tool_runs (run_id, engagement_id, proposal_id, capability_id,
+                tool, tool_version, normalized_target, normalized_params,
+                execution_context, execution_fingerprint, status, network_allowlist,
+                started_at)
+            VALUES (:run, :eng, :pid, :cap, :tool, :tver, :target,
+                    CAST(:params AS jsonb), CAST(:ctx AS jsonb), :fp, :status,
+                    :allowlist, now())
+        """),
+        {
+            "run": run_id, "eng": engagement_id, "pid": proposal_id,
+            "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
+            "target": target, "params": _json(plan.as_params()),
+            "ctx": _json(dict(execution_context or {})), "fp": fingerprint,
+            "status": RUNNING, "allowlist": allowlist,
+        },
+    )
+    _set_state(conn, proposal_id, RUNNING)
+    record_audit(
+        engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
+        subject_type="tool_run", subject_id=run_id,
+        payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
+                 "network_allowlist": allowlist, "capability_id": capability.capability_id},
+    )
+
+    sandbox = sandbox or DockerSandbox()
+    try:
+        result = sandbox.run(
+            command=plan.command, network_allowlist=allowlist,
+            max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
+        )
+    except SandboxUnavailable as exc:
+        _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
+        _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.unknown_outcome", subject_type="tool_run",
+            subject_id=run_id, reasons=("sandbox_unavailable",),
+            payload={"error": str(exc)},
+        )
+        return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
+
+    raw = (
+        f"$ {' '.join(plan.command)}\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
+    ).encode()
+    prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
+    evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
+    record_evidence(
+        conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
+        evidence_type="tool_output", raw=raw,
+        derived_view=adapter.derive_view(result.stdout, result.stderr),
+        tool=adapter.TOOL, tool_version=tool_version,
+    )
+
+    status = SUCCEEDED if result.succeeded else FAILED
+
+    # The second artifact (§2.5 of the design doc): the full, unbounded
+    # graph, never the bounded derived_view above. Attempted only when the
+    # tool itself reported success -- a failed run has no graph to write.
+    # A parse failure here does not flip an otherwise-successful run to
+    # FAILED (the tool ran and exited cleanly; that is what `status`
+    # reports) -- it is a distinct, separately-audited failure of the
+    # second write, not a re-judgment of the first.
+    if status == SUCCEEDED:
+        try:
+            nodes, edges = adapter.parse_graph(result.stdout)
+            record_batch(
+                conn, engagement_id=engagement_id, run_id=run_id,
+                nodes=nodes, edges=edges,
+            )
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="security_graph.recorded", subject_type="tool_run",
+                subject_id=run_id,
+                payload={"node_count": len(nodes), "edge_count": len(edges)},
+            )
+        except (ValueError, KeyError) as exc:
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="security_graph.record_failed", subject_type="tool_run",
+                subject_id=run_id, reasons=(UNPARSEABLE_COLLECTION_RESULT,),
+                payload={"error": str(exc)},
+            )
+
     _finish_run(
         conn, run_id, status, exit_code=result.exit_code,
         fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
