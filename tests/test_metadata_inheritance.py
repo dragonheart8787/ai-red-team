@@ -20,13 +20,19 @@ What this module pins, per ADR_CLASSIFICATION_INHERITANCE.md:
   Resolver rather than reimplemented (§6) — the D14-style check that a shared
   predicate is actually shared;
 * that extracting it left ``scope_covers_target`` behaving identically (§6),
-  proven against the pre-refactor implementation rather than asserted.
+  proven against the pre-refactor implementation rather than asserted — except
+  for the one family of answers D41 deliberately changed (a ``url`` target's
+  host may now be covered by an ``fqdn``/``ip``/``cidr`` scope object), which
+  the same differential test now asserts matches an independently-recomputed
+  expectation rather than merely differing from the pre-D41 oracle.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import itertools
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -497,25 +503,67 @@ def _legacy_scope_covers_target(scope, target) -> bool:
 # between them: wildcard and bare fqdn, the non-label-boundary suffix, v4 and
 # v6, a network and a host inside it, cross-family comparison (which makes
 # ``subnet_of`` raise TypeError), values that will not parse at all, and the
-# empty string.
+# empty string. The two URLs whose host reappears elsewhere in this same list
+# ("app.customer-a.com", "10.79.0.42") are D41's addition: without them every
+# url-vs-fqdn/ip/cidr pair in the grid disagrees old=False/new=False (no
+# disagreement at all), and the sanctioned-family carve-out in the test below
+# would never see a case where the new answer is actually True.
 _GRID_VALUES = [
     "customer-a.com", "a.com", "app.customer-a.com", "*.customer-a.com",
     "*.a.com", "10.79.0.0/24", "10.79.0.0/16", "10.79.0.42", "10.80.0.42",
     "10.79.0.0/25", "192.168.0.0/16", "2001:db8::/32", "2001:db8::1",
     "::1", "https://host.example.com/admin", "github.com/org",
     "corp.example.com", "not a value", "10.79.0.2/24", "", "*.", "*.com",
+    "https://app.customer-a.com/api", "http://10.79.0.42/",
 ]
 _GRID_TYPES = ["fqdn", "ip", "cidr", "url", "repo", "ad_domain"]
 
 
+def _independent_url_host(value: str) -> tuple[str, str] | None:
+    """A second, independent opinion of what host a URL names (D41).
+
+    Deliberately not ``containment._url_host``, for the reason
+    ``_legacy_scope_covers_target`` is a separate copy rather than an import:
+    an oracle built from the code under test cannot catch a mistake the two
+    share. This skips ``normalize_fqdn``'s IDNA/label strictness on purpose —
+    the grid's values are plain ASCII — trading completeness for genuine
+    independence on the part that matters here, the host string itself.
+    """
+    try:
+        hostname = urlsplit(value).hostname
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    try:
+        ipaddress.ip_address(hostname)
+        return "ip", hostname
+    except ValueError:
+        return "fqdn", hostname.rstrip(".")
+
+
 def test_containment_refactor_is_behaviour_preserving():
-    """The extraction changed no answer, proven rather than inspected.
+    """The extraction changed no answer outside one family D41 changed on purpose.
 
     ADR §6 required the refactor of ``scope_covers_target`` to be
-    behaviour-preserving. This runs the pre-refactor implementation beside the
-    current one over every combination of scope type/value and target
-    type/value in the grid above — several thousand cases, including malformed
-    and adversarial values — and requires them to agree on every single one.
+    behaviour-preserving, and this differential test is what proved it at D25:
+    every combination of scope type/value and target type/value in the grid
+    above — several thousand cases, including malformed and adversarial
+    values — had to agree between the pre-refactor oracle and the current
+    implementation.
+
+    D41 deliberately taught ``identity_contains`` one new fact: an
+    ``fqdn``/``ip``/``cidr`` scope object now covers a ``url`` target whose
+    *host* it covers (docs/D40_THREE_ROLE_INTEGRATION_REPORT.md §2.5 found a
+    real Worker whose proposal could never have been authorized otherwise).
+    That is exactly the shape of disagreement this test must now expect —
+    and *only* that shape: any disagreement is checked against an
+    independently-recomputed expectation (the pre-D41 oracle re-run against
+    the URL's own extracted host, using a second, separately-written host
+    parser) rather than being waved through because "D41 changed something."
+    A disagreement of any other shape — a different scope type, a different
+    target type, or a url-target case where the recomputed expectation
+    disagrees with the new implementation — still fails the test.
 
     A differential test rather than a re-run of the old suite, because the old
     suite proves the refactor kept the behaviours somebody wrote a test for.
@@ -550,12 +598,34 @@ def test_containment_refactor_is_behaviour_preserving():
         new = scope_covers_target(scope, target)
         old = _legacy_scope_covers_target(scope, target)
         checked += 1
-        if new != old:
-            disagreements.append((stype, svalue, itype, ivalue, old, new))
+        if new == old:
+            continue
+
+        # D41's one sanctioned family: url target, fqdn/ip/cidr scope, and the
+        # pre-D41 oracle said False (it has no url-child branch at all — every
+        # disagreement in this family must start from old=False).
+        if itype == "url" and stype in ("fqdn", "ip", "cidr") and old is False:
+            host = _independent_url_host(ivalue)
+            if host is None:
+                expected_new = False
+            else:
+                host_type, host_value = host
+                try:
+                    host_target = normalize_target(
+                        {"logical_identity": {"type": host_type, "value": host_value}}
+                    )
+                except CanonicalizationError:
+                    expected_new = False
+                else:
+                    expected_new = _legacy_scope_covers_target(scope, host_target)
+            if new == expected_new:
+                continue  # exactly the sanctioned, independently-verified change
+
+        disagreements.append((stype, svalue, itype, ivalue, old, new))
 
     assert not disagreements, (
-        f"{len(disagreements)} of {checked} cases changed behaviour: "
-        f"{disagreements[:10]}"
+        f"{len(disagreements)} of {checked} cases changed behaviour outside "
+        f"D41's sanctioned url-host family: {disagreements[:10]}"
     )
     # Guard against the grid silently collapsing to nothing, which would make
     # the assertion above vacuously true — the failure mode D9 found when

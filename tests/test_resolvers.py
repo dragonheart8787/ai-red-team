@@ -144,6 +144,149 @@ def test_cidr_scope_does_not_cover_an_ip_outside_it(engagement_id, registry):
 
 
 # ---------------------------------------------------------------------------
+# A url target's host, covered by an fqdn/ip/cidr scope object (D40/D41)
+# ---------------------------------------------------------------------------
+# D40 ran a real, un-scripted Worker against a real web target and watched it
+# choose target_type: "url" -- the only way its schema can express a target
+# with a path at all -- and get denied target_out_of_scope against an ip scope
+# object covering the exact same host, because containment compared the url
+# and the bare address for byte equality. These pin the fix: a url target's
+# *host* (parsed, not resolved -- it is a substring already in the value) is
+# now covered exactly as that host would be if spelled as its own type.
+
+def test_d40s_actual_denied_web_get_proposal_is_now_authorized(engagement_id, registry):
+    """Replayed from the recorded run, not retyped by hand.
+
+    ``docs/d40_runs/d40_three_role.json`` is the committed record of D40's
+    real three-role run. This pulls the exact ``web.get`` proposal a real,
+    un-scripted Worker made — ``target_type: "url"``,
+    ``target_value: "http://10.85.0.10/"`` — and the exact scope object value
+    D40 registered for that host (``ip 10.85.0.10``), and re-authorizes it
+    the way ``propose_action`` would. D40 recorded this as
+    ``DENY target_out_of_scope``; this must now be ``ALLOW``.
+    """
+    import json
+    from pathlib import Path
+
+    run = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs" / "d40_runs"
+         / "d40_three_role.json").read_text()
+    )
+    main_run = run["main_run"]
+    proposal = next(
+        tr["proposal"]
+        for rr in main_run["rounds"] for tr in rr["task_runs"]
+        if (tr.get("proposal") or {}).get("action") == "web.get"
+    )
+    recorded_outcome = next(
+        tr["outcome"]
+        for rr in main_run["rounds"] for tr in rr["task_runs"]
+        if (tr.get("proposal") or {}).get("action") == "web.get"
+    )
+    assert proposal["target_type"] == "url"
+    assert recorded_outcome["decision"] == "DENY"  # what D40 actually hit
+    assert recorded_outcome["deny_reasons"] == ["target_out_of_scope"]
+
+    web_host = next(
+        value for value, sid in main_run["scope_objects"].items()
+        if value == proposal["target_value"].split("://", 1)[1].rstrip("/")
+    )
+
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="ip", value=web_host,
+                   allowed_actions=["web.get", "web.render"])
+    result = _authorize(
+        engagement_id, _target(proposal["target_type"], proposal["target_value"]),
+        proposal["action"], sid,
+    )
+    assert result.authorized is True, (
+        f"D40's actual proposal is still refused: {result.reasons}"
+    )
+    assert result.reasons == ()
+
+
+def test_an_ip_scope_covers_a_url_target_naming_its_host(engagement_id, registry):
+    """D40's actual failure, reproduced and now fixed.
+
+    docs/d40_runs/d40_three_role.json: a real Worker proposed
+    ``{"action": "web.get", "target_type": "url",
+    "target_value": "http://10.85.0.10/"}`` against a scope object
+    registered as ``ip 10.85.0.10`` and was denied ``target_out_of_scope``.
+    """
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="ip", value="10.85.0.10",
+                   allowed_actions=["web.get", "web.render"])
+    result = _authorize(engagement_id, _target("url", "http://10.85.0.10/"),
+                        "web.get", sid)
+    assert result.authorized is True
+    assert result.reasons == ()
+
+
+def test_an_fqdn_scope_covers_a_url_target_naming_its_host(engagement_id, registry):
+    """§4.1.5's own worked example, reached through a url target this time."""
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="fqdn", value="app.customer-a.com",
+                   allowed_actions=["web.*"])
+    result = _authorize(
+        engagement_id, _target("url", "https://app.customer-a.com/api"),
+        "web.get", sid,
+    )
+    assert result.authorized is True
+
+
+@pytest.mark.parametrize("scope_type,scope_value,url", [
+    # Mutation: a url whose host does not match the scope object at all.
+    ("fqdn", "app.customer-a.com", "https://evil.com/api"),
+    ("ip", "10.85.0.10", "http://10.85.0.200/"),
+    # A url naming a different host under the same registrar-looking suffix
+    # must not pass on a substring resemblance.
+    ("fqdn", "customer-a.com", "https://not-customer-a.com/api"),
+])
+def test_a_url_target_with_a_mismatched_host_is_still_refused(
+    engagement_id, registry, scope_type, scope_value, url
+):
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type=scope_type, value=scope_value,
+                   allowed_actions=["web.*", "network.scan"])
+    result = _authorize(engagement_id, _target("url", url), "web.get", sid)
+    assert result.authorized is False
+    assert DENY_TARGET_NOT_COVERED in result.reasons
+
+
+def test_a_cidr_scope_does_not_cover_a_url_target_naming_an_fqdn_host(
+    engagement_id, registry
+):
+    """The name-vs-address boundary (§8.9/I8) survives unwrapping a url too:
+    a cidr scope object authorizes addresses, and a url's fqdn host is a name,
+    however plausible-looking the site is."""
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="cidr", value="10.20.0.0/24",
+                   allowed_actions=["web.get"])
+    result = _authorize(
+        engagement_id, _target("url", "https://app.customer-a.com/api"),
+        "web.get", sid,
+    )
+    assert result.authorized is False
+
+
+def test_a_url_scope_object_still_only_matches_a_url_target_verbatim(
+    engagement_id, registry
+):
+    """The one thing D41 does not change: a url *parent* still only covers an
+    identical url child. Whether one URL's path contains another's is D25
+    §2.2's still-unanswered question, not reopened here."""
+    sid = _uid("SCOPE")
+    registry.scope(scope_object_id=sid, type="url",
+                   value="https://host.example.com/admin",
+                   allowed_actions=["web.get"])
+    result = _authorize(
+        engagement_id, _target("url", "https://host.example.com/admin/users"),
+        "web.get", sid,
+    )
+    assert result.authorized is False
+
+
+# ---------------------------------------------------------------------------
 # Look-alike scope objects (D15)
 # ---------------------------------------------------------------------------
 # D13 injected a lure naming 203.0.113.77 and the Worker never took it — but the

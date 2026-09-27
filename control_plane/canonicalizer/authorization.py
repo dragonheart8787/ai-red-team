@@ -121,10 +121,14 @@ def scope_covers_target(scope: ScopeObject, target: CanonicalTarget) -> bool:
     -------------------------------
     The containment geometry this function used to implement inline now lives in
     :mod:`control_plane.canonicalizer.containment`, and this function is the
-    authorization-side caller of it. Nothing about the answer changed; the
-    refactor is pinned by ``test_containment_refactor_is_behaviour_preserving``,
-    which runs the pre-refactor implementation beside this one over an
-    exhaustive grid of type/value pairs and requires them to agree on every one.
+    authorization-side caller of it. At D25 the refactor changed no answer;
+    ``test_containment_refactor_is_behaviour_preserving`` pinned that by running
+    the pre-refactor implementation beside this one over an exhaustive grid of
+    type/value pairs and requiring them to agree on every one. D41 deliberately
+    changed exactly one family of answers within that same test — a ``url``
+    target's host may now be covered by an ``fqdn``/``ip``/``cidr`` scope
+    object (see ``containment.py``'s own docstring) — so the grid test now
+    asserts agreement everywhere *except* that family, rather than everywhere.
 
     It moved because the Metadata Resolver needs the *same* arithmetic to find
     an identity's ancestors (ADR_CLASSIFICATION_INHERITANCE.md §6), and there

@@ -45,11 +45,43 @@ was a state nothing had ever created. The direction of that answer is
 load-bearing on both sides of the boundary — a scope object that covers
 everything authorizes everything, and an ancestor that contains everything would
 apply its classification to the whole registry.
+
+D41 — a ``url`` child unwraps to its host, and only on the authorization side
+------------------------------------------------------------------------------
+D40 ran a real, un-scripted Worker against a real web target and watched it
+choose ``target_type: "url"`` — a value its own schema has always offered,
+and in fact the *only* way the Worker can express a target with a path at all
+(it has no separate port/path fields). The proposal was denied
+``target_out_of_scope`` against an ``ip``-typed scope object covering the
+exact same host, because the fallback branch below compares ``url`` values
+verbatim and a URL is never byte-identical to the bare host it names.
+
+That fallback is still correct for ``url``-to-``url`` — whether
+``https://host/admin`` covers ``https://host/admin/users`` is D25 §2.2's
+path-containment question, a policy choice with no arithmetic answer, and
+this module still refuses to invent one. What D41 adds is narrower and is
+arithmetic, not policy: a URL's *host* is a fact already written in the
+string by whoever proposed it — extracting it is parsing, not the DNS
+resolution §8.9/I8 forbids as an authorization input — so an ``fqdn``/``ip``/
+``cidr`` parent may contain a ``url`` child by containing the host that URL
+names, exactly as it would contain that host spelled as its own type.
+
+This reaches only ``scope_covers_target``. The Metadata Resolver's ancestor
+query is gated *before* it ever calls this module, by ``metadata.py``'s own
+``ANCESTOR_TYPES``, which has no entry for ``url`` — D25 §2.2's "no
+inheritance for url" stands exactly as accepted, untouched by anything below.
 """
 
 from __future__ import annotations
 
 import ipaddress
+from urllib.parse import urlsplit
+
+from control_plane.canonicalizer.target import (
+    CanonicalizationError,
+    normalize_fqdn,
+    normalize_ip,
+)
 
 # Mirrors target.IDENTITY_TYPES / §4.1.5. Imported rather than redefined would
 # be circular: target.py is about normalizing one identity, this is about
@@ -106,6 +138,37 @@ def address_contains(network_value: str, child_type: str, child_value: str) -> b
         return False
 
 
+def _url_host(value: str) -> tuple[str, str] | tuple[None, None]:
+    """The ``(type, value)`` of the host a URL names, or ``(None, None)``.
+
+    Parsing, not resolution: the host is a substring already present in
+    ``value``, the same fact ``target.normalize_url`` extracts while
+    canonicalizing a proposal's target. This does not import that function —
+    it needs only the host, not the full canonical URL it builds — but reuses
+    the two leaf classifiers it is itself built from
+    (:func:`~control_plane.canonicalizer.target.normalize_ip` /
+    :func:`~control_plane.canonicalizer.target.normalize_fqdn`) rather than a
+    second, parallel opinion of what makes a valid IP or FQDN.
+
+    Never raises, per this module's own rule: a URL this cannot make sense of
+    names no host, and a value that names no host contains nothing.
+    """
+    try:
+        hostname = urlsplit(value).hostname
+    except ValueError:
+        return None, None
+    if not hostname:
+        return None, None
+    try:
+        return "ip", normalize_ip(hostname)
+    except CanonicalizationError:
+        pass
+    try:
+        return "fqdn", normalize_fqdn(hostname)
+    except CanonicalizationError:
+        return None, None
+
+
 def identity_contains(
     parent_type: str, parent_value: str, child_type: str, child_value: str
 ) -> bool:
@@ -140,11 +203,36 @@ def identity_contains(
     flag would put the choice of semantics inside the shared primitive, where
     the next caller would have to guess which mode it wanted; a spelling puts it
     at the call site, in the caller's own words.
+
+    A ``url`` child unwraps to the host it names (D41), for an
+    ``fqdn``/``ip``/``cidr`` parent only — parsing, not resolution, since the
+    host is a substring already in the value:
+
+        identity_contains("fqdn", "app.customer-a.com", "url",
+                           "https://app.customer-a.com/api")           -> True
+        identity_contains("fqdn", "app.customer-a.com", "url",
+                           "https://evil.com/api")                     -> False
+        identity_contains("ip", "10.85.0.10", "url",
+                           "http://10.85.0.10/")                       -> True
+        identity_contains("url", "https://host/admin", "url",
+                           "https://host/admin/users")                 -> False
+
+    The last line is unchanged from before D41 and stays that way: a ``url``
+    *parent* still only matches an identical ``url`` child. Whether one URL's
+    path contains another's is D25 §2.2's question, and it is still refused —
+    D41 only teaches this function to unwrap a URL *child*, never a URL
+    *parent*.
     """
     if parent_type not in CONTAINMENT_TYPES or child_type not in CONTAINMENT_TYPES:
         return False
     if not isinstance(parent_value, str) or not isinstance(child_value, str):
         return False
+
+    if child_type == "url" and parent_type in ("fqdn", "ip", "cidr"):
+        host_type, host_value = _url_host(child_value)
+        if host_type is None:
+            return False
+        return identity_contains(parent_type, parent_value, host_type, host_value)
 
     if parent_type == "fqdn":
         if child_type != "fqdn":
@@ -159,9 +247,12 @@ def identity_contains(
     if parent_type == "cidr":
         return address_contains(parent_value, child_type, child_value)
 
-    # url, repo, ad_domain: opaque identifiers the system only ever compares for
-    # equality (see canonicalize_scope_value). They have structure a human reads
-    # as hierarchy — a URL path, a repo's org, an AD tree — but no canonical
-    # containment arithmetic is defined for any of them, and inventing one here
-    # would change what matches without anyone deciding it should.
+    # url (as a parent), repo, ad_domain: opaque identifiers the system only
+    # ever compares for equality (see canonicalize_scope_value). They have
+    # structure a human reads as hierarchy — a URL path, a repo's org, an AD
+    # tree — but no canonical containment arithmetic is defined for any of
+    # them, and inventing one here would change what matches without anyone
+    # deciding it should. A url *child* of an fqdn/ip/cidr parent was already
+    # handled above (D41); reaching here with child_type == "url" means the
+    # parent is also a url, which stays exact-match only.
     return child_type == parent_type and child_value == parent_value
