@@ -5,6 +5,19 @@ is made until the decisions in §4 are confirmed.** No `semgrep` binary is
 invoked, no repository is cloned, and nothing about D42's BloodHound/Security
 Graph work is touched.
 
+**Status update (D45/D46)**: implemented and wired at D43 as this document
+describes. D45 found that the real production entry point (`propose_action`)
+never actually routed `code.scan` to `dispatch_code_scan` — every real call
+ran the generic `dispatch_scan` instead, so a real `code.scan` capability
+would start its container with nothing mounted at `CONTAINER_REPO_PATH`
+(the control-plane-side git fetch this document's §3.2/D43-5 design depends
+on would never run) and fail immediately. This was never caught because
+every existing test called `dispatch_code_scan` directly, never
+`propose_action`. Fixed at D45, rebuilt as a structural guarantee at D46
+(`tests/test_dispatch_routing.py`) so a future action cannot silently repeat
+it. Full account: `docs/D45_AD_COLLECTION_E2E_REPORT.md` and
+`docs/D46_DISPATCH_ROUTING_AUDIT_REPORT.md`.
+
 D42 (BloodHound) was the first tool whose *output* is a shape this platform
 had never stored — a relationship graph. Semgrep is the first tool whose
 *input* is a shape this platform has never handled — the entire contents of

@@ -5,6 +5,20 @@ written or changed for this document. Every claim below about the current
 system was checked against the tree at the time of writing (D43, commit
 `ab2849a`), not assumed from the concept brief.
 
+**Status update (D45/D46)**: implemented at D44 as this document describes.
+D45 drove a real `revoke_credential()` call genuinely mid-flight during a
+real `dispatch_collection` run and found §2.2's exposure-window claim needs
+a sharper mechanism than stated: the revoke is not merely "too slow to stop
+the container" (below) — it is a complete no-op against that specific run,
+because `propose_action`'s entire pipeline runs inside one open database
+transaction, and the capability row a concurrent revoke needs to see does
+not exist to any other connection until that transaction commits, which
+happens only once the container has already finished. This does not change
+§2.2's conclusion (the exposure window is accepted, not closed, per D44-7
+Option A) — it sharpens the mechanism behind it. Full account:
+`docs/D45_AD_COLLECTION_E2E_REPORT.md` §6, and
+`docs/ACCEPTANCE_MVP1_AGENTS.md` 5.24's own addendum.
+
 ## 0. Why this is a different trust boundary than D35, and why that matters
 
 D35 built the only precedent this system has for handing a sandboxed

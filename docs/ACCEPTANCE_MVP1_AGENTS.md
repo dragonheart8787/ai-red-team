@@ -623,6 +623,17 @@ D45_AD_COLLECTION_E2E_REPORT.md` for the full account) and surfaced two
 findings recorded below: one sharpens 5.24's own characterization with a
 mechanism 5.24 did not know about, the other is new.
 
+**Status, as of D46**: the routing bug itself (the second of the four found
+above) was re-examined across every registered action, not only `ad.collect`/
+`code.scan` — `network.scan`/`network.recon`/`web.get`/`web.post`/
+`web.render` were confirmed never to have been exposed to this bug class
+(they share the one dispatch function that has ever existed for them), and
+D37's own "drove web.render through `propose_action`" claim was independently
+re-verified as genuine. The fix is rebuilt as a structural guarantee
+(`tests/test_dispatch_routing.py`, mutation-verified) rather than resting on
+the two hand-written branches D45 itself added. Full account: `docs/
+D46_DISPATCH_ROUTING_AUDIT_REPORT.md`.
+
 **5.24, sharpened.** D45 empirically triggered `revoke_credential()` while a
 real `dispatch_collection` run was genuinely in flight (confirmed by wall-
 clock timing: the revoke call landed before the dispatch call returned) and

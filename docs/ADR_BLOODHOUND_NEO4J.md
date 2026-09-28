@@ -14,6 +14,20 @@ architectural argument alone — see `docs/D42_2_CTE_BENCHMARK.md` and
 document's own "Reading these numbers against D42-5" section rather than
 this ADR's §3/§5, which predate the measurement.
 
+**Status update (D45/D46)**: §4's design was implemented and then driven
+end to end for the first time at D45, which found the real production entry
+point (`propose_action`) never actually routed `ad.collect` to
+`dispatch_collection` at all — every real call ran the generic
+`dispatch_scan` instead, silently dropping the Security Graph write this
+section's whole design exists for. Fixed at D45, rebuilt as a structural
+guarantee at D46 (`tests/test_dispatch_routing.py`). D45 also found that
+real authenticated collection cannot complete against any environment
+available to this project, for a reason one layer earlier than expected —
+see `docs/D45_AD_COLLECTION_E2E_REPORT.md` §5 — which qualifies §4's design
+as verified for its wiring, not yet for a real domain controller in
+practice. Full account: `docs/D45_AD_COLLECTION_E2E_REPORT.md` and
+`docs/D46_DISPATCH_ROUTING_AUDIT_REPORT.md`.
+
 This is the first tool this project has ever considered whose native output
 is a **relationship graph** (`User —MemberOf→ Group —GenericAll→ Computer`)
 rather than a classification of, or scan result against, one resource. Every
