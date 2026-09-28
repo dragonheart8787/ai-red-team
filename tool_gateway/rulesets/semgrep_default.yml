@@ -1,0 +1,51 @@
+# Default code.scan ruleset (D43).
+#
+# Bundled and mounted read-only alongside the repository being scanned
+# (tool_gateway/adapters/semgrep.py, docs/ADR_SEMGREP.md §3.1) rather than
+# fetched from Semgrep's registry at run time — the scanning container has
+# no network egress at all, so --config always points here, never at a
+# registry name.
+#
+# This file's own content, not a hand-maintained version string, is what
+# ruleset_version hashes (semgrep.ruleset_version()) — the same reasoning
+# CanonicalTarget.address_count uses for being a computed property rather
+# than a stored field: a version number a developer has to remember to bump
+# can be forgotten, and a forgotten bump is exactly the D11-3 shape (a rule
+# change silently absorbed into "the same execution" by the dedup cache).
+rules:
+  - id: hardcoded-credential-assignment
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "AKIA..."
+          - pattern-regex: (?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)\s*=\s*["'][^"']{4,}["']
+    message: >-
+      Hardcoded credential-shaped literal assigned to a variable. Confirm
+      this is not a real secret before this code ships.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  - id: shell-injection-via-subprocess
+    patterns:
+      - pattern: subprocess.run(..., shell=True, ...)
+    message: >-
+      subprocess.run with shell=True executes through a shell, and any
+      attacker-influenced argument is a command injection risk.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+
+  - id: dangerous-eval-exec
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+    message: >-
+      eval()/exec() on any input that is not fully trusted is arbitrary
+      code execution.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-95: Eval Injection"

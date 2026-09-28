@@ -37,8 +37,14 @@ from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request
 from control_plane.dedup.fingerprint import execution_fingerprint
 from control_plane.evidence.store import record_evidence
 from control_plane.graph.store import record_batch
+from control_plane.orchestrator.git_fetch import (
+    GitFetchError,
+    cleanup_repo,
+    fetch_repo,
+    parse_repo_scope_value,
+)
 from tool_gateway import registry
-from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap
+from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap, semgrep
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
@@ -172,7 +178,7 @@ adapter_for = registry.adapter_for
 #: Evidence id prefix per tool, so an id keeps saying what produced it.
 EVIDENCE_PREFIX = {
     nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP",
-    browser.TOOL: "BROWSER", ad_collector.TOOL: "ADCOLLECT",
+    browser.TOOL: "BROWSER", ad_collector.TOOL: "ADCOLLECT", semgrep.TOOL: "CODE",
 }
 
 #: A malformed collection result: the run succeeded, but its stdout could
@@ -653,6 +659,245 @@ def dispatch_collection(
         payload={**result.as_dict(), "evidence_id": evidence_id},
     )
     return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+
+
+#: A control-plane-side repo fetch failed before any sandbox run started
+#: (D43-5). Distinct from UNBUILDABLE_PLAN (the capability's shape itself
+#: was wrong -- no fetch was attempted) and from FAILED (a tool inside the
+#: sandbox reported failure): here the capability was valid and a fetch was
+#: attempted, but the source it names could not be retrieved.
+REPO_FETCH_FAILED = "repo_fetch_failed"
+
+#: Semgrep needs no network access at all (tool_gateway/adapters/semgrep.py
+#: module docstring): the repository and the ruleset both arrive as
+#: read-only bind mounts, not over a network the container has no route on.
+#: DockerSandbox still requires a non-empty CIDR allowlist to build its
+#: internal, gateway-less network (§8.3's validate_allowlist) -- ``internal
+#: =True`` is what removes the route out, not the specific range named
+#: here, so this fixed, otherwise-unused private block stands in for a real
+#: target range that this action has no target range to give.
+NO_EGRESS_ALLOWLIST = ["10.255.255.0/29"]
+
+
+def dispatch_code_scan(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    sandbox: DockerSandbox | None = None,
+    execution_context: Mapping[str, Any] | None = None,
+    fresh_for_seconds: int = 1800,
+    ruleset_path: str | None = None,
+) -> DispatchOutcome:
+    """Run one ``code.scan`` (Semgrep) and record its evidence (D43).
+
+    A third bespoke dispatch function, alongside :func:`dispatch_scan` and
+    :func:`dispatch_collection`, for the same reason ``dispatch_collection``
+    is not a branch of ``dispatch_scan``: this action needs an extra step
+    the generic adapter call site does not have a place for. Here it is two
+    steps, one on each side of the sandbox run — a control-plane-side git
+    fetch *before* it (D43-5 Option B: the repository is cloned outside any
+    container, with whatever credential this step alone holds, and handed
+    in as a read-only bind mount; the scanning container itself never has
+    network egress and never holds a git credential) and cleanup *after*.
+
+    The fetch happens, and the commit it resolves to is folded into
+    ``execution_context``, *before* the fingerprint is computed and the
+    dedup cache is consulted — not after. A ``repo`` scope authorizes a
+    repository and a mutable branch (D43-1 Option C), and a branch can move
+    between two proposals that name the same target string. Fingerprinting
+    on the branch name alone would let a later commit on the same branch
+    match an earlier run's fingerprint and be served from cache instead of
+    scanned — the exact D11-3 shape (a real difference the dedup cache
+    could not see, folded into a v0.3 amendment that put the network
+    allowlist into ``execution_context`` for the identical reason), here
+    applied to a ref that moved instead of a route that never existed. The
+    cost is that a fetch happens even on what turns out to be a dedup hit;
+    a shallow clone is cheap enough control-plane-side that this is the
+    right side to pay it on, per :mod:`control_plane.orchestrator.git_fetch`'s
+    own module docstring.
+    """
+    if capability.revoked or not capability.is_live():
+        return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+
+    adapter = semgrep
+    if capability.action != adapter.ACTION:
+        # Routed here by the caller naming the action explicitly, the same
+        # as dispatch_collection -- refused rather than silently run under
+        # the wrong adapter if that ever drifts.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(registry.UNKNOWN_ACTION,),
+            payload={"action": capability.action, "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=registry.UNKNOWN_ACTION)
+
+    try:
+        plan = adapter.build_plan(
+            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            target=target,
+        )
+    except adapter.AdapterError as exc:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": adapter.TOOL, "error": str(exc),
+                     "constraints": dict(capability.constraints),
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
+    try:
+        location, branch = parse_repo_scope_value(target)
+    except GitFetchError as exc:
+        # build_plan already checked for a '#' -- this is defensive, not the
+        # expected path, but a malformed scope value is still an unbuildable
+        # plan, not a fetch failure: nothing was attempted against a real
+        # remote yet.
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": adapter.TOOL, "error": str(exc),
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
+    try:
+        fetched = fetch_repo(location, branch)
+    except GitFetchError as exc:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(REPO_FETCH_FAILED,),
+            payload={"tool": adapter.TOOL, "error": str(exc), "target": target,
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=REPO_FETCH_FAILED)
+
+    try:
+        rules_version = adapter.ruleset_version(ruleset_path)
+        tool_version = adapter.tool_version()
+        ctx = {**dict(execution_context or {}),
+               "commit_sha": fetched.commit_sha, "branch": fetched.branch}
+        fingerprint = execution_fingerprint(
+            engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
+            normalized_target=target, normalized_params=plan.as_params(),
+            execution_context=fingerprint_context(ctx, NO_EGRESS_ALLOWLIST),
+            ruleset_version=rules_version,
+        )
+
+        cached = find_cached_run(conn, fingerprint)
+        if cached is not None:
+            _set_state(conn, proposal_id, SUCCEEDED)
+            return DispatchOutcome(False, cached["run_id"], SUCCEEDED, reason="dedup_hit")
+
+        if not claim_for_dispatch(conn, proposal_id):
+            state = conn.execute(
+                text("SELECT dispatch_state FROM action_proposals WHERE proposal_id = :p"),
+                {"p": proposal_id},
+            ).scalar_one_or_none()
+            return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
+
+        run_id = f"RUN-{uuid.uuid4().hex[:12]}"
+
+        conn.execute(
+            text("""
+                INSERT INTO tool_runs (run_id, engagement_id, proposal_id, capability_id,
+                    tool, tool_version, ruleset_version, normalized_target, normalized_params,
+                    execution_context, execution_fingerprint, status, network_allowlist,
+                    started_at)
+                VALUES (:run, :eng, :pid, :cap, :tool, :tver, :rver, :target,
+                        CAST(:params AS jsonb), CAST(:ctx AS jsonb), :fp, :status,
+                        :allowlist, now())
+            """),
+            {
+                "run": run_id, "eng": engagement_id, "pid": proposal_id,
+                "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
+                "rver": rules_version, "target": target, "params": _json(plan.as_params()),
+                "ctx": _json(ctx), "fp": fingerprint,
+                "status": RUNNING, "allowlist": list(NO_EGRESS_ALLOWLIST),
+            },
+        )
+        _set_state(conn, proposal_id, RUNNING)
+        record_audit(
+            engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
+            subject_type="tool_run", subject_id=run_id,
+            payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
+                     "commit_sha": fetched.commit_sha,
+                     "capability_id": capability.capability_id},
+        )
+
+        sandbox = sandbox or DockerSandbox(image=adapter.IMAGE)
+        try:
+            result = sandbox.run(
+                command=plan.command, network_allowlist=NO_EGRESS_ALLOWLIST,
+                max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
+                tmpfs=adapter.TMPFS,
+                source_mounts={
+                    fetched.local_path: adapter.CONTAINER_REPO_PATH,
+                    (ruleset_path or adapter.DEFAULT_RULESET_HOST_PATH):
+                        adapter.CONTAINER_RULESET_PATH,
+                },
+            )
+        except SandboxUnavailable as exc:
+            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
+            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.unknown_outcome", subject_type="tool_run",
+                subject_id=run_id, reasons=("sandbox_unavailable",),
+                payload={"error": str(exc)},
+            )
+            return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
+
+        raw = (
+            f"$ {' '.join(plan.command)}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
+        ).encode()
+        prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
+        evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
+        record_evidence(
+            conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
+            evidence_type="tool_output", raw=raw,
+            derived_view=adapter.derive_view(
+                result.stdout, result.stderr, repo_local_path=fetched.local_path,
+            ),
+            tool=adapter.TOOL, tool_version=tool_version, ruleset_version=rules_version,
+        )
+
+        status = SUCCEEDED if result.succeeded else FAILED
+        _finish_run(
+            conn, run_id, status, exit_code=result.exit_code,
+            fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
+        )
+        _set_state(conn, proposal_id, status)
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
+            decision="ALLOW" if status == SUCCEEDED else None,
+            payload={**result.as_dict(), "evidence_id": evidence_id},
+        )
+        return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+    finally:
+        # Always -- a dedup hit, a lost claim race, a sandbox failure and a
+        # completed run all leave a fetched checkout on disk that nobody
+        # else will clean up (git_fetch.fetch_repo's own docstring: the
+        # caller owns cleanup).
+        cleanup_repo(fetched.local_path)
 
 
 def _finish_run(
