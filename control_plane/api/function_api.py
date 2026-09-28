@@ -76,7 +76,6 @@ from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
 from control_plane.registry.scope_registry import list_scope_objects
-from tool_gateway.adapters import ad_collector, semgrep
 from tool_gateway.registry import side_effect_floor
 
 ALLOW = "ALLOW"
@@ -262,6 +261,19 @@ def complete_task(
 # propose_action — the pipeline
 # ---------------------------------------------------------------------------
 
+#: Every dispatch function an issued capability can be routed to, named
+#: exactly as each adapter's own ``NEEDS_DISPATCH`` constant spells it
+#: (D46). This dict, not a hand-written if/elif on ``capability.action``, is
+#: what makes the correspondence checkable: ``tests/test_dispatch_routing
+#: .py`` iterates every action in ``registry.ADAPTERS`` and asserts this
+#: table's entry for it is exactly the function the adapter names.
+_DISPATCH_FUNCTIONS = {
+    "dispatch_scan": dispatch_scan,
+    "dispatch_collection": dispatch_collection,
+    "dispatch_code_scan": dispatch_code_scan,
+}
+
+
 def _dispatch_for_action(
     conn: Connection,
     *,
@@ -301,27 +313,47 @@ def _dispatch_for_action(
     through the one real production entry point instead of calling a
     dispatch function directly, is what finally exercised this path and
     found it broken.
+
+    **D46 rebuilt this as a declaration, not a guess.** The original D45 fix
+    was still a hand-written ``if capability.action == ad_collector.ACTION``
+    — correct for the two actions it named, but exactly the shape that let
+    the bug exist in the first place: a *third* action needing its own
+    dispatch function would only be caught here if whoever added it also
+    remembered to add a branch here, in a file its own adapter module never
+    has to import or know about. Every adapter now names its own requirement
+    (``NEEDS_DISPATCH``, checked structurally as a required constant, not an
+    optional one an adapter could omit) and this function does nothing but
+    look it up and call it — there is no per-action branch left to forget.
     """
-    if capability.action == ad_collector.ACTION:
-        return dispatch_collection(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
-            capability=capability, target=target, actor=actor, sandbox=sandbox,
-            network_allowlist=list(network_allowlist) if network_allowlist else None,
-            execution_context=execution_context,
-        )
-    if capability.action == semgrep.ACTION:
-        return dispatch_code_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
-            capability=capability, target=target, actor=actor, sandbox=sandbox,
-            execution_context=execution_context,
-        )
-    return dispatch_scan(
-        conn, engagement_id=engagement_id, proposal_id=proposal_id,
-        capability=capability, target=target, actor=actor, sandbox=sandbox,
-        network_allowlist=list(network_allowlist) if network_allowlist else None,
-        execution_context=execution_context,
-        proxy_url=proxy_url, ca_cert_pem=ca_cert_pem, proxy_cert_spki=proxy_cert_spki,
-    )
+    import inspect
+
+    from tool_gateway.registry import adapter_for
+
+    adapter = adapter_for(capability.action)
+    # No adapter at all is the one case this function does not resolve
+    # itself: routed to dispatch_scan, whose own UNKNOWN_ACTION branch is the
+    # single place that refusal is decided and audited (registry.py's own
+    # docstring: "a capability whose action has no adapter is refused rather
+    # than defaulted to one").
+    dispatch_name = adapter.NEEDS_DISPATCH if adapter is not None else "dispatch_scan"
+    dispatch_fn = _DISPATCH_FUNCTIONS[dispatch_name]
+
+    all_kwargs = {
+        "engagement_id": engagement_id, "proposal_id": proposal_id,
+        "capability": capability, "target": target, "actor": actor,
+        "sandbox": sandbox,
+        "network_allowlist": list(network_allowlist) if network_allowlist else None,
+        "execution_context": execution_context,
+        "proxy_url": proxy_url, "ca_cert_pem": ca_cert_pem,
+        "proxy_cert_spki": proxy_cert_spki,
+    }
+    # Each dispatch function accepts a different subset (dispatch_collection
+    # takes no proxy_*; dispatch_code_scan takes no network_allowlist either)
+    # — handed only what its own signature declares, the same
+    # inspect.signature technique dispatch.py's own _build_plan_params
+    # already uses to hand each adapter only the proxy-trust input it takes.
+    accepted = frozenset(inspect.signature(dispatch_fn).parameters)
+    return dispatch_fn(conn, **{k: v for k, v in all_kwargs.items() if k in accepted})
 
 
 def propose_action(

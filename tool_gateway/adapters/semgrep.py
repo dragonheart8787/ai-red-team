@@ -71,6 +71,16 @@ CHANGES_STATE = False
 #: egress at all in this container in the first place (module docstring).
 REQUIRES_PROXY = False
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46).
+#: `dispatch_code_scan` is the one dispatch function that performs this
+#: action's two bespoke steps -- the control-plane-side git fetch before the
+#: sandbox run, and cleanup after -- routing anywhere else would start this
+#: container with nothing mounted at `CONTAINER_REPO_PATH`. See ad_collector
+#: .py's own copy of this constant for the identical class of gap D45 found
+#: this action shared with `ad.collect`.
+NEEDS_DISPATCH = "dispatch_code_scan"
+
 #: semgrep writes ~/.semgrep/settings.yml and ~/.semgrep/semgrep.log on
 #: every run (confirmed empirically) -- needs a writable HOME over the
 #: sandbox's otherwise read-only root, the same D36 shape as the browser.

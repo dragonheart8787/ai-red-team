@@ -141,6 +141,18 @@ CHANGES_STATE = False
 #: read, so routing through it would add a hop that inspects nothing.
 REQUIRES_PROXY = False
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46).
+#: **This is the exact fact D45 found `propose_action` getting wrong**: the
+#: real production entry point called the generic `dispatch_scan` for
+#: `ad.collect` unconditionally, for as long as this action has existed,
+#: because nothing declared -- anywhere -- that it needed something else.
+#: `dispatch_collection` is the one dispatch function that actually performs
+#: this action's second, bespoke step (the Security Graph write); routing
+#: anywhere else silently drops it. See nmap.py's own copy of this constant
+#: for why every adapter, not only this one, declares it explicitly.
+NEEDS_DISPATCH = "dispatch_collection"
+
 TOOL_STOP_GRACE_SECONDS = 5
 
 #: Verified against a real `pip install bloodhound` inside the image this

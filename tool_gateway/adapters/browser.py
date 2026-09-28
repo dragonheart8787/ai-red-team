@@ -58,6 +58,13 @@ REQUIRES_PROXY = True
 #: This tool runs in its own image, not the shared nmap/curl one (§一, D36).
 IMAGE = "cyberorch/browser:local"
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46). web.render
+#: needs no bespoke second step -- the generic `dispatch_scan` path is the
+#: whole job (D36/D37 verified this end to end; see nmap.py's own copy of
+#: this constant for why it is declared explicitly rather than assumed).
+NEEDS_DISPATCH = "dispatch_scan"
+
 #: Writable tmpfs over the read-only root the browser needs (D36). Chromium
 #: writes a profile and caches under its HOME and /tmp; nothing sensitive lives
 #: on either, and each is discarded with the container. ``mode=1777`` so the
