@@ -24,6 +24,15 @@ CI state confirmed, not assumed: the branch's actual range is exactly
 D42-D46 (12 commits) — no earlier stranded work this time, unlike the
 D31-D41 stage's own discovery that its true range was D25-D41.**
 
+**Status, as of D48**: §1's gap is closed. `tests/test_ad_collection_e2e.py`
+and `tests/test_code_scan_e2e.py` are the permanent, CI-committed
+`propose_action`-level tests this section found missing, mutation-verified
+against every applicable D45 bug. `code.scan` got a real-infrastructure test
+(Semgrep against a real repo already works reliably); `ad.collect` got a
+stub-sandbox tier only, by design — real Samba-in-CI was investigated and
+rejected on two independent grounds, not silently deferred. Full account:
+`docs/D48_AD_COLLECT_CI_E2E_REPORT.md`.
+
 ---
 
 ## 1. E2E coverage beyond routing: is anything else skipping the real entry point?
