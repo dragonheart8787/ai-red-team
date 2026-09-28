@@ -1,14 +1,24 @@
 """Control-plane-side repository fetch (D43-5 Option B).
 
 Runs entirely outside any sandbox, on whatever credential this step alone
-holds — none, for the public-repository-only scope this phase ships
-(D43-6). The resulting directory is handed to ``DockerSandbox.run``'s
-``source_mount`` as a read-only bind mount; the container that actually
-runs Semgrep never has network egress and never holds a git credential.
-This is the same trust-minimization shape D34's egress-proxy split and
-D35/D36's file-not-network credential delivery already established,
-applied one layer up — to the repository's *content* rather than a
-credential for reaching it.
+holds — none for a public repository (D43-6's original scope), or, as of
+D44, a Vault-issued git token for a private one. Either way, the resulting
+directory is handed to ``DockerSandbox.run``'s ``source_mount`` as a
+read-only bind mount; the container that actually runs Semgrep never has
+network egress and never holds a git credential, regardless of whether this
+fetch used one. This is the same trust-minimization shape D34's
+egress-proxy split and D35/D36's file-not-network credential delivery
+already established, applied one layer up — to the repository's *content*
+rather than a credential for reaching it.
+
+D44 lands a git token here rather than in the Semgrep sandbox precisely
+*because* this function is the trusted control-plane tier
+(`docs/ADR_CREDENTIAL_VAULT.md` §4.2: the same tier as
+`engagement_ca.mint_leaf_for_host`, not the tool-container tier
+`control_plane.vault.vault.mount_for_run` serves) — the caller resolves a
+`credential_id` via `vault.material_for()` and passes the decrypted token
+in as `auth_token`; this module has no idea what a Vault or a
+`credential_id` is, and does not need one.
 
 Scope object values are ``<location>#<branch>`` (D43-1 Option C: a scope
 authorizes a repository *and* a mutable branch name, never a bare
@@ -22,6 +32,7 @@ appear in either a git remote URL or a valid branch name.
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 import tempfile
@@ -51,7 +62,32 @@ def parse_repo_scope_value(value: str) -> tuple[str, str]:
     return location, branch
 
 
-def fetch_repo(location: str, branch: str, *, timeout_seconds: int = 120) -> FetchedRepo:
+def _basic_auth_header(auth_token: str) -> str:
+    """A git ``http.extraHeader`` value for token auth (D44).
+
+    Deliberately not embedded in the clone URL: git echoes the URL verbatim
+    into its own stderr on a failed clone (``fatal: unable to access
+    'https://...'``), which would smuggle the token into whatever this
+    function raises. An extra header never appears in that message at all,
+    and :func:`fetch_repo`'s own error path redacts the token from the
+    underlying stderr regardless, as a second layer.
+
+    ``x-access-token`` as the username is GitHub's own documented
+    convention for token-based Basic auth (works for a classic PAT too,
+    which ignores the username) — unverified against a git host that
+    expects something else, the same "not independently verified" caveat
+    `ad_collector.py`'s flag names already carry for the identical reason:
+    nothing in this environment can authenticate to a real private host to
+    check.
+    """
+    encoded = base64.b64encode(f"x-access-token:{auth_token}".encode()).decode()
+    return f"Authorization: Basic {encoded}"
+
+
+def fetch_repo(
+    location: str, branch: str, *, timeout_seconds: int = 120,
+    auth_token: str | None = None,
+) -> FetchedRepo:
     """Shallow-clone ``location`` at ``branch`` into a fresh temp directory.
 
     Shallow (``--depth 1``): Semgrep scans a working tree, not history, and a
@@ -61,21 +97,34 @@ def fetch_repo(location: str, branch: str, *, timeout_seconds: int = 120) -> Fet
     exactly the value D11-3's lesson (docs/ADR_SEMGREP.md §1.2) requires
     enter the execution fingerprint.
 
+    ``auth_token``, when given, authenticates the clone (D44) — this is the
+    seam `docs/ADR_SEMGREP.md` §3.2 named and this document's own §4.2
+    verifies against: a private repository's scope, once the Vault resolves
+    its `credential_id` into a token here. The token reaches this process's
+    argv (an unavoidable cost of `git`'s own CLI having no "read a header
+    value from a file" option — the same honest limit `ad_collector.py`'s
+    shell wrapper already carries for the identical reason), but never a
+    sandboxed one: this function runs entirely control-plane-side, before
+    any container exists for this dispatch.
+
     The caller owns cleanup (:func:`cleanup_repo`) — this function does not
     delete on its own success or failure, so a caller inspecting the tree
     after a partial failure still can.
     """
     local_path = tempfile.mkdtemp(prefix="cyberorch-repo-")
+    command = ["git", "clone", "--depth", "1", "--branch", branch, "--single-branch"]
+    if auth_token:
+        command += ["-c", f"http.extraHeader={_basic_auth_header(auth_token)}"]
+    command += [location, local_path]
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", branch, "--single-branch",
-             location, local_path],
-            check=True, capture_output=True, text=True, timeout=timeout_seconds,
+            command, check=True, capture_output=True, text=True, timeout=timeout_seconds,
         )
     except subprocess.CalledProcessError as exc:
         cleanup_repo(local_path)
+        stderr = exc.stderr.replace(auth_token, "***REDACTED***") if auth_token else exc.stderr
         raise GitFetchError(
-            f"git clone failed for {location!r}@{branch!r}: {exc.stderr}"
+            f"git clone failed for {location!r}@{branch!r}: {stderr}"
         ) from exc
     except subprocess.TimeoutExpired as exc:
         cleanup_repo(local_path)

@@ -7,6 +7,9 @@
 #   cyberorch_app    the runtime role — owns nothing, cannot bypass RLS
 #   registry_admin   the Engagement Manager — cyberorch_app plus write access
 #                    to scope_registry and metadata_registry, nothing else
+#   credential_admin the Credential Vault's write path (D44) — a separate
+#                    role, not registry_admin widened; write access to
+#                    credential_material and credentials, nothing else
 #
 # Passwords are never hardcoded here. They are taken from the environment, or
 # from a gitignored .env, or generated randomly on first run and written to
@@ -39,11 +42,24 @@ gen_password() {
     python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 }
 
+# The Vault's own master key (D44), not a database role password -- a real
+# Fernet key, generated with the venv's own `cryptography` (already a
+# dependency for control_plane/tls/engagement_ca.py) rather than bare
+# `python3`, since this script's own final step already assumes the venv
+# exists (it runs `.venv/bin/alembic`) and a system Python has no reason to
+# carry `cryptography` at all.
+gen_vault_key() {
+    "$root/.venv/bin/python3" -c \
+        'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+}
+
 : "${MIGRATION_OWNER_PASSWORD:=$(gen_password)}"
 : "${CYBERORCH_APP_PASSWORD:=$(gen_password)}"
 : "${REGISTRY_ADMIN_PASSWORD:=$(gen_password)}"
 : "${GLOBAL_AUDITOR_PASSWORD:=$(gen_password)}"
 : "${UI_READER_PASSWORD:=$(gen_password)}"
+: "${CREDENTIAL_ADMIN_PASSWORD:=$(gen_password)}"
+: "${VAULT_MASTER_KEY:=$(gen_vault_key)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
 super_psql() {
@@ -78,6 +94,7 @@ super_psql \
     -v "registry_admin_password=$REGISTRY_ADMIN_PASSWORD" \
     -v "global_auditor_password=$GLOBAL_AUDITOR_PASSWORD" \
     -v "ui_reader_password=$UI_READER_PASSWORD" \
+    -v "credential_admin_password=$CREDENTIAL_ADMIN_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -100,11 +117,14 @@ CYBERORCH_APP_PASSWORD=${CYBERORCH_APP_PASSWORD}
 REGISTRY_ADMIN_PASSWORD=${REGISTRY_ADMIN_PASSWORD}
 GLOBAL_AUDITOR_PASSWORD=${GLOBAL_AUDITOR_PASSWORD}
 UI_READER_PASSWORD=${UI_READER_PASSWORD}
+CREDENTIAL_ADMIN_PASSWORD=${CREDENTIAL_ADMIN_PASSWORD}
+VAULT_MASTER_KEY=${VAULT_MASTER_KEY}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 REGISTRY_ADMIN_DATABASE_URL=postgresql+psycopg://registry_admin:${REGISTRY_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 GLOBAL_AUDITOR_DATABASE_URL=postgresql+psycopg://global_auditor:${GLOBAL_AUDITOR_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 UI_READER_DATABASE_URL=postgresql+psycopg://ui_reader:${UI_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+CREDENTIAL_ADMIN_DATABASE_URL=postgresql+psycopg://credential_admin:${CREDENTIAL_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 

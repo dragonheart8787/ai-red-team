@@ -22,6 +22,15 @@
 --                    (D11-7). NOSUPERUSER, NOBYPASSRLS, owner of nothing; an
 --                    RLS policy limits it to SELECT on audit_log WHERE
 --                    scope='global'. No write anywhere, no other table.
+--   credential_admin the Credential Vault's write path (D44). A new role,
+--                    not registry_admin widened: writing a real customer
+--                    credential is a strictly higher-sensitivity category
+--                    than scope/metadata, so it gets its own connection
+--                    rather than growing an existing one's blast radius,
+--                    the same reasoning that kept ui_reader and
+--                    global_auditor from ever being folded into
+--                    registry_admin. SELECT+INSERT on credential_material
+--                    and credentials, nothing else -- see migration 0012.
 --
 -- Run as a superuser, before the first migration. Passwords come from psql
 -- variables so none is committed: see scripts/init_db.sh.
@@ -46,6 +55,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ui_reader') THEN
         CREATE ROLE ui_reader LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'credential_admin') THEN
+        CREATE ROLE credential_admin LOGIN;
     END IF;
 END
 $$;
@@ -89,3 +101,13 @@ ALTER ROLE global_auditor
 ALTER ROLE ui_reader
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'ui_reader_password';
+
+-- The Credential Vault's write path (D44). NOBYPASSRLS like every other role
+-- here: its reach is defined by the engagement_isolation policy on
+-- credential_material (migration 0012), not by trusting it to stay in its
+-- lane. It cannot read scope_registry/metadata_registry (registry_admin's
+-- tables) and registry_admin cannot read credential_material -- the two
+-- write paths this system now has for its most sensitive data stay apart.
+ALTER ROLE credential_admin
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'credential_admin_password';

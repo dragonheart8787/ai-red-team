@@ -1,30 +1,29 @@
 """dispatch_collection (D42-6): the ad.collect dispatch path, against fixtures.
 
 No Docker, no real bloodhound-python, no real LDAP bind — deliberately.
-§2.1/§4.3 of docs/D42_1_D42_6_DESIGN.md are explicit that this adapter has
-no live/production path until the Credential Vault exists: there is no
-credential anywhere in this system for a real collection run to authenticate
-with, so there is no real domain this suite could collect against even with
-Docker available. What is tested here is the control plane's own accounting
-around a collection run — the state machine, the two-artifact write
-(bounded evidence + the Security Graph batch), and fail-closed behavior —
-using ``StubSandbox`` (the same no-Docker pattern ``tests/
-test_capability_budget.py`` already uses for the identical reason: "what is
-under test here is the control plane's accounting, and a container would
-only make the test slower and less able to run anywhere").
+D44 wires this dispatch path to a real Credential Vault (`control_plane.
+vault.vault`), so the credential-shaped gap `docs/ADR_BLOODHOUND_NEO4J.md`
+§4.3 named is closed — but a real LDAP bind still cannot happen here, for a
+reason that has shifted: there is now a real, encrypted credential this
+suite can mint and mount, but there is still no real
+``bloodhound-python`` Docker image (no `tool_gateway/images/build_
+bloodhound_image.sh` exists), a separate, still-open gap the Vault alone
+does not close. `StubSandbox` remains the right tool for the same reason
+`tests/test_capability_budget.py`'s own copy is: what is under test here is
+the control plane's accounting — the state machine, the two-artifact write,
+fail-closed behavior, and now the credential mount/cleanup lifecycle — not
+whether a container can run.
 
-**Real LDAP bind and a real bloodhound-python run remain untested, and must
-stay that way until the Credential Vault deliverable lands** (docs/
-ADR_BLOODHOUND_NEO4J.md §4.3). This file's stub stdout is this adapter's own
-documented intermediate JSON shape (``tool_gateway.adapters.ad_collector
-.parse_graph``'s docstring), not bloodhound-python's native per-object-type
-output — that translation is separately flagged as unverified in the
-adapter's own module docstring.
+This file's stub stdout is this adapter's own documented intermediate JSON
+shape (``tool_gateway.adapters.ad_collector.parse_graph``'s docstring), not
+bloodhound-python's native per-object-type output — that translation is
+separately flagged as unverified in the adapter's own module docstring.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import uuid
 
 from sqlalchemy import text
@@ -38,9 +37,13 @@ from control_plane.orchestrator.dispatch import (
     UNPARSEABLE_COLLECTION_RESULT,
     dispatch_collection,
 )
-from control_plane.state.db import engagement_scope
+from control_plane.state.db import credential_admin_scope, engagement_scope
+from control_plane.vault.vault import store_credential
 from tool_gateway import registry
+from tool_gateway.adapters import ad_collector
 from tool_gateway.sandbox import SandboxResult, SandboxUnavailable
+
+REAL_DOMAIN_SECRET = "hunter2_real_domain_password"  # noqa: S105 - synthetic test fixture
 
 TARGET_DOMAIN = "corp.example.com"
 
@@ -71,8 +74,11 @@ class StubSandbox:
         self.exit_code = exit_code
 
     def run(self, *, command, network_allowlist, max_duration_seconds,
-            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None):
-        self.runs.append({"command": list(command), "allowlist": list(network_allowlist)})
+            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None, source_mounts=None):
+        self.runs.append({
+            "command": list(command), "allowlist": list(network_allowlist),
+            "source_mounts": dict(source_mounts or {}),
+        })
         return SandboxResult(
             exit_code=self.exit_code, stdout=self.stdout, stderr="",
             timed_out=False, duration_seconds=0.1,
@@ -120,16 +126,30 @@ def _proposal(conn, engagement_id: str, *, action: str = "ad.collect") -> str:
     return proposal_id
 
 
-def _capability(conn, engagement_id: str, *, action: str = "ad.collect", constraints=None):
+def _capability(
+    conn, engagement_id: str, *, action: str = "ad.collect", constraints=None,
+    credential_id: str | None = None,
+):
     result = issue_capability(
         conn, engagement_id=engagement_id, capability_id=_uid("CAP"),
         agent_id="fake-worker", action=action, actor="orchestrator",
         constraints=constraints or {"collection_methods": ["Group", "ACL"]},
         budget=Budget(max_duration_seconds=60),
-        ttl_seconds=60,
+        ttl_seconds=60, credential_id=credential_id,
     )
     assert result.issued is True, result.reasons
     return result.capability
+
+
+def _store_domain_credential(engagement_id: str, *, secret: str = REAL_DOMAIN_SECRET) -> str:
+    credential_id = _uid("CRED")
+    with credential_admin_scope(engagement_id) as conn:
+        store_credential(
+            conn, engagement_id=engagement_id, credential_id=credential_id,
+            label="svc-account", credential_type="ad_domain_bind", secret=secret,
+            actor="test-harness",
+        )
+    return credential_id
 
 
 def _dispatch(conn, engagement_id, capability, *, sandbox, target=TARGET_DOMAIN):
@@ -256,3 +276,128 @@ def test_sandbox_unavailable_is_unknown_outcome_not_failed(engagement_id):
         capability = _capability(conn, engagement_id)
         outcome = _dispatch(conn, engagement_id, capability, sandbox=_UnavailableSandbox())
         assert outcome.state == UNKNOWN_OUTCOME
+
+
+def test_domain_username_without_a_credential_id_is_refused_as_unbuildable(engagement_id):
+    """A capability that declares a bind username but carries no credential_id
+    has nothing for mount_for_run to mint -- refused before any sandbox call,
+    the same as any other unbuildable plan (D44).
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], "domain_username": "svc-account"},
+            credential_id=None,
+        )
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
+        assert outcome.state == FAILED
+        assert outcome.reason == UNBUILDABLE_PLAN
+
+
+def test_a_credentialed_run_mounts_the_secret_and_cleans_it_up(engagement_id):
+    credential_id = _store_domain_credential(engagement_id)
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], "domain_username": "svc-account"},
+            credential_id=credential_id,
+        )
+        sandbox = StubSandbox()
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
+
+        assert outcome.state == SUCCEEDED, outcome.reason
+        assert len(sandbox.runs) == 1
+        mounts = sandbox.runs[0]["source_mounts"]
+        assert list(mounts.values()) == [ad_collector.CONTAINER_CRED_PATH]
+        host_path = next(iter(mounts))
+        # The dispatch already returned -- cleanup_mount runs in dispatch's
+        # own finally block, so by now the file must be gone (D44-5).
+        assert not os.path.exists(host_path)
+
+        # The command bloodhound-python actually ran carries no secret --
+        # only the fixed container path, never the plaintext.
+        rendered = " ".join(sandbox.runs[0]["command"])
+        assert REAL_DOMAIN_SECRET not in rendered
+
+        row = conn.execute(
+            text("SELECT execution_context FROM tool_runs WHERE run_id = :r"),
+            {"r": outcome.run_id},
+        ).mappings().one()
+        assert row["execution_context"]["credential_id"] == credential_id
+
+
+def test_same_credential_same_domain_is_a_dedup_hit(engagement_id):
+    credential_id = _store_domain_credential(engagement_id)
+    constraints = {"collection_methods": ["Group"], "domain_username": "svc-account"}
+
+    with engagement_scope(engagement_id) as conn:
+        cap1 = _capability(
+            conn, engagement_id, constraints=constraints, credential_id=credential_id,
+        )
+        first = dispatch_collection(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id, action=cap1.action),
+            capability=cap1, target=TARGET_DOMAIN, actor="orchestrator",
+            sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],
+        )
+        assert first.state == SUCCEEDED, first.reason
+
+        cap2 = _capability(
+            conn, engagement_id, constraints=constraints, credential_id=credential_id,
+        )
+        second = dispatch_collection(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id, action=cap2.action),
+            capability=cap2, target=TARGET_DOMAIN, actor="orchestrator",
+            sandbox=_ExplodingSandbox(), network_allowlist=["10.0.0.0/8"],
+        )
+        assert second.reason == "dedup_hit"
+        assert second.run_id == first.run_id
+
+
+def test_a_different_credential_against_the_same_domain_is_not_a_dedup_hit(engagement_id):
+    """D11-3's own lesson, applied to a credential rather than a network range
+    or a commit: the same target under a different credential is a different
+    execution and must not be served from cache.
+    """
+    constraints = {"collection_methods": ["Group"], "domain_username": "svc-account"}
+
+    with engagement_scope(engagement_id) as conn:
+        credential_a = _store_domain_credential(engagement_id, secret="secret-a-value")
+        cap1 = _capability(conn, engagement_id, constraints=constraints, credential_id=credential_a)
+        first = dispatch_collection(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id, action=cap1.action),
+            capability=cap1, target=TARGET_DOMAIN, actor="orchestrator",
+            sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],
+        )
+        assert first.state == SUCCEEDED, first.reason
+
+        credential_b = _store_domain_credential(engagement_id, secret="secret-b-value")
+        cap2 = _capability(conn, engagement_id, constraints=constraints, credential_id=credential_b)
+        second = dispatch_collection(
+            conn, engagement_id=engagement_id,
+            proposal_id=_proposal(conn, engagement_id, action=cap2.action),
+            capability=cap2, target=TARGET_DOMAIN, actor="orchestrator",
+            sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],
+        )
+        assert second.reason != "dedup_hit"
+        assert second.state == SUCCEEDED, second.reason
+        assert second.run_id != first.run_id
+
+
+def test_a_credentialed_run_cleans_up_the_secret_even_when_the_tool_fails(engagement_id):
+    """D44-5: cleanup is unconditional, not contingent on the run succeeding."""
+    credential_id = _store_domain_credential(engagement_id)
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], "domain_username": "svc-account"},
+            credential_id=credential_id,
+        )
+        sandbox = StubSandbox(stdout="", exit_code=1)
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
+
+        assert outcome.state == FAILED
+        host_path = next(iter(sandbox.runs[0]["source_mounts"]))
+        assert not os.path.exists(host_path)

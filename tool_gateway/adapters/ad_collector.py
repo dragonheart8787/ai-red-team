@@ -12,21 +12,41 @@ names an ``ad_domain`` identity, and everything this run discovers is a
 of the design doc) — nothing in this module writes ``metadata_registry``,
 and nothing here can.
 
-No credential parameter anywhere in this file. BloodHound-style collection
-needs an authenticated LDAP bind, and the Credential Vault (§48,
-ARCHITECTURE.md §10) does not exist (confirmed absent, ADR §4.3) — so
-``build_plan`` produces a command with no ``-u``/``-p``/``-hashes`` flag at
-all. That is a known, documented limitation, not an oversight: this adapter
-is buildable and testable against fixture output today, and has no
-live/production path until the Vault lands, the same way ``http_get``
-existed with nothing to route it to before D34's proxy work.
+Credential handling (D44, `docs/ADR_CREDENTIAL_VAULT.md` §4.1). A
+``domain_username`` constraint is this adapter's signal that the capability
+carries a credential: when present, ``build_plan`` builds a small shell
+wrapper that reads the LDAP bind secret from a file at
+``CONTAINER_CRED_PATH`` at *run* time rather than putting it in argv —
+``dispatch_collection`` is the caller that actually mints and mounts that
+file, via ``control_plane.vault.vault.mount_for_run``. When
+``domain_username`` is absent, the command is exactly what it always was:
+no ``-u``/``-p``/``-hashes`` flag at all, buildable and testable against
+fixture output with no credential in the picture, unchanged from before D44.
 
-**Flag names below are bloodhound-python's documented CLI as of this
-writing, not independently verified against an installed binary in this
-environment** — there is no way to verify them here, since no credential
-means no run could succeed against a real domain regardless. Re-check
-against ``bloodhound-python --help`` the first time a live run becomes
-possible.
+**This is an honest limit, not a claimed clean solution.**
+``bloodhound-python`` has no "read the password from a file" flag of its
+own, so the wrapper still has to substitute the secret into the real
+process's argv via shell command substitution (``"$(cat ...)"``) at the
+moment it execs. What D35's file-mount principle buys here is that the
+secret never appears in *this system's own* records — not in the plan's
+``command`` (what ``tool_run.started`` audits), not in the capability's
+``normalized_params``, not on the command line the control plane ever
+constructs or logs. What it cannot buy, because the tool's own CLI does not
+offer it, is keeping the secret out of that one process's argv as seen from
+*inside* the container itself (e.g. by another process sharing that
+container's PID namespace) for the moment it execs. `docs/
+ADR_CREDENTIAL_VAULT.md` §2.2 already prices this into ad.collect's stated
+blast radius; nothing here claims a stronger guarantee than that document
+does.
+
+**Flag names below, and the wrapper's exact shape, are bloodhound-python's
+documented CLI as of this writing, not independently verified against an
+installed binary or a real bloodhound-python container image** — neither
+exists in this environment (there is no ``tool_gateway/images/build_
+bloodhound_image.sh`` yet, a separate, still-open gap from the Credential
+Vault this deliverable does not close). Re-check against
+``bloodhound-python --help`` and a real container the first time a live run
+becomes possible.
 """
 
 from __future__ import annotations
@@ -69,6 +89,18 @@ COLLECTION_METHODS = frozenset({
 
 _DOMAIN_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
 
+#: Where the sandbox mounts a per-dispatch credential file (D44,
+#: ``control_plane.vault.vault.mount_for_run``'s ``host_path``, mapped here
+#: by the caller -- ``dispatch_collection`` -- into ``source_mounts``). Only
+#: ever read when ``domain_username`` is set; the plain, uncredentialed
+#: command never references it.
+CONTAINER_CRED_PATH = "/creds/secret"
+
+#: bloodhound-python's two mutually exclusive bind mechanisms. Kept closed
+#: like ``COLLECTION_METHODS``, for the same reason: a constraint should
+#: select among known shapes, not become an arbitrary flag passthrough.
+AUTH_MODES = frozenset({"password", "hashes"})
+
 
 class AdapterError(ValueError):
     """The capability cannot be turned into a collection run."""
@@ -83,13 +115,30 @@ class AdCollectPlan:
     collection_methods: tuple[str, ...]
     max_duration_seconds: int
     max_queries_issued: int | None
+    #: Non-secret. Present iff this plan uses a Vault-issued credential --
+    #: the signal ``dispatch_collection`` uses to decide whether to call
+    #: ``mount_for_run`` at all (D44).
+    domain_username: str | None = None
+    auth_mode: str | None = None
 
     def as_params(self) -> dict[str, Any]:
-        """Normalized parameters for the §7 execution fingerprint."""
-        return {
+        """Normalized parameters for the §7 execution fingerprint.
+
+        ``domain_username``/``auth_mode`` are included -- a different bind
+        account or a switch from password to pass-the-hash is a different
+        execution (§7 v0.3's own reasoning, "the same target scanned with a
+        different credential is a different execution") -- but the secret
+        value itself never reaches this adapter, so there is nothing here
+        for a fingerprint to leak even in principle.
+        """
+        params: dict[str, Any] = {
             "target": self.target,
             "collection_methods": list(self.collection_methods),
         }
+        if self.domain_username is not None:
+            params["domain_username"] = self.domain_username
+            params["auth_mode"] = self.auth_mode
+        return params
 
 
 def tool_version() -> str:
@@ -128,6 +177,15 @@ def validate_collection_methods(spec: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(spec)
 
 
+def validate_auth_mode(spec: str | None) -> str:
+    mode = spec or "password"
+    if mode not in AUTH_MODES:
+        raise AdapterError(
+            f"unsupported auth_mode {mode!r}; expected one of {sorted(AUTH_MODES)}"
+        )
+    return mode
+
+
 def build_plan(
     *, constraints: Mapping[str, Any], budget: Mapping[str, Any], target: str,
 ) -> AdCollectPlan:
@@ -154,15 +212,6 @@ def build_plan(
 
     methods = validate_collection_methods(constraints.get("collection_methods"))
 
-    # No -u/-p/-hashes: see module docstring. A real run has no way to
-    # authenticate until the Credential Vault exists; this command is
-    # buildable and its shape testable, not a runnable invocation today.
-    command = [
-        "/usr/bin/bloodhound-python",
-        "-d", target,
-        "-c", ",".join(methods),
-        "--zip",
-    ]
     # max_queries_issued is recorded on the plan for observability and audit
     # (as_params/dispatch payload) but is not mapped to a CLI flag here:
     # bloodhound-python is not confirmed to have a native per-run query-count
@@ -171,9 +220,37 @@ def build_plan(
     # enforced by the sandbox kill exactly like every other adapter, is the
     # bound this adapter actually enforces today.
 
+    domain_username = constraints.get("domain_username")
+    if domain_username:
+        auth_mode = validate_auth_mode(constraints.get("auth_mode"))
+        auth_flag = "-p" if auth_mode == "password" else "--hashes"
+        # D35's file-mount principle, generalized (D44, module docstring):
+        # the secret is read from CONTAINER_CRED_PATH at run time, never
+        # placed in this command -- what dispatch_collection audits and
+        # records as `plan.command` never contains it.
+        command = [
+            "/bin/sh", "-c",
+            'exec /usr/bin/bloodhound-python -d "$1" -u "$2" "$3" '
+            '"$(cat "$4")" -c "$5" --zip',
+            "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
+            ",".join(methods),
+        ]
+    else:
+        auth_mode = None
+        # No -u/-p/-hashes: this capability carries no credential. Buildable
+        # and testable against fixture output with no Vault in the picture,
+        # unchanged from before D44.
+        command = [
+            "/usr/bin/bloodhound-python",
+            "-d", target,
+            "-c", ",".join(methods),
+            "--zip",
+        ]
+
     return AdCollectPlan(
         command=tuple(command), target=target, collection_methods=methods,
         max_duration_seconds=max_duration, max_queries_issued=max_queries,
+        domain_username=domain_username or None, auth_mode=auth_mode,
     )
 
 

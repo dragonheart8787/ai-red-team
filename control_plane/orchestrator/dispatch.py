@@ -43,6 +43,7 @@ from control_plane.orchestrator.git_fetch import (
     fetch_repo,
     parse_repo_scope_value,
 )
+from control_plane.vault import vault
 from tool_gateway import registry
 from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap, semgrep
 from tool_gateway.sandbox import (
@@ -539,12 +540,40 @@ def dispatch_collection(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
 
+    # A plan built for a domain_username with no credential_id on the
+    # capability to back it has nothing to mount at dispatch time and is
+    # refused the same way any other unbuildable plan is (D44) -- the
+    # adapter itself never sees credential_id (it stays in constraints/
+    # capability territory, not adapter territory), so this check belongs
+    # here, not in build_plan.
+    if plan.domain_username is not None and capability.credential_id is None:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": adapter.TOOL,
+                     "error": "domain_username constraint set with no credential_id "
+                              "on the capability to back it",
+                     "capability_id": capability.capability_id},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
     tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]
+    # A different credential against the same domain is a different
+    # execution (D11-3/§7 v0.3's own reasoning, already applied to D43's
+    # commit_sha) -- folded into execution_context, never into
+    # normalized_params, so the fingerprint changes without the credential
+    # id ever needing to look like a scan parameter.
+    ctx = dict(execution_context or {})
+    if capability.credential_id is not None:
+        ctx["credential_id"] = capability.credential_id
     fingerprint = execution_fingerprint(
         engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
-        execution_context=fingerprint_context(execution_context, allowlist),
+        execution_context=fingerprint_context(ctx, allowlist),
     )
 
     cached = find_cached_run(conn, fingerprint)
@@ -575,7 +604,7 @@ def dispatch_collection(
             "run": run_id, "eng": engagement_id, "pid": proposal_id,
             "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
             "target": target, "params": _json(plan.as_params()),
-            "ctx": _json(dict(execution_context or {})), "fp": fingerprint,
+            "ctx": _json(ctx), "fp": fingerprint,
             "status": RUNNING, "allowlist": allowlist,
         },
     )
@@ -587,78 +616,106 @@ def dispatch_collection(
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
 
-    sandbox = sandbox or DockerSandbox()
-    try:
-        result = sandbox.run(
-            command=plan.command, network_allowlist=allowlist,
-            max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
-        )
-    except SandboxUnavailable as exc:
-        _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
-        _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
-        record_audit(
+    # Minted only now -- after the dedup check and the claim -- so a dedup
+    # hit or a lost claim race never mints (and never has to clean up) a
+    # credential file nothing will use (D44). ad.collect is the one dispatch
+    # path that can defer this past the fingerprint step at all: unlike
+    # D43's commit_sha, credential_id is already known from the capability
+    # itself, with nothing to discover that the fingerprint depends on.
+    mounted_credential = None
+    if plan.domain_username is not None:
+        mounted_credential = vault.mount_for_run(
+            conn, credential_id=capability.credential_id, run_id=run_id,
             engagement_id=engagement_id, actor=actor,
-            event_type="tool_run.unknown_outcome", subject_type="tool_run",
-            subject_id=run_id, reasons=("sandbox_unavailable",),
-            payload={"error": str(exc)},
         )
-        return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
 
-    raw = (
-        f"$ {' '.join(plan.command)}\n"
-        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
-    ).encode()
-    prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
-    evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
-    record_evidence(
-        conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
-        evidence_type="tool_output", raw=raw,
-        derived_view=adapter.derive_view(result.stdout, result.stderr),
-        tool=adapter.TOOL, tool_version=tool_version,
-    )
-
-    status = SUCCEEDED if result.succeeded else FAILED
-
-    # The second artifact (§2.5 of the design doc): the full, unbounded
-    # graph, never the bounded derived_view above. Attempted only when the
-    # tool itself reported success -- a failed run has no graph to write.
-    # A parse failure here does not flip an otherwise-successful run to
-    # FAILED (the tool ran and exited cleanly; that is what `status`
-    # reports) -- it is a distinct, separately-audited failure of the
-    # second write, not a re-judgment of the first.
-    if status == SUCCEEDED:
+    try:
+        sandbox = sandbox or DockerSandbox()
         try:
-            nodes, edges = adapter.parse_graph(result.stdout)
-            record_batch(
-                conn, engagement_id=engagement_id, run_id=run_id,
-                nodes=nodes, edges=edges,
+            result = sandbox.run(
+                command=plan.command, network_allowlist=allowlist,
+                max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
+                source_mounts=(
+                    {mounted_credential.host_path: adapter.CONTAINER_CRED_PATH}
+                    if mounted_credential is not None else None
+                ),
             )
+        except SandboxUnavailable as exc:
+            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
+            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
             record_audit(
                 engagement_id=engagement_id, actor=actor,
-                event_type="security_graph.recorded", subject_type="tool_run",
-                subject_id=run_id,
-                payload={"node_count": len(nodes), "edge_count": len(edges)},
-            )
-        except (ValueError, KeyError) as exc:
-            record_audit(
-                engagement_id=engagement_id, actor=actor,
-                event_type="security_graph.record_failed", subject_type="tool_run",
-                subject_id=run_id, reasons=(UNPARSEABLE_COLLECTION_RESULT,),
+                event_type="tool_run.unknown_outcome", subject_type="tool_run",
+                subject_id=run_id, reasons=("sandbox_unavailable",),
                 payload={"error": str(exc)},
             )
+            return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
 
-    _finish_run(
-        conn, run_id, status, exit_code=result.exit_code,
-        fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
-    )
-    _set_state(conn, proposal_id, status)
-    record_audit(
-        engagement_id=engagement_id, actor=actor,
-        event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
-        decision="ALLOW" if status == SUCCEEDED else None,
-        payload={**result.as_dict(), "evidence_id": evidence_id},
-    )
-    return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+        raw = (
+            f"$ {' '.join(plan.command)}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
+        ).encode()
+        prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
+        evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
+        record_evidence(
+            conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
+            evidence_type="tool_output", raw=raw,
+            derived_view=adapter.derive_view(result.stdout, result.stderr),
+            tool=adapter.TOOL, tool_version=tool_version,
+        )
+
+        status = SUCCEEDED if result.succeeded else FAILED
+
+        # The second artifact (§2.5 of the design doc): the full, unbounded
+        # graph, never the bounded derived_view above. Attempted only when
+        # the tool itself reported success -- a failed run has no graph to
+        # write. A parse failure here does not flip an otherwise-successful
+        # run to FAILED (the tool ran and exited cleanly; that is what
+        # `status` reports) -- it is a distinct, separately-audited failure
+        # of the second write, not a re-judgment of the first.
+        if status == SUCCEEDED:
+            try:
+                nodes, edges = adapter.parse_graph(result.stdout)
+                record_batch(
+                    conn, engagement_id=engagement_id, run_id=run_id,
+                    nodes=nodes, edges=edges,
+                )
+                record_audit(
+                    engagement_id=engagement_id, actor=actor,
+                    event_type="security_graph.recorded", subject_type="tool_run",
+                    subject_id=run_id,
+                    payload={"node_count": len(nodes), "edge_count": len(edges)},
+                )
+            except (ValueError, KeyError) as exc:
+                record_audit(
+                    engagement_id=engagement_id, actor=actor,
+                    event_type="security_graph.record_failed", subject_type="tool_run",
+                    subject_id=run_id, reasons=(UNPARSEABLE_COLLECTION_RESULT,),
+                    payload={"error": str(exc)},
+                )
+
+        _finish_run(
+            conn, run_id, status, exit_code=result.exit_code,
+            fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
+        )
+        _set_state(conn, proposal_id, status)
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
+            decision="ALLOW" if status == SUCCEEDED else None,
+            payload={**result.as_dict(), "evidence_id": evidence_id},
+        )
+        return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+    finally:
+        # Always -- success, failure, or sandbox-unavailable all leave a
+        # minted credential file on the control-plane host's disk that
+        # nothing else will clean up (D44-5, the same caller-owns-cleanup
+        # contract D43's git_fetch.cleanup_repo already established).
+        if mounted_credential is not None:
+            vault.cleanup_mount(
+                mounted_credential, engagement_id=engagement_id, actor=actor,
+                run_id=run_id,
+            )
 
 
 #: A control-plane-side repo fetch failed before any sandbox run started
@@ -719,6 +776,14 @@ def dispatch_code_scan(
     a shallow clone is cheap enough control-plane-side that this is the
     right side to pay it on, per :mod:`control_plane.orchestrator.git_fetch`'s
     own module docstring.
+
+    A private repository's ``credential_id`` (D44, `docs/
+    ADR_CREDENTIAL_VAULT.md` §4.2) is resolved here, via
+    ``vault.material_for``, and handed to ``fetch_repo`` as ``auth_token`` --
+    never mounted into the sandbox, because the fetch that needs it happens
+    entirely before any sandbox exists for this dispatch. ``credential_id``
+    absent (D43-6's original public-repo-only scope) means ``auth_token``
+    stays ``None`` and this function behaves exactly as it did before D44.
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
@@ -774,8 +839,43 @@ def dispatch_code_scan(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
 
+    # A private repository's credential is resolved here, control-plane-side
+    # (D44 §4.2): git_fetch.fetch_repo consumes it directly and never returns
+    # it, the same trust tier as engagement_ca.mint_leaf_for_host, not the
+    # sandbox-mount tier dispatch_collection's LDAP credential needs. Public
+    # repos (D43-6's original scope) are unaffected -- credential_id absent
+    # means auth_token stays None and fetch_repo behaves exactly as before.
+    auth_token = None
+    if capability.credential_id is not None:
+        try:
+            material = vault.material_for(conn, capability.credential_id)
+        except vault.VaultError as exc:
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.refused", subject_type="action_proposal",
+                subject_id=proposal_id, decision=DENY_DECISION,
+                reasons=(UNBUILDABLE_PLAN,),
+                payload={"tool": adapter.TOOL, "error": str(exc),
+                         "capability_id": capability.capability_id},
+            )
+            _set_state(conn, proposal_id, FAILED)
+            return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+        if material.credential_type != "git_token":
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.refused", subject_type="action_proposal",
+                subject_id=proposal_id, decision=DENY_DECISION,
+                reasons=(UNBUILDABLE_PLAN,),
+                payload={"tool": adapter.TOOL,
+                         "error": f"credential_type {material.credential_type!r} is not "
+                                  "git_token", "capability_id": capability.capability_id},
+            )
+            _set_state(conn, proposal_id, FAILED)
+            return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+        auth_token = material.fields.get("secret")
+
     try:
-        fetched = fetch_repo(location, branch)
+        fetched = fetch_repo(location, branch, auth_token=auth_token)
     except GitFetchError as exc:
         record_audit(
             engagement_id=engagement_id, actor=actor,
@@ -793,6 +893,8 @@ def dispatch_code_scan(
         tool_version = adapter.tool_version()
         ctx = {**dict(execution_context or {}),
                "commit_sha": fetched.commit_sha, "branch": fetched.branch}
+        if capability.credential_id is not None:
+            ctx["credential_id"] = capability.credential_id
         fingerprint = execution_fingerprint(
             engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
             normalized_target=target, normalized_params=plan.as_params(),
