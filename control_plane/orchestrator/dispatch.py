@@ -630,7 +630,15 @@ def dispatch_collection(
         )
 
     try:
-        sandbox = sandbox or DockerSandbox()
+        # A tool that ships its own image says so (adapter.IMAGE); the rest
+        # run in the shared one -- same lookup dispatch_scan and
+        # dispatch_code_scan already do for their own adapters (D45: this one
+        # was missing, so a caller that did not hand-pick a sandbox got
+        # DockerSandbox's default nmap image instead of bloodhound-python's).
+        adapter_image = getattr(adapter, "IMAGE", None)
+        sandbox = sandbox or (
+            DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
+        )
         try:
             result = sandbox.run(
                 command=plan.command, network_allowlist=allowlist,

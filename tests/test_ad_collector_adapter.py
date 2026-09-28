@@ -27,7 +27,7 @@ def test_no_domain_username_builds_the_original_uncredentialed_command():
     assert plan.domain_username is None
     assert plan.auth_mode is None
     assert plan.command == (
-        "/usr/bin/bloodhound-python", "-d", TARGET, "-c", "Group,ACL", "--zip",
+        ad_collector.BLOODHOUND_PYTHON_PATH, "-d", TARGET, "-c", "Group,ACL", "--zip",
     )
     assert "domain_username" not in plan.as_params()
     assert "auth_mode" not in plan.as_params()

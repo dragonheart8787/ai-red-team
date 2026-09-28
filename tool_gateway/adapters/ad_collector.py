@@ -39,14 +39,65 @@ ADR_CREDENTIAL_VAULT.md` §2.2 already prices this into ad.collect's stated
 blast radius; nothing here claims a stronger guarantee than that document
 does.
 
-**Flag names below, and the wrapper's exact shape, are bloodhound-python's
-documented CLI as of this writing, not independently verified against an
-installed binary or a real bloodhound-python container image** — neither
-exists in this environment (there is no ``tool_gateway/images/build_
-bloodhound_image.sh`` yet, a separate, still-open gap from the Credential
-Vault this deliverable does not close). Re-check against
-``bloodhound-python --help`` and a real container the first time a live run
-becomes possible.
+**Flag verification (D45): closed for real, not re-derived from documentation.**
+``-d``/``-c``/``-u``/``-p``/``--hashes``/``--zip`` were all checked against a
+real `pip install bloodhound==1.9.0` and a real `bloodhound-python --help`,
+then exercised against a real Samba AD DC via `tool_gateway/images/
+bloodhound.Dockerfile` (built for the first time in D45 — no image existed
+before it). This is also how D45 found and fixed a real bug this module
+carried since D42: the binary lives at ``/usr/local/bin/bloodhound-python``
+(pip's own install location), not ``/usr/bin/bloodhound-python``, which
+every prior test passed under because `StubSandbox` records `plan.command`
+without ever executing it. ``--hashes`` takes ``LM:NTLM`` (both halves,
+colon-separated), not a single hash value — whoever stores an
+``ad_domain_bind`` credential with ``auth_mode="hashes"`` must store it
+already in that joined form; this module does not reshape it.
+
+**What D45 could not verify, and why, recorded precisely rather than
+glossed over:** a full authenticated collection was attempted against a
+real Samba Active Directory Domain Controller (`nowsci/samba-domain`, the
+only lightweight non-Windows AD-compatible option found), driven through
+the real, unmodified production path (`propose_action` ->
+`dispatch_collection` -> `DockerSandbox.run` -> this adapter's real,
+fixed-binary-path command). That real run surfaces a real blocker one step
+*earlier* than the LDAP/Kerberos layer: `DockerSandbox.run` passes no `dns`
+option to `containers.create` at all, so the container gets Docker's own
+embedded resolver (127.0.0.11), which returns `SERVFAIL` for the AD-specific
+locator record `bloodhound-python` needs first
+(`_ldap._tcp.pdc._msdcs.<domain>`, an SRV record type nothing but the
+domain's own DNS server -- here, the DC itself -- knows how to answer).
+Confirmed structural, not a Samba quirk: querying the same record directly
+against the DC's own DNS (`--dns <dc-ip>`, bypassing `DockerSandbox`
+entirely) answers correctly, so the record exists and is correct; the sandbox
+container simply has no path to ask the DC for it. This is not specific to
+this test's Samba surrogate -- **the same sandbox network model (an
+internal, gateway-less Docker network with no `dns=` override) would face
+the identical `SERVFAIL` against a genuine Windows AD domain**, since a real
+deployment's DC is exactly the DNS server bloodhound-python needs and
+exactly what `DockerSandbox` currently has no way to point a container at.
+This adapter's own design (`build_plan`'s docstring above: "DNS/DC location
+is the collector binary's own business at run time, not this module's")
+assumed ambient container DNS would simply resolve the domain; D45 is what
+found that assumption false for this sandbox's actual network model, not
+only for this test's specific target.
+
+Separately, and only reachable if the DNS gap above is ever closed: a raw,
+out-of-band container run (bypassing `DockerSandbox`, with an explicit `--dns`
+override pointing at the DC) does reach the LDAP/Kerberos layer, and fails
+there for two independent, verified reasons that are properties of the
+client libraries against *this specific server implementation*, not of
+anything this adapter builds: (1) `ldap3`'s NTLM bind uses the legacy
+Microsoft "Sicily" LDAP extension, which Samba's AD DC does not implement and
+closes the connection on sight; (2) `impacket`'s Kerberos TGS-REQ
+(`impacket/krb5/kerberosv5.py`, `getKerberosTGS`) never sets the
+Authenticator's optional `cksum` field, which real Microsoft AD KDCs
+tolerate but Samba's own, stricter KDC rejects with `KRB_AP_ERR_INAPP_CKSUM`.
+Both were confirmed by reading the library source after reproducing each
+failure directly, not assumed from a single stack trace, and neither is
+fixable from this adapter's side. Real authenticated collection against a
+genuine Windows AD domain remains unverified through *any* path -- the DNS
+gap blocks the real sandbox path before authentication is ever attempted,
+and that gap is real, not a mock standing in for it.
 """
 
 from __future__ import annotations
@@ -64,6 +115,20 @@ from control_plane.graph.store import GraphEdge, GraphNode
 TOOL = "bloodhound-python"
 ACTION = "ad.collect"
 
+#: This tool ships its own image, the same as semgrep's (D43) and for the
+#: same reason -- bloodhound-python is not present in the shared
+#: cyberorch/nmap:local image dispatch_scan's callers default to. Read by
+#: dispatch_collection via getattr(adapter, "IMAGE", None), mirroring
+#: dispatch_scan's and dispatch_code_scan's own lookup exactly. **Missing
+#: until D45**: dispatch_collection built and read every other adapter
+#: attribute (TOOL, ACTION, REQUIRES_PROXY) but never looked one up for the
+#: image, so a caller of propose_action/dispatch_collection that did not
+#: hand-pick a sandbox got DockerSandbox's DEFAULT_IMAGE
+#: (cyberorch/nmap:local) -- a container with no bloodhound-python binary in
+#: it at all. Found only because D45 insisted on driving a real dispatch
+#: rather than the StubSandbox every prior ad.collect test supplied.
+IMAGE = "cyberorch/bloodhound:local"
+
 #: A collection run issues LDAP reads and writes nothing to the domain it
 #: queries — the same D31/D34 reasoning nmap's port scan and web.get give,
 #: applied to LDAP instead of TCP/HTTP: nothing in the command this adapter
@@ -77,6 +142,15 @@ CHANGES_STATE = False
 REQUIRES_PROXY = False
 
 TOOL_STOP_GRACE_SECONDS = 5
+
+#: Verified against a real `pip install bloodhound` inside the image this
+#: adapter actually runs in (D45) -- **not** `/usr/bin/bloodhound-python`,
+#: which this module wrongly assumed before D45 actually built and ran
+#: `tool_gateway/images/bloodhound.Dockerfile` for the first time. Every
+#: prior test passed with the wrong path because `StubSandbox` never
+#: executes `plan.command`, only records it -- exactly the class of gap a
+#: real container run exists to catch.
+BLOODHOUND_PYTHON_PATH = "/usr/local/bin/bloodhound-python"
 
 #: bloodhound-python's own collection-method vocabulary (``-c``). Kept
 #: closed rather than passed through verbatim, matching every other
@@ -230,7 +304,7 @@ def build_plan(
         # records as `plan.command` never contains it.
         command = [
             "/bin/sh", "-c",
-            'exec /usr/bin/bloodhound-python -d "$1" -u "$2" "$3" '
+            f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" -u "$2" "$3" '
             '"$(cat "$4")" -c "$5" --zip',
             "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
             ",".join(methods),
@@ -241,7 +315,7 @@ def build_plan(
         # and testable against fixture output with no Vault in the picture,
         # unchanged from before D44.
         command = [
-            "/usr/bin/bloodhound-python",
+            BLOODHOUND_PYTHON_PATH,
             "-d", target,
             "-c", ",".join(methods),
             "--zip",

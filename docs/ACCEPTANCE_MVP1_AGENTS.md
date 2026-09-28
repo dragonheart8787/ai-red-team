@@ -608,6 +608,44 @@ day add.
 |---|---|---|
 | **5.24** | Credential revocation does not stop an in-flight container already holding the credential (D44-7) | **Open, Class B, at the elevated edge of the class — see the note above.** Verified directly, not assumed: `revoke_credential` (`control_plane/orchestrator/engagement.py`) and `engage_kill_switch` both only flip a database row and are checked by `check_preconditions`, which runs at capability issue and heartbeat/renewal time — never mid-dispatch. Every dispatch function calls `sandbox.run()` as one blocking call bounded solely by `max_duration_seconds`, with no re-check of `capabilities.revoked` between container start and exit. This is not new to D44 — every revocation path in this system has always worked this way — but D44 is the first time it has real teeth: before D44, a container revoked mid-flight lost nothing but its own already-scoped scan output; now, `dispatch_collection` mounts a real customer domain credential (password or NTLM hash) into the `ad.collect` container for up to `max_duration_seconds`, and revoking that credential during the run cannot shorten that window — the plaintext stays on the container's filesystem for the full budget regardless of what the control plane decides in the meantime. `docs/ADR_CREDENTIAL_VAULT.md` §2.2 states the resulting blast radius precisely: a compromised `ad.collect` container can, at most, use the credential's real authentication material against hosts inside the capability's own `network_allowlist`, for no longer than `max_duration_seconds` — the sandbox timeout is the *only* bound on an in-flight run once revocation cannot reach it, so a long `max_duration_seconds` on a credentialed capability is a directly proportional increase in this exposure window, not an independent knob. Not a live exploit: nothing is authorized incorrectly and no additional privilege is granted beyond what the real credential already carries in the real domain (§2.2's own framing) — this is an exposure-*duration* gap, not an authorization gap. **Confirmed buildable, not hand-waved**: Docker containers are already labeled with their `run_id` (`tool_gateway/sandbox.py`, `labels={"cyberorch.run_id": run_id}`), `tool_runs.run_id` already correlates to `capability_id`/`credential_id`, and `container.kill()` is already used for the existing timeout enforcement — D44-7's Option B (kill every live container whose credential was just revoked) is scoped, known work, not a research question, deliberately left out of D44's own scope rather than silently assumed unnecessary. |
 
+### Found at D45 — AD Collection end-to-end verification, one confirmation and one new item
+
+D45 drove a real `ad.collect` proposal through the real, unmodified
+production path (`propose_action` -> `dispatch_collection` ->
+`DockerSandbox.run`) against a real Samba AD DC — the first time any
+`ad.collect` test had gone through `propose_action` rather than calling
+`dispatch_collection` directly. Doing so found and fixed four real bugs
+(wrong binary path, missing `propose_action` routing to
+`dispatch_collection`/`dispatch_code_scan`, missing constraint pass-through
+for `domain_username`/`auth_mode`/`collection_methods`/`exclude_paths`,
+missing `adapter.IMAGE` lookup in `dispatch_collection` — see `docs/
+D45_AD_COLLECTION_E2E_REPORT.md` for the full account) and surfaced two
+findings recorded below: one sharpens 5.24's own characterization with a
+mechanism 5.24 did not know about, the other is new.
+
+**5.24, sharpened.** D45 empirically triggered `revoke_credential()` while a
+real `dispatch_collection` run was genuinely in flight (confirmed by wall-
+clock timing: the revoke call landed before the dispatch call returned) and
+found the effect is not merely "too slow to stop the container" — it is a
+complete no-op against that specific run. `engagement_scope` wraps
+`engine.begin()`, and `propose_action` runs its entire pipeline — OPA,
+`issue_capability`, and the fully synchronous, blocking `sandbox.run()` —
+inside that one transaction. Postgres's read-committed isolation means the
+capability row a concurrent `revoke_credential` call needs to see does not
+exist to any other connection until that transaction commits, which happens
+only once the container has already finished. The identical call against the
+identical `credential_id`, issued again after the transaction commits,
+succeeds immediately (the control D45 ran to confirm this is a visibility
+artifact, not a broken `revoke_credential`). 5.24's original text stands —
+this only replaces "the window is bounded by `max_duration_seconds`" with
+"the window is bounded by `max_duration_seconds`, and a revoke attempted
+inside it is invisible to the database until the window has already closed,"
+which is a materially stronger statement about the same exposure.
+
+| # | Item | Status |
+|---|---|---|
+| **5.25** | `DockerSandbox` has no way to point a container's DNS resolution at the target's own nameserver, which blocks `ad.collect`'s domain-controller discovery in every environment, not only this test's | **Open, Class B, at the same elevated edge as 5.24 — a concrete, already-reachable failure, not a hypothetical.** `DockerSandbox.run` (`tool_gateway/sandbox.py`) passes no `dns` argument to `client.containers.create`, so every sandboxed container gets Docker's own embedded resolver (127.0.0.11). `bloodhound-python`'s first act is an SRV lookup for `_ldap._tcp.pdc._msdcs.<domain>` — a locator record only the domain's own DNS server (in practice, the DC itself) can answer. Verified directly: querying the identical record against the DC's own DNS (`--dns <dc-ip>`, bypassing `DockerSandbox` entirely) answers correctly, proving the record exists and is correctly served — Docker's embedded resolver returns `SERVFAIL` because it has no route to ask the DC, not because anything about the record is wrong. **This is not specific to this deliverable's Samba surrogate.** A real customer engagement's `ad.collect` container runs on the same kind of internal, gateway-less sandbox network, and a real Windows AD domain's locator records are resolvable only through that domain's own DNS infrastructure (typically the DC) — the identical `SERVFAIL` would occur against a genuine production target. `ad_collector.py`'s own design (`build_plan`'s docstring: "DNS/DC location is the collector binary's own business at run time, not this module's") assumed ambient container DNS would simply resolve the domain; D45 is what found that assumption false for the sandbox's actual network model, for any domain, not only this test's. Not a live exploit: nothing is authorized incorrectly, and this blocks `ad.collect` from *working at all* rather than from being confined correctly — a reliability/capability gap, not a security one. **Not fixed here, deliberately**: closing it means deciding how a container should learn which nameserver to use for a domain-shaped target (the DC's IP is not always known ahead of collection — that is itself part of what `ad.collect` may need to discover), whether that decision belongs to `ad_collector.build_plan` or to `DockerSandbox` generically, and what it means for the sandbox's own confinement model (§8.3) to let a tool's DNS traffic leave the allowlisted CIDR to reach a nameserver, or to require the nameserver be inside it — an ADR-shaped question, not an in-scope fix for a verification deliverable. |
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |
