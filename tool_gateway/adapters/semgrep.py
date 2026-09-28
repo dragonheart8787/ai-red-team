@@ -40,8 +40,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +50,15 @@ from control_plane.evidence.redaction import redact_snippet
 TOOL = "semgrep"
 ACTION = "code.scan"
 IMAGE = "cyberorch/semgrep:local"
+
+#: Must track tool_gateway/images/semgrep.Dockerfile's SEMGREP_VERSION build
+#: arg. Unlike nmap's image (built by exporting the *host's own* installed
+#: binary, tool_gateway/images/build_nmap_image.sh) this is a real
+#: Dockerfile pinning its own pip install -- the control-plane host that
+#: calls tool_version() has no reason to have semgrep installed at all, so
+#: there is no host binary to introspect. Same shape as browser.py's
+#: tool_version(), which returns a pinned constant for the identical reason.
+SEMGREP_VERSION = "1.178.0"
 
 #: A scan reads the repository and writes nothing to it or anywhere else —
 #: the same WRITES_DATA/CHANGES_STATE reasoning as nmap's port scan and
@@ -117,24 +124,17 @@ class SemgrepPlan:
 
 
 def tool_version() -> str:
-    """The installed semgrep version, for the fingerprint (§7).
+    """The pinned semgrep version, for the §7 fingerprint.
 
-    Same pattern as every other adapter's ``tool_version`` (ad_collector.py,
-    nmap.py): best-effort against the host binary, ``"unknown"`` if absent
-    rather than raising. ``--disable-version-check --metrics=off`` for the
-    same reason the built command always carries them (module docstring).
+    Not a host subprocess check: this is a real Dockerfile-built image
+    (SEMGREP_VERSION above), not one built by exporting the host's own
+    installed binary the way nmap's is, so there is no host-side binary
+    whose presence would say anything about what actually runs inside the
+    container. browser.py's tool_version() is the precedent for returning a
+    pinned constant here rather than probing a binary that may not exist on
+    whatever machine calls this function.
     """
-    binary = shutil.which("semgrep")
-    if binary is None:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            [binary, "--version", "--disable-version-check", "--metrics=off"],
-            capture_output=True, text=True, timeout=10, check=False,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover
-        return "unknown"
-    return out.strip() or "unknown"
+    return f"semgrep-{SEMGREP_VERSION}"
 
 
 def ruleset_version(ruleset_path: str | None = None) -> str:

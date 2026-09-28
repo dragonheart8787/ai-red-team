@@ -165,7 +165,7 @@ def test_normal_path_produces_real_findings_with_no_unredacted_secret(
                  "FROM tool_runs WHERE run_id = :r"),
             {"r": outcome.run_id},
         ).mappings().one()
-        assert row["tool_version"] and row["tool_version"] != "unknown"
+        assert row["tool_version"] == semgrep.tool_version()
         assert row["ruleset_version"] == semgrep.ruleset_version()
         assert row["execution_context"]["commit_sha"]
         assert row["execution_context"]["branch"] == "main"
