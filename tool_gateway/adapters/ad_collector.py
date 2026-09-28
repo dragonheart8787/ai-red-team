@@ -98,10 +98,37 @@ fixable from this adapter's side. Real authenticated collection against a
 genuine Windows AD domain remains unverified through *any* path -- the DNS
 gap blocks the real sandbox path before authentication is ever attempted,
 and that gap is real, not a mock standing in for it.
+
+**D49 closes the DNS gap above -- and the fix is smaller than D45's own
+framing implied.** D45 said "`DockerSandbox` currently has no way to point a
+container at" a nameserver, which reads as "`DockerSandbox` needs a `dns=`
+parameter." Verified fresh rather than assumed: it does not. Reading
+`bloodhound.ad.domain.AD.__init__` directly shows `-ns` already makes
+`dnspython` replace its resolver's nameserver list outright
+(`dnsresolver.nameservers = [nameserver]`), which sends the DNS query
+straight to that IP over a real socket -- bypassing the container's system
+resolver (and therefore Docker's embedded one) entirely, no `containers.
+create(dns=...)` involved. `sandbox.py`'s own docstring already establishes
+that the container's network namespace has a real route to every address
+inside the allowlisted CIDR ("Docker attaches no default gateway to an
+internal network, so the container's namespace has a route to the
+allowlisted range and to nothing else") -- and a real AD domain's DC (the
+address this constraint would actually carry) is, in the case this project
+can act on, inside that same CIDR by construction, since D42-1's own scope
+model already ties `ad.collect`'s authorization to the domain's own
+network. So a `dns_server` constraint naming an address the sandbox's
+network can already route to was sufficient, with `DockerSandbox` itself
+untouched. What D49 *did* have to add is the piece D45 had not yet asked
+the question of: whether an operator-supplied `dns_server` needed its own
+authorization check at all (it does -- `dispatch_collection`'s own
+docstring covers the reasoning), since nothing before D49 had ever
+considered a DNS server as something a compromised or misconfigured
+capability could try to point outside its own authorized range.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import shutil
@@ -206,6 +233,12 @@ class AdCollectPlan:
     #: ``mount_for_run`` at all (D44).
     domain_username: str | None = None
     auth_mode: str | None = None
+    #: A concrete IP, never a hostname (D49) -- passed straight to
+    #: bloodhound-python's own ``-ns`` flag. ``dispatch_collection`` is the
+    #: one place with both this value and ``network_allowlist`` in hand, so
+    #: it -- not this adapter -- is what refuses a value outside the
+    #: authorized range; this field only carries what the capability named.
+    dns_server: str | None = None
 
     def as_params(self) -> dict[str, Any]:
         """Normalized parameters for the §7 execution fingerprint.
@@ -215,7 +248,11 @@ class AdCollectPlan:
         execution (§7 v0.3's own reasoning, "the same target scanned with a
         different credential is a different execution") -- but the secret
         value itself never reaches this adapter, so there is nothing here
-        for a fingerprint to leak even in principle.
+        for a fingerprint to leak even in principle. ``dns_server`` is
+        included for the identical reason: a different nameserver can
+        resolve a different domain controller for the same domain name, so
+        it is part of what makes one run the same execution as another, not
+        a detail the fingerprint can ignore.
         """
         params: dict[str, Any] = {
             "target": self.target,
@@ -224,6 +261,8 @@ class AdCollectPlan:
         if self.domain_username is not None:
             params["domain_username"] = self.domain_username
             params["auth_mode"] = self.auth_mode
+        if self.dns_server is not None:
+            params["dns_server"] = self.dns_server
         return params
 
 
@@ -278,10 +317,21 @@ def build_plan(
     """Turn a capability into a collection command.
 
     ``target`` is the ``ad_domain`` identity's value — a domain name, opaque
-    per D42-1 §1.1, compared verbatim. This adapter does not resolve it to
-    a domain controller address; that is exactly the kind of discovery-vs-
-    authorization line §8.9/I8 draws elsewhere, and DNS/DC location is the
-    collector binary's own business at run time, not this module's.
+    per D42-1 §1.1, compared verbatim. This adapter does not *discover* a
+    domain controller address on its own initiative — that is exactly the
+    kind of discovery-vs-authorization line §8.9/I8 draws elsewhere — but it
+    can be *told* one via the ``dns_server`` constraint (D49): when present,
+    it is passed straight to bloodhound-python's own ``-ns`` flag, which
+    bypasses the container's system resolver entirely and queries that
+    server directly (verified by reading ``bloodhound.ad.domain.AD.
+    __init__``: ``dnsresolver.nameservers = [nameserver]`` replaces
+    ``dnspython``'s default resolver configuration outright, not merely a
+    hint layered on top of it). Whether that value is authorized to be
+    queried at all — is it inside the capability's own ``network_allowlist``
+    — is not this function's call; ``dispatch_collection`` is the one place
+    that holds both the constraint and the allowlist, so it is what refuses
+    a ``dns_server`` outside the authorized range, before any container
+    starts (see its own docstring).
     """
     if not target:
         raise AdapterError("no target")
@@ -306,6 +356,15 @@ def build_plan(
     # enforced by the sandbox kill exactly like every other adapter, is the
     # bound this adapter actually enforces today.
 
+    dns_server = constraints.get("dns_server")
+    if dns_server is not None:
+        try:
+            ipaddress.ip_address(dns_server)
+        except ValueError as exc:
+            raise AdapterError(
+                f"dns_server {dns_server!r} is not a valid IP address"
+            ) from exc
+
     domain_username = constraints.get("domain_username")
     if domain_username:
         auth_mode = validate_auth_mode(constraints.get("auth_mode"))
@@ -313,14 +372,21 @@ def build_plan(
         # D35's file-mount principle, generalized (D44, module docstring):
         # the secret is read from CONTAINER_CRED_PATH at run time, never
         # placed in this command -- what dispatch_collection audits and
-        # records as `plan.command` never contains it.
+        # records as `plan.command` never contains it. dns_server is not
+        # secret, but it still arrives as a positional shell argument ($6),
+        # not string-interpolated into the script text, matching every
+        # other value here -- the same injection-avoidance discipline
+        # applies regardless of which values happen to be sensitive.
+        dns_flag = ' -ns "$6"' if dns_server is not None else ""
         command = [
             "/bin/sh", "-c",
             f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" -u "$2" "$3" '
-            '"$(cat "$4")" -c "$5" --zip',
+            f'"$(cat "$4")" -c "$5"{dns_flag} --zip',
             "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
             ",".join(methods),
         ]
+        if dns_server is not None:
+            command.append(dns_server)
     else:
         auth_mode = None
         # No -u/-p/-hashes: this capability carries no credential. Buildable
@@ -330,13 +396,16 @@ def build_plan(
             BLOODHOUND_PYTHON_PATH,
             "-d", target,
             "-c", ",".join(methods),
-            "--zip",
         ]
+        if dns_server is not None:
+            command += ["-ns", dns_server]
+        command.append("--zip")
 
     return AdCollectPlan(
         command=tuple(command), target=target, collection_methods=methods,
         max_duration_seconds=max_duration, max_queries_issued=max_queries,
         domain_username=domain_username or None, auth_mode=auth_mode,
+        dns_server=dns_server,
     )
 
 

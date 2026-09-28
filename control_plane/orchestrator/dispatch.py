@@ -24,6 +24,7 @@ enforced by a conditional UPDATE rather than a read followed by a write.
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -502,6 +503,18 @@ def dispatch_collection(
     .REQUIRES_PROXY`` is ``False``). No ``consume_request`` call: this is one
     dispatch, one run, not the multi-request shape that budget dimension
     exists for (nmap is exempt for the identical reason).
+
+    ``dns_server`` authorization (D49) is decided here, not in
+    ``ad_collector.build_plan``: the constraint's *shape* (a real IP) is the
+    adapter's business, but whether that IP is one this dispatch is allowed
+    to have the container query is a fact about ``network_allowlist``, which
+    only this function holds alongside the constraint. A ``dns_server``
+    outside every allowlisted CIDR is refused as ``UNBUILDABLE_PLAN`` before
+    ``sandbox.run`` is ever called — the same fail-closed default every
+    other CIDR-adjacent decision in this system uses, applied to a
+    dimension (which server a tool's own DNS queries go to) nothing before
+    this deliverable had modeled as something a capability could name at
+    all.
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
@@ -562,6 +575,41 @@ def dispatch_collection(
 
     tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]
+
+    # dns_server authorization (D49): a new dimension nothing before this
+    # deliverable had ever considered. ad_collector.build_plan validates the
+    # value is a real IP but has no network_allowlist to check it against
+    # (build_plan never receives one, matching every other adapter); this is
+    # the one place both the constraint and the allowlist are in hand.
+    # Fail-closed, checked before any container starts, for the same reason
+    # sandbox.py's own network confinement is fail-closed: a compromised or
+    # simply misconfigured capability naming a dns_server outside the
+    # authorized range would otherwise get a container that queries an
+    # address nothing here ever reasoned about letting it reach -- exactly
+    # the kind of egress the CIDR allowlist exists to bound, reached through
+    # a side door the allowlist check on the *scan target* was never asked
+    # to cover. This is refused as UNBUILDABLE_PLAN, the same reason the
+    # domain_username-without-credential_id case above uses, for the
+    # identical reason: the plan is well-formed on its own terms and still
+    # cannot be run given what else is true about this dispatch.
+    if plan.dns_server is not None:
+        dns_ip = ipaddress.ip_address(plan.dns_server)
+        if not any(
+            dns_ip in ipaddress.ip_network(cidr, strict=False) for cidr in allowlist
+        ):
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.refused", subject_type="action_proposal",
+                subject_id=proposal_id, decision=DENY_DECISION,
+                reasons=(UNBUILDABLE_PLAN,),
+                payload={"tool": adapter.TOOL,
+                         "error": f"dns_server {plan.dns_server!r} is outside "
+                                  f"network_allowlist {list(allowlist)!r}",
+                         "capability_id": capability.capability_id},
+            )
+            _set_state(conn, proposal_id, FAILED)
+            return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
     # A different credential against the same domain is a different
     # execution (D11-3/§7 v0.3's own reasoning, already applied to D43's
     # commit_sha) -- folded into execution_context, never into

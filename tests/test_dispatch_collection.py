@@ -294,6 +294,49 @@ def test_domain_username_without_a_credential_id_is_refused_as_unbuildable(engag
         assert outcome.reason == UNBUILDABLE_PLAN
 
 
+def test_dns_server_outside_network_allowlist_is_refused_as_unbuildable(engagement_id):
+    """D49: a new authorization dimension nothing before it had modeled. A
+    dns_server naming an address outside the dispatch's own
+    network_allowlist must be refused before any sandbox work, fail-closed,
+    the same as domain_username-without-credential_id above.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], "dns_server": "203.0.113.5"},
+        )
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
+        assert outcome.state == FAILED
+        assert outcome.reason == UNBUILDABLE_PLAN
+
+        rows = conn.execute(
+            text("SELECT reasons, payload FROM audit_log WHERE engagement_id = :e "
+                 "AND event_type = 'tool_run.refused' ORDER BY ts DESC LIMIT 1"),
+            {"e": engagement_id},
+        ).mappings().all()
+        assert len(rows) == 1
+        assert UNBUILDABLE_PLAN in rows[0]["reasons"]
+        assert "203.0.113.5" in rows[0]["payload"]["error"]
+
+
+def test_dns_server_inside_network_allowlist_reaches_the_sandbox(engagement_id):
+    """The mirror of the refusal above: an authorized dns_server is passed
+    straight through to the real command, unmodified, and the run proceeds
+    exactly as any other successful collection would.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], "dns_server": "10.0.0.53"},
+        )
+        sandbox = StubSandbox()
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
+        assert outcome.state == SUCCEEDED, outcome.reason
+        assert len(sandbox.runs) == 1
+        assert "-ns" in sandbox.runs[0]["command"]
+        assert "10.0.0.53" in sandbox.runs[0]["command"]
+
+
 def test_a_credentialed_run_mounts_the_secret_and_cleans_it_up(engagement_id):
     credential_id = _store_domain_credential(engagement_id)
     with engagement_scope(engagement_id) as conn:

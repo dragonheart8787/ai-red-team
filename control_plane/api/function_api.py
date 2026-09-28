@@ -891,6 +891,12 @@ def execution_constraints(
         constraints["auth_mode"] = target_block["auth_mode"]
     if target_block.get("exclude_paths") is not None:
         constraints["exclude_paths"] = target_block["exclude_paths"]
+    # dns_server (D49): the nameserver ad_collector.build_plan passes to
+    # bloodhound-python's own -ns flag. Carried through by the same rule as
+    # every field above -- dispatch_collection, not this function, is what
+    # checks it against network_allowlist before any container starts.
+    if target_block.get("dns_server") is not None:
+        constraints["dns_server"] = target_block["dns_server"]
     return constraints
 
 
