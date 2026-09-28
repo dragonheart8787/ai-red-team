@@ -24,6 +24,7 @@ _ENGINE: Engine | None = None
 _REGISTRY_ADMIN_ENGINE: Engine | None = None
 _GLOBAL_AUDITOR_ENGINE: Engine | None = None
 _UI_READER_ENGINE: Engine | None = None
+_CREDENTIAL_ADMIN_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -65,6 +66,15 @@ def global_auditor_url() -> str:
 def ui_reader_url() -> str:
     """The web console's read connection string (D29)."""
     return require_env("UI_READER_DATABASE_URL")
+
+
+def credential_admin_url() -> str:
+    """The Credential Vault's write connection string (D44)."""
+    return require_env(
+        "CREDENTIAL_ADMIN_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export CREDENTIAL_ADMIN_DATABASE_URL "
+             "for the credential_admin role.",
+    )
 
 
 def get_engine() -> Engine:
@@ -115,22 +125,40 @@ def get_ui_reader_engine() -> Engine:
     return _UI_READER_ENGINE
 
 
+def get_credential_admin_engine() -> Engine:
+    """A fifth pool, for the one role allowed to write credential material (D44).
+
+    Same reasoning as registry_admin's own pool: a privilege boundary that a
+    session-level ``SET ROLE`` could step across is not a boundary. Separate
+    connection, separate role, nothing SQL can talk out of.
+    """
+    global _CREDENTIAL_ADMIN_ENGINE
+    if _CREDENTIAL_ADMIN_ENGINE is None:
+        _CREDENTIAL_ADMIN_ENGINE = create_engine(
+            credential_admin_url(), pool_pre_ping=True, future=True
+        )
+    return _CREDENTIAL_ADMIN_ENGINE
+
+
 def reset_engine() -> None:
     """Drop the cached engines (tests switch roles between connections)."""
     global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE, _UI_READER_ENGINE
+    global _CREDENTIAL_ADMIN_ENGINE
     for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE,
-                   _UI_READER_ENGINE):
+                   _UI_READER_ENGINE, _CREDENTIAL_ADMIN_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
     _REGISTRY_ADMIN_ENGINE = None
     _GLOBAL_AUDITOR_ENGINE = None
     _UI_READER_ENGINE = None
+    _CREDENTIAL_ADMIN_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
 GLOBAL_AUDITOR_ROLE = "global_auditor"
 UI_READER_ROLE = "ui_reader"
+CREDENTIAL_ADMIN_ROLE = "credential_admin"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -146,6 +174,21 @@ def assert_registry_admin(conn: Connection) -> None:
         raise PermissionError(
             f"registry writes require the {REGISTRY_ADMIN_ROLE} connection (§5); "
             f"this connection is {role!r}. Use registry_admin_scope()."
+        )
+
+
+def assert_credential_admin(conn: Connection) -> None:
+    """Refuse a credential write on a connection that is not credential_admin (D44).
+
+    Same shape as :func:`assert_registry_admin`: the database's own grants are
+    the real enforcement, this only turns a permission-denied three frames deep
+    into a message naming the actual mistake.
+    """
+    role = conn.execute(text("SELECT current_user")).scalar_one()
+    if role != CREDENTIAL_ADMIN_ROLE:
+        raise PermissionError(
+            f"credential writes require the {CREDENTIAL_ADMIN_ROLE} connection "
+            f"(D44); this connection is {role!r}. Use credential_admin_scope()."
         )
 
 
@@ -201,6 +244,26 @@ def registry_admin_scope(engagement_id: str) -> Iterator[Connection]:
     :func:`engagement_scope`, and the database will refuse them if they do not.
     """
     with _scoped(get_registry_admin_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def credential_admin_scope(engagement_id: str) -> Iterator[Connection]:
+    """Open a transaction as ``credential_admin`` — the Vault's write path (D44).
+
+    The only connection that can write ``credential_material`` or insert a new
+    ``credentials`` row. Still bound to one engagement and still subject to
+    RLS: writing a credential is not permission to cross an engagement
+    boundary, the same limit ``registry_admin_scope`` places on registry
+    writes.
+
+    Reach for this only when storing a new credential. Every dispatch
+    function reads credential material through :func:`engagement_scope`
+    (``cyberorch_app`` holds SELECT on ``credential_material`` — migration
+    0012), the same read/write split ``scope_registry``/``metadata_registry``
+    already established.
+    """
+    with _scoped(get_credential_admin_engine(), engagement_id) as conn:
         yield conn
 
 

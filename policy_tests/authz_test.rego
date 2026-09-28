@@ -374,6 +374,67 @@ test_adding_web_get_did_not_make_recon_require_a_classification if {
 	r.decision == "ALLOW"
 }
 
+# code.* joined at D43 (ADR_SEMGREP.md §2.1), argued independently of D32's
+# web.get reasoning rather than inherited from it: running a source-code
+# scanner necessarily ingests the whole repository, and a finding's evidence
+# is a verbatim quote of it. The three cases mirror D32's own three exactly.
+code_scan_base := object.union(base, {
+	"action": {"action": "code.scan"},
+	"canonical": {
+		"target": {
+			"logical_identity": {"type": "repo", "value": "github.com/acme/backend:main"},
+			"address_count": 1,
+		},
+		"risk": "low",
+	},
+	"policy": {
+		"actions": {"code.scan": "ALLOW"},
+		"scope_objects": [{
+			"id": "SCOPE-2",
+			"type": "repo",
+			"value": "github.com/acme/backend:main",
+			"allowed_actions": ["code.scan"],
+		}],
+	},
+})
+
+test_code_scan_against_an_unclassified_repo_needs_a_human if {
+	r := authz.result with input as object.union(code_scan_base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [],
+	}})
+
+	r.decision == "HUMAN_APPROVAL"
+	"unknown_classification_for_action_class" in r.approval_reasons
+}
+
+test_code_scan_against_a_classified_non_sensitive_repo_runs_unattended if {
+	r := authz.result with input as object.union(code_scan_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["source_code"],
+		"resource_class": ["repository"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+test_code_scan_against_a_deny_listed_repo_is_denied_not_escalated if {
+	r := authz.result with input as object.union(code_scan_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["PII"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "DENY"
+	"forbidden_data" in r.deny_reasons
+}
+
 test_unknown_classification_blocks_actions_that_write if {
 	r := authz.result with input as object.union(base, {
 		"action": {"writes_data": true},

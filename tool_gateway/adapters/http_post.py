@@ -75,6 +75,13 @@ CHANGES_STATE = True
 #: Every web.* run goes through the policy-aware egress proxy (§8.3, D34).
 REQUIRES_PROXY = True
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46). web.post
+#: needs no bespoke second step -- the generic `dispatch_scan` path is the
+#: whole job. See nmap.py's own copy of this constant for why it is declared
+#: explicitly rather than assumed.
+NEEDS_DISPATCH = "dispatch_scan"
+
 #: Grace between the tool's own deadline and the sandbox kill.
 #:
 #: This adapter's own constant, equal to the others today by coincidence. D11's

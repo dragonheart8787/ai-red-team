@@ -583,6 +583,7 @@ class DockerSandbox:
         stdin: str | None = None,
         ca_cert_pem: str | None = None,
         tmpfs: Mapping[str, str] | None = None,
+        source_mounts: Mapping[str, str] | None = None,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
 
@@ -612,6 +613,19 @@ class DockerSandbox:
         tmpfs, and each is discarded with the container. nmap and curl pass
         none — a read-only root with no writable path is the tighter default,
         kept wherever it is enough.
+
+        ``source_mounts`` maps host paths (files or directories) to
+        in-container paths, each bind-mounted read-only (D43-5). Every prior
+        read-only mount this sandbox has ever done was a single PEM file at a
+        fixed path (``TOOL_CA_PATH``, the proxy's leaf cert/key) — this is the
+        same primitive, extended two ways at once the first time a tool
+        needed more: to a directory, not just a file (Semgrep's source tree,
+        fetched by the control plane *outside* any sandbox — the container
+        itself never holds a git credential or has network egress), and to
+        more than one path at a time (the source tree and, separately, the
+        pinned ruleset file Semgrep is told to run — two control-plane-owned
+        inputs the container should not have to fetch or trust from anywhere
+        else).
         """
         allowlist = validate_allowlist(network_allowlist)
         self.ensure_image()
@@ -628,6 +642,8 @@ class DockerSandbox:
             # could not read a 0600 file owned by the host uid.
             ca_file = _write_public_tempfile(ca_cert_pem)
             volumes[ca_file] = {"bind": TOOL_CA_PATH, "mode": "ro"}
+        for host_path, container_path in (source_mounts or {}).items():
+            volumes[host_path] = {"bind": container_path, "mode": "ro"}
 
         try:
             container = client.containers.create(

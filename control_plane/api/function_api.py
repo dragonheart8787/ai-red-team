@@ -67,7 +67,11 @@ from control_plane.canonicalizer.authorization import resolve_authorization
 from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
 from control_plane.capability.broker import Budget, issue_capability
-from control_plane.orchestrator.dispatch import dispatch_scan
+from control_plane.orchestrator.dispatch import (
+    dispatch_code_scan,
+    dispatch_collection,
+    dispatch_scan,
+)
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
@@ -257,6 +261,101 @@ def complete_task(
 # propose_action — the pipeline
 # ---------------------------------------------------------------------------
 
+#: Every dispatch function an issued capability can be routed to, named
+#: exactly as each adapter's own ``NEEDS_DISPATCH`` constant spells it
+#: (D46). This dict, not a hand-written if/elif on ``capability.action``, is
+#: what makes the correspondence checkable: ``tests/test_dispatch_routing
+#: .py`` iterates every action in ``registry.ADAPTERS`` and asserts this
+#: table's entry for it is exactly the function the adapter names.
+_DISPATCH_FUNCTIONS = {
+    "dispatch_scan": dispatch_scan,
+    "dispatch_collection": dispatch_collection,
+    "dispatch_code_scan": dispatch_code_scan,
+}
+
+
+def _dispatch_for_action(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    sandbox,
+    network_allowlist: Sequence[str] | None,
+    execution_context: Mapping[str, Any] | None,
+    proxy_url: str | None,
+    ca_cert_pem: str | None,
+    proxy_cert_spki: str | None,
+):
+    """Route to the dispatch function this issued capability's action needs.
+
+    ``dispatch_scan`` is the generic path every single-target scan action
+    shares. ``ad.collect`` (D42) and ``code.scan`` (D43) each need a second,
+    action-specific step their own bespoke dispatch function alone
+    performs — the Security Graph write, and the control-plane-side git
+    fetch/cleanup, respectively — that ``dispatch_scan`` does not know how
+    to do.
+
+    **This routing did not exist until D45.** Every call to
+    ``propose_action`` for either action, since the day each shipped, ran
+    ``dispatch_scan`` instead: the underlying tool would execute, but
+    ``ad.collect``'s Security Graph batch would never be written and
+    ``code.scan``'s repository would never be fetched at all (its
+    container would start with nothing mounted at ``CONTAINER_REPO_PATH``
+    and fail immediately). D42's and D43's own test suites never caught
+    this because they called ``dispatch_collection``/``dispatch_code_scan``
+    directly, never ``propose_action`` — exactly the shape of gap this
+    module's own docstring warns about: "a test that wires the stages
+    together by hand verifies the wiring the test wrote, not the wiring
+    production uses." D45, which insisted on driving a real proposal
+    through the one real production entry point instead of calling a
+    dispatch function directly, is what finally exercised this path and
+    found it broken.
+
+    **D46 rebuilt this as a declaration, not a guess.** The original D45 fix
+    was still a hand-written ``if capability.action == ad_collector.ACTION``
+    — correct for the two actions it named, but exactly the shape that let
+    the bug exist in the first place: a *third* action needing its own
+    dispatch function would only be caught here if whoever added it also
+    remembered to add a branch here, in a file its own adapter module never
+    has to import or know about. Every adapter now names its own requirement
+    (``NEEDS_DISPATCH``, checked structurally as a required constant, not an
+    optional one an adapter could omit) and this function does nothing but
+    look it up and call it — there is no per-action branch left to forget.
+    """
+    import inspect
+
+    from tool_gateway.registry import adapter_for
+
+    adapter = adapter_for(capability.action)
+    # No adapter at all is the one case this function does not resolve
+    # itself: routed to dispatch_scan, whose own UNKNOWN_ACTION branch is the
+    # single place that refusal is decided and audited (registry.py's own
+    # docstring: "a capability whose action has no adapter is refused rather
+    # than defaulted to one").
+    dispatch_name = adapter.NEEDS_DISPATCH if adapter is not None else "dispatch_scan"
+    dispatch_fn = _DISPATCH_FUNCTIONS[dispatch_name]
+
+    all_kwargs = {
+        "engagement_id": engagement_id, "proposal_id": proposal_id,
+        "capability": capability, "target": target, "actor": actor,
+        "sandbox": sandbox,
+        "network_allowlist": list(network_allowlist) if network_allowlist else None,
+        "execution_context": execution_context,
+        "proxy_url": proxy_url, "ca_cert_pem": ca_cert_pem,
+        "proxy_cert_spki": proxy_cert_spki,
+    }
+    # Each dispatch function accepts a different subset (dispatch_collection
+    # takes no proxy_*; dispatch_code_scan takes no network_allowlist either)
+    # — handed only what its own signature declares, the same
+    # inspect.signature technique dispatch.py's own _build_plan_params
+    # already uses to hand each adapter only the proxy-trust input it takes.
+    accepted = frozenset(inspect.signature(dispatch_fn).parameters)
+    return dispatch_fn(conn, **{k: v for k, v in all_kwargs.items() if k in accepted})
+
+
 def propose_action(
     conn: Connection,
     *,
@@ -274,8 +373,14 @@ def propose_action(
     proxy_url: str | None = None,
     ca_cert_pem: str | None = None,
     proxy_cert_spki: str | None = None,
+    credential_id: str | None = None,
 ) -> ActionOutcome:
     """Canonicalize, resolve, review, decide, and only then act.
+
+    ``credential_id`` (D44/D45) names a Vault-stored credential the issued
+    capability should carry — the caller's job to supply, the same way it
+    already supplies ``budget``: this function does not choose one on its
+    own initiative, it only threads through what it is given.
 
     ``proxy_url`` / ``ca_cert_pem`` / ``proxy_cert_spki`` are the egress-proxy
     inputs for web.* actions (§8.3, D34/D35/D36). They are threaded straight to
@@ -457,6 +562,7 @@ def propose_action(
         # proposal is what an agent asked for, the resolution is what was
         # granted, and only the second is a fact about this system.
         scope_object_id=authorization.scope_object_id,
+        credential_id=credential_id,
     )
     if not issued.issued:
         # The policy said yes and the broker said no. Both are recorded; the
@@ -474,11 +580,10 @@ def propose_action(
     )
 
     # --- 7. Tool Gateway ------------------------------------------------------
-    outcome = dispatch_scan(
+    outcome = _dispatch_for_action(
         conn, engagement_id=engagement_id, proposal_id=proposal_id,
         capability=issued.capability, target=target.logical_identity.value,
-        actor=actor, sandbox=sandbox,
-        network_allowlist=list(network_allowlist) if network_allowlist else None,
+        actor=actor, sandbox=sandbox, network_allowlist=network_allowlist,
         execution_context=execution_context,
         proxy_url=proxy_url, ca_cert_pem=ca_cert_pem,
         proxy_cert_spki=proxy_cert_spki,
@@ -769,6 +874,23 @@ def execution_constraints(
         # https on a non-443 port (the D35 target on 8443) is expressed by the
         # scheme, not inferrable from a bare IP; the adapters read it.
         constraints["scheme"] = target_block["scheme"]
+    # ad.collect (D42/D44) and code.scan (D43) constraints, carried through
+    # only when the proposal named them -- same "defaults apply only when the
+    # proposal said nothing" rule as port/path/scheme above. Found missing
+    # entirely at D45: a proposal naming domain_username had it silently
+    # dropped here, so a credentialed ad.collect capability issued through
+    # this function could never actually reach ad_collector.build_plan's
+    # credentialed branch, regardless of whether issue_capability was given a
+    # credential_id -- the two would disagree exactly the way D30's own
+    # docstring above warns a single derivation exists to prevent.
+    if target_block.get("collection_methods") is not None:
+        constraints["collection_methods"] = target_block["collection_methods"]
+    if target_block.get("domain_username") is not None:
+        constraints["domain_username"] = target_block["domain_username"]
+    if target_block.get("auth_mode") is not None:
+        constraints["auth_mode"] = target_block["auth_mode"]
+    if target_block.get("exclude_paths") is not None:
+        constraints["exclude_paths"] = target_block["exclude_paths"]
     return constraints
 
 

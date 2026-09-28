@@ -96,6 +96,17 @@ jobs:
         # that cannot start under the sandbox restriction fails here.
         run: ./tool_gateway/images/build_browser_image.sh
 
+      - name: Build the semgrep image
+        # D43's code.scan runs in a container of its own, like the browser a
+        # real Dockerfile (Semgrep is a Python application with its own
+        # dependency tree, not a single binary the scratch route can enumerate
+        # the closure of). Same reasoning as every image above: without it,
+        # tests/test_dispatch_code_scan.py's real-container tests fail rather
+        # than skip, because a scan that never started a container has shown
+        # nothing about the new dispatch path, the read-only source/ruleset
+        # mounts, or the redaction wired in front of the evidence it produces.
+        run: ./tool_gateway/images/build_semgrep_image.sh
+
       - name: Verify Docker can enforce the network boundary
         # Checked explicitly and early so a runner without usable Docker
         # networking reports that, rather than surfacing as a wall of

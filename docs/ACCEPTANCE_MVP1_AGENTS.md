@@ -572,6 +572,91 @@ recorded here as bounded, non-security robustness limits.
 | **5.21** | §2's query interface has no cap on cumulative evidence | **Open, Class B — a known, bounded reliability gap, not a live exploit.** `agents/llm/headless.build_command` passes an entire assembled prompt as one argv element to `claude`; `query_state` takes `task_limit`/`decision_limit`, but `query_evidence` and `build_state` take no equivalent, so nothing stops a caller from handing the Supervisor unbounded evidence. D40's main run hit the OS's argument-length ceiling on round 2 of 5 with three real evidence artifacts already collected, and every later round failed identically (`OSError: Argument list too long`) until the harness itself was given a `MAX_EVIDENCE_SHOWN` cap — a workaround in the caller, not a fix in §2. Not a security boundary: nothing is authorized incorrectly, a crashed Supervisor call simply plans nothing that round. A real, long-running engagement accumulating real evidence would hit the same wall in production; closing it needs a design choice (what gets shown when evidence outgrows one prompt — most recent first, a size cap, pagination) that this deliverable did not make. |
 | **5.22** | The Supervisor's `status_assessment` label is not stable under a frozen state | **Open, Class B — the Supervisor's own version of D10.5's `risk_hint` finding.** Three consecutive real Supervisor calls in D40's main run, against a byte-for-byte identical ledger/finding/decision state (nothing was created in any of the three rounds), returned `objective_met`, then `blocked`, then `objective_met`. Every prose `assessment_note` was individually defensible; the categorical label attached to it was not the same label twice. Exactly D10.5's own shape (a scalar Reviewer field split 10/5 on an unchanged input while the substance underneath stayed consistent), now measured for the Supervisor's status field. Not currently a live gap — nothing in `function_api.py` or the harnesses reads `status_assessment` to make a decision, it is reported for a human or a log — but a future consumer that branches on the label alone, rather than also reading the prose, would inherit this instability. |
 
+### Found at D42 — BloodHound/Security Graph, one deferred item
+
+D42 added the Security Graph (`security_graph_nodes`/`security_graph_edges`,
+migration 0011) and `ad.collect` — the first tool whose output is a
+relationship graph rather than single-resource evidence
+(`docs/ADR_BLOODHOUND_NEO4J.md`, `docs/D42_1_D42_6_DESIGN.md`). The recursive
+queries over it (`control_plane/graph/queries.py`) were benchmarked twice
+(`docs/D42_2_CTE_BENCHMARK.md`, `docs/D42_6_PATHS_WITHIN_HOPS_BENCHMARK.md`)
+and a real production-schema performance bug was found and fixed during
+implementation (a missing single-column index — see migration 0011's module
+docstring). One gap remains open rather than closed.
+
+| # | Item | Status |
+|---|---|---|
+| **5.23** | BloodHound query/collection performance under concurrent load — untested | **Open, Class B — a known, bounded measurement gap, not a live exploit.** `docs/D42_2_CTE_BENCHMARK.md` and `docs/D42_6_PATHS_WITHIN_HOPS_BENCHMARK.md` measured `shortest_path`/`paths_within_hops` at two realistic scales and found both comfortably fast — worst case 351ms — but every query ran sequentially, on a single connection, with nothing else touching the database. Real usage is neither: a Supervisor driving an audit sweep issues many queries in a short window, other engagements' traffic shares the same Postgres instance, and an `ad.collect` bulk write (`control_plane/graph/store.py`'s `record_batch`) may be landing tens of thousands of rows at the same time a query against an *older* run's data is in flight. Not a security boundary: RLS (§8.6) does not weaken under concurrent load, this is purely a performance question. *Why not measured yet:* D42-2 was scoped to answer whether a correctly-formulated recursive CTE is fast enough at all, single-connection, to make Postgres a credible alternative to Neo4j (D42-5) — concurrency is a different question that does not change that decision, and answering it would have delayed the one D42-5 was actually waiting on. *Binding constraints on whoever measures this:* (1) test against a Postgres instance under a representative concurrent **write** load (an `ad.collect` batch insert in flight), not read-only concurrency alone — the write path has never been exercised under contention at all; (2) test with RLS active and multiple engagements' data present, not a single-engagement throwaway database — RLS's per-query filter is exactly the mechanism concurrency could interact with; (3) if the numbers regress materially from the single-connection figures, that is new information for D42-5, not a reason to quietly retune the query and move on without recording what changed and why. |
+
+### Found at D44 — Credential Vault, one deferred item at the elevated edge of Class B
+
+D44 built the Credential Vault (`control_plane/vault/vault.py`, migration
+0012) `docs/ADR_BLOODHOUND_NEO4J.md` §4.3 and `docs/ADR_SEMGREP.md` §3.2
+both named as the reason `ad.collect` and `code.scan`'s private-repo path
+could not run for real, and wired both through it (`dispatch_collection`,
+`dispatch_code_scan`). One item from the ADR's own decision table (D44-7)
+is recorded here as DEFERRED rather than built, per that document's own
+recommendation — but at a higher priority than an ordinary Class B item,
+for a reason 5.2 is otherwise the only precedent for in this document: it
+is not a hypothetical risk description, it is a concrete, already-
+implemented scenario (`dispatch_collection` really does mount a real
+customer domain credential into a real container the moment `ad.collect`
+carries a `credential_id`), not a future capability this system might one
+day add.
+
+| # | Item | Status |
+|---|---|---|
+| **5.24** | Credential revocation does not stop an in-flight container already holding the credential (D44-7) | **Open, Class B, at the elevated edge of the class — see the note above.** Verified directly, not assumed: `revoke_credential` (`control_plane/orchestrator/engagement.py`) and `engage_kill_switch` both only flip a database row and are checked by `check_preconditions`, which runs at capability issue and heartbeat/renewal time — never mid-dispatch. Every dispatch function calls `sandbox.run()` as one blocking call bounded solely by `max_duration_seconds`, with no re-check of `capabilities.revoked` between container start and exit. This is not new to D44 — every revocation path in this system has always worked this way — but D44 is the first time it has real teeth: before D44, a container revoked mid-flight lost nothing but its own already-scoped scan output; now, `dispatch_collection` mounts a real customer domain credential (password or NTLM hash) into the `ad.collect` container for up to `max_duration_seconds`, and revoking that credential during the run cannot shorten that window — the plaintext stays on the container's filesystem for the full budget regardless of what the control plane decides in the meantime. `docs/ADR_CREDENTIAL_VAULT.md` §2.2 states the resulting blast radius precisely: a compromised `ad.collect` container can, at most, use the credential's real authentication material against hosts inside the capability's own `network_allowlist`, for no longer than `max_duration_seconds` — the sandbox timeout is the *only* bound on an in-flight run once revocation cannot reach it, so a long `max_duration_seconds` on a credentialed capability is a directly proportional increase in this exposure window, not an independent knob. Not a live exploit: nothing is authorized incorrectly and no additional privilege is granted beyond what the real credential already carries in the real domain (§2.2's own framing) — this is an exposure-*duration* gap, not an authorization gap. **Confirmed buildable, not hand-waved**: Docker containers are already labeled with their `run_id` (`tool_gateway/sandbox.py`, `labels={"cyberorch.run_id": run_id}`), `tool_runs.run_id` already correlates to `capability_id`/`credential_id`, and `container.kill()` is already used for the existing timeout enforcement — D44-7's Option B (kill every live container whose credential was just revoked) is scoped, known work, not a research question, deliberately left out of D44's own scope rather than silently assumed unnecessary. |
+
+### Found at D45 — AD Collection end-to-end verification, one confirmation and one new item
+
+D45 drove a real `ad.collect` proposal through the real, unmodified
+production path (`propose_action` -> `dispatch_collection` ->
+`DockerSandbox.run`) against a real Samba AD DC — the first time any
+`ad.collect` test had gone through `propose_action` rather than calling
+`dispatch_collection` directly. Doing so found and fixed four real bugs
+(wrong binary path, missing `propose_action` routing to
+`dispatch_collection`/`dispatch_code_scan`, missing constraint pass-through
+for `domain_username`/`auth_mode`/`collection_methods`/`exclude_paths`,
+missing `adapter.IMAGE` lookup in `dispatch_collection` — see `docs/
+D45_AD_COLLECTION_E2E_REPORT.md` for the full account) and surfaced two
+findings recorded below: one sharpens 5.24's own characterization with a
+mechanism 5.24 did not know about, the other is new.
+
+**Status, as of D46**: the routing bug itself (the second of the four found
+above) was re-examined across every registered action, not only `ad.collect`/
+`code.scan` — `network.scan`/`network.recon`/`web.get`/`web.post`/
+`web.render` were confirmed never to have been exposed to this bug class
+(they share the one dispatch function that has ever existed for them), and
+D37's own "drove web.render through `propose_action`" claim was independently
+re-verified as genuine. The fix is rebuilt as a structural guarantee
+(`tests/test_dispatch_routing.py`, mutation-verified) rather than resting on
+the two hand-written branches D45 itself added. Full account: `docs/
+D46_DISPATCH_ROUTING_AUDIT_REPORT.md`.
+
+**5.24, sharpened.** D45 empirically triggered `revoke_credential()` while a
+real `dispatch_collection` run was genuinely in flight (confirmed by wall-
+clock timing: the revoke call landed before the dispatch call returned) and
+found the effect is not merely "too slow to stop the container" — it is a
+complete no-op against that specific run. `engagement_scope` wraps
+`engine.begin()`, and `propose_action` runs its entire pipeline — OPA,
+`issue_capability`, and the fully synchronous, blocking `sandbox.run()` —
+inside that one transaction. Postgres's read-committed isolation means the
+capability row a concurrent `revoke_credential` call needs to see does not
+exist to any other connection until that transaction commits, which happens
+only once the container has already finished. The identical call against the
+identical `credential_id`, issued again after the transaction commits,
+succeeds immediately (the control D45 ran to confirm this is a visibility
+artifact, not a broken `revoke_credential`). 5.24's original text stands —
+this only replaces "the window is bounded by `max_duration_seconds`" with
+"the window is bounded by `max_duration_seconds`, and a revoke attempted
+inside it is invisible to the database until the window has already closed,"
+which is a materially stronger statement about the same exposure.
+
+| # | Item | Status |
+|---|---|---|
+| **5.25** | `DockerSandbox` has no way to point a container's DNS resolution at the target's own nameserver, which blocks `ad.collect`'s domain-controller discovery in every environment, not only this test's | **Open, Class B, at the same elevated edge as 5.24 — a concrete, already-reachable failure, not a hypothetical.** `DockerSandbox.run` (`tool_gateway/sandbox.py`) passes no `dns` argument to `client.containers.create`, so every sandboxed container gets Docker's own embedded resolver (127.0.0.11). `bloodhound-python`'s first act is an SRV lookup for `_ldap._tcp.pdc._msdcs.<domain>` — a locator record only the domain's own DNS server (in practice, the DC itself) can answer. Verified directly: querying the identical record against the DC's own DNS (`--dns <dc-ip>`, bypassing `DockerSandbox` entirely) answers correctly, proving the record exists and is correctly served — Docker's embedded resolver returns `SERVFAIL` because it has no route to ask the DC, not because anything about the record is wrong. **This is not specific to this deliverable's Samba surrogate.** A real customer engagement's `ad.collect` container runs on the same kind of internal, gateway-less sandbox network, and a real Windows AD domain's locator records are resolvable only through that domain's own DNS infrastructure (typically the DC) — the identical `SERVFAIL` would occur against a genuine production target. `ad_collector.py`'s own design (`build_plan`'s docstring: "DNS/DC location is the collector binary's own business at run time, not this module's") assumed ambient container DNS would simply resolve the domain; D45 is what found that assumption false for the sandbox's actual network model, for any domain, not only this test's. Not a live exploit: nothing is authorized incorrectly, and this blocks `ad.collect` from *working at all* rather than from being confined correctly — a reliability/capability gap, not a security one. **Not fixed here, deliberately**: closing it means deciding how a container should learn which nameserver to use for a domain-shaped target (the DC's IP is not always known ahead of collection — that is itself part of what `ad.collect` may need to discover), whether that decision belongs to `ad_collector.build_plan` or to `DockerSandbox` generically, and what it means for the sandbox's own confinement model (§8.3) to let a tool's DNS traffic leave the allowlisted CIDR to reach a nameserver, or to require the nameserver be inside it — an ADR-shaped question, not an in-scope fix for a verification deliverable. |
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |

@@ -86,6 +86,14 @@ CHANGES_STATE = False
 #: an unchecked one.
 REQUIRES_PROXY = True
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46).
+#: web.get needs no bespoke second step -- the generic `dispatch_scan` path
+#: (build_plan -> sandbox.run -> record_evidence) is the whole job. See
+#: nmap.py's own copy of this constant for why it is declared explicitly
+#: rather than assumed.
+NEEDS_DISPATCH = "dispatch_scan"
+
 #: Grace between the tool's own deadline and the sandbox kill.
 #:
 #: Deliberately its own constant rather than a shared one. D11 found the Worker

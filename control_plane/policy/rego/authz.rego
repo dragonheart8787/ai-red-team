@@ -138,8 +138,20 @@ observed_data_class contains class if {
 # practice -- so a classified host still ALLOWs, and D25's inheritance means one
 # AUTHORITATIVE cidr row covers every host inside it.
 
+# code.* joined at D43, argued independently of D32's web.get reasoning
+# rather than inherited from it (ADR_SEMGREP.md §2.1) -- the two cases are
+# not the same shape. D32's concern was implicitly about a target the
+# operator does not fully own; a repo scope object is the resource owner's
+# own explicit grant. The test that carries over anyway is D32's actual
+# one: does the action touch the resource's whole content. Running a
+# source-code scanner necessarily ingests the entire repository, and a
+# finding's evidence is a verbatim quote of it -- more directly than a
+# single HTTP response body ever was. A repo that happens to hold hardcoded
+# production credentials is exactly the resource_class/data_class a human
+# should confirm is understood before an LLM-mediated pipeline starts
+# reading and summarizing matched snippets.
 requires_known_classification if {
-	some pattern in {"data.*", "web.get", "web.post", "web.put", "web.delete"}
+	some pattern in {"data.*", "web.get", "web.post", "web.put", "web.delete", "code.*"}
 	pattern_matches(pattern, input.action.action)
 }
 

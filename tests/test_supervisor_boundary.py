@@ -265,7 +265,7 @@ def test_one_bad_task_refuses_the_whole_plan():
 @pytest.mark.parametrize("field,value", [
     ("goal", ""), ("goal", "   "), ("goal", 7),
     ("target_value", ""), ("target_value", None),
-    ("target_type", "repo"), ("target_type", "banana"),
+    ("target_type", "domain"), ("target_type", "banana"),
     ("priority", -1), ("priority", 10), ("priority", "high"), ("priority", True),
 ])
 def test_a_field_the_task_manager_could_not_use_is_refused(field, value):

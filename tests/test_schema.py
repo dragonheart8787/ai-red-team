@@ -188,6 +188,33 @@ def test_findings_has_no_confidence_column(db_available):
     assert "confidence" not in cols
 
 
+def test_security_graph_tables_have_no_classification_columns(db_available):
+    """D42-3 Option A: Postgres's Metadata Registry is the sole classification
+    authority. security_graph_nodes/edges hold opaque identities and edges
+    only, and the boundary is enforced by the schema's own absence of a
+    column to hold one -- checked directly, the same shape as
+    test_findings_has_no_confidence_column above, rather than trusted to a
+    design doc nobody re-reads at review time.
+    """
+    forbidden_substrings = ("class", "classif", "sensitiv", "resource_class", "data_class")
+    with get_engine().connect() as conn:
+        for table in ("security_graph_nodes", "security_graph_edges"):
+            cols = conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = :t"
+            ), {"t": table}).scalars().all()
+            assert cols, f"{table} has no columns at all -- did the migration run?"
+            offenders = [
+                c for c in cols
+                if any(s in c.lower() for s in forbidden_substrings)
+            ]
+            assert not offenders, (
+                f"{table} has classification-shaped column(s) {offenders} -- "
+                f"D42-3 Option A requires metadata_registry to be the only "
+                f"place classification is ever stored"
+            )
+
+
 def test_models_match_the_database(db_available):
     """models.py is a mirror of the migration; drift between them is a bug."""
     with get_engine().connect() as conn:

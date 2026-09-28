@@ -45,6 +45,18 @@ CHANGES_STATE = False
 #: why §8.3 splits enforcement by protocol in the first place.
 REQUIRES_PROXY = False
 
+#: Which dispatch function (`control_plane.orchestrator.dispatch`) this
+#: action's capability must be routed to from `propose_action` (D46).
+#: Declared here, by name, for the same reason `WRITES_DATA`/`CHANGES_STATE`
+#: are declared above rather than assumed: an adapter that omitted this would
+#: fail a structural test before it could ever silently misroute in
+#: production, the exact gap D45 found for `ad.collect`/`code.scan` (`propose_
+#: action` called `dispatch_scan` unconditionally for years, never routing
+#: either to its own bespoke dispatch function). A plain port/service scan
+#: fits the generic path -- `dispatch_scan` looks this adapter up by action
+#: name and runs it like any other.
+NEEDS_DISPATCH = "dispatch_scan"
+
 # Scan techniques the adapter will emit. -sT (TCP connect) is the default
 # because the sandbox drops every capability including NET_RAW: a SYN scan
 # would need the container to hold a capability that also lets it reshape its

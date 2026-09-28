@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
+
+from sqlalchemy import Connection, text
+
 from control_plane.orchestrator.engagement import create_engagement
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
@@ -31,6 +35,27 @@ def make_engagement(
         create_engagement(
             conn, engagement_id=engagement_id, customer_id=customer_id, actor=actor,
         )
+
+
+def make_tool_run(
+    conn: Connection, *, engagement_id: str, tool: str = "bloodhound-python",
+    normalized_target: str = "test.local", status: str = "succeeded",
+) -> str:
+    """A minimal ``tool_runs`` row for tests that need a real run_id to hang
+    evidence, a Security Graph batch, or a provenance edge off of, without
+    running an actual dispatch.
+    """
+    run_id = f"RUN-TEST-{uuid.uuid4().hex[:12]}"
+    conn.execute(
+        text("""
+            INSERT INTO tool_runs (run_id, engagement_id, tool, tool_version,
+                normalized_target, execution_fingerprint, status)
+            VALUES (:run, :eng, :tool, 'test', :target, :fp, :status)
+        """),
+        {"run": run_id, "eng": engagement_id, "tool": tool,
+         "target": normalized_target, "fp": f"fp-{run_id}", "status": status},
+    )
+    return run_id
 
 
 class EngagementManager:
