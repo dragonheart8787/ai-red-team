@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Build the image the {{Name}} tool runs in -- DRAFT from scripts/new_tool_scaffold.py.
+#
+# The shared shape of build_browser_image.sh, build_semgrep_image.sh and
+# build_bloodhound_image.sh: build, verify the manifest names the pinned version,
+# then run the tool's self-check EXACTLY as the sandbox runs it (non-root,
+# cap-dropped, read-only, no-new-privileges, network-less). The self-check is
+# the part that matters -- it is how each earlier image's "the container starts
+# and does nothing" failure was found before CI, not three CI rounds later (D31,
+# D36).
+#
+# The two DECIDE values below are unset on purpose; the script refuses to run
+# until a person has chosen them.
+set -euo pipefail
+
+IMAGE="${IMAGE:-cyberorch/{{name}}:local}"
+BASE="${BASE:-python:3.12-slim}"
+{{NAME}}_VERSION="${{{NAME}}_VERSION:-}"          # DECIDE(version): exact pin, no default
+SELFCHECK_ARGS="${SELFCHECK_ARGS:-}"               # DECIDE(selfcheck): args that print the version, needing no target
+SELFCHECK_EXPECT="${SELFCHECK_EXPECT:-}"           # DECIDE(selfcheck): text the output must contain
+
+[ -n "${{{NAME}}_VERSION}" ] || { echo "DECIDE(version): set {{NAME}}_VERSION" >&2; exit 1; }
+[ -n "$SELFCHECK_ARGS" ] && [ -n "$SELFCHECK_EXPECT" ] || {
+    echo "DECIDE(selfcheck): set SELFCHECK_ARGS and SELFCHECK_EXPECT" >&2; exit 1; }
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+command -v docker >/dev/null 2>&1 || {
+    echo "error: docker is required to build $IMAGE" >&2
+    exit 1
+}
+
+docker build \
+    --build-arg "BASE=$BASE" \
+    --build-arg "{{NAME}}_VERSION=${{{NAME}}_VERSION}" \
+    -t "$IMAGE" -f "$here/{{name}}.Dockerfile" "$here"
+
+docker run --rm --entrypoint /bin/cat "$IMAGE" /etc/cyberorch/{{name}}-manifest.txt \
+    | grep -q "{{name}}_version=${{{NAME}}_VERSION}" || {
+    echo "error: $IMAGE manifest does not record {{name}}_version=${{{NAME}}_VERSION}" >&2
+    exit 1
+}
+
+# Capture and PRINT the output before gating on it. A check that discards the
+# container's output reports "cannot launch" with no cause (D36); a module with
+# no __main__ guard exits 0 having done nothing and looks identical (D36 again).
+# Add each --tmpfs the adapter's TMPFS declares.
+# shellcheck disable=SC2086
+selfcheck="$(timeout 30 docker run --rm --network none \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --read-only --tmpfs /home/{{name}}:rw,mode=1777 --tmpfs /tmp:rw,mode=1777 \
+    "$IMAGE" $SELFCHECK_ARGS 2>&1)" || true
+echo "--- self-check output ---"
+echo "$selfcheck"
+echo "$selfcheck" | grep -q "$SELFCHECK_EXPECT" || {
+    echo "error: $IMAGE cannot run as a non-root, cap-dropped, read-only, network-less container" >&2
+    exit 1
+}
+
+echo "built $IMAGE ({{name}} ${{{NAME}}_VERSION})"

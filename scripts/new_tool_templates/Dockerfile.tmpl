@@ -1,0 +1,51 @@
+# The image the {{Name}} tool runs in -- DRAFT from scripts/new_tool_scaffold.py.
+#
+# This is the shape browser.Dockerfile (D36), semgrep.Dockerfile (D43) and
+# bloodhound.Dockerfile (D42/D45) converged on: a pinned version, a manifest that
+# records exactly what is inside, and a non-root user. Everything that is a
+# choice about THIS tool is left failing on purpose (the two `exit 1` lines).
+#
+# Decide first, in the ADR, whether the tool needs the network at all. Semgrep's
+# container gets none (its input is mounted read-only from outside, D43-5); an
+# image that is given no route to anything cannot exfiltrate what it reads.
+
+ARG BASE=python:3.12-slim
+FROM ${BASE}
+
+# DECIDE(version): pin exactly, and keep equal to {{NAME}}_VERSION in
+# tool_gateway/adapters/{{name}}.py. There is deliberately no default -- an image
+# built from "whatever is latest" has no version for the fingerprint to record.
+ARG {{NAME}}_VERSION
+
+RUN test -n "${{{NAME}}_VERSION}" || { echo "DECIDE(version): pass --build-arg {{NAME}}_VERSION=<exact>" >&2; exit 1; }
+
+# DECIDE(install): install the tool at exactly ${{{NAME}}_VERSION}. Do NOT leave
+# the tool able to phone home: anything it does on its own initiative (version
+# check, telemetry, rule-registry fetch) HANGS under `--network none` rather than
+# failing fast (Semgrep, D43). Turn those off in the command, in the adapter.
+RUN echo "DECIDE(install): install {{name}} at ${{{NAME}}_VERSION}" >&2 && exit 1
+
+# Provenance: what exactly is in here, not just "{{name}}, latest". The build
+# script checks this file against the version it asked for.
+RUN mkdir -p /etc/cyberorch \
+    && { echo "{{name}}_version=${{{NAME}}_VERSION}"; \
+         echo "base_image=${BASE}"; \
+         echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } \
+       > /etc/cyberorch/{{name}}-manifest.txt
+
+# A user that owns nothing. The sandbox also runs the container with every
+# capability dropped, a read-only root and no-new-privileges (sandbox.py); root
+# inside a cap-dropped container cannot read a 0600 file owned by another uid
+# (D35), so anything the tool must read is mounted world-readable or the tool
+# runs as the file's owner.
+RUN useradd --system --uid 10001 --create-home --home-dir /home/{{name}} {{name}}
+USER {{name}}
+WORKDIR /home/{{name}}
+
+# A tool that writes under $HOME needs the tmpfs the sandbox mounts at run time
+# (declare it as TMPFS in the adapter; D36, D43) -- not a workaround baked in here.
+#
+# DECIDE(entrypoint): the container's `command` is APPENDED to ENTRYPOINT, not a
+# replacement for it (D34 hit this twice). Choose ENTRYPOINT plus arguments in
+# the adapter, or CMD, deliberately; the build script's checks override it.
+ENTRYPOINT ["/DECIDE/path/to/{{name}}"]
