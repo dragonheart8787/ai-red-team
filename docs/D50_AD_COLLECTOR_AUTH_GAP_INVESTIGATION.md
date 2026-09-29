@@ -292,3 +292,85 @@ What the F1/F3 change taught about the test suite, beyond the code:
 * **The ADR work corrected one of this report's own calibrations.** §3 F2 called the practical increment of the argv exposure small because the secret already sits in a world-readable file. That considered only live local observers; argv, unlike a temp file, is routinely recorded and shipped off-host by `execve` auditing and process-telemetry agents. Not measured here, so it is a risk to assess, not a finding — but the "small" was too quick (ADR §7.1).
 * There is now a permanent test of what a real container receives
   (`tests/test_ad_collector_credential_delivery.py`) — the gap §2 found.
+
+---
+
+## 9. Attempt against the real Samba DC (task #42/#44/#45), after D50-D
+
+Per D50-D, task #42/#44/#45 were attempted directly after CI confirmed green on
+D50-B — without waiting for D50-A. Result: **the DNS and credential-format
+mechanisms are now confirmed working end to end through the real, unmodified
+production path; real collection still cannot complete, for the identical,
+pre-existing reason D45 already found and documented.** Nothing here is a new
+D49/D50 defect, and nothing here is fixable from this codebase.
+
+**What was re-provisioned and re-run:** a fresh `nowsci/samba-domain` DC
+(domain `d45test.local`), a fresh `collector` domain user, and
+`scripts/live_run/d45_ad_collection_e2e.py --dns-server <dc-ip>` — the same
+script D49 used, now exercising D50-B's credential-identity path for the first
+time against real infrastructure (the credential is stored with
+`username="collector", auth_mode="password"`; the proposal states the same
+pair; `dispatch_collection` reads the identity from the credential and confirms
+the match).
+
+**Confirmed working, through the real pipeline, for the first time with the
+post-D50-B attached-form command:**
+
+```
+sh -c 'exec bloodhound-python -d "$1" "--username=$2" "$3=$(cat "$4")" -c "$5" -ns "$6" --zip'
+   sh d45test.local collector --password /creds/secret Group,ACL 10.85.0.53
+```
+
+The real binary logged `Found AD domain: d45test.local` (DNS/SRV resolution
+succeeded via `-ns`) and reached the LDAP bind attempt — past every stage D49
+and D50 own.
+
+**Where it still stops**, verified from the raw evidence artifact (not the
+derived view's own truncated excerpt):
+
+```
+File ".../ldap3/core/connection.py", line 628, in bind
+    response = self.do_ntlm_bind(controls)
+File ".../ldap3/strategy/base.py", line 370, in get_response
+    raise LDAPSessionTerminatedByServerError(self.connection.last_error)
+ldap3.core.exceptions.LDAPSessionTerminatedByServerError: session terminated by server
+```
+
+This is the exact failure D45 already identified and attributed to a verified,
+static cause: `ldap3`'s NTLM bind uses the legacy Microsoft "Sicily" LDAP
+extension, which Samba's AD DC implementation does not support and closes the
+connection on sight — a protocol-level gap in the server implementation this
+test environment uses as a Windows AD substitute, not a configuration option,
+not a credential problem, and not anything D49 or D50 touched. (The Kerberos
+attempt immediately above it also failed, for the separate, already-documented
+reason of the DC's own container-ID hostname not being resolvable — expected,
+and why the tool falls back to NTLM in the first place.)
+
+**Consequences for the three tasks, stated plainly rather than worked around:**
+
+* **#44 (query real collected data) and #45 (I8 re-test against real data)
+  remain blocked.** No collection has ever completed against any environment
+  available to this project, so there is no real collected data to query or
+  re-test against — not a gap this attempt introduced, one it re-confirmed.
+* **#42 (the real output translator) remains unwritten, deliberately.**
+  `bloodhound-python` crashes before `prefetch_info` returns, i.e. before it
+  ever calls any of the `enumeration/*.py` writers that produce the real
+  per-object-type JSON files `--zip` would bundle (`ad_collector.parse_graph`'s
+  own docstring). No real output exists anywhere to translate. Writing a
+  translator against the documented-but-unverified format now would be
+  exactly the "silently assumed solved" gap this project's own discipline
+  (D45's own module docstring, quoted at the top of this file) refuses to
+  accept.
+* **What D49/D50 set out to unblock is unblocked.** The mechanism, not the
+  environment, was this deliverable's scope, and it is now proven correct
+  against real infrastructure, not merely by construction.
+
+**Not attempted, and why:** re-litigating whether Samba's Sicily-extension gap
+or the Kerberos checksum issue (the second failure D45 found one layer deeper,
+reached only by bypassing `DockerSandbox` entirely) can be worked around.
+D45 already read both `ldap3` and `impacket`'s own source to reach that
+conclusion; nothing observed here contradicts it, and re-deriving it a second
+time would not change the answer. The only paths forward are a real Windows AD
+test environment (not available here) or an explicit decision to accept
+fixture-based verification as the permanent method for #42/#44/#45 — a scope
+decision, not an engineering one, and not this session's to make unasked.
