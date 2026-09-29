@@ -1,10 +1,17 @@
 """D50 -- probes behind docs/D50_AD_COLLECTOR_AUTH_GAP_INVESTIGATION.md.
 
-An investigation, not a fix: nothing here changes production code, and every
-probe only *observes* how the real ``cyberorch/bloodhound:local`` image
+Written as an investigation, not a fix: nothing here changes production code,
+and every probe only *observes* how the real ``cyberorch/bloodhound:local`` image
 (``bloodhound==1.9.0``) and the real D44 vault/sandbox path behave. It prints
 observations, not pass/fail -- several of them are deliberately documenting
 a defect, and a green exit would be the wrong signal for that.
+
+**Status after the D50 follow-up (F1 + F3):** probes 1, 2, 4, 5 are unchanged and
+still show the *tool's* behaviour. Probe 3 now shows the pre-fix separate-token
+form as history (``build_plan`` emits the attached form since F3). Probe 6 now
+shows ``build_plan`` *refusing* the uncredentialed capability (F1) instead of
+running the dead command. Probes 2, 4 and 5 still document F2 (the secret is in
+argv) -- that is undecided, pending the ADR addendum.
 
 Needs: Docker running, ``cyberorch/bloodhound:local`` built
 (``tool_gateway/images/build_bloodhound_image.sh``), Postgres provisioned
@@ -88,7 +95,7 @@ def stage_of(out: str) -> str:
 def probe_1_matrix() -> None:
     print("\n[1] Which credential shapes does the real binary accept? (no DC needed)")
     cases = [
-        ("(no auth flag)  <- ad_collector's uncredentialed command", []),
+        ("(no auth flag)  <- the pre-F1 uncredentialed command", []),
         ("--dns-tcp only", ["--dns-tcp"]),
         ("-no-pass only", ["-no-pass"]),
         ("-u alice -p secret", ["-u", "alice", "-p", "secret"]),
@@ -160,8 +167,8 @@ def probe_2_delivery() -> None:
             finally:
                 os.remove(mounted.host_path)
             argv = json.loads(res.stdout.strip().splitlines()[-1])
-            flag = "-p" if mode == "password" else "--hashes"
-            got = argv[argv.index(flag) + 1]
+            prefix = "--password=" if mode == "password" else "--hashes="
+            got = next(a for a in argv if a.startswith(prefix))[len(prefix):]
             verdict = "intact" if got == sec else f"DIFFERS, tool would receive {got!r}"
             print(f"  {label:18s} mounted file mode={file_mode}  -> {verdict}")
     finally:
@@ -174,7 +181,7 @@ def probe_3_argparse_dash() -> None:
     print("\n[3] A password starting with '-': the shell delivers it intact;")
     print("    does the tool's argument parser accept it?")
     for label, args in [
-        ("-p -abc123   (what the wrapper emits)", ["-u", "alice", "-p", "-abc123"]),
+        ("-p -abc123   (the pre-F3 wrapper form)", ["-u", "alice", "-p", "-abc123"]),
         ("-p=-abc123", ["-u", "alice", "-p=-abc123"]),
         ("--password=-abc123", ["-u", "alice", "--password=-abc123"]),
     ]:
@@ -269,23 +276,16 @@ def probe_5_inprocess_launcher() -> None:
 # 6 ---------------------------------------------------------------------------
 
 def probe_6_uncredentialed_dispatch() -> None:
-    print("\n[6] What does the real sandbox do with ad_collector's uncredentialed command?")
-    cidr = "10.94.0.0/24"
-    box = DockerSandbox(image=IMAGE)
-    box.ensure_image()
-    plan = ad_collector.build_plan(
-        constraints={"collection_methods": ["Group", "ACL"]},
-        budget={"max_duration_seconds": 30}, target="corp.test")
-    try:
-        res = box.run(command=plan.command, network_allowlist=[cidr], max_duration_seconds=30)
-    finally:
-        box.remove_network([cidr])
-    print(f"  command: {list(plan.command)}")
-    print(f"  exit_code={res.exit_code} succeeded={res.succeeded} "
-          f"-> dispatch_collection records status={'succeeded' if res.succeeded else 'failed'}, "
-          f"graph write attempted={res.succeeded}")
-    first = res.stdout.strip().splitlines()[0] if res.stdout.strip() else "(empty)"
-    print(f"  stdout begins: {first[:80]}")
+    print("\n[6] What happens to an ad.collect capability with no domain_username now (F1)?")
+    print("    (before F1 this built a bare command; the real tool printed usage and exited 1)")
+    for constraints in ({"collection_methods": ["Group", "ACL"]},
+                        {"collection_methods": ["Group"], "domain_username": ""}):
+        try:
+            ad_collector.build_plan(
+                constraints=constraints, budget={"max_duration_seconds": 30}, target="corp.test")
+            print(f"  {constraints}: built a plan (UNEXPECTED -- F1 not in effect)")
+        except ad_collector.AdapterError as exc:
+            print(f"  {constraints}\n    -> refused: {str(exc)[:96]}...")
 
 
 PROBES = {1: probe_1_matrix, 2: probe_2_delivery, 3: probe_3_argparse_dash,

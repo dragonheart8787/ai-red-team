@@ -63,6 +63,7 @@ from agents.base_agent import ProposedAction
 from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import propose_action
 from control_plane.capability.broker import Budget
+from control_plane.orchestrator.dispatch import UNBUILDABLE_PLAN
 from control_plane.policy.layers import publish_policy_layer
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import register_scope_object
@@ -273,13 +274,19 @@ def test_ad_collect_runs_end_to_end_through_propose_action(engagement_id, monkey
     assert recorded_event["payload"]["edge_count"] == 2
 
 
-def test_ad_collect_without_a_credential_still_reaches_dispatch_collection(
+def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
     engagement_id, monkeypatch,
 ):
-    """The uncredentialed path (no `domain_username`) also has to reach the
-    real `dispatch_collection`, not only the credentialed one above -- both
-    branches of `ad_collector.build_plan` are exercised through the real
-    entry point, not just the one D45's own live run happened to use.
+    """D50 F1 (this test used to assert the opposite). An ``ad.collect`` proposal
+    with no ``domain_username`` is authorized and issued a capability like any
+    other -- nothing upstream knows the real tool has no credential-free mode --
+    and is then refused by ``dispatch_collection`` itself, through the real
+    entry point, before any container is constructed.
+
+    Until D50 this test ran the uncredentialed command through a recording
+    sandbox and asserted the run "succeeded" and wrote three graph nodes. That
+    was true only because the sandbox never executed the command: the real
+    bloodhound-python prints its usage text and exits 1 for it.
     """
     _RecordingDockerSandbox.instances.clear()
     monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
@@ -295,16 +302,34 @@ def test_ad_collect_without_a_credential_still_reaches_dispatch_collection(
             budget=Budget(max_duration_seconds=90),
         )
 
+    # Authorized and issued a capability -- the refusal is dispatch's, not
+    # policy's...
     assert outcome.decision == "ALLOW", outcome.deny_reasons
-    sandbox_used = _RecordingDockerSandbox.instances[0]
-    assert sandbox_used.image == ad_collector.IMAGE
-    rendered_command = " ".join(sandbox_used.runs[0]["command"])
-    assert ad_collector.BLOODHOUND_PYTHON_PATH in rendered_command
-    assert sandbox_used.runs[0]["source_mounts"] == {}
+    assert outcome.capability_id is not None
+    # ...and it happens before anything runs.
+    assert outcome.run_id is None
+    assert outcome.failure == UNBUILDABLE_PLAN
+    assert _RecordingDockerSandbox.instances == [], (
+        "a refused plan must not construct a sandbox at all"
+    )
 
     with engagement_scope(engagement_id) as conn:
-        node_count = conn.execute(
-            text("SELECT COUNT(*) FROM security_graph_nodes WHERE first_seen_run_id = :r"),
-            {"r": outcome.run_id},
-        ).scalar_one()
-    assert node_count == 3
+        # dispatch_collection (not dispatch_scan) made the refusal: its own
+        # adapter's name and its own error text are on the audit row.
+        refusal = conn.execute(
+            text("SELECT reasons, payload FROM audit_log WHERE engagement_id = :e "
+                 "AND event_type = 'tool_run.refused'"),
+            {"e": engagement_id},
+        ).mappings().one()
+        assert UNBUILDABLE_PLAN in refusal["reasons"]
+        assert refusal["payload"]["tool"] == ad_collector.TOOL
+        assert "domain_username" in refusal["payload"]["error"]
+        # Nothing ran, so nothing was recorded.
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM tool_runs WHERE engagement_id = :e"),
+            {"e": engagement_id},
+        ).scalar_one() == 0
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM security_graph_nodes WHERE engagement_id = :e"),
+            {"e": engagement_id},
+        ).scalar_one() == 0

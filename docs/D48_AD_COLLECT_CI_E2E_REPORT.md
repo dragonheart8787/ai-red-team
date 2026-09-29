@@ -101,6 +101,16 @@ Two tests (credentialed and uncredentialed), each driving the real
 real `dispatch_collection`, with explicit, mutation-verified assertions for
 every one of D45's four bugs:
 
+> **Status, as of D50:** the "uncredentialed" test described here asserted that
+> a capability with no `domain_username` ran and wrote three graph nodes. That
+> held only because the recording sandbox never executed the command; the real
+> bloodhound-python has no credential-free mode (`docs/D50_AD_COLLECTOR_AUTH_GAP_
+> INVESTIGATION.md` F1). The test now asserts the opposite -- `propose_action`
+> authorizes the proposal and `dispatch_collection` refuses it as
+> `UNBUILDABLE_PLAN` before any container is constructed
+> (`test_ad_collect_without_a_credential_is_refused_by_dispatch_collection`).
+> The four-bug table below concerns the credentialed test and is unchanged.
+
 | Bug (D45) | Assertion | Mutation-verified |
 |---|---|---|
 | 1. Wrong binary path | `ad_collector.BLOODHOUND_PYTHON_PATH in rendered_command` and the old path is absent | Reverting the constant to `/usr/bin/bloodhound-python` fails the test with the exact wrong string quoted in the diff |

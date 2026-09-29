@@ -223,3 +223,31 @@ Kerberos-ccache route (`-k`, needs a control-plane `kinit`, untried);
   `DockerSandbox` has no `extra_hosts`) that needs a target to test against.
 * **F5.** Needs an environment where authentication can succeed; independent of
   the above and the true prerequisite for #42/#44/#45.
+
+---
+
+## 7. Status, as of the D50 follow-up
+
+Decisions taken on §6, and what was done:
+
+| Finding | Decision | State |
+|---|---|---|
+| F1 | Approved: refuse, remove the dead branch, no ADR | **Done.** `build_plan` refuses a capability with no (or blank / non-string) `domain_username`; `dispatch_collection` reports it as `UNBUILDABLE_PLAN` before any sandbox, `tool_runs` row or credential mount; the uncredentialed command branch and the conditionals it made dead are gone. |
+| F3 | Approved: attached-form arguments, no ADR | **Done.** `--username=$2` / `$3=$(cat "$4")` with `$3` in `{--password, --hashes}`. Applied to the username as well as the secret — the real tool rejects `-u -alice` exactly as it rejects `-p -abc123`, and `domain_username` is Worker-supplied, so it is the same defect. Hash shape and username↔secret binding are **not** addressed here: they go into the F2 ADR addendum. |
+| F2 | ADR addendum first; **no implementation until reviewed** | Addendum to `docs/ADR_CREDENTIAL_VAULT.md` (status DRAFT) is being written as a separate, docs-only commit. Unchanged in behaviour: probe 4 still shows the secret in host `ps` (now as `--password=<secret>`). |
+| F4 | Record only, not a priority | Recorded (5.25 caveat). Not fixed. |
+| F5 | Confirmed as the gate | Task #42/#44/#45 stay blocked until F1/F3 are in (done), F2's direction is decided **and** implemented, and only then are they re-assessed — in that order. |
+
+What the F1/F3 change taught about the test suite, beyond the code:
+
+* The affected tests were not "three": `test_ad_collector_adapter.py` (the uncredentialed
+  command test, and every dns test that used the uncredentialed shape),
+  `test_dispatch_collection.py` (its *default* capability was uncredentialed, so seven
+  tests ran the dead branch), and D48's E2E test.
+* **Two D49 dns_server tests would have kept passing for the wrong reason.** Left on
+  the default capability, `..._outside_network_allowlist_is_refused_as_unbuildable`
+  would have been refused earlier for the missing bind identity and stayed green with
+  the dns_server check deleted. They were moved to credentialed capabilities and the
+  dns_server mutation was re-run against the rewritten test (red, as it must be).
+* There is now a permanent test of what a real container receives
+  (`tests/test_ad_collector_credential_delivery.py`) — the gap §2 found.

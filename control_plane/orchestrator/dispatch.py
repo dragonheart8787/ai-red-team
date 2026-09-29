@@ -515,6 +515,13 @@ def dispatch_collection(
     dimension (which server a tool's own DNS queries go to) nothing before
     this deliverable had modeled as something a capability could name at
     all.
+
+    An ``ad.collect`` capability with no ``domain_username`` (D50 F1), or with
+    one but no ``credential_id`` behind it, is refused as ``UNBUILDABLE_PLAN``
+    the same way, before any container or credential mount: the real
+    ``bloodhound-python`` has no credential-free mode, so such a run could only
+    ever print its usage text and fail. The former uncredentialed plan was a
+    D42 interim path that D44 never retired.
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
@@ -553,13 +560,16 @@ def dispatch_collection(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
 
-    # A plan built for a domain_username with no credential_id on the
-    # capability to back it has nothing to mount at dispatch time and is
+    # Every plan build_plan returns names a bind identity (an ad.collect
+    # capability with no domain_username never gets this far: build_plan
+    # refuses it as an AdapterError, handled above -- D50 F1, the real tool
+    # has no credential-free mode). A bind identity with no credential_id on
+    # the capability to back it has nothing to mount at dispatch time and is
     # refused the same way any other unbuildable plan is (D44) -- the
     # adapter itself never sees credential_id (it stays in constraints/
     # capability territory, not adapter territory), so this check belongs
     # here, not in build_plan.
-    if plan.domain_username is not None and capability.credential_id is None:
+    if capability.credential_id is None:
         record_audit(
             engagement_id=engagement_id, actor=actor,
             event_type="tool_run.refused", subject_type="action_proposal",
@@ -616,8 +626,7 @@ def dispatch_collection(
     # normalized_params, so the fingerprint changes without the credential
     # id ever needing to look like a scan parameter.
     ctx = dict(execution_context or {})
-    if capability.credential_id is not None:
-        ctx["credential_id"] = capability.credential_id
+    ctx["credential_id"] = capability.credential_id
     fingerprint = execution_fingerprint(
         engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
@@ -670,12 +679,10 @@ def dispatch_collection(
     # path that can defer this past the fingerprint step at all: unlike
     # D43's commit_sha, credential_id is already known from the capability
     # itself, with nothing to discover that the fingerprint depends on.
-    mounted_credential = None
-    if plan.domain_username is not None:
-        mounted_credential = vault.mount_for_run(
-            conn, credential_id=capability.credential_id, run_id=run_id,
-            engagement_id=engagement_id, actor=actor,
-        )
+    mounted_credential = vault.mount_for_run(
+        conn, credential_id=capability.credential_id, run_id=run_id,
+        engagement_id=engagement_id, actor=actor,
+    )
 
     try:
         # A tool that ships its own image says so (adapter.IMAGE); the rest
@@ -691,10 +698,7 @@ def dispatch_collection(
             result = sandbox.run(
                 command=plan.command, network_allowlist=allowlist,
                 max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
-                source_mounts=(
-                    {mounted_credential.host_path: adapter.CONTAINER_CRED_PATH}
-                    if mounted_credential is not None else None
-                ),
+                source_mounts={mounted_credential.host_path: adapter.CONTAINER_CRED_PATH},
             )
         except SandboxUnavailable as exc:
             _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
@@ -767,11 +771,10 @@ def dispatch_collection(
         # minted credential file on the control-plane host's disk that
         # nothing else will clean up (D44-5, the same caller-owns-cleanup
         # contract D43's git_fetch.cleanup_repo already established).
-        if mounted_credential is not None:
-            vault.cleanup_mount(
-                mounted_credential, engagement_id=engagement_id, actor=actor,
-                run_id=run_id,
-            )
+        vault.cleanup_mount(
+            mounted_credential, engagement_id=engagement_id, actor=actor,
+            run_id=run_id,
+        )
 
 
 #: A control-plane-side repo fetch failed before any sandbox run started

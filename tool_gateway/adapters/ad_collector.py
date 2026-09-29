@@ -12,16 +12,33 @@ names an ``ad_domain`` identity, and everything this run discovers is a
 of the design doc) — nothing in this module writes ``metadata_registry``,
 and nothing here can.
 
-Credential handling (D44, `docs/ADR_CREDENTIAL_VAULT.md` §4.1). A
-``domain_username`` constraint is this adapter's signal that the capability
-carries a credential: when present, ``build_plan`` builds a small shell
-wrapper that reads the LDAP bind secret from a file at
-``CONTAINER_CRED_PATH`` at *run* time rather than putting it in argv —
-``dispatch_collection`` is the caller that actually mints and mounts that
-file, via ``control_plane.vault.vault.mount_for_run``. When
-``domain_username`` is absent, the command is exactly what it always was:
-no ``-u``/``-p``/``-hashes`` flag at all, buildable and testable against
-fixture output with no credential in the picture, unchanged from before D44.
+Credential handling (D44, `docs/ADR_CREDENTIAL_VAULT.md` §4.1).
+``build_plan`` requires a ``domain_username`` constraint and builds a small
+shell wrapper that reads the LDAP bind secret from a file at
+``CONTAINER_CRED_PATH`` at *run* time — ``dispatch_collection`` is the caller
+that actually mints and mounts that file, via
+``control_plane.vault.vault.mount_for_run``. (The wrapper does not keep the
+secret out of argv; see the honest limit below.)
+
+**There is no uncredentialed mode, and this adapter no longer builds one
+(D50 F1).** Until D50 a capability with no ``domain_username`` got a bare
+``bloodhound-python -d <domain> -c <methods> --zip``. That was a D42
+interim path ("no live/production path until the Vault lands") that D44 never
+retired, and it cannot work: the real ``bloodhound==1.9.0`` requires a username
+in every authentication branch of its ``main()`` and, given none, prints its
+usage text and exits 1 before it builds the object that does any DNS or LDAP
+(D50, `docs/D50_AD_COLLECTOR_AUTH_GAP_INVESTIGATION.md` §1, ten credential
+shapes tried against the real binary). Every fixture test that passed through
+that branch did so under ``StubSandbox``, which never executes the command.
+``build_plan`` therefore refuses it, and ``dispatch_collection`` turns that
+refusal into ``UNBUILDABLE_PLAN`` before any container starts.
+
+**Attached-form arguments (D50 F3).** The username and the secret are passed as
+``--username=<v>`` / ``--password=<v>`` (or ``--hashes=<v>``), never as a flag
+followed by a separate token. With the separate-token form, argparse refuses
+any value that begins with ``-`` (``-p -abc123`` fails with "expected one
+argument"), and both values are operator/Worker-supplied. Verified against the
+real binary: the attached forms are accepted for every such value.
 
 **This is an honest limit, not a claimed clean solution.**
 ``bloodhound-python`` has no "read the password from a file" flag of its
@@ -204,9 +221,8 @@ _DOMAIN_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECAS
 
 #: Where the sandbox mounts a per-dispatch credential file (D44,
 #: ``control_plane.vault.vault.mount_for_run``'s ``host_path``, mapped here
-#: by the caller -- ``dispatch_collection`` -- into ``source_mounts``). Only
-#: ever read when ``domain_username`` is set; the plain, uncredentialed
-#: command never references it.
+#: by the caller -- ``dispatch_collection`` -- into ``source_mounts``). Every
+#: plan this adapter builds reads it (there is no uncredentialed command, D50).
 CONTAINER_CRED_PATH = "/creds/secret"
 
 #: bloodhound-python's two mutually exclusive bind mechanisms. Kept closed
@@ -228,11 +244,10 @@ class AdCollectPlan:
     collection_methods: tuple[str, ...]
     max_duration_seconds: int
     max_queries_issued: int | None
-    #: Non-secret. Present iff this plan uses a Vault-issued credential --
-    #: the signal ``dispatch_collection`` uses to decide whether to call
-    #: ``mount_for_run`` at all (D44).
-    domain_username: str | None = None
-    auth_mode: str | None = None
+    #: Non-secret. Every plan carries a bind identity (D50 F1 removed the
+    #: uncredentialed plan), so these are required, not optional.
+    domain_username: str
+    auth_mode: str
     #: A concrete IP, never a hostname (D49) -- passed straight to
     #: bloodhound-python's own ``-ns`` flag. ``dispatch_collection`` is the
     #: one place with both this value and ``network_allowlist`` in hand, so
@@ -257,10 +272,9 @@ class AdCollectPlan:
         params: dict[str, Any] = {
             "target": self.target,
             "collection_methods": list(self.collection_methods),
+            "domain_username": self.domain_username,
+            "auth_mode": self.auth_mode,
         }
-        if self.domain_username is not None:
-            params["domain_username"] = self.domain_username
-            params["auth_mode"] = self.auth_mode
         if self.dns_server is not None:
             params["dns_server"] = self.dns_server
         return params
@@ -365,46 +379,50 @@ def build_plan(
                 f"dns_server {dns_server!r} is not a valid IP address"
             ) from exc
 
+    # No credential-free plan exists (module docstring, D50 F1): the real tool
+    # exits with its usage text unless it is given a username, so building
+    # one would only produce a run that cannot succeed. Refused here, in the
+    # constraint-shape layer; dispatch_collection reports it as
+    # UNBUILDABLE_PLAN, before any container starts.
     domain_username = constraints.get("domain_username")
-    if domain_username:
-        auth_mode = validate_auth_mode(constraints.get("auth_mode"))
-        auth_flag = "-p" if auth_mode == "password" else "--hashes"
-        # D35's file-mount principle, generalized (D44, module docstring):
-        # the secret is read from CONTAINER_CRED_PATH at run time, never
-        # placed in this command -- what dispatch_collection audits and
-        # records as `plan.command` never contains it. dns_server is not
-        # secret, but it still arrives as a positional shell argument ($6),
-        # not string-interpolated into the script text, matching every
-        # other value here -- the same injection-avoidance discipline
-        # applies regardless of which values happen to be sensitive.
-        dns_flag = ' -ns "$6"' if dns_server is not None else ""
-        command = [
-            "/bin/sh", "-c",
-            f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" -u "$2" "$3" '
-            f'"$(cat "$4")" -c "$5"{dns_flag} --zip',
-            "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
-            ",".join(methods),
-        ]
-        if dns_server is not None:
-            command.append(dns_server)
-    else:
-        auth_mode = None
-        # No -u/-p/-hashes: this capability carries no credential. Buildable
-        # and testable against fixture output with no Vault in the picture,
-        # unchanged from before D44.
-        command = [
-            BLOODHOUND_PYTHON_PATH,
-            "-d", target,
-            "-c", ",".join(methods),
-        ]
-        if dns_server is not None:
-            command += ["-ns", dns_server]
-        command.append("--zip")
+    if not isinstance(domain_username, str) or not domain_username.strip():
+        raise AdapterError(
+            "ad.collect requires a domain_username constraint: the real "
+            "bloodhound-python has no credential-free mode (it prints usage "
+            "and exits 1 without one), so a capability without a bind "
+            "identity cannot be run"
+        )
+    auth_mode = validate_auth_mode(constraints.get("auth_mode"))
+    auth_flag = "--password" if auth_mode == "password" else "--hashes"
+
+    # D35's file-mount principle, generalized (D44, module docstring): the
+    # secret is read from CONTAINER_CRED_PATH at run time, never placed in this
+    # command -- what dispatch_collection audits and records as `plan.command`
+    # never contains it. Every value arrives as a positional shell argument
+    # ($1..$6), never string-interpolated into the script text, so none of
+    # them can alter the script; that holds for non-secret values too (dns_server
+    # is not secret, and is a validated IP besides).
+    #
+    # D50 F3: username and secret are attached to their flag ("--username=$2",
+    # "--password=$(cat ...)") rather than following it as a separate token,
+    # because argparse refuses a separate-token value that begins with "-"
+    # (module docstring). $3 is the flag *name* only, chosen from the closed
+    # AUTH_MODES vocabulary above, never a caller-supplied string.
+    dns_flag = ' -ns "$6"' if dns_server is not None else ""
+    command = [
+        "/bin/sh", "-c",
+        f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" "--username=$2" '
+        f'"$3=$(cat "$4")" -c "$5"{dns_flag} --zip',
+        "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
+        ",".join(methods),
+    ]
+    if dns_server is not None:
+        command.append(dns_server)
 
     return AdCollectPlan(
         command=tuple(command), target=target, collection_methods=methods,
         max_duration_seconds=max_duration, max_queries_issued=max_queries,
-        domain_username=domain_username or None, auth_mode=auth_mode,
+        domain_username=domain_username, auth_mode=auth_mode,
         dns_server=dns_server,
     )
 

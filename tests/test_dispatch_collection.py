@@ -14,6 +14,14 @@ the control plane's accounting — the state machine, the two-artifact write,
 fail-closed behavior, and now the credential mount/cleanup lifecycle — not
 whether a container can run.
 
+D50 F1: every ad.collect capability here is *credentialed* (``_credentialed_
+capability``). The real bloodhound-python has no credential-free mode, so
+``build_plan`` no longer builds an uncredentialed plan and ``dispatch_collection``
+refuses one as ``UNBUILDABLE_PLAN``; until D50 the default capability in this
+file was the uncredentialed one, and its "normal path" ran a command no real
+container could ever have succeeded with, under a ``StubSandbox`` that never
+executed it.
+
 This file's stub stdout is this adapter's own documented intermediate JSON
 shape (``tool_gateway.adapters.ad_collector.parse_graph``'s docstring), not
 bloodhound-python's native per-object-type output — that translation is
@@ -141,6 +149,21 @@ def _capability(
     return result.capability
 
 
+DEFAULT_CONSTRAINTS = {"collection_methods": ["Group", "ACL"], "domain_username": "svc-account"}
+
+
+def _credentialed_capability(conn, engagement_id: str, *, action: str = "ad.collect", **extra):
+    """An ad.collect capability that can actually be dispatched: it names a bind
+    identity in its constraints *and* carries the vault credential behind it.
+    ``extra`` adds/overrides constraints (e.g. ``dns_server``).
+    """
+    return _capability(
+        conn, engagement_id, action=action,
+        constraints={**DEFAULT_CONSTRAINTS, **extra},
+        credential_id=_store_domain_credential(engagement_id),
+    )
+
+
 def _store_domain_credential(engagement_id: str, *, secret: str = REAL_DOMAIN_SECRET) -> str:
     credential_id = _uid("CRED")
     with credential_admin_scope(engagement_id) as conn:
@@ -162,9 +185,17 @@ def _dispatch(conn, engagement_id, capability, *, sandbox, target=TARGET_DOMAIN)
     )
 
 
+def _last_refusal(conn, engagement_id: str):
+    return conn.execute(
+        text("SELECT reasons, payload FROM audit_log WHERE engagement_id = :e "
+             "AND event_type = 'tool_run.refused' ORDER BY ts DESC LIMIT 1"),
+        {"e": engagement_id},
+    ).mappings().one()
+
+
 def test_normal_path_records_evidence_and_a_security_graph_batch(engagement_id):
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(conn, engagement_id)
+        capability = _credentialed_capability(conn, engagement_id)
         outcome = _dispatch(conn, engagement_id, capability, sandbox=StubSandbox())
 
         assert outcome.state == SUCCEEDED, outcome.reason
@@ -215,14 +246,19 @@ def test_wrong_action_on_the_capability_is_refused_before_anything_runs(engageme
 
 
 def test_an_invalid_domain_target_is_refused_as_unbuildable(engagement_id):
+    """Credentialed on purpose: with an uncredentialed capability this would be
+    refused too (D50 F1), for the wrong reason, and prove nothing about the
+    target check.
+    """
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(conn, engagement_id)
+        capability = _credentialed_capability(conn, engagement_id)
         outcome = _dispatch(
             conn, engagement_id, capability, sandbox=_ExplodingSandbox(),
             target="",
         )
         assert outcome.state == FAILED
         assert outcome.reason == UNBUILDABLE_PLAN
+        assert _last_refusal(conn, engagement_id)["payload"]["error"] == "no target"
 
 
 def test_an_unparseable_collection_result_is_audited_but_does_not_fail_the_run(engagement_id):
@@ -231,7 +267,7 @@ def test_an_unparseable_collection_result_is_audited_but_does_not_fail_the_run(e
     audited fact -- not a re-judgment of whether the tool itself succeeded.
     """
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(conn, engagement_id)
+        capability = _credentialed_capability(conn, engagement_id)
         outcome = _dispatch(
             conn, engagement_id, capability,
             sandbox=StubSandbox(stdout="not json at all", exit_code=0),
@@ -255,7 +291,7 @@ def test_an_unparseable_collection_result_is_audited_but_does_not_fail_the_run(e
 
 def test_a_failed_tool_run_never_attempts_a_graph_write(engagement_id):
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(conn, engagement_id)
+        capability = _credentialed_capability(conn, engagement_id)
         outcome = _dispatch(
             conn, engagement_id, capability,
             sandbox=StubSandbox(stdout="", exit_code=1),
@@ -273,7 +309,7 @@ def test_a_failed_tool_run_never_attempts_a_graph_write(engagement_id):
 def test_sandbox_unavailable_is_unknown_outcome_not_failed(engagement_id):
     """§8.8/I7: the tool may or may not have run. FAILED would invite a retry."""
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(conn, engagement_id)
+        capability = _credentialed_capability(conn, engagement_id)
         outcome = _dispatch(conn, engagement_id, capability, sandbox=_UnavailableSandbox())
         assert outcome.state == UNKNOWN_OUTCOME
 
@@ -301,22 +337,18 @@ def test_dns_server_outside_network_allowlist_is_refused_as_unbuildable(engageme
     the same as domain_username-without-credential_id above.
     """
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(
-            conn, engagement_id,
-            constraints={"collection_methods": ["Group"], "dns_server": "203.0.113.5"},
-        )
+        # Credentialed (D50 F1): otherwise the refusal below would come from
+        # the missing bind identity, and this test would keep passing with
+        # the dns_server check deleted.
+        capability = _credentialed_capability(conn, engagement_id, dns_server="203.0.113.5")
         outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
         assert outcome.state == FAILED
         assert outcome.reason == UNBUILDABLE_PLAN
 
-        rows = conn.execute(
-            text("SELECT reasons, payload FROM audit_log WHERE engagement_id = :e "
-                 "AND event_type = 'tool_run.refused' ORDER BY ts DESC LIMIT 1"),
-            {"e": engagement_id},
-        ).mappings().all()
-        assert len(rows) == 1
-        assert UNBUILDABLE_PLAN in rows[0]["reasons"]
-        assert "203.0.113.5" in rows[0]["payload"]["error"]
+        refusal = _last_refusal(conn, engagement_id)
+        assert UNBUILDABLE_PLAN in refusal["reasons"]
+        assert "203.0.113.5" in refusal["payload"]["error"]
+        assert "dns_server" in refusal["payload"]["error"]
 
 
 def test_dns_server_inside_network_allowlist_reaches_the_sandbox(engagement_id):
@@ -325,16 +357,68 @@ def test_dns_server_inside_network_allowlist_reaches_the_sandbox(engagement_id):
     exactly as any other successful collection would.
     """
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(
-            conn, engagement_id,
-            constraints={"collection_methods": ["Group"], "dns_server": "10.0.0.53"},
-        )
+        capability = _credentialed_capability(conn, engagement_id, dns_server="10.0.0.53")
         sandbox = StubSandbox()
         outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
         assert outcome.state == SUCCEEDED, outcome.reason
         assert len(sandbox.runs) == 1
-        assert "-ns" in sandbox.runs[0]["command"]
-        assert "10.0.0.53" in sandbox.runs[0]["command"]
+        command = sandbox.runs[0]["command"]
+        # The credentialed command is a shell wrapper: -ns lives inside the
+        # script text, the address is its own positional argument ($6).
+        assert '-ns "$6"' in command[2]
+        assert command[-1] == "10.0.0.53"
+
+
+def _assert_refused_before_any_run_or_credential_mount(conn, engagement_id: str, outcome):
+    assert outcome.state == FAILED
+    assert outcome.reason == UNBUILDABLE_PLAN
+    assert outcome.run_id is None
+    assert conn.execute(
+        text("SELECT COUNT(*) FROM tool_runs WHERE engagement_id = :e"),
+        {"e": engagement_id},
+    ).scalar_one() == 0, "a refused plan must not create a tool_runs row"
+    assert conn.execute(
+        text("SELECT COUNT(*) FROM audit_log WHERE engagement_id = :e "
+             "AND event_type = 'credential.issued_to_run'"),
+        {"e": engagement_id},
+    ).scalar_one() == 0, "a refused plan must not mint a credential file"
+
+
+def test_ad_collect_without_a_domain_username_is_refused_as_unbuildable(engagement_id):
+    """D50 F1. The real bloodhound-python has no credential-free mode: it prints
+    its usage text and exits 1 without a username. Refused before the sandbox
+    (``_ExplodingSandbox`` raises if reached), before a tool_runs row, and
+    before any credential is minted -- the previous behaviour was to start a
+    container that could only fail.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id, constraints={"collection_methods": ["Group", "ACL"]},
+        )
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
+
+        _assert_refused_before_any_run_or_credential_mount(conn, engagement_id, outcome)
+        refusal = _last_refusal(conn, engagement_id)
+        assert UNBUILDABLE_PLAN in refusal["reasons"]
+        assert "domain_username" in refusal["payload"]["error"]
+        assert "credential-free mode" in refusal["payload"]["error"]
+
+
+def test_a_credential_with_no_domain_username_is_refused_and_never_mounted(engagement_id):
+    """The other half of the same gap: a capability that carries a vault
+    credential but names no bind identity used to run *uncredentialed*,
+    silently ignoring the credential it was issued with. It is refused now, and
+    the credential is never minted.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _capability(
+            conn, engagement_id, constraints={"collection_methods": ["Group"]},
+            credential_id=_store_domain_credential(engagement_id),
+        )
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
+
+        _assert_refused_before_any_run_or_credential_mount(conn, engagement_id, outcome)
+        assert "domain_username" in _last_refusal(conn, engagement_id)["payload"]["error"]
 
 
 def test_a_credentialed_run_mounts_the_secret_and_cleans_it_up(engagement_id):
