@@ -173,7 +173,10 @@ def _store_credential(engagement_id: str) -> str:
     return credential_id
 
 
-def _proposal(scope_object_id: str, credential_username: str | None = None) -> ProposedAction:
+def _proposal(
+    scope_object_id: str, credential_username: str | None = None,
+    dns_server: str | None = None,
+) -> ProposedAction:
     target: dict[str, Any] = {
         "logical_identity": {"type": "ad_domain", "value": DOMAIN},
         "collection_methods": ["Group", "ACL"],
@@ -181,6 +184,8 @@ def _proposal(scope_object_id: str, credential_username: str | None = None) -> P
     if credential_username is not None:
         target["domain_username"] = credential_username
         target["auth_mode"] = "password"
+    if dns_server is not None:
+        target["dns_server"] = dns_server
     return ProposedAction(
         action="ad.collect", target=target,
         authorization={"source": "engagement_scope", "scope_object_id": scope_object_id},
@@ -334,3 +339,189 @@ def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
             text("SELECT COUNT(*) FROM security_graph_nodes WHERE engagement_id = :e"),
             {"e": engagement_id},
         ).scalar_one() == 0
+
+
+# ---------------------------------------------------------------------------
+# D51: D49's dns_server and D50-B's credential-identity binding, closed the
+# same way D47 asked for -- not just at dispatch_collection/build_plan, but
+# driven through the real propose_action entry point at least once, as a
+# permanent CI test. Until this file, dns_server's only real-infrastructure
+# proof was scripts/live_run/d45_ad_collection_e2e.py, a live-run script D47's
+# own module docstring already named as not part of the pytest suite; the
+# credential-identity binding (D50-B) had no propose_action-level test at all.
+# ---------------------------------------------------------------------------
+
+DNS_SERVER = "10.0.0.53"  # inside the ["10.0.0.0/8"] allowlist every test here uses
+
+
+def test_dns_server_reaches_the_real_command_through_propose_action(
+    engagement_id, monkeypatch,
+):
+    """D49, never previously exercised through propose_action in the committed
+    suite (only via ad_collector.build_plan/dispatch_collection called
+    directly, or via the live-run script). A dns_server stated on the proposal
+    must survive execution_constraints, reach ad_collector.build_plan, and
+    appear in the real command dispatch_collection executes.
+    """
+    _RecordingDockerSandbox.instances.clear()
+    monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
+
+    scope_object_id = _setup(engagement_id)
+    credential_id = _store_credential(engagement_id)
+    proposal = _proposal(
+        scope_object_id, credential_username="svc-account", dns_server=DNS_SERVER,
+    )
+
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+        )
+
+    assert outcome.decision == "ALLOW", outcome.deny_reasons
+    assert outcome.run_id is not None
+    command = _RecordingDockerSandbox.instances[0].runs[0]["command"]
+    # The credentialed shape is a shell wrapper: -ns lives in the script text
+    # ($6), the address is its own positional argument.
+    assert '-ns "$6"' in command[2]
+    assert command[-1] == DNS_SERVER
+
+
+def test_a_dns_server_outside_the_allowlist_is_refused_through_propose_action(
+    engagement_id, monkeypatch,
+):
+    """The mirror case, also never exercised at this level: D49's fail-closed
+    check runs inside dispatch_collection, reached here only through the real
+    entry point.
+    """
+    _RecordingDockerSandbox.instances.clear()
+    monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
+
+    scope_object_id = _setup(engagement_id)
+    credential_id = _store_credential(engagement_id)
+    proposal = _proposal(
+        scope_object_id, credential_username="svc-account", dns_server="203.0.113.5",
+    )
+
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+        )
+
+    assert outcome.decision == "ALLOW", outcome.deny_reasons  # OPA allowed; dispatch refused
+    assert outcome.run_id is None
+    assert outcome.failure == UNBUILDABLE_PLAN
+    assert _RecordingDockerSandbox.instances == []
+
+
+def test_the_credentials_identity_is_used_when_the_proposal_states_none(
+    engagement_id, monkeypatch,
+):
+    """D50-B, never previously exercised through propose_action: a proposal
+    that names no domain_username/auth_mode at all must still run, bound as
+    the credential's own account -- the identity comes from the credential,
+    not from anything the proposal said.
+    """
+    _RecordingDockerSandbox.instances.clear()
+    monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
+
+    scope_object_id = _setup(engagement_id)
+    credential_id = _store_credential(engagement_id)  # bound to "svc-account"/password
+    proposal = _proposal(scope_object_id, credential_username=None)
+
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+        )
+
+    assert outcome.decision == "ALLOW", outcome.deny_reasons
+    assert outcome.run_id is not None
+    command = _RecordingDockerSandbox.instances[0].runs[0]["command"]
+    assert command[3:] == [
+        "sh", DOMAIN, "svc-account", "--password", ad_collector.CONTAINER_CRED_PATH,
+        "Group,ACL",
+    ]
+
+
+def test_a_proposal_stating_a_different_identity_than_the_credential_is_refused(
+    engagement_id, monkeypatch,
+):
+    """D50-B, never previously exercised through propose_action: until D50-B a
+    Worker-supplied domain_username could be paired with any stored secret.
+    Now it is only an assertion that must match the credential's own bound
+    identity, and a mismatch is refused before any sandbox is built.
+    """
+    _RecordingDockerSandbox.instances.clear()
+    monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
+
+    scope_object_id = _setup(engagement_id)
+    credential_id = _store_credential(engagement_id)  # bound to "svc-account"
+    proposal = _proposal(scope_object_id, credential_username="someone-else")
+
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+        )
+
+    assert outcome.decision == "ALLOW", outcome.deny_reasons
+    assert outcome.run_id is None
+    assert outcome.failure == UNBUILDABLE_PLAN
+    assert _RecordingDockerSandbox.instances == []
+    with engagement_scope(engagement_id) as conn:
+        error = conn.execute(
+            text("SELECT payload->>'error' FROM audit_log WHERE engagement_id = :e "
+                 "AND event_type = 'tool_run.refused'"),
+            {"e": engagement_id},
+        ).scalar_one()
+    assert "domain_username" in error
+    assert "does not match" in error
+    assert REAL_DOMAIN_SECRET not in error
+
+
+def test_a_legacy_credential_with_no_bound_identity_is_refused_through_propose_action(
+    engagement_id, monkeypatch,
+):
+    """D50-B's existing-data rule (D30/D11-7), never previously exercised
+    through propose_action: a credential stored before D50-B carries no bound
+    identity. Refused as unknown, never run as though no account were needed.
+    """
+    from tests.test_vault import _legacy_store
+
+    _RecordingDockerSandbox.instances.clear()
+    monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
+
+    scope_object_id = _setup(engagement_id)
+    credential_id = _legacy_store(engagement_id, secret=REAL_DOMAIN_SECRET)
+    proposal = _proposal(scope_object_id, credential_username="svc-account")
+
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+        )
+
+    assert outcome.decision == "ALLOW", outcome.deny_reasons
+    assert outcome.run_id is None
+    assert outcome.failure == UNBUILDABLE_PLAN
+    assert _RecordingDockerSandbox.instances == []
+    with engagement_scope(engagement_id) as conn:
+        error = conn.execute(
+            text("SELECT payload->>'error' FROM audit_log WHERE engagement_id = :e "
+                 "AND event_type = 'tool_run.refused'"),
+            {"e": engagement_id},
+        ).scalar_one()
+    assert "predates identity binding" in error
+    assert REAL_DOMAIN_SECRET not in error
