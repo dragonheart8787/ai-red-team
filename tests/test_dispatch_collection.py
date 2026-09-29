@@ -34,6 +34,7 @@ import json
 import os
 import uuid
 
+import pytest
 from sqlalchemy import text
 
 from control_plane.capability.broker import Budget, issue_capability
@@ -47,6 +48,7 @@ from control_plane.orchestrator.dispatch import (
 )
 from control_plane.state.db import credential_admin_scope, engagement_scope
 from control_plane.vault.vault import store_credential
+from tests.test_vault import _legacy_store
 from tool_gateway import registry
 from tool_gateway.adapters import ad_collector
 from tool_gateway.sandbox import SandboxResult, SandboxUnavailable
@@ -149,28 +151,38 @@ def _capability(
     return result.capability
 
 
-DEFAULT_CONSTRAINTS = {"collection_methods": ["Group", "ACL"], "domain_username": "svc-account"}
+BOUND_USERNAME = "svc-account"
+DEFAULT_CONSTRAINTS = {
+    "collection_methods": ["Group", "ACL"], "domain_username": BOUND_USERNAME,
+}
 
 
-def _credentialed_capability(conn, engagement_id: str, *, action: str = "ad.collect", **extra):
-    """An ad.collect capability that can actually be dispatched: it names a bind
-    identity in its constraints *and* carries the vault credential behind it.
-    ``extra`` adds/overrides constraints (e.g. ``dns_server``).
+def _credentialed_capability(
+    conn, engagement_id: str, *, action: str = "ad.collect", constraints=None,
+    credential_id: str | None = None, **extra,
+):
+    """An ad.collect capability that can actually be dispatched: it carries the
+    vault credential behind it, and (by default) states the same username the
+    credential is bound to. ``constraints`` replaces the default constraint set
+    outright (e.g. to state no username); ``extra`` adds to it (``dns_server``).
     """
     return _capability(
         conn, engagement_id, action=action,
-        constraints={**DEFAULT_CONSTRAINTS, **extra},
-        credential_id=_store_domain_credential(engagement_id),
+        constraints={**(DEFAULT_CONSTRAINTS if constraints is None else constraints), **extra},
+        credential_id=credential_id or _store_domain_credential(engagement_id),
     )
 
 
-def _store_domain_credential(engagement_id: str, *, secret: str = REAL_DOMAIN_SECRET) -> str:
+def _store_domain_credential(
+    engagement_id: str, *, secret: str = REAL_DOMAIN_SECRET,
+    username: str = BOUND_USERNAME, auth_mode: str = "password",
+) -> str:
     credential_id = _uid("CRED")
     with credential_admin_scope(engagement_id) as conn:
         store_credential(
             conn, engagement_id=engagement_id, credential_id=credential_id,
-            label="svc-account", credential_type="ad_domain_bind", secret=secret,
-            actor="test-harness",
+            label=username, credential_type="ad_domain_bind", secret=secret,
+            actor="test-harness", username=username, auth_mode=auth_mode,
         )
     return credential_id
 
@@ -384,12 +396,13 @@ def _assert_refused_before_any_run_or_credential_mount(conn, engagement_id: str,
     ).scalar_one() == 0, "a refused plan must not mint a credential file"
 
 
-def test_ad_collect_without_a_domain_username_is_refused_as_unbuildable(engagement_id):
+def test_ad_collect_without_a_credential_is_refused_as_unbuildable(engagement_id):
     """D50 F1. The real bloodhound-python has no credential-free mode: it prints
-    its usage text and exits 1 without a username. Refused before the sandbox
-    (``_ExplodingSandbox`` raises if reached), before a tool_runs row, and
-    before any credential is minted -- the previous behaviour was to start a
-    container that could only fail.
+    its usage text and exits 1 without a username. A capability with no
+    credential behind it is refused before the sandbox (``_ExplodingSandbox``
+    raises if reached), before a tool_runs row, and before any credential is
+    minted -- the previous behaviour was to start a container that could only
+    fail.
     """
     with engagement_scope(engagement_id) as conn:
         capability = _capability(
@@ -400,25 +413,98 @@ def test_ad_collect_without_a_domain_username_is_refused_as_unbuildable(engageme
         _assert_refused_before_any_run_or_credential_mount(conn, engagement_id, outcome)
         refusal = _last_refusal(conn, engagement_id)
         assert UNBUILDABLE_PLAN in refusal["reasons"]
-        assert "domain_username" in refusal["payload"]["error"]
+        assert "credential_id" in refusal["payload"]["error"]
         assert "credential-free mode" in refusal["payload"]["error"]
 
 
-def test_a_credential_with_no_domain_username_is_refused_and_never_mounted(engagement_id):
-    """The other half of the same gap: a capability that carries a vault
-    credential but names no bind identity used to run *uncredentialed*,
-    silently ignoring the credential it was issued with. It is refused now, and
-    the credential is never minted.
+def test_the_credentials_bound_identity_supplies_the_username_when_none_is_stated(
+    engagement_id,
+):
+    """D50-B. A capability that carries a credential but states no username is
+    no longer refused (as it was in the F1 round) or silently run without one
+    (as it was before): the credential *is* the identity, so the run binds as
+    the account stored with it.
     """
     with engagement_scope(engagement_id) as conn:
-        capability = _capability(
+        capability = _credentialed_capability(
             conn, engagement_id, constraints={"collection_methods": ["Group"]},
-            credential_id=_store_domain_credential(engagement_id),
+        )
+        sandbox = StubSandbox()
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
+
+        assert outcome.state == SUCCEEDED, outcome.reason
+        command = sandbox.runs[0]["command"]
+        # positional layout of the wrapper: sh, domain, username, flag, cred path, methods
+        assert command[5] == BOUND_USERNAME
+        assert command[6] == "--password"
+        params = conn.execute(
+            text("SELECT normalized_params FROM tool_runs WHERE run_id = :r"),
+            {"r": outcome.run_id},
+        ).scalar_one()
+        assert params["domain_username"] == BOUND_USERNAME
+        assert params["auth_mode"] == "password"
+
+
+def test_the_credentials_auth_mode_selects_the_flag_not_the_proposal(engagement_id):
+    with engagement_scope(engagement_id) as conn:
+        hash_credential = _store_domain_credential(
+            engagement_id, secret="aad3b435b51404eeaad3b435b51404ee:"
+                                  "31d6cfe0d16ae931b73c59d7e0c089c0",
+            auth_mode="hashes")
+        capability = _credentialed_capability(
+            conn, engagement_id, constraints={"collection_methods": ["Group"]},
+            credential_id=hash_credential,
+        )
+        sandbox = StubSandbox()
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=sandbox)
+
+        assert outcome.state == SUCCEEDED, outcome.reason
+        assert sandbox.runs[0]["command"][6] == "--hashes"
+
+
+@pytest.mark.parametrize(("stated", "expected_in_error"), [
+    pytest.param({"domain_username": "someone-else"}, "domain_username", id="username"),
+    pytest.param({"auth_mode": "hashes"}, "auth_mode", id="auth-mode"),
+])
+def test_a_stated_identity_that_differs_from_the_credentials_is_refused(
+    engagement_id, stated, expected_in_error,
+):
+    """D50-B. Until now a Worker-supplied proposal could pair a stored secret
+    with any username, or with the other authentication mechanism. The proposal
+    may still *state* them, but only as assertions that must match; a mismatch
+    is refused before anything is minted or run.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _credentialed_capability(
+            conn, engagement_id,
+            constraints={"collection_methods": ["Group"], **stated},
         )
         outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
 
         _assert_refused_before_any_run_or_credential_mount(conn, engagement_id, outcome)
-        assert "domain_username" in _last_refusal(conn, engagement_id)["payload"]["error"]
+        error = _last_refusal(conn, engagement_id)["payload"]["error"]
+        assert expected_in_error in error
+        assert "does not match" in error
+        assert REAL_DOMAIN_SECRET not in error
+
+
+def test_a_credential_stored_before_identity_binding_is_refused_at_dispatch(engagement_id):
+    """The existing-data rule (D30/D11-7) end to end: a legacy credential holds
+    only a secret, its owner is unknown, and it is refused -- even though the
+    capability states a username -- rather than run as though it needed no
+    account or be given the proposal's guess. Nothing is minted.
+    """
+    with engagement_scope(engagement_id) as conn:
+        capability = _credentialed_capability(
+            conn, engagement_id,
+            credential_id=_legacy_store(engagement_id, secret=REAL_DOMAIN_SECRET),
+        )
+        outcome = _dispatch(conn, engagement_id, capability, sandbox=_ExplodingSandbox())
+
+        _assert_refused_before_any_run_or_credential_mount(conn, engagement_id, outcome)
+        error = _last_refusal(conn, engagement_id)["payload"]["error"]
+        assert "predates identity binding" in error
+        assert REAL_DOMAIN_SECRET not in error
 
 
 def test_a_credentialed_run_mounts_the_secret_and_cleans_it_up(engagement_id):

@@ -18,7 +18,12 @@ shell wrapper that reads the LDAP bind secret from a file at
 ``CONTAINER_CRED_PATH`` at *run* time — ``dispatch_collection`` is the caller
 that actually mints and mounts that file, via
 ``control_plane.vault.vault.mount_for_run``. (The wrapper does not keep the
-secret out of argv; see the honest limit below.)
+secret out of argv; see the honest limit below.) Since D50-B the
+``domain_username`` and ``auth_mode`` this function sees are the ones **bound
+into the credential** (``dispatch_collection`` reads them from the vault and
+puts them in ``constraints``; a proposal's own claim is only an assertion that
+must match) -- this adapter still just requires them to be present, and does
+not know or care where they came from.
 
 **There is no uncredentialed mode, and this adapter no longer builds one
 (D50 F1).** Until D50 a capability with no ``domain_username`` got a bare
@@ -43,18 +48,21 @@ real binary: the attached forms are accepted for every such value.
 **This is an honest limit, not a claimed clean solution.**
 ``bloodhound-python`` has no "read the password from a file" flag of its
 own, so the wrapper still has to substitute the secret into the real
-process's argv via shell command substitution (``"$(cat ...)"``) at the
-moment it execs. What D35's file-mount principle buys here is that the
-secret never appears in *this system's own* records — not in the plan's
-``command`` (what ``tool_run.started`` audits), not in the capability's
-``normalized_params``, not on the command line the control plane ever
-constructs or logs. What it cannot buy, because the tool's own CLI does not
-offer it, is keeping the secret out of that one process's argv as seen from
-*inside* the container itself (e.g. by another process sharing that
-container's PID namespace) for the moment it execs. `docs/
-ADR_CREDENTIAL_VAULT.md` §2.2 already prices this into ad.collect's stated
-blast radius; nothing here claims a stronger guarantee than that document
-does.
+process's argv via shell command substitution (``"$(cat ...)"``) when it
+execs. What D35's file-mount principle buys here is that the secret never
+appears in *this system's own* records — not in the plan's ``command`` (what
+``tool_run.started`` audits), not in the capability's ``normalized_params``,
+not on the command line the control plane ever constructs or logs. What it
+cannot buy, because the tool's own CLI does not offer it, is keeping the
+secret out of that process's argv: **for the whole run** (the wrapper
+``exec``s, so the tool *is* the process), and visible **on the host**, not only
+inside the container — measured at D50 in ``docker top`` and in the host's own
+``ps``. (An earlier version of this paragraph limited it to "inside the
+container … for the moment it execs" and said ADR §2.2 already priced it in;
+neither was accurate — §2.2 does not mention the process table.) The secret
+also sits in a ``0644`` host file for the same window. Whether to close either
+is an open, deliberately deferred question: ``docs/ACCEPTANCE_MVP1_AGENTS.md``
+5.26 and ``docs/ADR_CREDENTIAL_VAULT.md`` §7.
 
 **Flag verification (D45): closed for real, not re-derived from documentation.**
 ``-d``/``-c``/``-u``/``-p``/``--hashes``/``--zip`` were all checked against a

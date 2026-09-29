@@ -145,10 +145,17 @@ def probe_2_delivery() -> None:
     try:
         for label, mode, sec in _SECRETS:
             cred_id = f"CRED-{uuid.uuid4().hex[:8]}"
-            with credential_admin_scope(eng) as conn:
-                vault.store_credential(
-                    conn, engagement_id=eng, credential_id=cred_id, label="svc",
-                    credential_type="ad_domain_bind", secret=sec, actor=ACTOR)
+            try:
+                with credential_admin_scope(eng) as conn:
+                    vault.store_credential(
+                        conn, engagement_id=eng, credential_id=cred_id, label="svc",
+                        credential_type="ad_domain_bind", secret=sec, actor=ACTOR,
+                        username="alice", auth_mode=mode)
+            except vault.VaultError as exc:
+                # Since D50-B the vault refuses a secret the shell would alter
+                # (this probe's "trailing newline" case) instead of storing it.
+                print(f"  {label:18s} refused at store (D50-B): {str(exc)[:70]}")
+                continue
             run_id = f"RUN-{uuid.uuid4().hex[:8]}"
             with engagement_scope(eng) as conn:
                 mounted = vault.mount_for_run(

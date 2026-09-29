@@ -38,7 +38,7 @@ from pathlib import Path
 import pytest
 
 from control_plane.state.db import credential_admin_scope, engagement_scope
-from control_plane.vault.vault import mount_for_run, store_credential
+from control_plane.vault.vault import VaultError, identity_for, mount_for_run, store_credential
 from tool_gateway.adapters import ad_collector
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -82,17 +82,22 @@ def argv_stub():
 
 def _run(sandbox, engagement_id, *, secret, auth_mode="password", username="alice",
          extra_mounts=None, **constraints):
-    """Store ``secret`` in the vault, mount it for one run, and execute the
-    real ``build_plan`` command in the real sandbox. Returns ``(plan, result)``.
+    """Store ``secret`` (with its identity) in the vault, mount it for one run,
+    and execute the real ``build_plan`` command in the real sandbox. The
+    username and mode handed to ``build_plan`` are read back from the
+    credential, exactly as ``dispatch_collection`` does (D50-B) -- not passed
+    in separately. Returns ``(plan, result)``.
     """
     credential_id = f"CRED-{uuid.uuid4().hex[:8]}"
     with credential_admin_scope(engagement_id) as conn:
         store_credential(
             conn, engagement_id=engagement_id, credential_id=credential_id,
             label="svc", credential_type="ad_domain_bind", secret=secret, actor=ACTOR,
+            username=username, auth_mode=auth_mode,
         )
     run_id = f"RUN-{uuid.uuid4().hex[:8]}"
     with engagement_scope(engagement_id) as conn:
+        identity = identity_for(conn, credential_id)
         mounted = mount_for_run(
             conn, credential_id=credential_id, run_id=run_id,
             engagement_id=engagement_id, actor=ACTOR,
@@ -100,8 +105,8 @@ def _run(sandbox, engagement_id, *, secret, auth_mode="password", username="alic
     try:
         plan = ad_collector.build_plan(
             constraints={
-                "collection_methods": ["Group"], "domain_username": username,
-                "auth_mode": auth_mode, **constraints,
+                "collection_methods": ["Group"], "domain_username": identity.username,
+                "auth_mode": identity.auth_mode, **constraints,
             },
             budget={"max_duration_seconds": 30}, target=TARGET,
         )
@@ -170,20 +175,20 @@ def test_a_username_that_looks_like_a_flag_reaches_the_tool_as_a_value(
     ]
 
 
-def test_trailing_newlines_in_a_secret_are_stripped_by_command_substitution(
-    sandbox, engagement_id, argv_stub,
-):
-    """A known, accepted limit (D50 F3-4), pinned so a change is noticed rather
-    than assumed: ``$(cat ...)`` drops trailing newlines, so a secret that ends
-    in one is delivered without it. Not a realistic password; recorded because
-    a *silent* difference between what is stored and what is sent is exactly
-    what this file exists to make visible.
+def test_a_secret_the_shell_would_alter_never_gets_this_far(engagement_id):
+    """``$(cat ...)`` drops trailing newlines, so a secret ending in one would
+    be delivered as a *different* secret than the one stored -- the silent
+    stored/sent difference this file exists to make visible (D50 F3-4). Since
+    D50-B the vault refuses to store such a secret, so every secret that can
+    reach the tests above is one that arrives byte for byte.
     """
-    _, result = _run(
-        sandbox, engagement_id, secret="abc\n",
-        extra_mounts={argv_stub: ad_collector.BLOODHOUND_PYTHON_PATH},
-    )
-    assert _delivered_argv(result)[3] == "--password=abc"
+    with credential_admin_scope(engagement_id) as conn:
+        with pytest.raises(VaultError, match="newline"):
+            store_credential(
+                conn, engagement_id=engagement_id, credential_id="CRED-nl",
+                label="svc", credential_type="ad_domain_bind", secret="abc\n",
+                actor=ACTOR, username="alice", auth_mode="password",
+            )
 
 
 def test_the_dns_server_flag_survives_next_to_the_attached_arguments(

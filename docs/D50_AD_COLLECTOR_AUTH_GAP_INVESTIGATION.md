@@ -65,6 +65,30 @@ beginning `usage: bloodhound-python …`; `dispatch_collection` records `failed`
 and never attempts the graph write. No security consequence — it fails closed at
 the tool — but it is a run that cannot succeed and is not refused.
 
+> The two tables above are the **snapshot at investigation time** and are kept as
+> the evidence for what the tool wants. §1.1 is the code as it stands now.
+
+### 1.1 Current state (after F1, F3 and D50-B)
+
+| Capability | Where the bind identity comes from | Outcome |
+|---|---|---|
+| no `credential_id` | — | **refused** as `UNBUILDABLE_PLAN` by `dispatch_collection`, before any sandbox, `tool_runs` row or credential mount (was: branch A, a run the real tool could only fail) |
+| a credential stored **before** D50-B (secret only) | unknown | **refused** (`predates identity binding`); not backfilled, not run without an account |
+| a credential with a bound identity, states no username/mode | the credential (`vault.identity_for`) | runs as the bound account, in the bound mode |
+| a credential with a bound identity, states a *different* username or mode | the credential; the statement is an assertion that must match | **refused** on mismatch |
+
+What the one remaining command shape looks like (branches A/B/C above collapse
+to it; `$3` is `--password` or `--hashes`, chosen by the credential's bound mode):
+
+```
+sh -c 'exec bloodhound-python -d "$1" "--username=$2" "$3=$(cat "$4")" -c "$5" --zip'
+   sh <domain> <bound username> --password|--hashes /creds/secret <methods>
+```
+
+Not changed by any of this, and still open: the secret is in that process's argv
+and in a `0644` host file (F2, tracked as ACCEPTANCE 5.26); the KDC hostname is
+not covered by `-ns` (F4); and no authentication has succeeded anywhere (F5).
+
 ## 2. Has D44's mount → command-line path actually been walked?
 
 **Yes, with two qualifications — so the brief's class-3 hypothesis ("D45's real
@@ -233,10 +257,26 @@ Decisions taken on §6, and what was done:
 | Finding | Decision | State |
 |---|---|---|
 | F1 | Approved: refuse, remove the dead branch, no ADR | **Done.** `build_plan` refuses a capability with no (or blank / non-string) `domain_username`; `dispatch_collection` reports it as `UNBUILDABLE_PLAN` before any sandbox, `tool_runs` row or credential mount; the uncredentialed command branch and the conditionals it made dead are gone. |
-| F3 | Approved: attached-form arguments, no ADR | **Done.** `--username=$2` / `$3=$(cat "$4")` with `$3` in `{--password, --hashes}`. Applied to the username as well as the secret — the real tool rejects `-u -alice` exactly as it rejects `-p -abc123`, and `domain_username` is Worker-supplied, so it is the same defect. Hash shape and username↔secret binding are **not** addressed here: they go into the F2 ADR addendum. |
-| F2 | ADR addendum first; **no implementation until reviewed** | **ADR addendum drafted** (`docs/ADR_CREDENTIAL_VAULT.md` §7, status DRAFT): the three options plus a fourth found while checking the tool's CLI (its own password prompt fed from the sandbox's stdin channel), each analysed against the D44 §0 question with evidence; the launcher's deviation from `sandbox.run`'s execution model axis by axis; where hash-shape / username binding could live. It decides nothing and nothing is implemented. Unchanged in behaviour: probe 4 still shows the secret in host `ps` (now as `--password=<secret>`). |
+| F3 | Approved: attached-form arguments, no ADR | **Done.** `--username=$2` / `$3=$(cat "$4")` with `$3` in `{--password, --hashes}`. Applied to the username as well as the secret — the real tool rejects `-u -alice` exactly as it rejects `-p -abc123`, and `domain_username` is Worker-supplied, so it is the same defect. Hash shape and username↔secret binding were split out into D50-B (next row). |
+| F3 (hash shape, username binding) → **D50-B** | Approved: store-time, bound into `encrypted_material`; a formal revision of a D44 implementation-time decision, not a new feature | **Implemented** — `store_credential` requires and validates `username` + `auth_mode` for `ad_domain_bind`; `vault.identity_for`; `dispatch_collection` takes the identity from the credential and treats the proposal's as an assertion that must match; a credential stored before D50-B is refused (unknown, never "none needed"), not backfilled. Recorded as ADR §8 ("Revision"). |
+| F2 | ADR addendum first; decisions taken on it | **D50-A: no option adopted** — recorded as **ACCEPTANCE 5.26**, to be re-evaluated once a real threat model exists (ADR §7.11). **D50-C** (the `0644` file) folded into the same item. Behaviour unchanged: probe 4 still shows the secret in host `ps` (now as `--password=<secret>`). The `ad_collector.py` docstring's inaccurate statements about the exposure were corrected (a factual fix, not an acceptance). |
 | F4 | Record only, not a priority | Recorded (5.25 caveat). Not fixed. |
-| F5 | Confirmed as the gate | Task #42/#44/#45 stay blocked until F1/F3 are in (done), F2's direction is decided **and** implemented, and only then are they re-assessed — in that order. |
+| F5 | Confirmed as the gate | **D50-D: task #42/#44/#45 are assessed after F1/F3/D50-B and do *not* wait for F2** — whether a credential can complete an LDAP/NTLM authentication and how visible it is on the host do not block each other. (This replaces the earlier ordering, in which F2 had to be decided and implemented first.) |
+
+**Existing-data survey for D50-B (before implementing).** The only database
+available is this branch's development database. Surveyed as the superuser
+(RLS scopes every ordinary role to one engagement, so a first survey through
+`credential_admin_scope` returned 0 — a wrong number that only *looked* like a
+finding): 357 `credential_material` rows — 305 `ad_domain_bind` (278 secret-only,
+27 undecryptable with the current master key) and 52 `git_token` (42 readable,
+10 undecryptable; untouched by D50-B). All from this branch's own `ENG-TEST`,
+`ENG-D45` and `ENG-D50` engagements; none is deployment or customer data.
+D50-B changes **none of them**: legacy rows stay as they are and are refused at
+use (`predates identity binding`; an undecryptable one is refused by the
+decrypt error). No backfill was done — a username cannot be recovered from a
+secret, and for the ten D45 rows the username appears only in a free-text
+*label*, which is not an identity. Whether to clean these rows up is left to you;
+nothing depends on it.
 
 What the F1/F3 change taught about the test suite, beyond the code:
 

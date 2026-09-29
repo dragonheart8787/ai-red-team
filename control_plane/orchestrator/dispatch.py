@@ -516,12 +516,18 @@ def dispatch_collection(
     this deliverable had modeled as something a capability could name at
     all.
 
-    An ``ad.collect`` capability with no ``domain_username`` (D50 F1), or with
-    one but no ``credential_id`` behind it, is refused as ``UNBUILDABLE_PLAN``
-    the same way, before any container or credential mount: the real
-    ``bloodhound-python`` has no credential-free mode, so such a run could only
-    ever print its usage text and fail. The former uncredentialed plan was a
-    D42 interim path that D44 never retired.
+    An ``ad.collect`` capability with no ``credential_id`` (D50 F1) is refused
+    as ``UNBUILDABLE_PLAN`` the same way, before any container or credential
+    mount: the real ``bloodhound-python`` has no credential-free mode, so such
+    a run could only ever print its usage text and fail. The former
+    uncredentialed plan was a D42 interim path that D44 never retired.
+
+    **The bind identity comes from the credential (D50-B).** The account a run
+    binds as and how it authenticates are read from the credential
+    (``vault.identity_for``, which never returns the secret); a ``domain_
+    username`` / ``auth_mode`` on the capability is only an assertion that must
+    match, and a mismatch is refused. A credential stored before D50-B carries
+    no identity and is refused too -- unknown, never "none needed".
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
@@ -542,46 +548,61 @@ def dispatch_collection(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=registry.UNKNOWN_ACTION)
 
-    try:
-        plan = adapter.build_plan(
-            constraints=capability.constraints, budget=capability.budget.as_dict(),
-            target=target,
-        )
-    except adapter.AdapterError as exc:
+    def refuse_unbuildable(error: str, **payload: Any) -> DispatchOutcome:
+        """One refusal shape for every reason a plan cannot be run, all raised
+        before any sandbox, tool_runs row or credential mount."""
         record_audit(
             engagement_id=engagement_id, actor=actor,
             event_type="tool_run.refused", subject_type="action_proposal",
             subject_id=proposal_id, decision=DENY_DECISION,
             reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": adapter.TOOL, "error": str(exc),
-                     "constraints": dict(capability.constraints),
-                     "capability_id": capability.capability_id},
+            payload={"tool": adapter.TOOL, "error": error,
+                     "capability_id": capability.capability_id, **payload},
         )
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
 
-    # Every plan build_plan returns names a bind identity (an ad.collect
-    # capability with no domain_username never gets this far: build_plan
-    # refuses it as an AdapterError, handled above -- D50 F1, the real tool
-    # has no credential-free mode). A bind identity with no credential_id on
-    # the capability to back it has nothing to mount at dispatch time and is
-    # refused the same way any other unbuildable plan is (D44) -- the
-    # adapter itself never sees credential_id (it stays in constraints/
-    # capability territory, not adapter territory), so this check belongs
-    # here, not in build_plan.
+    # The bind identity comes from the *credential*, not the proposal (D50-B).
+    # The real bloodhound-python has no credential-free mode (D50 F1), so a
+    # capability with no credential_id has nothing it could run as; and an
+    # ad_domain_bind credential is one indivisible unit -- secret, account and
+    # auth mode stored together -- so who the run binds as is a fact about the
+    # credential. The adapter never sees credential_id (that stays in
+    # capability territory, not adapter territory), so this belongs here.
     if capability.credential_id is None:
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type="tool_run.refused", subject_type="action_proposal",
-            subject_id=proposal_id, decision=DENY_DECISION,
-            reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": adapter.TOOL,
-                     "error": "domain_username constraint set with no credential_id "
-                              "on the capability to back it",
-                     "capability_id": capability.capability_id},
+        return refuse_unbuildable(
+            "ad.collect requires a credential_id on the capability: the real "
+            "bloodhound-python has no credential-free mode, so a run with no "
+            "credential behind it cannot succeed",
         )
-        _set_state(conn, proposal_id, FAILED)
-        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+    try:
+        identity = vault.identity_for(conn, capability.credential_id)
+    except vault.VaultError as exc:
+        # Includes a credential stored before D50-B: it holds no identity, and
+        # an absent identity means unknown, never "none needed" (D30's reading).
+        return refuse_unbuildable(str(exc))
+
+    # A proposal may still *state* a username / auth mode (execution_constraints
+    # carries them); they are now assertions that must match, never a way to
+    # pair a stored secret with a different account or a different mechanism.
+    constraints = dict(capability.constraints)
+    for key, bound in (("domain_username", identity.username),
+                       ("auth_mode", identity.auth_mode)):
+        stated = constraints.get(key)
+        if stated is not None and stated != bound:
+            return refuse_unbuildable(
+                f"{key} constraint {stated!r} does not match the credential's "
+                f"bound {key} {bound!r}",
+            )
+        constraints[key] = bound
+
+    try:
+        plan = adapter.build_plan(
+            constraints=constraints, budget=capability.budget.as_dict(),
+            target=target,
+        )
+    except adapter.AdapterError as exc:
+        return refuse_unbuildable(str(exc), constraints=dict(capability.constraints))
 
     tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]

@@ -19,10 +19,12 @@ Option A) — it sharpens the mechanism behind it. Full account:
 `docs/D45_AD_COLLECTION_E2E_REPORT.md` §6, and
 `docs/ACCEPTANCE_MVP1_AGENTS.md` 5.24's own addendum.
 
-**Addendum (D50, DRAFT)**: §7 records one place where the implemented design
-does not meet §2.1 (the secret reaches the tool's argv and is visible in the
-host process table), and lays out options with evidence. It decides nothing;
-nothing in it is implemented.
+**Addendum (D50)**: §7 records one place where the implemented design does not
+meet §2.1 (the secret reaches the tool's argv and is visible in the host
+process table), and lays out options with evidence. **No option was adopted**;
+it is tracked as ACCEPTANCE 5.26. **Revision (D50-B)**: §8 changes what an
+`ad_domain_bind` credential *is* — a secret, an account and an auth mode stored
+as one indivisible unit.
 
 ## 0. Why this is a different trust boundary than D35, and why that matters
 
@@ -521,8 +523,12 @@ behavior was changed; this document only traced how each already handles
 
 ## 7. Addendum (D50) — the secret reaches the tool's argv: options, not a decision
 
-**Status: DRAFT. Nothing in this section is implemented, and nothing here
-decides anything.** It is an addendum, not a rewrite: §§0–6 stand as written
+**Status: DISPOSED at the D50 decisions (see §7.11).** No option below was
+adopted; the exposure is recorded as `docs/ACCEPTANCE_MVP1_AGENTS.md` 5.26 for
+re-evaluation once a real threat model exists, and one *different* question
+raised here (§7.8) was adopted and is recorded as a revision in §8. The section
+is kept as written when it was a draft — options, evidence and leans — because
+5.26 points back to it. It is an addendum, not a rewrite: §§0–6 stand as written
 (D44's design was implemented as described and its delivery mechanism was
 re-verified byte-for-byte at D50). What this section does is record one place
 where the implemented design does not meet a principle §2.1 states, lay out the
@@ -791,3 +797,125 @@ has succeeded anywhere in this project, so the delivery is proven up to the
 tool's argument parser and no further); §7.4's Kerberos behaviour; the
 `multiprocessing` workers under a launcher; whether the deployment host runs
 process-command-line telemetry (§7.1's risk).
+
+### 7.11 Disposition (D50 decisions)
+
+| # | Decision | Outcome |
+|---|---|---|
+| **D50-A** | How to treat the argv exposure | **No option adopted.** Each has a defect the owner will not take on as a cost (launcher: first platform code resident in the tool's process, and it closes only argv; ccache: bound to F4 and contradicts §2.3; stdin/getpass: breaks `material_for`'s contract and silently truncates a secret containing a newline; accept-and-correct: not adopted as a standing position). Recorded as **ACCEPTANCE 5.26**, to be re-evaluated when a real deployment threat model — e.g. whether hosts carry `execve` auditing or EDR — exists. That is an honest statement that there is not yet enough information to say which cost is worth paying, not a deferral of a known answer |
+| **D50-B** | Where secret shape and bind identity live (§7.8) | **Store-time, with the identity bound into `encrypted_material`.** Implemented; see §8 |
+| **D50-C** | The `0644` file | **Folded into D50-A / 5.26**, not tracked separately: the same decision space |
+| **D50-D** | Ordering with F4 | F1, F3 and D50-B first; task #42/#44/#45 are then assessed **without** waiting for D50-A, because whether a credential can complete an LDAP/NTLM authentication and how visible it is on the host do not block each other. (§7.4's finding stands: the Kerberos option cannot be evaluated before F4.) |
+
+One thing was corrected without deciding anything: the `ad_collector.py`
+docstring's statements that the exposure was container-only and momentary, and
+that §2.2 priced it in (§7.1), are now accurate. Correcting a false sentence is
+not the same as accepting what it described.
+
+---
+
+## 8. Revision (D50-B) — an `ad_domain_bind` credential is one indivisible unit
+
+**Status: implemented at D50-B.** This is a revision of a decision, not a new
+feature, and the original decision is stated here as it was.
+
+### 8.1 What is being revised
+
+Until D50-B `store_credential` encrypted **only the secret**. The account name
+and the choice between a password and an NT hash were "non-secret capability
+constraints" a proposal supplied at run time. That was a deliberate trade-off
+made at D44 implementation: it kept `credential_material`'s shape identical
+across credential types.
+
+**Where it was recorded, stated honestly:** in `store_credential`'s docstring,
+not in this ADR. §1 (including §1.2's choice of an encrypted column) says
+nothing about what the encrypted object holds, and the docstring's citation of
+§4.3 for the "identical table shape" property does not survive a reading of
+§4.3, which is about the two *delivery* modes. So this revises an
+implementation-time decision, whose stated rationale leaned on this document
+for a sentence it does not contain.
+
+### 8.2 Why it is being revised
+
+The separation was cheap and it was not free. D50 found what it let happen:
+
+* A credential could exist with **no bind identity**. A capability that carried a
+  `credential_id` but named no `domain_username` was **silently run
+  uncredentialed** — the credential it was issued with ignored — against a tool
+  that has no credential-free mode, so the run could only fail. (This was the
+  visible symptom of D50 F1.)
+* A **Worker-supplied** `domain_username` / `auth_mode` could be paired with any
+  stored secret: a stored password with another account's name, or with the
+  other authentication mechanism. The pairing was decided by the proposal, not
+  by the credential.
+* Nothing validated a secret against how it would be used: `--hashes` crashes
+  the real tool on anything but `LM:NT` (verified), and no layer that sees the
+  secret ever checked.
+
+All three follow from one property: the pieces that make a credential *whole*
+lived in different places, so "this is one complete, indivisible credential" was
+true only as long as every caller remembered to pass all of it. The revision
+puts the account, the auth mode and the secret in the **same encrypted object**,
+so that property is guaranteed by the data model, not by caller discipline.
+
+### 8.3 What changed
+
+* `store_credential(…, username=…, auth_mode=…)`: **required** for
+  `ad_domain_bind`, refused for `git_token` (whose identity is a repository URL,
+  a scope object). Validated at write, where the secret is visible: `auth_mode`
+  ∈ {`password`, `hashes`} (pinned equal to the adapter's vocabulary by a test);
+  a `hashes` secret must be exactly `LM:NT`; a NUL byte in the username or
+  secret, or a secret ending in a newline (which `$(cat …)` would silently strip,
+  so the tool would receive a *different* secret than the one stored), is
+  refused. Refusals never echo the secret and happen before either `INSERT`.
+* `vault.identity_for(conn, credential_id)` returns the non-secret half
+  (`username`, `auth_mode`) and never the secret, so the dispatch function learns
+  *whose* account a run will use without holding the secret — §4.3's asymmetry
+  (`material_for` never to a sandbox; a sandbox secret only as a mounted file) is
+  untouched.
+* `dispatch_collection` takes the identity from the credential. A capability's
+  `domain_username` / `auth_mode` are kept only as **assertions that must match**;
+  a mismatch is refused as `UNBUILDABLE_PLAN` before anything is minted or run.
+  A capability with no `credential_id` is refused (D50 F1).
+* `credential.stored`'s audit payload now also carries `username` and
+  `auth_mode` (identity, not secret; the secret bytes remain pinned absent).
+* **No migration.** `encrypted_material` was already an encrypted JSON object
+  holding `{"secret": …}`; it now holds `{"secret", "username", "auth_mode"}` for
+  this type.
+
+### 8.4 Existing data
+
+Checked before implementing, as D16/D30 ask. The only database available to this
+work is the development database this branch's tests and live runs use, and it
+held **357** `credential_material` rows (surveyed as the database superuser,
+because RLS scopes every ordinary role to one engagement — a first survey
+through `credential_admin_scope` returned 0, an artifact of asking as a
+nonexistent engagement, not a fact): **305 `ad_domain_bind`** — 278 holding only
+`{"secret"}` and 27 that cannot be decrypted with the current `VAULT_MASTER_KEY`
+(the key in `.env` was regenerated at some point; rotating it makes older rows
+unreadable, as `_fernet`'s docstring already warns) — and **52 `git_token`**,
+which this revision does not touch. Every row belongs to this branch's own
+`ENG-TEST` (test suite), `ENG-D45` (the live runs against a Samba test domain)
+or `ENG-D50` (the probes) engagements; **none is deployment or customer data.**
+Nothing was modified, backfilled or deleted. The rule, following D30 / D11-7 —
+*an honest absence is safer than a plausible reconstruction*:
+
+* **No backfill.** A credential stored before D50-B holds only a secret. The
+  account it belongs to cannot be recovered from the secret; inferring `hashes`
+  from a hash-shaped string would be a guess and inferring a username is
+  impossible. A reconstruction written into a credential record is worse than a
+  gap.
+* **Absence means *unknown*, never "no identity needed".** `identity_for` and
+  `mount_for_run` refuse such a credential with a named reason
+  (`predates identity binding`), and `dispatch_collection` therefore refuses any
+  capability that carries one — fail-closed, before anything is minted. The
+  operator's remedy is the one `store_credential` already documents: rotation is a
+  new `credential_id`, and the old one is revoked through the existing cascade.
+  There is no update path, and this adds none.
+
+### 8.5 What this does not change
+
+The secret still reaches the tool's argv and the `0644` file (§7, ACCEPTANCE
+5.26 — deliberately not addressed here). This revision is about *what a
+credential is*, not about how it is delivered.
+

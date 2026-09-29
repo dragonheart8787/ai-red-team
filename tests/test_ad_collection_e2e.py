@@ -168,6 +168,7 @@ def _store_credential(engagement_id: str) -> str:
             conn, engagement_id=engagement_id, credential_id=credential_id,
             label="svc-account", credential_type="ad_domain_bind",
             secret=REAL_DOMAIN_SECRET, actor=ACTOR,
+            username="svc-account", auth_mode="password",
         )
     return credential_id
 
@@ -278,7 +279,7 @@ def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
     engagement_id, monkeypatch,
 ):
     """D50 F1 (this test used to assert the opposite). An ``ad.collect`` proposal
-    with no ``domain_username`` is authorized and issued a capability like any
+    handed no credential is authorized and issued a capability like any
     other -- nothing upstream knows the real tool has no credential-free mode --
     and is then refused by ``dispatch_collection`` itself, through the real
     entry point, before any container is constructed.
@@ -323,7 +324,7 @@ def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
         ).mappings().one()
         assert UNBUILDABLE_PLAN in refusal["reasons"]
         assert refusal["payload"]["tool"] == ad_collector.TOOL
-        assert "domain_username" in refusal["payload"]["error"]
+        assert "credential_id" in refusal["payload"]["error"]
         # Nothing ran, so nothing was recorded.
         assert conn.execute(
             text("SELECT COUNT(*) FROM tool_runs WHERE engagement_id = :e"),

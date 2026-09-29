@@ -165,6 +165,9 @@ def store_domain_credential(*, engagement_id: str, username: str, secret: str) -
             conn, engagement_id=engagement_id, credential_id=credential_id,
             label=f"D45 real domain bind account ({username})",
             credential_type="ad_domain_bind", secret=secret, actor=ACTOR,
+            # D50-B: the credential is the identity -- the account and how it
+            # authenticates are stored with the secret, not supplied per proposal.
+            username=username, auth_mode="password",
         )
     return credential_id
 
