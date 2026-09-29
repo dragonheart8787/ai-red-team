@@ -107,6 +107,17 @@ jobs:
         # mounts, or the redaction wired in front of the evidence it produces.
         run: ./tool_gateway/images/build_semgrep_image.sh
 
+      - name: Build the bloodhound image
+        # D49's tests/test_dns_server_kernel_evidence.py runs the real
+        # bloodhound-python binary in a real container and asserts against an
+        # independent UDP:53 listener's capture -- not the tool's own report.
+        # Same fail-rather-than-skip convention as every image above: a green
+        # run that never started the container would show nothing about
+        # whether the dns_server constraint actually sends a query. (D45 built
+        # this image for the first time; until now no test in the CI gate
+        # needed it, only the live-run script did.)
+        run: ./tool_gateway/images/build_bloodhound_image.sh
+
       - name: Verify Docker can enforce the network boundary
         # Checked explicitly and early so a runner without usable Docker
         # networking reports that, rather than surfacing as a wall of
