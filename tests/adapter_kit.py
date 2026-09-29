@@ -86,15 +86,11 @@ CARRY_EXEMPTIONS: Mapping[tuple[str, str], str] = {
 }
 
 #: Actions whose adapter runs in its own Dockerfile-built image but whose
-#: ``tool_version()`` still probes a host binary. A **known gap**, recorded as
-#: ACCEPTANCE 5.30 (the D43 ``ab2849a`` defect, still present in ad_collector).
-TOOL_VERSION_HOST_PROBE_EXEMPTIONS: Mapping[str, str] = {
-    "ad.collect":
-        "KNOWN GAP (ACCEPTANCE 5.30): tool_version() shells out to a "
-        "bloodhound-python that exists only inside the image, so the control "
-        "plane reports 'unknown' and a tool upgrade cannot change the "
-        "fingerprint",
-}
+#: ``tool_version()`` still probes a host binary. Empty since ACCEPTANCE 5.30 was
+#: fixed (ad_collector, the last one, now returns a pinned constant); it stays so a
+#: future known gap has somewhere to be declared -- with an ACCEPTANCE number, and
+#: a staleness test that fails the day the gap closes.
+TOOL_VERSION_HOST_PROBE_EXEMPTIONS: Mapping[str, str] = {}
 
 #: Filled in when a ``derive_view`` needs a keyword the smoke call cannot invent.
 DERIVE_VIEW_ARG_FILL: Mapping[str, Any] = {
