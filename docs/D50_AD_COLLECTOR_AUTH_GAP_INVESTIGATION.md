@@ -234,7 +234,7 @@ Decisions taken on §6, and what was done:
 |---|---|---|
 | F1 | Approved: refuse, remove the dead branch, no ADR | **Done.** `build_plan` refuses a capability with no (or blank / non-string) `domain_username`; `dispatch_collection` reports it as `UNBUILDABLE_PLAN` before any sandbox, `tool_runs` row or credential mount; the uncredentialed command branch and the conditionals it made dead are gone. |
 | F3 | Approved: attached-form arguments, no ADR | **Done.** `--username=$2` / `$3=$(cat "$4")` with `$3` in `{--password, --hashes}`. Applied to the username as well as the secret — the real tool rejects `-u -alice` exactly as it rejects `-p -abc123`, and `domain_username` is Worker-supplied, so it is the same defect. Hash shape and username↔secret binding are **not** addressed here: they go into the F2 ADR addendum. |
-| F2 | ADR addendum first; **no implementation until reviewed** | Addendum to `docs/ADR_CREDENTIAL_VAULT.md` (status DRAFT) is being written as a separate, docs-only commit. Unchanged in behaviour: probe 4 still shows the secret in host `ps` (now as `--password=<secret>`). |
+| F2 | ADR addendum first; **no implementation until reviewed** | **ADR addendum drafted** (`docs/ADR_CREDENTIAL_VAULT.md` §7, status DRAFT): the three options plus a fourth found while checking the tool's CLI (its own password prompt fed from the sandbox's stdin channel), each analysed against the D44 §0 question with evidence; the launcher's deviation from `sandbox.run`'s execution model axis by axis; where hash-shape / username binding could live. It decides nothing and nothing is implemented. Unchanged in behaviour: probe 4 still shows the secret in host `ps` (now as `--password=<secret>`). |
 | F4 | Record only, not a priority | Recorded (5.25 caveat). Not fixed. |
 | F5 | Confirmed as the gate | Task #42/#44/#45 stay blocked until F1/F3 are in (done), F2's direction is decided **and** implemented, and only then are they re-assessed — in that order. |
 
@@ -249,5 +249,6 @@ What the F1/F3 change taught about the test suite, beyond the code:
   would have been refused earlier for the missing bind identity and stayed green with
   the dns_server check deleted. They were moved to credentialed capabilities and the
   dns_server mutation was re-run against the rewritten test (red, as it must be).
+* **The ADR work corrected one of this report's own calibrations.** §3 F2 called the practical increment of the argv exposure small because the secret already sits in a world-readable file. That considered only live local observers; argv, unlike a temp file, is routinely recorded and shipped off-host by `execve` auditing and process-telemetry agents. Not measured here, so it is a risk to assess, not a finding — but the "small" was too quick (ADR §7.1).
 * There is now a permanent test of what a real container receives
   (`tests/test_ad_collector_credential_delivery.py`) — the gap §2 found.

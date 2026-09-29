@@ -19,6 +19,11 @@ Option A) — it sharpens the mechanism behind it. Full account:
 `docs/D45_AD_COLLECTION_E2E_REPORT.md` §6, and
 `docs/ACCEPTANCE_MVP1_AGENTS.md` 5.24's own addendum.
 
+**Addendum (D50, DRAFT)**: §7 records one place where the implemented design
+does not meet §2.1 (the secret reaches the tool's argv and is visible in the
+host process table), and lays out options with evidence. It decides nothing;
+nothing in it is implemented.
+
 ## 0. Why this is a different trust boundary than D35, and why that matters
 
 D35 built the only precedent this system has for handing a sandboxed
@@ -511,3 +516,278 @@ credential exists yet to test a real bind with regardless. Nothing about
 `dispatch_scan`, `dispatch_collection`, or `dispatch_code_scan`'s existing
 behavior was changed; this document only traced how each already handles
 (or does not need to handle) secret material, to ground §2 and §4.
+
+---
+
+## 7. Addendum (D50) — the secret reaches the tool's argv: options, not a decision
+
+**Status: DRAFT. Nothing in this section is implemented, and nothing here
+decides anything.** It is an addendum, not a rewrite: §§0–6 stand as written
+(D44's design was implemented as described and its delivery mechanism was
+re-verified byte-for-byte at D50). What this section does is record one place
+where the implemented design does not meet a principle §2.1 states, lay out the
+ways to close or accept that, and put the same question §0 asked of D35 to each
+of them — *is this the same trust boundary as the precedent?* — with evidence,
+before anyone builds anything. Evidence is from D50 unless marked otherwise;
+every experiment is reproducible with
+`scripts/live_run/d50_ad_collector_auth_probe.py` (probes 2, 4, 5) and the
+commands quoted inline. Full investigation:
+`docs/D50_AD_COLLECTOR_AUTH_GAP_INVESTIGATION.md`.
+
+### 7.1 What is true today
+
+**§2.1 says** the principle "path in argv, secret content only in a mounted
+file, never in argv or the environment" *"generalizes without change"*. For
+`bloodhound-python` it cannot be applied literally, because the tool has no
+option to read its password from a file. D44 resolved that with a shell wrapper
+(`sh -c 'exec bloodhound-python … "$(cat /creds/secret)"'`), and
+`ad_collector.py`'s docstring called the residue "an honest limit". Measured
+while the tool runs (D50 probe 4):
+
+| Observer | Sees the secret? |
+|---|---|
+| `docker inspect` `Config.Cmd` (the daemon's / control plane's record) | no |
+| `tool_runs.normalized_params`, `tool_run.started` audit payload | no (D45/D49 live checks + `dispatch_collection`) |
+| `docker top <container>` | **yes** |
+| host `ps -eo args` | **yes**, for the whole run (the wrapper `exec`s) |
+| the mounted file `/tmp/cyberorch-cred-*` on the host | **yes**, mode `0644`, for the whole run (ADR §4.1's own choice) |
+
+What that changes about the record:
+
+* The principle in §2.1 is met for everything *this system* records and not met
+  at the host process table. The adapter docstring limited the exposure to
+  "*inside* the container … for the moment it execs" and said §2.2 "already
+  prices this in"; both statements understate it (host-wide, run-long), and
+  §2.2 does not mention the process table at all. That is a correction owed
+  regardless of which option below is chosen.
+* **A calibration made at D50 needs qualifying.** D50's report called the
+  practical increment small, because the same run already leaves the secret in
+  a world-readable file that anyone who can `ps` can also read. That reasoned
+  only about *live local observers*. It did not consider that argv, unlike a
+  temp file, is routinely **recorded and shipped off-host** by `auditd`
+  `execve` rules and EDR/process-telemetry agents, and then persists in places
+  the file never does. I have not measured whether any such collector runs on
+  a deployment host; it is general knowledge about how those tools work, stated
+  as a risk to be assessed, not as a finding.
+* The 0644 file is a *separate* exposure and stays under every option except
+  §7.5. The container runs as `uid=10002 (collector)` with `CapEff=0`
+  (measured), so a `0600` file owned by any other host uid is unreadable to it;
+  `0644` is what makes the mount work. Narrowing that (e.g. `chown` to
+  10002) needs the control plane to run as root or as that uid, which is not
+  generally true — out of scope here unless you want it added.
+
+### 7.2 The yardstick: what the precedents actually did
+
+§0 separated D35 from D44 by asking whose code holds the secret. The same
+question needs a finer grain here, because every option below still uses the
+D44 mount; what differs is what sits between the mounted file and the tool.
+
+| | Who reads the file | Where the secret lives afterwards | Platform-authored code in the tool's process | Uses the tool's own input channel? |
+|---|---|---|---|---|
+| **D35** TLS material | the tool, via its own flag (`curl --cacert <path>`) | the tool's memory | none | yes |
+| **D34** web.post body | the tool, via its own `--data-binary @-` on stdin | the tool's memory | none | yes |
+| **D44 as built** | `sh` (`$(cat …)`), then `exec` | **the tool's argv** | shell glue, *gone after `exec`* | yes (argv) — but populated by platform glue |
+
+The `sandbox.run` contract all of these share is *container-level*: an
+internal, gateway-less network confined to the allowlisted CIDR, no capabilities,
+read-only root, `no-new-privileges`, pid/memory limits, a kill at
+`max_duration_seconds`. None of it depends on what the process image is or how
+its `command` is written, and no option below touches any of it. Repo check: no
+code identifies a tool by its command line (`grep` for `docker top`, `/proc/…/
+cmdline`, `psutil`: nothing); tool identity is `adapter.TOOL`, recorded in
+`tool_runs.tool` and the audit payloads.
+
+### 7.3 Option (i) — an in-process launcher
+
+`python3 -c '<fixed script>' <positional args>` reads `/creds/secret`, builds
+`sys.argv` in memory, and calls the tool's own entry point.
+
+**What was verified (D50).**
+* The entry point is the package's *declared* console script
+  (`entry_points.txt`: `bloodhound-python = bloodhound:main`), and the console
+  script itself is `sys.exit(main())`. A launcher making the same call is not
+  reaching into internals.
+* Behavioural equivalence, real image, five cases (no auth flag → usage; an
+  argparse error; auth accepted then DNS unreachable; `--help`; a hash-parse
+  `ValueError`): **exit code, stdout and stderr identical** to the console
+  script, ignoring traceback frame lines (they name `<string>` instead of the
+  script path). One requirement surfaced: the launcher must set `sys.argv[0]`,
+  or argparse's `prog` — which appears in usage and error text — changes.
+* The secret is absent from `docker top` and host `ps` while the tool runs,
+  and the tool still selects its authentication branch (probe 5).
+* The shell layer disappears, so `$(cat …)`'s newline stripping goes with it;
+  every value would reach the tool as a list element, never through a shell.
+
+**Deviation from `sandbox.run`'s execution model, axis by axis.**
+
+| Axis | Now | With a launcher | Verdict |
+|---|---|---|---|
+| Container guarantees (network, caps, FS, limits, kill) | unchanged by anything in `command` | identical | **no deviation** |
+| Privilege of the code that reads the secret | `sh`, uid 10002, CapEff 0 | `python3`, same uid, CapEff 0 | no deviation |
+| Process image the audit/`docker top` describes | `bloodhound-python …` | `python3 -c …` | changes; nothing in the repo consumes it |
+| What the audit records | the full `command`, glue included | the full `command`, glue (now Python source) included | unchanged in kind — the code that runs is still in the audit verbatim. A launcher *baked into the image* would not have this: the audit would record only its path. Inline is the option that preserves it |
+| Is platform code resident in the tool's process? | **no** — `exec` replaces the shell | **yes** — the launcher's frame stays on the stack while `main()` runs | **the one real shift** |
+| Reliance on tool internals | the tool's CLI | the tool's CLI **and** its `main` entry point (pinned: `BLOODHOUND_VERSION`, build-time manifest check) | small, and the delivery/acceptance tests in `tests/test_ad_collector_credential_delivery.py` run against the real image in CI, so a break is caught |
+| Child processes | n/a | the tool uses `multiprocessing.Pool` for ACL parsing; this image's default start method is `fork`, so workers inherit the parent's command line, which contains no secret (it is read at run time, not embedded). Not exercised end to end: no run has got far enough to start the pool | unverified past the argument that follows from `fork` |
+
+**Is it the same trust boundary as the precedent?** In every respect §0 cares
+about — who holds the secret, with what privilege, what a compromised holder
+can do — yes: a compromised tool library in the same interpreter can already
+read `/creds/secret` and its own argv, so a resident launcher grants nothing
+new. What is genuinely new is category, not capability: D34 and D35 both used
+the tool's **own** input channel with nothing of the platform's in the tool's
+process, and D44's shell wrapper was platform glue that disappeared at `exec`.
+A launcher is the first case where platform-authored code stays resident in the
+tool's process. That is a fact to decide on, not a reason to refuse it.
+
+**What it does not do:** it leaves the `0644` file (§7.1) untouched. It also
+fixes **both** authentication modes (password and hashes), which no option
+except (iii) does.
+
+### 7.4 Option (ii) — Kerberos ccache instead of a password
+
+The tool's `-k` mode reads a ticket cache instead of a secret; the secret never
+enters the tool container.
+
+**What was verified (D50).** `bloodhound/ad/authentication.py` `load_ccache`
+reads the path from the `KRB5CCNAME` environment variable and extracts only a
+**TGT**. After that the tool still calls `getKerberosTGS(…, self.kdc, …)` to
+obtain service tickets, and impacket's `sendReceive` resolves the KDC
+*hostname* with `socket.getaddrinfo` — the system resolver, which D49's `-ns`
+does not touch and which cannot resolve AD names in the sandbox (D50 F4,
+observed in D49's own run). Two more findings:
+`DockerSandbox.run` has no environment parameter (`grep` for `environment=`:
+none), so `KRB5CCNAME` would have to be set by a shell prefix in `command`; and
+the tool container's uid is 10002, so the ccache file has the same mode
+constraint as §7.1.
+
+**Consequences.**
+* It is **coupled to F4**, which was deliberately deferred: without a way for
+  the tool container to resolve the KDC's name, the Kerberos path cannot get
+  service tickets. This option cannot be evaluated, let alone built, before F4.
+* Something must mint the ccache from the password. Either the control plane
+  does (a new dependency — impacket is not in `pyproject.toml` — and a new
+  network path from the control plane to a customer's KDC; D43's control-plane-
+  side `git fetch` is the nearest precedent for the control plane contacting a
+  third party with a credential), or a *second, fixed-code container* does,
+  which is the D35 pattern (§0: a program this system owns) applied to a new
+  purpose.
+* **It contradicts a sentence in §2.3.** §2.3 says no derivative shorter than
+  the credential exists for a domain password or hash. A Kerberos TGT is such a
+  derivative (bounded lifetime, password never leaves the minting step). The
+  caveat: while valid it, and its session key, act as the principal for
+  anything the principal can do, so it shortens the window and removes the
+  password from the tool container without shrinking what a leak can do.
+* Not verified at all: any part of this against a real KDC. Samba's KDC
+  rejects impacket's TGS-REQ for a reason D45 recorded, so this environment
+  cannot test it.
+
+### 7.5 Option (iii) — accept it, and correct the record
+
+No mechanism change. State the exposure and bound it.
+
+* **Bound:** host-visible for at most `max_duration_seconds` (600 by default in
+  `build_plan`; the budget the capability carries), to whoever can list host
+  processes or run `docker top`, and — per §7.1 — to any host-local user via the
+  file regardless.
+* **Corrections owed under any option:** the `ad_collector.py` docstring
+  (scope: host, not container; duration: the run, not "the moment it execs";
+  and it must stop citing §2.2 as having priced this in); §2.1's "generalizes
+  without change" (false for a tool whose CLI takes secrets only in argv); §2.2
+  (add the host process table to what the exposure includes); §2.3 (the
+  Kerberos derivative, §7.4).
+* This is the only option that needs no code. It is also the only one that
+  leaves §2.1's principle knowingly unmet for this tool; whether that is
+  acceptable is a threat-model call (single-tenant host with no process
+  telemetry vs. shared host or one with `execve` auditing), which this document
+  cannot make for you.
+
+### 7.6 Option (iv) — newly found: the tool's own password prompt, fed from stdin
+
+Not in the three the brief listed; found while checking what the tool's CLI
+offers. With `-u <user>` and no password, `main()` calls `getpass.getpass()`,
+which in a container with no TTY falls back to reading stdin. `DockerSandbox.run`
+already has a stdin channel (D34, for `web.post`).
+
+**What was verified (D50).** Real image, real `DockerSandbox.run(stdin=…)`: the
+tool passes the prompt and reaches its DNS stage. Fidelity of `getpass` on that
+channel, secret + `\n` sent: plain, spaces, shell metacharacters, leading `-`,
+unicode, trailing spaces and empty are **intact**; a trailing newline is
+stripped; **an embedded newline is silently truncated** (`ab\ncd` → `ab`) —
+worse than today, where it survives. The prompt and a `GetPassWarning` land on
+stderr and therefore in the evidence excerpt (no secret in them).
+
+**Consequences.**
+* It is the **only** option that removes *both* the argv exposure and the host
+  file: the secret would exist only in the control plane's memory, the Docker
+  attach socket and the tool's memory. Nothing in `docker top`, `ps`,
+  `docker inspect`, `/tmp` or the audit payload.
+* It **runs into D44's own written contract.** `vault.material_for`'s
+  docstring says never to pass its result to `DockerSandbox.run`, and
+  `mount_for_run` refuses any type but `ad_domain_bind` precisely so a
+  control-plane-only secret never reaches a sandbox (§4.3). Feeding stdin
+  needs a third delivery mode (say `stdin_for_run`) or an amendment of that
+  contract, and it means the plaintext transits `dispatch_collection`'s memory,
+  which today it never does (only a path does).
+* **Password mode only.** There is no prompt for `--hashes`; that mode would
+  still need argv or a launcher. Two mechanisms instead of one.
+* The truncation above needs a guard (refuse a secret containing `\n` at
+  store time) or it is a silent-corruption risk.
+
+### 7.7 Side by side
+
+| | (i) launcher | (ii) ccache | (iii) accept + correct | (iv) stdin / getpass |
+|---|---|---|---|---|
+| Secret out of host `ps` / `docker top` | yes | yes (never in the tool container) | no | yes |
+| Secret out of the host `0644` file | no | no (ccache is a file too) | no | **yes** |
+| Password mode / hashes mode | both | password → TGT; hashes → `-aesKey`/ticket, untested | both | password only |
+| Changes a D44 contract | no | §2.3 sentence; new delivery type | text only | `material_for`'s "never to `sandbox.run`"; third delivery mode |
+| Platform code in the tool's process | **yes, resident** | none (a separate minting step) | none | none |
+| Code / design size | small | large, needs a second component | none | medium |
+| Blocked by anything deferred | no | **F4** | no | no |
+| Verified in D50 | equivalence, probe | source reading only | n/a | fidelity, probe |
+
+### 7.8 The second question: where do secret shape and bind identity live?
+
+Independent of §§7.3–7.6, and the one D50 left "D44-level" (F3 items 2 and 3):
+`--hashes` needs exactly `LM:NT` (anything else crashes the tool before any DNS,
+verified), and nothing binds a stored secret to the *kind* of secret it is or to
+the account it belongs to.
+
+**This was a decision, not an oversight.** `store_credential`'s docstring says
+the secret is "the one thing this Vault ever encrypts"; the username and the
+password-vs-hashes choice are non-secret constraints the proposal supplies,
+so that the table's shape stays identical across credential types (§4.3).
+Changing it reverses that. The three placements:
+
+| Placement | Mechanism | Cost | Catches |
+|---|---|---|---|
+| **Adapter** (`build_plan`) | — | — | **nothing**: it never sees the secret, by design |
+| **Mount time** (`mount_for_run`) | validate shape just before the file is written; refuse with a named audit event | none to the schema; one more failure mode at dispatch | wrong shape, at the last moment, per run |
+| **Store time** (`store_credential`) | validate at write; optionally also store `auth_mode` (and `username`) inside the encrypted JSON | **no migration** — `encrypted_material` is already an encrypted JSON object holding `{"secret": …}`; reverses the "secret only" decision | wrong shape once, at the source; and, if username is stored, ends the Worker-supplied pairing (today a Worker can pair a stored password with any `domain_username` or with `hashes`) |
+
+Store-time-with-binding is the strongest and the only one that changes what the
+record *means*; mount-time is the cheapest and keeps §4.3 intact. Either way the
+adapter's `domain_username`/`auth_mode` constraints would become redundant or
+required-to-match.
+
+### 7.9 Decisions this needs (nothing here is decided)
+
+| # | Decision | Options | Lean — explicitly *not* a decision |
+|---|---|---|---|
+| **D50-A** | How to treat the argv exposure | (i), (ii), (iii), (iv), or a combination | (i) closes the observers §7.1 lists for both modes with the smallest design change and no contract broken, but leaves the `0644` file, so it only *helps* if the deployment's threat model cares about `ps`/`docker top`/`execve` telemetry but not about local file reads; (iv) is the only one that closes both, at the cost of a contract change and password-only coverage. If the threat model is single-tenant with no process telemetry, (iii) is defensible. This is a threat-model question the code cannot answer |
+| **D50-B** | Whether to touch the `0644` file at all | leave / `chown` to uid 10002 when the control plane can / drop it via (iv) | leave, unless D50-A picks (iv) |
+| **D50-C** | Where shape/identity binding lives (§7.8) | mount-time / store-time / store-time + bound username | mount-time now (no schema or §4.3 change), store-time-with-binding recorded as the stronger follow-up |
+| **D50-D** | Ordering with F4 | (ii) only after F4 | (ii) is not a candidate until F4 is designed |
+
+### 7.10 What this addendum does not do
+
+No code, test, schema or Rego change. The three experiments in §7.3/§7.6 ran in
+throwaway containers against `cyberorch/bloodhound:local`; the launcher was
+never put in the dispatch path and no stdin secret was ever stored by the
+Vault (the probes used synthetic values). Not tested against a real domain
+controller: any of (i)–(iv) authenticating successfully (F5 — no authentication
+has succeeded anywhere in this project, so the delivery is proven up to the
+tool's argument parser and no further); §7.4's Kerberos behaviour; the
+`multiprocessing` workers under a launcher; whether the deployment host runs
+process-command-line telemetry (§7.1's risk).
