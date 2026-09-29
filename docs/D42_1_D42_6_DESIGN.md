@@ -195,6 +195,15 @@ This is a design *note* for whoever writes that harness integration, not
 new code this deliverable produces — the same way `d40_three_role.py`
 was the harness, not a control-plane change.
 
+> **D52 pointer — read before implementing this section.** The instruction
+> above to pass the full set of discovered `fqdn`/`ip` identities as
+> `observed_identities` assumes that "LDAP returned this object" and D20's
+> *established* are the same thing. That equivalence has **not** been
+> confirmed and must not be taken as given: it is recorded as
+> `ACCEPTANCE_MVP1_AGENTS.md` **5.27** (Class C). Whoever writes this harness
+> must read 5.27 and settle the question first, not implement the paragraph
+> above literally. The original text is left unchanged.
+
 ### 1.9 I8 verification requirement (binding on implementation)
 
 Before `ad.collect` ships, a test in the style of D13/D15's adversarial
