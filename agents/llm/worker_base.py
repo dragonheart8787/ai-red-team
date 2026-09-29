@@ -71,6 +71,7 @@ from control_plane.canonicalizer.target import (
     canonicalize_scope_value,
     normalize_target,
 )
+from control_plane.orchestrator.git_fetch import GitFetchError, parse_repo_scope_value
 
 #: Cap on the model's own output. A proposal is a small object; anything near
 #: this ceiling means the model is not doing the task, and truncation then
@@ -354,6 +355,32 @@ _UNTYPED_IDENTITY_TYPES = ("url", "ip", "cidr", "fqdn")
 _TEXT_TOKEN = re.compile(r"[^\s\"'<>(){}|,;]+")
 
 
+def _repo_location_key(value: str) -> IdentityKey:
+    """The identity of the repository a ``repo`` value names, whatever branch it carries.
+
+    A ``repo`` is ``<location>#<branch>`` (D43-1), and the location is to it what the
+    host is to a ``url`` (D52): *who* was named. The branch, like a URL's path, is
+    only *what* is asked of them. The split is ``git_fetch.parse_repo_scope_value`` --
+    the parser that defines the format -- not a second opinion of where a branch
+    begins; a value with no ``#branch`` (an observed identity, a mention in text) is
+    itself a location.
+
+    Case is not identity here, for the same reason ``_norm_identity`` lowercases: the
+    floor this sits beside has always matched that way.
+    """
+    try:
+        location = parse_repo_scope_value(value)[0]
+    except GitFetchError:
+        location = value
+    return ("repo_location", _norm_identity(location))
+
+
+def _untyped_repo_keys(value: str) -> set[IdentityKey]:
+    """A repository-shaped mention (``scheme://...``) as a location key, for text and
+    observed identities, which arrive with no declared type."""
+    return {_repo_location_key(value)} if "://" in value else set()
+
+
 def _canonical_keys(value: str, types: tuple[str, ...]) -> set[IdentityKey]:
     """What ``value`` denotes, according to the pipeline's own canonicalizer.
 
@@ -381,6 +408,8 @@ def _canonical_keys(value: str, types: tuple[str, ...]) -> set[IdentityKey]:
         except CanonicalizationError:
             continue
         keys.add((itype, canonical))
+        if itype == "repo":
+            keys.add(_repo_location_key(canonical))
         if itype == "url":
             host_type, host_value = url_host(canonical)
             if host_type is not None:
@@ -407,7 +436,11 @@ def _untyped_keys(value: str) -> set[IdentityKey]:
     norm = _norm_identity(value)
     if not norm:
         return set()
-    return {("raw", norm)} | _canonical_keys(value, _UNTYPED_IDENTITY_TYPES)
+    return (
+        {("raw", norm)}
+        | _canonical_keys(value, _UNTYPED_IDENTITY_TYPES)
+        | _untyped_repo_keys(value)
+    )
 
 
 def _scope_keys(candidate: ScopeCandidate) -> set[IdentityKey]:
@@ -425,6 +458,8 @@ def _scope_keys(candidate: ScopeCandidate) -> set[IdentityKey]:
                   canonicalize_scope_value(candidate.type, candidate.value)))
     except CanonicalizationError:
         pass
+    if candidate.type == "repo":
+        keys.add(_repo_location_key(candidate.value))
     return keys
 
 
@@ -452,6 +487,7 @@ def _text_identity_keys(text: str) -> set[IdentityKey]:
     for token in _TEXT_TOKEN.findall(text.replace("\\", "")):
         for candidate in _token_candidates(token):
             keys |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
+            keys |= _untyped_repo_keys(candidate)
     return keys
 
 
@@ -497,6 +533,14 @@ def _discovery_provenance(
     escalated here, in agreement with what authorization already treats as one
     target. Names are never resolved (§8.9/I8): an fqdn is not established by an
     observed ip, nor the reverse.
+
+    D53 follow-up -- "established" for a ``repo`` target. A repository is judged by
+    its **location** (``<location>#<branch>`` without the branch), the way a ``url``
+    is judged by its host: a different branch of a repository the engagement offered
+    or a tool observed introduces nobody, and a repository named in scanned source
+    by location alone *is* introduced -- which matters because ``code.scan`` accepts
+    a target only with a ``#branch``, so the string a Worker proposes is never the
+    string the source contained (ACCEPTANCE 5.31).
 
     Returns ``source`` (descriptive channel), ``evidence_id`` /
     ``discovered_by_run_id`` (the §4.1 provenance chain), and
