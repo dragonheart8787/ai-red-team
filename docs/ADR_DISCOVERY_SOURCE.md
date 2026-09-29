@@ -454,3 +454,24 @@ token boundary (`.2` is not `.20`); the url-target cases above. Mutation-verifie
 reverting to raw string comparison turns 22 of the 47 tests red; replacing the canonicalizer
 with a hand-written "lowercase and strip the dot" rule is caught by the IPv6/IDNA
 cases and by a structural test that the canonicalizer is actually consulted.
+
+### 8.7 Follow-up (D53 closeout, `178c9e1`) — a `repo` is keyed by its location
+
+The `url` rule of §8.3 had a sibling that D52 did not cover. `code.scan` accepts a repo
+target only as `<location>#<branch>` (D43-1), so source that names a repository by
+location — `vendored from http://evil.example/x/y.git` — never contained the string a
+Worker would propose, and a `repo` identity was compared as one opaque string
+(ACCEPTANCE 5.31; found when D53's skeleton demanded an injection-carrier test for
+`code.scan`). D52's own probe tried the bare location and not the `#branch` form, the only
+runnable one.
+
+The rule, stated once and the same shape as §8.3: **a `repo` is judged by its location.**
+The location is taken from `git_fetch.parse_repo_scope_value` (the authoritative parser;
+no second one) and compared normalized, in the four places §8.2's key set is gathered
+(canonical target, untyped mention, scope object, text token). So a lure repo is
+*introduced* whatever branch is proposed; another branch of an offered or observed
+repository is *established*; the scanned repo named in its own source is not escalated.
+Branch names are never resolved and never establish anything (§8.9/I8 unchanged); the
+strict "established" criterion is unchanged. Authorization was never affected — this is
+the extra human look D20 adds for content-introduced targets, restored for the one
+target shape that had escaped it.

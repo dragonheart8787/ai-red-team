@@ -84,7 +84,7 @@ templates encode the ones marked *template*; the rest are yours.
 **Image**
 - Pin the tool to an exact version; `tool_version()` returns that constant. It must
   never probe a binary on the control-plane host — the tool lives in the image
-  (D43 `ab2849a`; found unfixed in `ad_collector`, ACCEPTANCE 5.30). *Enforced.*
+  (D43 `ab2849a`; found unfixed in `ad_collector` at D53, ACCEPTANCE 5.30, fixed after). *Enforced.*
 - Bake a manifest recording the version and base; the build script checks it. *Template.*
 - Run as a non-root user that owns nothing. *Template.*
 - The sandbox runs the container `cap_drop=ALL`, `read_only`, `no-new-privileges`,

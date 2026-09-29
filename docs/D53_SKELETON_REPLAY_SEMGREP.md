@@ -82,8 +82,9 @@ False`; proposing the bare location → `True`, a form `code.scan` would refuse 
 Authorization still refuses a repo no scope object covers, so this is a missing second
 layer, not a broken boundary. It is the same shape as D52's `url` finding, and it is
 mine to own: I probed the bare form in D52 and not the `#branch` form, which is the
-only one that runs. It is pinned by `test_known_gap_a_repo_named_by_location_alone_is_not_yet_escalated`
-so it cannot be forgotten or fixed silently, and recorded as ACCEPTANCE **5.31**.
+only one that runs. It was pinned by a known-gap test so it could not be forgotten or fixed silently,
+recorded as ACCEPTANCE **5.31**, and **closed in the D53 closeout (`178c9e1`)**: a repo
+is now keyed by its location, and the test was inverted.
 
 The walk also surfaced, without being looked for, two defects in *other* tools that
 the mechanical checks report on their first run (inventory F1, F2; ACCEPTANCE 5.29,
@@ -111,7 +112,7 @@ confirms the tracked tree is clean afterwards. **RED** = the skeleton caught it.
 | 11 | A new constraint read by `build_plan`, unaccounted | D11-3 (prospective) | **RED** — fingerprint accounting **and** wired-in check |
 | 12 | Redaction silently stops being applied | D43-4 | **RED** — `test_derive_view_redacts_the_fake_secret_by_default` |
 | 13 | The discovery check stops noticing a lure in evidence | D20 | **RED** — `test_an_address_named_in_scanned_source_is_a_discovery_candidate_only` |
-| 14 | *Live:* BloodHound's `tool_version()` host probe (exemption removed) | D43 defect, present today | **fires** — reports `'unknown'` |
+| 14 | *Live:* BloodHound's `tool_version()` host probe (exemption removed) | D43 defect, present at D53 | **fired** — reported `'unknown'`; fixed in `d708117` |
 
 Three properties of the checks themselves, also shown rather than assumed:
 
@@ -164,10 +165,13 @@ Nothing was dropped between the ledger and the skeleton; what the skeleton does
 
 | ACCEPTANCE | Finding | Class |
 |---|---|---|
-| **5.29** | `web.post` can never build a plan through `propose_action` (no way to carry a body); `web.get` and `web.post` have never been driven past policy into dispatch by a committed test | C |
-| **5.30** | `ad_collector.tool_version()` host-probes and returns `"unknown"` (the D43 `ab2849a` defect, unfixed in its sibling) | B |
-| **5.31** | A repository named in scanned source by location alone is not escalated by D20, because a `repo` is compared as an opaque string and the only runnable form carries `#branch` | B |
+| **5.29** | `web.post` can never build a plan through `propose_action` (no way to carry a body); `web.get` and `web.post` have never been driven past policy into dispatch by a committed test | C — open; analysis in `D53_5_29_WEB_POST_BODY_ANALYSIS.md` |
+| **5.30** | `ad_collector.tool_version()` host-probes and returns `"unknown"` (the D43 `ab2849a` defect, unfixed in its sibling) | B — **closed `d708117`** |
+| **5.31** | A repository named in scanned source by location alone is not escalated by D20, because a `repo` is compared as an opaque string and the only runnable form carries `#branch` | B — **closed `178c9e1`** |
 
-None was fixed. 5.30 and 5.31 have small fixes with clear precedents (`ab2849a`;
-D52's keying a `url` by its host); each changes behaviour that was not in this
-deliverable's scope, so each waits for a go-ahead.
+At D53 none was fixed: 5.30 and 5.31 had small fixes with clear precedents (`ab2849a`;
+D52's keying a `url` by its host) that changed behaviour outside this deliverable's
+scope, so they waited for a go-ahead. **The closeout gave it and both are fixed**, each
+with a test shown red against the pre-fix code and green after. Row 14 above was the
+live case; with 5.30 fixed the exemption table it used is empty, and the staleness test
+that guards the empty table remains. 5.29 is a design decision and stays open.

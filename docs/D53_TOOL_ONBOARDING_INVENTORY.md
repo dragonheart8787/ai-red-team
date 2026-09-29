@@ -126,7 +126,7 @@ neither reaches `build_plan`. For `web.get` nothing is known to be broken —
 `execution_constraints` carries what it reads, and it shares `dispatch_scan` with
 the browser that D37 did drive end to end — but it has no test that runs it
 through the entry point, and D37's own lesson is that this is where wiring gaps
-hide. → ACCEPTANCE **5.29**.
+hide. → ACCEPTANCE **5.29** (still open; see `D53_5_29_WEB_POST_BODY_ANALYSIS.md`).
 
 **F2 — `ad_collector.tool_version()` returns `"unknown"`.** It shells out to
 `bloodhound-python` on the control-plane host; the tool exists only in the
@@ -146,7 +146,7 @@ identities as opaque strings. Authorization still refuses the repo; what is miss
 is the second look D20 adds for content-introduced targets. I probed the bare
 location in D52 (`True`) and not the `#branch` form, which is the only form that
 runs — a miss in D52's own probe, not something D52 could have known. → ACCEPTANCE
-**5.31**.
+**5.31** (closed after D53, `178c9e1`).
 
 **F4 — `EVIDENCE_PREFIX` was an unenforced registration point.** A tool with no
 entry silently got `TOOL-…` evidence ids. Cosmetic, but the same shape as the
