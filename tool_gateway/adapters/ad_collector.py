@@ -12,32 +12,57 @@ names an ``ad_domain`` identity, and everything this run discovers is a
 of the design doc) — nothing in this module writes ``metadata_registry``,
 and nothing here can.
 
-Credential handling (D44, `docs/ADR_CREDENTIAL_VAULT.md` §4.1). A
-``domain_username`` constraint is this adapter's signal that the capability
-carries a credential: when present, ``build_plan`` builds a small shell
-wrapper that reads the LDAP bind secret from a file at
-``CONTAINER_CRED_PATH`` at *run* time rather than putting it in argv —
-``dispatch_collection`` is the caller that actually mints and mounts that
-file, via ``control_plane.vault.vault.mount_for_run``. When
-``domain_username`` is absent, the command is exactly what it always was:
-no ``-u``/``-p``/``-hashes`` flag at all, buildable and testable against
-fixture output with no credential in the picture, unchanged from before D44.
+Credential handling (D44, `docs/ADR_CREDENTIAL_VAULT.md` §4.1).
+``build_plan`` requires a ``domain_username`` constraint and builds a small
+shell wrapper that reads the LDAP bind secret from a file at
+``CONTAINER_CRED_PATH`` at *run* time — ``dispatch_collection`` is the caller
+that actually mints and mounts that file, via
+``control_plane.vault.vault.mount_for_run``. (The wrapper does not keep the
+secret out of argv; see the honest limit below.) Since D50-B the
+``domain_username`` and ``auth_mode`` this function sees are the ones **bound
+into the credential** (``dispatch_collection`` reads them from the vault and
+puts them in ``constraints``; a proposal's own claim is only an assertion that
+must match) -- this adapter still just requires them to be present, and does
+not know or care where they came from.
+
+**There is no uncredentialed mode, and this adapter no longer builds one
+(D50 F1).** Until D50 a capability with no ``domain_username`` got a bare
+``bloodhound-python -d <domain> -c <methods> --zip``. That was a D42
+interim path ("no live/production path until the Vault lands") that D44 never
+retired, and it cannot work: the real ``bloodhound==1.9.0`` requires a username
+in every authentication branch of its ``main()`` and, given none, prints its
+usage text and exits 1 before it builds the object that does any DNS or LDAP
+(D50, `docs/D50_AD_COLLECTOR_AUTH_GAP_INVESTIGATION.md` §1, ten credential
+shapes tried against the real binary). Every fixture test that passed through
+that branch did so under ``StubSandbox``, which never executes the command.
+``build_plan`` therefore refuses it, and ``dispatch_collection`` turns that
+refusal into ``UNBUILDABLE_PLAN`` before any container starts.
+
+**Attached-form arguments (D50 F3).** The username and the secret are passed as
+``--username=<v>`` / ``--password=<v>`` (or ``--hashes=<v>``), never as a flag
+followed by a separate token. With the separate-token form, argparse refuses
+any value that begins with ``-`` (``-p -abc123`` fails with "expected one
+argument"), and both values are operator/Worker-supplied. Verified against the
+real binary: the attached forms are accepted for every such value.
 
 **This is an honest limit, not a claimed clean solution.**
 ``bloodhound-python`` has no "read the password from a file" flag of its
 own, so the wrapper still has to substitute the secret into the real
-process's argv via shell command substitution (``"$(cat ...)"``) at the
-moment it execs. What D35's file-mount principle buys here is that the
-secret never appears in *this system's own* records — not in the plan's
-``command`` (what ``tool_run.started`` audits), not in the capability's
-``normalized_params``, not on the command line the control plane ever
-constructs or logs. What it cannot buy, because the tool's own CLI does not
-offer it, is keeping the secret out of that one process's argv as seen from
-*inside* the container itself (e.g. by another process sharing that
-container's PID namespace) for the moment it execs. `docs/
-ADR_CREDENTIAL_VAULT.md` §2.2 already prices this into ad.collect's stated
-blast radius; nothing here claims a stronger guarantee than that document
-does.
+process's argv via shell command substitution (``"$(cat ...)"``) when it
+execs. What D35's file-mount principle buys here is that the secret never
+appears in *this system's own* records — not in the plan's ``command`` (what
+``tool_run.started`` audits), not in the capability's ``normalized_params``,
+not on the command line the control plane ever constructs or logs. What it
+cannot buy, because the tool's own CLI does not offer it, is keeping the
+secret out of that process's argv: **for the whole run** (the wrapper
+``exec``s, so the tool *is* the process), and visible **on the host**, not only
+inside the container — measured at D50 in ``docker top`` and in the host's own
+``ps``. (An earlier version of this paragraph limited it to "inside the
+container … for the moment it execs" and said ADR §2.2 already priced it in;
+neither was accurate — §2.2 does not mention the process table.) The secret
+also sits in a ``0644`` host file for the same window. Whether to close either
+is an open, deliberately deferred question: ``docs/ACCEPTANCE_MVP1_AGENTS.md``
+5.26 and ``docs/ADR_CREDENTIAL_VAULT.md`` §7.
 
 **Flag verification (D45): closed for real, not re-derived from documentation.**
 ``-d``/``-c``/``-u``/``-p``/``--hashes``/``--zip`` were all checked against a
@@ -98,10 +123,37 @@ fixable from this adapter's side. Real authenticated collection against a
 genuine Windows AD domain remains unverified through *any* path -- the DNS
 gap blocks the real sandbox path before authentication is ever attempted,
 and that gap is real, not a mock standing in for it.
+
+**D49 closes the DNS gap above -- and the fix is smaller than D45's own
+framing implied.** D45 said "`DockerSandbox` currently has no way to point a
+container at" a nameserver, which reads as "`DockerSandbox` needs a `dns=`
+parameter." Verified fresh rather than assumed: it does not. Reading
+`bloodhound.ad.domain.AD.__init__` directly shows `-ns` already makes
+`dnspython` replace its resolver's nameserver list outright
+(`dnsresolver.nameservers = [nameserver]`), which sends the DNS query
+straight to that IP over a real socket -- bypassing the container's system
+resolver (and therefore Docker's embedded one) entirely, no `containers.
+create(dns=...)` involved. `sandbox.py`'s own docstring already establishes
+that the container's network namespace has a real route to every address
+inside the allowlisted CIDR ("Docker attaches no default gateway to an
+internal network, so the container's namespace has a route to the
+allowlisted range and to nothing else") -- and a real AD domain's DC (the
+address this constraint would actually carry) is, in the case this project
+can act on, inside that same CIDR by construction, since D42-1's own scope
+model already ties `ad.collect`'s authorization to the domain's own
+network. So a `dns_server` constraint naming an address the sandbox's
+network can already route to was sufficient, with `DockerSandbox` itself
+untouched. What D49 *did* have to add is the piece D45 had not yet asked
+the question of: whether an operator-supplied `dns_server` needed its own
+authorization check at all (it does -- `dispatch_collection`'s own
+docstring covers the reasoning), since nothing before D49 had ever
+considered a DNS server as something a compromised or misconfigured
+capability could try to point outside its own authorized range.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import shutil
@@ -177,9 +229,8 @@ _DOMAIN_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECAS
 
 #: Where the sandbox mounts a per-dispatch credential file (D44,
 #: ``control_plane.vault.vault.mount_for_run``'s ``host_path``, mapped here
-#: by the caller -- ``dispatch_collection`` -- into ``source_mounts``). Only
-#: ever read when ``domain_username`` is set; the plain, uncredentialed
-#: command never references it.
+#: by the caller -- ``dispatch_collection`` -- into ``source_mounts``). Every
+#: plan this adapter builds reads it (there is no uncredentialed command, D50).
 CONTAINER_CRED_PATH = "/creds/secret"
 
 #: bloodhound-python's two mutually exclusive bind mechanisms. Kept closed
@@ -201,11 +252,16 @@ class AdCollectPlan:
     collection_methods: tuple[str, ...]
     max_duration_seconds: int
     max_queries_issued: int | None
-    #: Non-secret. Present iff this plan uses a Vault-issued credential --
-    #: the signal ``dispatch_collection`` uses to decide whether to call
-    #: ``mount_for_run`` at all (D44).
-    domain_username: str | None = None
-    auth_mode: str | None = None
+    #: Non-secret. Every plan carries a bind identity (D50 F1 removed the
+    #: uncredentialed plan), so these are required, not optional.
+    domain_username: str
+    auth_mode: str
+    #: A concrete IP, never a hostname (D49) -- passed straight to
+    #: bloodhound-python's own ``-ns`` flag. ``dispatch_collection`` is the
+    #: one place with both this value and ``network_allowlist`` in hand, so
+    #: it -- not this adapter -- is what refuses a value outside the
+    #: authorized range; this field only carries what the capability named.
+    dns_server: str | None = None
 
     def as_params(self) -> dict[str, Any]:
         """Normalized parameters for the §7 execution fingerprint.
@@ -215,15 +271,20 @@ class AdCollectPlan:
         execution (§7 v0.3's own reasoning, "the same target scanned with a
         different credential is a different execution") -- but the secret
         value itself never reaches this adapter, so there is nothing here
-        for a fingerprint to leak even in principle.
+        for a fingerprint to leak even in principle. ``dns_server`` is
+        included for the identical reason: a different nameserver can
+        resolve a different domain controller for the same domain name, so
+        it is part of what makes one run the same execution as another, not
+        a detail the fingerprint can ignore.
         """
         params: dict[str, Any] = {
             "target": self.target,
             "collection_methods": list(self.collection_methods),
+            "domain_username": self.domain_username,
+            "auth_mode": self.auth_mode,
         }
-        if self.domain_username is not None:
-            params["domain_username"] = self.domain_username
-            params["auth_mode"] = self.auth_mode
+        if self.dns_server is not None:
+            params["dns_server"] = self.dns_server
         return params
 
 
@@ -278,10 +339,21 @@ def build_plan(
     """Turn a capability into a collection command.
 
     ``target`` is the ``ad_domain`` identity's value — a domain name, opaque
-    per D42-1 §1.1, compared verbatim. This adapter does not resolve it to
-    a domain controller address; that is exactly the kind of discovery-vs-
-    authorization line §8.9/I8 draws elsewhere, and DNS/DC location is the
-    collector binary's own business at run time, not this module's.
+    per D42-1 §1.1, compared verbatim. This adapter does not *discover* a
+    domain controller address on its own initiative — that is exactly the
+    kind of discovery-vs-authorization line §8.9/I8 draws elsewhere — but it
+    can be *told* one via the ``dns_server`` constraint (D49): when present,
+    it is passed straight to bloodhound-python's own ``-ns`` flag, which
+    bypasses the container's system resolver entirely and queries that
+    server directly (verified by reading ``bloodhound.ad.domain.AD.
+    __init__``: ``dnsresolver.nameservers = [nameserver]`` replaces
+    ``dnspython``'s default resolver configuration outright, not merely a
+    hint layered on top of it). Whether that value is authorized to be
+    queried at all — is it inside the capability's own ``network_allowlist``
+    — is not this function's call; ``dispatch_collection`` is the one place
+    that holds both the constraint and the allowlist, so it is what refuses
+    a ``dns_server`` outside the authorized range, before any container
+    starts (see its own docstring).
     """
     if not target:
         raise AdapterError("no target")
@@ -306,37 +378,60 @@ def build_plan(
     # enforced by the sandbox kill exactly like every other adapter, is the
     # bound this adapter actually enforces today.
 
+    dns_server = constraints.get("dns_server")
+    if dns_server is not None:
+        try:
+            ipaddress.ip_address(dns_server)
+        except ValueError as exc:
+            raise AdapterError(
+                f"dns_server {dns_server!r} is not a valid IP address"
+            ) from exc
+
+    # No credential-free plan exists (module docstring, D50 F1): the real tool
+    # exits with its usage text unless it is given a username, so building
+    # one would only produce a run that cannot succeed. Refused here, in the
+    # constraint-shape layer; dispatch_collection reports it as
+    # UNBUILDABLE_PLAN, before any container starts.
     domain_username = constraints.get("domain_username")
-    if domain_username:
-        auth_mode = validate_auth_mode(constraints.get("auth_mode"))
-        auth_flag = "-p" if auth_mode == "password" else "--hashes"
-        # D35's file-mount principle, generalized (D44, module docstring):
-        # the secret is read from CONTAINER_CRED_PATH at run time, never
-        # placed in this command -- what dispatch_collection audits and
-        # records as `plan.command` never contains it.
-        command = [
-            "/bin/sh", "-c",
-            f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" -u "$2" "$3" '
-            '"$(cat "$4")" -c "$5" --zip',
-            "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
-            ",".join(methods),
-        ]
-    else:
-        auth_mode = None
-        # No -u/-p/-hashes: this capability carries no credential. Buildable
-        # and testable against fixture output with no Vault in the picture,
-        # unchanged from before D44.
-        command = [
-            BLOODHOUND_PYTHON_PATH,
-            "-d", target,
-            "-c", ",".join(methods),
-            "--zip",
-        ]
+    if not isinstance(domain_username, str) or not domain_username.strip():
+        raise AdapterError(
+            "ad.collect requires a domain_username constraint: the real "
+            "bloodhound-python has no credential-free mode (it prints usage "
+            "and exits 1 without one), so a capability without a bind "
+            "identity cannot be run"
+        )
+    auth_mode = validate_auth_mode(constraints.get("auth_mode"))
+    auth_flag = "--password" if auth_mode == "password" else "--hashes"
+
+    # D35's file-mount principle, generalized (D44, module docstring): the
+    # secret is read from CONTAINER_CRED_PATH at run time, never placed in this
+    # command -- what dispatch_collection audits and records as `plan.command`
+    # never contains it. Every value arrives as a positional shell argument
+    # ($1..$6), never string-interpolated into the script text, so none of
+    # them can alter the script; that holds for non-secret values too (dns_server
+    # is not secret, and is a validated IP besides).
+    #
+    # D50 F3: username and secret are attached to their flag ("--username=$2",
+    # "--password=$(cat ...)") rather than following it as a separate token,
+    # because argparse refuses a separate-token value that begins with "-"
+    # (module docstring). $3 is the flag *name* only, chosen from the closed
+    # AUTH_MODES vocabulary above, never a caller-supplied string.
+    dns_flag = ' -ns "$6"' if dns_server is not None else ""
+    command = [
+        "/bin/sh", "-c",
+        f'exec {BLOODHOUND_PYTHON_PATH} -d "$1" "--username=$2" '
+        f'"$3=$(cat "$4")" -c "$5"{dns_flag} --zip',
+        "sh", target, domain_username, auth_flag, CONTAINER_CRED_PATH,
+        ",".join(methods),
+    ]
+    if dns_server is not None:
+        command.append(dns_server)
 
     return AdCollectPlan(
         command=tuple(command), target=target, collection_methods=methods,
         max_duration_seconds=max_duration, max_queries_issued=max_queries,
-        domain_username=domain_username or None, auth_mode=auth_mode,
+        domain_username=domain_username, auth_mode=auth_mode,
+        dns_server=dns_server,
     )
 
 

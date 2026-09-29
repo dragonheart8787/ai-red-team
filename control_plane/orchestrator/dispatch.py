@@ -24,6 +24,7 @@ enforced by a conditional UPDATE rather than a read followed by a write.
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -502,6 +503,31 @@ def dispatch_collection(
     .REQUIRES_PROXY`` is ``False``). No ``consume_request`` call: this is one
     dispatch, one run, not the multi-request shape that budget dimension
     exists for (nmap is exempt for the identical reason).
+
+    ``dns_server`` authorization (D49) is decided here, not in
+    ``ad_collector.build_plan``: the constraint's *shape* (a real IP) is the
+    adapter's business, but whether that IP is one this dispatch is allowed
+    to have the container query is a fact about ``network_allowlist``, which
+    only this function holds alongside the constraint. A ``dns_server``
+    outside every allowlisted CIDR is refused as ``UNBUILDABLE_PLAN`` before
+    ``sandbox.run`` is ever called — the same fail-closed default every
+    other CIDR-adjacent decision in this system uses, applied to a
+    dimension (which server a tool's own DNS queries go to) nothing before
+    this deliverable had modeled as something a capability could name at
+    all.
+
+    An ``ad.collect`` capability with no ``credential_id`` (D50 F1) is refused
+    as ``UNBUILDABLE_PLAN`` the same way, before any container or credential
+    mount: the real ``bloodhound-python`` has no credential-free mode, so such
+    a run could only ever print its usage text and fail. The former
+    uncredentialed plan was a D42 interim path that D44 never retired.
+
+    **The bind identity comes from the credential (D50-B).** The account a run
+    binds as and how it authenticates are read from the credential
+    (``vault.identity_for``, which never returns the secret); a ``domain_
+    username`` / ``auth_mode`` on the capability is only an assertion that must
+    match, and a mismatch is refused. A credential stored before D50-B carries
+    no identity and is refused too -- unknown, never "none needed".
     """
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
@@ -522,54 +548,106 @@ def dispatch_collection(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=registry.UNKNOWN_ACTION)
 
+    def refuse_unbuildable(error: str, **payload: Any) -> DispatchOutcome:
+        """One refusal shape for every reason a plan cannot be run, all raised
+        before any sandbox, tool_runs row or credential mount."""
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="tool_run.refused", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY_DECISION,
+            reasons=(UNBUILDABLE_PLAN,),
+            payload={"tool": adapter.TOOL, "error": error,
+                     "capability_id": capability.capability_id, **payload},
+        )
+        _set_state(conn, proposal_id, FAILED)
+        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
+    # The bind identity comes from the *credential*, not the proposal (D50-B).
+    # The real bloodhound-python has no credential-free mode (D50 F1), so a
+    # capability with no credential_id has nothing it could run as; and an
+    # ad_domain_bind credential is one indivisible unit -- secret, account and
+    # auth mode stored together -- so who the run binds as is a fact about the
+    # credential. The adapter never sees credential_id (that stays in
+    # capability territory, not adapter territory), so this belongs here.
+    if capability.credential_id is None:
+        return refuse_unbuildable(
+            "ad.collect requires a credential_id on the capability: the real "
+            "bloodhound-python has no credential-free mode, so a run with no "
+            "credential behind it cannot succeed",
+        )
+    try:
+        identity = vault.identity_for(conn, capability.credential_id)
+    except vault.VaultError as exc:
+        # Includes a credential stored before D50-B: it holds no identity, and
+        # an absent identity means unknown, never "none needed" (D30's reading).
+        return refuse_unbuildable(str(exc))
+
+    # A proposal may still *state* a username / auth mode (execution_constraints
+    # carries them); they are now assertions that must match, never a way to
+    # pair a stored secret with a different account or a different mechanism.
+    constraints = dict(capability.constraints)
+    for key, bound in (("domain_username", identity.username),
+                       ("auth_mode", identity.auth_mode)):
+        stated = constraints.get(key)
+        if stated is not None and stated != bound:
+            return refuse_unbuildable(
+                f"{key} constraint {stated!r} does not match the credential's "
+                f"bound {key} {bound!r}",
+            )
+        constraints[key] = bound
+
     try:
         plan = adapter.build_plan(
-            constraints=capability.constraints, budget=capability.budget.as_dict(),
+            constraints=constraints, budget=capability.budget.as_dict(),
             target=target,
         )
     except adapter.AdapterError as exc:
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type="tool_run.refused", subject_type="action_proposal",
-            subject_id=proposal_id, decision=DENY_DECISION,
-            reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": adapter.TOOL, "error": str(exc),
-                     "constraints": dict(capability.constraints),
-                     "capability_id": capability.capability_id},
-        )
-        _set_state(conn, proposal_id, FAILED)
-        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
-
-    # A plan built for a domain_username with no credential_id on the
-    # capability to back it has nothing to mount at dispatch time and is
-    # refused the same way any other unbuildable plan is (D44) -- the
-    # adapter itself never sees credential_id (it stays in constraints/
-    # capability territory, not adapter territory), so this check belongs
-    # here, not in build_plan.
-    if plan.domain_username is not None and capability.credential_id is None:
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type="tool_run.refused", subject_type="action_proposal",
-            subject_id=proposal_id, decision=DENY_DECISION,
-            reasons=(UNBUILDABLE_PLAN,),
-            payload={"tool": adapter.TOOL,
-                     "error": "domain_username constraint set with no credential_id "
-                              "on the capability to back it",
-                     "capability_id": capability.capability_id},
-        )
-        _set_state(conn, proposal_id, FAILED)
-        return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+        return refuse_unbuildable(str(exc), constraints=dict(capability.constraints))
 
     tool_version = adapter.tool_version()
     allowlist = network_allowlist or [target]
+
+    # dns_server authorization (D49): a new dimension nothing before this
+    # deliverable had ever considered. ad_collector.build_plan validates the
+    # value is a real IP but has no network_allowlist to check it against
+    # (build_plan never receives one, matching every other adapter); this is
+    # the one place both the constraint and the allowlist are in hand.
+    # Fail-closed, checked before any container starts, for the same reason
+    # sandbox.py's own network confinement is fail-closed: a compromised or
+    # simply misconfigured capability naming a dns_server outside the
+    # authorized range would otherwise get a container that queries an
+    # address nothing here ever reasoned about letting it reach -- exactly
+    # the kind of egress the CIDR allowlist exists to bound, reached through
+    # a side door the allowlist check on the *scan target* was never asked
+    # to cover. This is refused as UNBUILDABLE_PLAN, the same reason the
+    # domain_username-without-credential_id case above uses, for the
+    # identical reason: the plan is well-formed on its own terms and still
+    # cannot be run given what else is true about this dispatch.
+    if plan.dns_server is not None:
+        dns_ip = ipaddress.ip_address(plan.dns_server)
+        if not any(
+            dns_ip in ipaddress.ip_network(cidr, strict=False) for cidr in allowlist
+        ):
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.refused", subject_type="action_proposal",
+                subject_id=proposal_id, decision=DENY_DECISION,
+                reasons=(UNBUILDABLE_PLAN,),
+                payload={"tool": adapter.TOOL,
+                         "error": f"dns_server {plan.dns_server!r} is outside "
+                                  f"network_allowlist {list(allowlist)!r}",
+                         "capability_id": capability.capability_id},
+            )
+            _set_state(conn, proposal_id, FAILED)
+            return DispatchOutcome(False, None, FAILED, reason=UNBUILDABLE_PLAN)
+
     # A different credential against the same domain is a different
     # execution (D11-3/§7 v0.3's own reasoning, already applied to D43's
     # commit_sha) -- folded into execution_context, never into
     # normalized_params, so the fingerprint changes without the credential
     # id ever needing to look like a scan parameter.
     ctx = dict(execution_context or {})
-    if capability.credential_id is not None:
-        ctx["credential_id"] = capability.credential_id
+    ctx["credential_id"] = capability.credential_id
     fingerprint = execution_fingerprint(
         engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
         normalized_target=target, normalized_params=plan.as_params(),
@@ -622,12 +700,10 @@ def dispatch_collection(
     # path that can defer this past the fingerprint step at all: unlike
     # D43's commit_sha, credential_id is already known from the capability
     # itself, with nothing to discover that the fingerprint depends on.
-    mounted_credential = None
-    if plan.domain_username is not None:
-        mounted_credential = vault.mount_for_run(
-            conn, credential_id=capability.credential_id, run_id=run_id,
-            engagement_id=engagement_id, actor=actor,
-        )
+    mounted_credential = vault.mount_for_run(
+        conn, credential_id=capability.credential_id, run_id=run_id,
+        engagement_id=engagement_id, actor=actor,
+    )
 
     try:
         # A tool that ships its own image says so (adapter.IMAGE); the rest
@@ -643,10 +719,7 @@ def dispatch_collection(
             result = sandbox.run(
                 command=plan.command, network_allowlist=allowlist,
                 max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
-                source_mounts=(
-                    {mounted_credential.host_path: adapter.CONTAINER_CRED_PATH}
-                    if mounted_credential is not None else None
-                ),
+                source_mounts={mounted_credential.host_path: adapter.CONTAINER_CRED_PATH},
             )
         except SandboxUnavailable as exc:
             _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
@@ -719,11 +792,10 @@ def dispatch_collection(
         # minted credential file on the control-plane host's disk that
         # nothing else will clean up (D44-5, the same caller-owns-cleanup
         # contract D43's git_fetch.cleanup_repo already established).
-        if mounted_credential is not None:
-            vault.cleanup_mount(
-                mounted_credential, engagement_id=engagement_id, actor=actor,
-                run_id=run_id,
-            )
+        vault.cleanup_mount(
+            mounted_credential, engagement_id=engagement_id, actor=actor,
+            run_id=run_id,
+        )
 
 
 #: A control-plane-side repo fetch failed before any sandbox run started

@@ -146,6 +146,10 @@ def test_a_credential_of_the_wrong_type_is_refused_as_unbuildable(
             conn, engagement_id=engagement_id, credential_id=wrong_credential_id,
             label="wrong type", credential_type="ad_domain_bind", secret="not-a-git-token",
             actor="test-harness",
+            # D50-B: ad_domain_bind now requires a bound identity to store at
+            # all. Unrelated to what this test checks (dispatch_code_scan
+            # refusing the wrong credential_type) -- any valid identity does.
+            username="irrelevant", auth_mode="password",
         )
     target = f"{private_git_server}#main"
     with engagement_scope(engagement_id) as conn:

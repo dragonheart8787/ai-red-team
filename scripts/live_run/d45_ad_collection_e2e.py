@@ -165,19 +165,31 @@ def store_domain_credential(*, engagement_id: str, username: str, secret: str) -
             conn, engagement_id=engagement_id, credential_id=credential_id,
             label=f"D45 real domain bind account ({username})",
             credential_type="ad_domain_bind", secret=secret, actor=ACTOR,
+            # D50-B: the credential is the identity -- the account and how it
+            # authenticates are stored with the secret, not supplied per proposal.
+            username=username, auth_mode="password",
         )
     return credential_id
 
 
-def build_proposal(*, domain: str, scope_object_id: str, username: str) -> ProposedAction:
+def build_proposal(
+    *, domain: str, scope_object_id: str, username: str, dns_server: str | None = None,
+) -> ProposedAction:
+    target = {
+        "logical_identity": {"type": "ad_domain", "value": domain},
+        "collection_methods": ["Group", "ACL"],
+        "domain_username": username,
+        "auth_mode": "password",
+    }
+    if dns_server is not None:
+        # D49: routed to the real DC through the real entry point --
+        # execution_constraints -> ad_collector.build_plan's -ns flag ->
+        # dispatch_collection's network_allowlist check -- never a bypass of
+        # DockerSandbox the way D45's own --dns experiment was.
+        target["dns_server"] = dns_server
     return ProposedAction(
         action="ad.collect",
-        target={
-            "logical_identity": {"type": "ad_domain", "value": domain},
-            "collection_methods": ["Group", "ACL"],
-            "domain_username": username,
-            "auth_mode": "password",
-        },
+        target=target,
         authorization={"source": "engagement_scope", "scope_object_id": scope_object_id},
         discovery={"source": "explicit_scope"},
         resources=("ad_object",), expected_data=("group_membership", "acl"),
@@ -216,8 +228,12 @@ def collect_trail(engagement_id: str, *, proposal_id: str,
 
 def run_main_dispatch(*, engagement_id: str, domain: str, scope_object_id: str,
                       username: str, credential_id: str, network_allowlist: list[str],
-                      max_duration_seconds: int, sandbox) -> dict[str, Any]:
-    proposal = build_proposal(domain=domain, scope_object_id=scope_object_id, username=username)
+                      max_duration_seconds: int, sandbox,
+                      dns_server: str | None = None) -> dict[str, Any]:
+    proposal = build_proposal(
+        domain=domain, scope_object_id=scope_object_id, username=username,
+        dns_server=dns_server,
+    )
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
@@ -246,7 +262,8 @@ def run_main_dispatch(*, engagement_id: str, domain: str, scope_object_id: str,
 
 
 def part_one_two_three(*, domain: str, username: str, secret: str,
-                       network_allowlist: list[str], max_duration_seconds: int) -> dict[str, Any]:
+                       network_allowlist: list[str], max_duration_seconds: int,
+                       dns_server: str | None = None) -> dict[str, Any]:
     """The main chain: engagement -> scope -> vault -> OPA -> capability ->
     dispatch -> real bloodhound-python -> Security Graph attempt -> audit.
     """
@@ -278,7 +295,7 @@ def part_one_two_three(*, domain: str, username: str, secret: str,
         engagement_id=engagement_id, domain=domain, scope_object_id=scope_object_id,
         username=username, credential_id=credential_id,
         network_allowlist=network_allowlist, max_duration_seconds=max_duration_seconds,
-        sandbox=sandbox,
+        sandbox=sandbox, dns_server=dns_server,
     )
     elapsed = time.monotonic() - started
 
@@ -350,18 +367,34 @@ def part_one_two_three(*, domain: str, username: str, secret: str,
                 bool(command) and domain in " ".join(command), str(command))
     ok &= check("the real command never carries the plaintext secret",
                 bool(command) and secret not in " ".join(command))
+    if dns_server is not None:
+        # D49: the fact this script exists to (re-)verify -- the real
+        # command, built by the real dispatch path this run just exercised,
+        # actually carries -ns pointed at the authorized DC address.
+        # command may be the credentialed branch's shell wrapper, where -ns
+        # lives inside the embedded script string (one list element) rather
+        # than as its own standalone argv entry -- checked against the
+        # joined text so both command shapes are covered the same way.
+        joined_command = " ".join(str(c) for c in (command or ()))
+        ok &= check(
+            "the real command carries -ns pointed at the authorized dns_server "
+            "(D49 -- this is the fact D45 could not get past)",
+            "-ns" in joined_command and dns_server in joined_command,
+            str(command),
+        )
 
     return {
         "ok": ok, "engagement_id": engagement_id, "scope_object_id": scope_object_id,
         "credential_id": credential_id, "domain": domain, "username": username,
         "secret": secret, "network_allowlist": network_allowlist,
-        "sandbox": sandbox, "result": result,
+        "sandbox": sandbox, "result": result, "dns_server": dns_server,
     }
 
 
 def part_four_revocation(*, engagement_id: str, domain: str, scope_object_id: str,
                          username: str, secret: str, network_allowlist: list[str],
-                         max_duration_seconds: int, sandbox) -> dict[str, Any]:
+                         max_duration_seconds: int, sandbox,
+                         dns_server: str | None = None) -> dict[str, Any]:
     """D44-7: revoke_credential() triggered while dispatch_collection is
     actually running.
 
@@ -402,7 +435,7 @@ def part_four_revocation(*, engagement_id: str, domain: str, scope_object_id: st
             engagement_id=engagement_id, domain=domain, scope_object_id=scope_object_id,
             username=username, credential_id=credential_id,
             network_allowlist=network_allowlist, max_duration_seconds=max_duration_seconds,
-            sandbox=sandbox,
+            sandbox=sandbox, dns_server=dns_server,
         ))
         timeline["dispatch_end"] = time.monotonic()
 
@@ -503,6 +536,15 @@ def main() -> int:
                              "password, never passed on the command line")
     parser.add_argument("--network-allowlist", default="10.85.0.0/24")
     parser.add_argument("--max-duration-seconds", type=int, default=90)
+    parser.add_argument(
+        "--dns-server", default=None,
+        help="D49: the DC's own address, passed through the real dispatch "
+             "path (execution_constraints -> ad_collector.build_plan's -ns "
+             "flag -> dispatch_collection's network_allowlist check) so this "
+             "run no longer needs D45's own --dns bypass of DockerSandbox. "
+             "Must fall inside --network-allowlist or dispatch_collection "
+             "refuses the plan as UNBUILDABLE_PLAN before any container runs.",
+    )
     args = parser.parse_args()
 
     secret = Path(args.secret_file).read_text().strip()
@@ -518,6 +560,7 @@ def main() -> int:
         domain=args.domain, username=args.username, secret=secret,
         network_allowlist=network_allowlist,
         max_duration_seconds=args.max_duration_seconds,
+        dns_server=args.dns_server,
     )
 
     print("=" * 78)
@@ -528,6 +571,7 @@ def main() -> int:
         scope_object_id=main_run["scope_object_id"], username=main_run["username"],
         secret=main_run["secret"], network_allowlist=main_run["network_allowlist"],
         max_duration_seconds=args.max_duration_seconds, sandbox=main_run["sandbox"],
+        dns_server=main_run["dns_server"],
     )
 
     ok = main_run["ok"] and revocation_run["ok"]
