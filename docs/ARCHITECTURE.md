@@ -548,6 +548,8 @@ decision := "ALLOW" if {
     count(approval_reasons) == 0
 }
 ```
+
+> **D20 更新（此片段中的 `untrusted_discovery_source` 規則已被取代）**：上面 `input.action.discovery.source == "web_content"` 是原始寫法，保留作為設計歷程。現行規則改以 `input.action.discovery.introduced_by_untrusted == true` 觸發（`control_plane/policy/rego/authz.rego`）；該事實由 `agents/llm/worker_base.py::_discovery_provenance` 確定性計算，Worker 不再自報 `discovery.source`。授權面不變：這條規則仍只是 `approval_reasons`，只能加嚴。詳見 `docs/ADR_DISCOVERY_SOURCE.md`，以及 §8.9 的對應更新。
 Precedence 固定是 `DENY > HUMAN_APPROVAL > ALLOW`，這樣不管未來加多少條 deny/approval 規則，都不會出現「兩條 complete rule 同時成立」的 evaluation conflict——這也是 OPA 官方推薦處理多條件政策的慣用寫法（partial set rule 天生允許多條同時成立，不會像 complete rule 那樣衝突）。
 
 **修正（v0.2 保留，v0.3 進一步拆分）——OPA 的輸入不能全部信任 Policy Reviewer AI。**
@@ -840,6 +842,8 @@ v0.2 原本把這兩件事混進同一個 `target_source` 欄位（`dns_resolved
 > **Discovery can create candidate assets. Discovery can never create authorization.**
 
 具體規則：`discovery.source == "web_content"`（從網頁內容、使用者可控文字擷取）一律強制 HUMAN_APPROVAL，不管 Policy Reviewer 給的 risk_hint 是什麼（§5 Rego 的 `approval_reasons`）；`discovery.source == "dns"` 只代表「連線路由資訊」，要執行任何 action 前仍然要在 `authorization.scope_object_id` 查到對應的 scope object，且該 scope object 的 `allowed_actions` 要涵蓋這個 action——**單純因為 IP 是從 scope 內 domain 解析出來的，不足以自動授權對這個 IP 做 `network.scan`**（見 §4.1.5 的具體例子）。
+
+> **D20 更新（上一段的觸發條件已改）**：「`discovery.source == "web_content"` 一律強制 HUMAN_APPROVAL」是 D20 之前的寫法，原文保留作為設計歷程。D13/D15 證明它有兩個洞：lure 藏在 nmap banner 這類非 web 通道時不會觸發；而且 `source` 由 Worker 自報，同一份 evidence 會分裂成 8/10 對 2/10。現行做法：升級的觸發條件是 pipeline 確定性計算的事實 `discovery.introduced_by_untrusted`（「不是 offered scope object、不是工具實測觀察到的身分、只出現在不可信內容中」），`source` 只剩描述性的管道標籤，Worker 不再回報它。`discovery.source == "dns"` 那句與 I8 本身不變。決定與理由見 `docs/ADR_DISCOVERY_SOURCE.md`（D20，Option A、strict；D52 對「同一個目標」與 `url` 型目標的補強見其 §8）。
 
 這條防線跟 §5 的 Authorization/Metadata Resolver 是同一種設計哲學的兩個應用：**AI 的語意判斷只能拿來加嚴，事實性的、影響「能不能執行」的關鍵欄位一律要有 deterministic 的授權來源，不能靠發現方式的可信度替代。**
 

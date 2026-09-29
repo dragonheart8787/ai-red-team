@@ -1,9 +1,19 @@
 # ADR: discovery_source — what it means, and who gets to say it
 
-Status: **proposed, D20. Awaiting a decision before any implementation.** No
-schema, worker or Rego change is made until the direction in §7 is chosen.
-Addresses the `discovery_source` item on the candidate list
-(`ACCEPTANCE_MVP1_AGENTS.md` §3, Class C).
+Status: **accepted and implemented, D20 — Option A, strict "established"**
+(§7.1 answered A; §7.2 answered (ii) strict). Step two landed as `7391581`: the
+Worker no longer emits `discovery_source`; `worker_base._discovery_provenance`
+computes the `discovery` block deterministically and `authz.rego`'s
+`untrusted_discovery_source` rule keys on `discovery.introduced_by_untrusted`.
+**Closes the `discovery_source` candidate item** (`ACCEPTANCE_MVP1_AGENTS.md` §3;
+it was Class C when this ADR was written, and is Class A now).
+**Refined at D52 (§8):** what counts as "the same target" is now decided by the
+pipeline's canonicalizer, and "established" for a `url` target is defined.
+Neither changes the strict criterion.
+
+Everything from here to §7 is the proposal as it was written at step one, kept
+as the record of what was weighed; its "awaiting a decision" wording is
+historical. The decision it asked for is recorded in the status above and in §7.
 
 This is step one of D20, mirroring D19: a design decision, not code. It answers
 the four questions the brief set — what the field should mean, whether it can be
@@ -299,6 +309,8 @@ scenario is the right confirmation, and it should show the split gone.
 
 ## 7. The decision I need
 
+> **Answered at D20 (`7391581`):** (1) **Option A**; (2) **(ii) strict**. This section is left as written.
+
 1. **Which option** — A (deterministic trigger: "target introduced by untrusted
    content"), A′ (deterministic channel only, gap retained), or B (converged
    self-report). **My recommendation is A**: it is the only one that both makes
@@ -327,3 +339,118 @@ scenario is the right confirmation, and it should show the split gone.
 Step two — the `worker_base` schema change, the deterministic check, the
 `evidence_id`/`run_id` plumbing, the Rego rekey, and the mutation tests — does
 not begin until §7 is answered.
+
+---
+
+## 8. Addendum (D52) — what "the same target" means, and "established" for a `url`
+
+Step two implemented the criterion in §4/§7 as decided. This addendum records two
+places where the implementation was narrower than the ADR's own text, found when
+the item was re-examined after the D42–D51 tools were added. It does **not**
+revisit the criterion: strict "established" (an offered scope object, or an
+identity a tool structurally observed) is unchanged, and so is the Rego rule.
+
+### 8.1 What was found
+
+§4 says the identity match "must normalize the same way — compare canonical
+identity forms, not raw bytes — or it fails open." D20 implemented the escaping
+half of that (`203\.0\.113\.77`) and compared everything else as lowercased
+strings; `_norm_identity` said so ("deliberately *not* full canonicalization").
+Probing the function directly showed the consequence, in both directions:
+
+| Situation | Before D52 | Should be |
+|---|---|---|
+| banner names `http://h/x`, Worker proposes `http://h:80/x` | not introduced | introduced |
+| banner names `dc01.example.com`, Worker proposes `dc01.example.com.` | not introduced | introduced |
+| `url` target on a host a tool observed, page links that exact URL | introduced (over-escalated) | established |
+| `url` target on an unobserved host, page names only the bare host | not introduced | introduced |
+
+The first two are the fail-open §4 warned about; the third is the noise D20 was
+meant to remove for `ip` targets and never reached for `url` targets, whose full
+string can never equal the bare host the harness records; the fourth is the
+same gap from the other side.
+
+### 8.2 What changed: one comparison, taken from the canonicalizer
+
+Two strings are the same identity when the pipeline's canonicalizer says they
+are. `_discovery_provenance` builds a set of canonical `(type, value)` keys for
+the proposed target, for each offered scope object, for each observed identity
+and for every identity-shaped token in an observation's untrusted content, and
+matches on intersection. It normalizes nothing itself; it calls, and keeps no
+private copy of:
+
+* `control_plane.canonicalizer.target.normalize_target` (trailing-dot FQDN,
+  default ports, scheme and host case, path dot-segments, IPv6 compression,
+  IDNA);
+* `canonicalize_scope_value` for scope objects;
+* `control_plane.canonicalizer.containment.url_host` — D41's rule for which host
+  a URL names, made public for this purpose so authorization and discovery cannot
+  disagree (D25 §6: one fact, one authoritative source).
+
+The old lowercased-string comparison stays as a floor underneath. Canonical keys
+can only add matches to what it finds, never remove one, so a value the
+canonicalizer refuses (or an opaque `repo`/`ad_domain` identifier it compares
+verbatim) is matched exactly as it was before. Every earlier mutation guard on
+the floor still applies.
+
+### 8.3 "Established" for a `url` target: judged by the host it names
+
+Alternatives considered:
+
+* **The full URL.** What the code did by accident. A `url` target is then almost
+  never established, because the harness records what a tool *reached* (a host),
+  not every path a Worker may later ask for; every path on an observed host would
+  escalate, which is the over-escalation D20 exists to remove.
+* **The origin (scheme, host, port).** Closer to "the endpoint actually reached",
+  and rejected: authorization already treats a URL as its host (D41), so a rule
+  finer than authorization's would make "who was introduced" and "who is
+  authorized" disagree about what one target is; and it would require every
+  harness to enumerate ports it observed, which the `hosts`-level contract in
+  `Observation` never asked for.
+* **The host.** Chosen. The escalation asks *who did untrusted text introduce to
+  us*; a path (or port) on a host a tool already saw respond does not introduce
+  anyone new, and this is the same question the Authorization Resolver answers
+  with the same function.
+
+Concretely, for a `url` target:
+
+1. **Offered scope object** — its host equals an offered `ip`/`fqdn` scope
+   object, or the URL itself equals an offered `url` scope object. (A `url` scope
+   object does not make its bare host a scope object; containment keeps the same
+   asymmetry.)
+2. **Structurally observed** — an observed identity whose canonical form is that
+   host, whether the harness recorded a bare `ip`/`fqdn` or a URL. Conversely an
+   observed URL establishes an `ip`/`fqdn` target on its host.
+3. **Introduced** — otherwise, if untrusted content names the URL or just its
+   host, in any spelling the canonicalizer folds together.
+
+Limits, stated because they are decisions: a *port or path that text names on an
+already-observed host is not escalated on discovery grounds* (host, not origin);
+and names are never resolved (§8.9/I8), so an observed `ip` does not establish an
+`fqdn` URL on the same machine, nor the reverse.
+
+### 8.4 What did not change
+
+The strict criterion; `authz.rego`; the Worker's schema and prompt (still no
+`discovery_source`); the authorization side, which never reads `discovery`.
+
+### 8.5 What this does not settle
+
+`Observation.observed_identities` is still filled by whoever builds the
+`Observation`. This addendum makes the *comparison* canonical and defines it for
+`url`; it does not say what a production harness puts in the field for each tool,
+because no production code constructs an `Observation` yet. Two questions that
+follow are recorded as candidates rather than answered here:
+`ACCEPTANCE_MVP1_AGENTS.md` **5.27** (whether a directory object returned by LDAP
+is "established" in D20's sense — Class C) and **5.28** (the mechanism has only
+ever been verified by tests and hand-built harness scripts).
+
+### 8.6 Verification
+
+`tests/test_discovery_source.py`: trailing-dot FQDN, default-port URL, and
+mixed-case scheme/host variants in both directions (page spelling vs proposal
+spelling, observed spelling vs proposal spelling); IPv6 and IDNA variants; the
+token boundary (`.2` is not `.20`); the url-target cases above. Mutation-verified:
+reverting to raw string comparison turns 22 of the 47 tests red; replacing the canonicalizer
+with a hand-written "lowercase and strip the dot" rule is caught by the IPv6/IDNA
+cases and by a structural test that the canonicalizer is actually consulted.
