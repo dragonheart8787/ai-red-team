@@ -384,6 +384,8 @@ Effective Policy =
 `Emergency Overlay` 是專門給「發現 policy engine 本身有漏洞，需要立刻全域收緊」用的通道，跟 baseline 分開存放、分開審核（例如只能新增 deny 規則，schema 上直接不允許 allow 欄位），這樣不需要動到既有 Engagement 的授權記錄就能 hotfix。
 
 - 加 `policy_snapshot_version` 欄位，Engagement 建立時凍結指向 Baseline Global Snapshot 的版本。
+
+> **D54 pointer（原文不改）：** 上面這條在 D39 之前只是一個從未被讀取的欄位。Baseline 凍結現已實作（`ACCEPTANCE_MVP1_AGENTS.md` **5.20**、`docs/D54_POLICY_SNAPSHOT_FREEZE_DESIGN.md`）：只凍結 `baseline_global`（全域）；建立之後才發布或被停用的 baseline 都不影響已建立的 engagement，只有 Emergency Overlay 能穿透。凍結點不是 `policy_snapshot_version`，而是 `engagements.baseline_frozen_through`（`policy_change_seq` 上的位置）。
 - `data_access.deny` 和 `scope.deny` 在三層（含 Emergency Overlay 共四層）merge 時做**聯集**（denylist 只會變多不會變少），`scope.allow` 做**交集**（allowlist 只會變窄不會變寬）——這是 §1.2(b) 提到的漏洞的具體修法，必須寫成 code，不能只在文件裡描述。
 
 **修正（v0.3）——上面這段程式碼本身有一個嚴重的 algebra bug，這輪 review 抓到的：`intersect`/`union`/`min` 沒有定義「這一層沒設定這個欄位」是什麼意思。** 例如 Emergency Overlay 的 schema 只允許新增 deny 規則，本來就不該有 `scope_allow`；但如果程式碼把「沒設定」當成字面上的空集合 `[]`，`intersect(GlobalAllow, [], CustomerAllow, EngagementAllow) = []`——一啟用 Emergency Overlay，整個 Engagement 會被意外全部 deny。反過來 `actions.get(k, DENY)` 也有對稱的問題：如果某個 action key 在某層完全沒提到，`get` 預設回傳 `DENY` 會讓「沒表態」被誤判成「明確禁止」，跟前面 allow-list 的問題方向相反但一樣是 bug。

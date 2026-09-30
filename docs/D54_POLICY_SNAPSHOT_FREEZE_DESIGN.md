@@ -1,6 +1,8 @@
 # D54 — Policy Snapshot freeze (ACCEPTANCE 5.20): design note
 
-**Status: design only for 5.20 -- nothing here is built. Update (D54 follow-up): the two prerequisites this note found were taken ahead of the freeze and are done -- 5.35 (customer scoping; the shared predicate now feeds all three readers) and 5.36 (migration 0013 narrowed the runtime role's grants). Sections 1, 3 and 5 are written as the state before that work; the notes marked *since done* say what changed.** This answers the four
+**Status: built (D54, migration 0015) -- see "As built" at the end. Everything above it is the design as it was put for decision; where the build differs, the last section says so.
+
+**(Earlier status line, kept:) design only for 5.20 -- nothing here is built. Update (D54 follow-up): the two prerequisites this note found were taken ahead of the freeze and are done -- 5.35 (customer scoping; the shared predicate now feeds all three readers) and 5.36 (migration 0013 narrowed the runtime role's grants). Sections 1, 3 and 5 are written as the state before that work; the notes marked *since done* say what changed.** This answers the four
 questions D54 asked and ends with the decisions that are yours. Every fact below was read in
 the code or **executed against the local test database** (an ephemeral database of
 `ENG-TEST`/`ENG-X-*` engagements; the experiment layers were deactivated afterwards);
@@ -198,7 +200,7 @@ concentrated in one place — a wrong boundary drops a deny — which is why §1
 |---|---|---|
 | 1 | What freezes: baseline only, or also `customer` / `engagement` layers | **Baseline only.** `engagement` layers are the in-flight adjustment channel. `customer` layers are now well-defined (5.35) but §4.5's own text splits the freeze into a baseline snapshot plus a live overlay, so the smaller change is still baseline first; freezing customer layers would be a separate, later step |
 | 2 | A newer baseline that *tightens*: immune, or penetrates | **Immune**; only an overlay reaches a frozen engagement (§2) |
-| 3 | A frozen-in baseline row is later deactivated: does the engagement follow? | **Follows** (`active` still honoured) — deactivation is deliberate and audited, and a row that can never be retired for open engagements is worse. It is a widening path that D16's `CHECK` does not cover, but since 5.37 it is an operator's act over the `global_policy_admin` connection, not something a runtime credential can do |
+| 3 | A frozen-in baseline row is later deactivated: does the engagement follow? | **[Decided the other way: it does NOT follow -- see §9.]** The default proposed here was: follows (`active` still honoured) — deactivation is deliberate and audited, and a row that can never be retired for open engagements is worse. It is a widening path that D16's `CHECK` does not cover, but since 5.37 it is an operator's act over the `global_policy_admin` connection, not something a runtime credential can do |
 | 4 | Pointer (V) or copy (S) | **V**, with the grants in §3 |
 | 5 | Legacy engagements | **Stay live** (`NULL`), no backfill |
 | 6 | Bundle the privilege hardening (`policy_layers`, `engagements` columns) and the `current_policy_version` de-duplication | **Done ahead of the freeze** (5.36, 5.35). Closing 5.36 found 5.37 -- who may write and retire *global* layers -- and **5.37 is now closed too** (migration 0014, the `global_policy_admin` role). That gives decision 3 a cleaner premise: a frozen-in baseline row can only be retired over that one operator-held connection, not by any engagement's runtime credential, so "the engagement follows a deactivation" now means "an operator decided to retire a baseline" |
@@ -219,3 +221,32 @@ concentrated in one place — a wrong boundary drops a deny — which is why §1
 It does not build the freeze, add a grant, or change a predicate. It does not decide the `customer`
 question. It does not claim the boundary approach is free of the "widening through deactivation" path
 — it names it (decision 3) and leaves the choice with you.
+
+## 9. As built (decisions taken; one consequence found)
+
+The seven decisions were taken as recommended, with decision 3 reversed: **an engagement does not
+follow the retirement of a baseline row that was in force when it froze** ("the baseline as it was
+first seen"). That reversal is the one place the build left the sketch in §3/§4, and it is
+forced, not chosen:
+
+* §4 proposed one number, a boundary on `id`, and treated a retired row as gone. That is exactly
+  the "follows" reading. To keep a retired row in force, the engagement needs to know *whether the
+  row was in force at the freeze*, i.e. whether it was retired before or after it. `id` orders
+  publications only, and comparing a retirement's `max(id)` with a freeze's is ambiguous whenever
+  nothing was published between them (the back-to-back case, tested).
+* So a single sequence, `policy_change_seq`, orders publication, retirement and freeze; a row has
+  one life `[created_seq, deactivated_seq)`; the engagement still stores **one number**, and no
+  document is copied. A retired layer can no longer be reactivated (a second life would break the
+  interval; nothing in the code did it, and the tests that did no longer do). The trigger that
+  stamps the two columns is `SECURITY DEFINER`, so no role needs the sequence and none can write
+  either column.
+* In force for a frozen engagement: `COALESCE(created_seq, 0) < frozen AND (active OR
+  deactivated_seq > frozen)`, for `baseline_global` rows with `engagement_id IS NULL` only. Rows
+  from before the migration have no position: read as older than every freeze; a retired one has no
+  `deactivated_seq` and so was retired before any freeze. Nothing is back-filled.
+
+Decision 7 is `list_frozen_out_baseline_changes` and a section of `scripts/policy_layers.py`.
+Decisions 5 and 6 are as written. What remains a property of the design, not a defect: a baseline
+must exist before the engagement it is to govern; an engagement created before any baseline is
+frozen without one (all actions default DENY until its own layers say otherwise); and lifting a
+restriction that a frozen engagement froze in is now an *overlay retirement*, an operator's act.
