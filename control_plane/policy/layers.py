@@ -71,6 +71,10 @@ EMERGENCY_OVERLAY = "emergency_overlay"
 #: How a layer's reach is reported. A word, not an inference from a null column.
 GLOBAL = "global"
 ENGAGEMENT = "engagement"
+#: A layer with a NULL ``engagement_id`` that names a customer (ACCEPTANCE 5.35). Stored
+#: like a global row, so a reader who inferred scope from the null column would call it
+#: global -- the D11-6 confusion -- and it applies to one customer's engagements only.
+CUSTOMER = "customer"
 
 
 class PolicyLayerError(ValueError):
@@ -113,6 +117,15 @@ def publish_policy_layer(
         )
     if not actor:
         raise PolicyLayerError("policy layer writes must name an actor (§4.4)")
+    if layer == "customer" and not scoped_to_engagement and not customer_id:
+        # ACCEPTANCE 5.35. A row with neither an engagement nor a customer applies to every
+        # engagement of every customer, so a 'customer' layer published without naming one
+        # would be the cross-customer leak again, reached by omission. Confined to a single
+        # engagement it is harmless, so that case is left alone.
+        raise PolicyLayerError(
+            "a customer layer published globally must name its customer_id: without one it "
+            "would apply to every customer's engagements (ACCEPTANCE 5.35)"
+        )
 
     if layer == EMERGENCY_OVERLAY:
         # Raises EmergencyOverlayError, which callers may want to catch
@@ -258,17 +271,53 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
 #: by discipline. ``test_the_listing_returns_exactly_the_rows_the_merge_consumed``
 #: still watches the statements ``load_effective_policy`` actually issues, so a
 #: future edit that stops using this helper is caught rather than assumed away.
+#:
+#: **Three readers, one predicate (D54).** ``current_policy_version`` in the broker had kept
+#: a hand-written copy of the first two lines of this WHERE, which the two functions above
+#: never noticed because nothing tied it to them. It now calls :func:`max_applicable_layer_id`
+#: below, and ``test_one_predicate_feeds_every_reader`` fails on any other read of the table.
+#:
+#: **Customer scope (ACCEPTANCE 5.35).** A layer that names a ``customer_id`` applies only to
+#: engagements of that customer, whatever the layer is called; one that names none applies as
+#: before. Before D54 this clause did not exist, and a ``customer`` layer published for one
+#: customer was in force for every engagement in the database (executed: an ``ALLOW`` for
+#: ``CUST-ALPHA`` turned ``DENY`` into ``ALLOW`` for a ``CUST-BETA`` engagement). The
+#: engagement's own customer comes from its row; ``:cust`` supplies it only for the one caller
+#: whose row does not exist yet (``create_engagement`` computing the version it is about to
+#: store). An engagement that has no row and is given no customer matches no customer-scoped
+#: layer -- fail closed, never "everyone's".
 _APPLICABLE = """
     FROM policy_layers
     WHERE active IS TRUE
       AND (engagement_id IS NULL OR engagement_id = :eid)
+      AND (customer_id IS NULL
+           OR customer_id = COALESCE(
+                (SELECT e.customer_id FROM engagements e WHERE e.engagement_id = :eid),
+                :cust))
 """
 
 
-def _select_applicable(conn: Connection, engagement_id: str, columns: str):
+def _select_applicable(
+    conn: Connection, engagement_id: str, columns: str, *, customer_id: str | None = None,
+):
     return conn.execute(
-        text(f"SELECT {columns} {_APPLICABLE} ORDER BY id"), {"eid": engagement_id},
+        text(f"SELECT {columns} {_APPLICABLE} ORDER BY id"),
+        {"eid": engagement_id, "cust": customer_id},
     ).mappings().all()
+
+
+def max_applicable_layer_id(
+    conn: Connection, engagement_id: str, *, customer_id: str | None = None,
+) -> int:
+    """The highest id among the layers in force here -- the policy version (§4.5).
+
+    Exists so the broker's ``current_policy_version`` reads the same set the merge and the
+    listing do, from the same predicate, instead of describing it a second time.
+    """
+    return conn.execute(
+        text(f"SELECT coalesce(max(id), 0) {_APPLICABLE}"),
+        {"eid": engagement_id, "cust": customer_id},
+    ).scalar_one()
 
 
 @dataclass(frozen=True)
@@ -354,6 +403,7 @@ def list_effective_policy_layers(
     layers: list[EffectiveLayer] = []
     for row in rows:
         is_global = row["engagement_id"] is None
+        is_customer = is_global and row["customer_id"] is not None
         published = attribution.get(row["id"])
         note = None
         if published is None:
@@ -367,7 +417,7 @@ def list_effective_policy_layers(
             )
         layers.append(EffectiveLayer(
             id=row["id"], layer=row["layer"], version=row["version"],
-            scope=GLOBAL if is_global else ENGAGEMENT,
+            scope=CUSTOMER if is_customer else (GLOBAL if is_global else ENGAGEMENT),
             engagement_id=row["engagement_id"], customer_id=row["customer_id"],
             document=row["document"] or {}, created_at=row["created_at"],
             published_by=published["actor"] if published else None,
@@ -431,6 +481,7 @@ def load_effective_policy(
 
 __all__ = [
     "EMERGENCY_OVERLAY",
+    "CUSTOMER",
     "ENGAGEMENT",
     "GLOBAL",
     "EffectiveLayer",
@@ -439,5 +490,6 @@ __all__ = [
     "deactivate_policy_layer",
     "list_effective_policy_layers",
     "load_effective_policy",
+    "max_applicable_layer_id",
     "publish_policy_layer",
 ]

@@ -140,7 +140,7 @@ def create_engagement(
     because the placeholder is gone.
     """
     assert_registry_admin(conn)
-    version = current_policy_version(conn, engagement_id)
+    version = current_policy_version(conn, engagement_id, customer_id=customer_id)
     try:
         conn.execute(
             text("""

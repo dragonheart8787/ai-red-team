@@ -66,10 +66,11 @@ def render(layers, policy, action: str | None) -> str:
     out.append(f"{len(layers)} active layer(s) apply to this engagement:")
     out.append("")
     for layer in layers:
-        marker = "GLOBAL    " if layer.is_global else "engagement"
+        marker = layer.scope.upper().ljust(10)
         out.append(
             f"  [{marker}] id={layer.id} {layer.layer} v{layer.version}"
-            + (f"  engagement_id={layer.engagement_id}" if not layer.is_global else "")
+            + (f"  engagement_id={layer.engagement_id}" if layer.engagement_id else "")
+            + (f"  customer_id={layer.customer_id}" if layer.scope == "customer" else "")
         )
         out.append(f"              {json.dumps(layer.document, sort_keys=True)}")
         if layer.published_by:
