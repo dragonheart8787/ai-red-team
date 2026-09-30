@@ -23,7 +23,7 @@ from control_plane.orchestrator.engagement import (
     get_engagement,
 )
 from control_plane.state.db import engagement_scope, registry_admin_scope
-from tests.helpers import deactivate_global_layer, publish_global_layer
+from tests.helpers import deactivate_global_layer, make_engagement, publish_global_layer
 
 
 def _uid(prefix: str) -> str:
@@ -113,41 +113,29 @@ def test_the_policy_snapshot_is_the_real_current_version(engagement_id):
     assert stored > 0, "the published baseline_global layer should be counted"
 
 
-def test_load_effective_policy_does_not_read_the_snapshot(engagement_id):
-    """Honesty check on the docstring's claim (DEFERRED 5.20).
-
-    A layer published *after* creation is still live-merged in, because
-    load_effective_policy never consults policy_snapshot_version -- the
-    frozen-baseline enforcement §4.5 describes has not been built. This would
-    fail if it ever silently got built without updating the claim.
-    """
+def test_a_baseline_published_after_creation_does_not_reach_the_engagement(engagement_id):
+    """Was ``test_load_effective_policy_does_not_read_the_snapshot`` (D39), which pinned the
+    unfrozen behaviour so the freeze could not be built without the claim being updated. It has
+    been built (ACCEPTANCE 5.20, D54): a baseline published after an engagement is created is
+    not in force for it. The full behaviour -- widening, tightening, retirement, the overlay --
+    is in ``tests/test_baseline_freeze.py``."""
     from control_plane.policy.layers import load_effective_policy
 
-    eid = _uid("ENG-LIVE")
-    with registry_admin_scope(eid) as conn:
-        create_engagement(
-            conn, engagement_id=eid, customer_id="CUST-LIVE", actor="engagement-manager",
-        )
-
     token = _uid("post_creation_class")
-    with engagement_scope(eid) as conn:
-        before = load_effective_policy(conn, eid)
-        assert token not in before.data_deny
-
     layer_id = publish_global_layer(
         layer="baseline_global", version=_version(),
         document={"data_deny": [token]}, actor="platform-owner",
     )
     try:
-        with engagement_scope(eid) as conn:
-            after = load_effective_policy(conn, eid)
+        with engagement_scope(engagement_id) as conn:
+            assert token not in load_effective_policy(conn, engagement_id).data_deny
+        # ...and the control: an engagement created *after* it is governed by it.
+        later = _uid("ENG-LATER")
+        make_engagement(later, "CUST-LATER")
+        with engagement_scope(later) as conn:
+            assert token in load_effective_policy(conn, later).data_deny
     finally:
         deactivate_global_layer(layer_id)
-    assert token in after.data_deny, (
-        "a post-creation baseline publish did not apply -- if this starts "
-        "failing, the frozen-baseline enforcement has been built and 5.20 "
-        "should be closed, not silently left stale"
-    )
 
 
 # ---------------------------------------------------------------------------

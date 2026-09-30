@@ -313,14 +313,37 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
 #: whose row does not exist yet (``create_engagement`` computing the version it is about to
 #: store). An engagement that has no row and is given no customer matches no customer-scoped
 #: layer -- fail closed, never "everyone's".
-_APPLICABLE = """
-    FROM policy_layers
-    WHERE active IS TRUE
-      AND (engagement_id IS NULL OR engagement_id = :eid)
+#:
+#: **The frozen baseline (ACCEPTANCE 5.20, D54).** §4.5: the global baseline is frozen when an
+#: engagement is created, and only the emergency overlay reaches an open engagement afterwards.
+#: Decided: only the *global baseline* freezes (``layer = 'baseline_global'`` with a NULL
+#: ``engagement_id``); customer layers, engagement layers and the overlay stay live. A frozen
+#: engagement (``baseline_frozen_through`` set) is governed by the baseline rows that were in
+#: force at its freeze point, in ``policy_change_seq`` order: published before it, and either
+#: still active or retired *after* it. A baseline published later never reaches it, tightening or
+#: widening; one retired later is still in force for it. ``NULL`` means no freeze was recorded and
+#: the row is judged as it always was (``active``) -- absent means unknown, never "frozen at 0".
+#: This is one extra clause on one category of row, in this one statement; the merge, the
+#: listing and the policy version all read it from here.
+_FROZEN_POINT = (
+    "(SELECT e.baseline_frozen_through FROM engagements e WHERE e.engagement_id = :eid)"
+)
+_IS_GLOBAL_BASELINE = "layer = 'baseline_global' AND engagement_id IS NULL"
+_ELIGIBLE = """(engagement_id IS NULL OR engagement_id = :eid)
       AND (customer_id IS NULL
            OR customer_id = COALESCE(
                 (SELECT e.customer_id FROM engagements e WHERE e.engagement_id = :eid),
-                :cust))
+                :cust))"""
+
+_APPLICABLE = f"""
+    FROM policy_layers
+    WHERE {_ELIGIBLE}
+      AND CASE
+            WHEN {_IS_GLOBAL_BASELINE} AND {_FROZEN_POINT} IS NOT NULL
+              THEN COALESCE(created_seq, 0) < {_FROZEN_POINT}
+                   AND (active IS TRUE OR deactivated_seq > {_FROZEN_POINT})
+            ELSE active IS TRUE
+          END
 """
 
 
@@ -476,6 +499,89 @@ def _publication_audit(
     return {int(row["subject_id"]): row for row in rows}
 
 
+PUBLISHED_AFTER_FREEZE = "published_after_freeze"
+RETIRED_AFTER_FREEZE = "retired_after_freeze"
+
+
+@dataclass(frozen=True)
+class FrozenOutLayer:
+    """A global-baseline change the engagement's freeze deliberately did not follow (D54).
+
+    ``change`` is ``published_after_freeze`` (a newer baseline: **not** in force for this
+    engagement) or ``retired_after_freeze`` (a baseline row that was in force at the freeze and
+    has since been retired: **still** in force for this engagement, ``still_applied``). It is a
+    report -- see :func:`list_frozen_out_baseline_changes` -- and decides nothing.
+    """
+
+    id: int
+    layer: str
+    version: int
+    customer_id: str | None
+    document: Mapping[str, Any]
+    change: str
+    still_applied: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "layer": self.layer, "version": self.version,
+            "customer_id": self.customer_id, "document": dict(self.document),
+            "change": self.change, "still_applied": self.still_applied,
+        }
+
+
+def list_frozen_out_baseline_changes(
+    conn: Connection, engagement_id: str
+) -> tuple[FrozenOutLayer, ...]:
+    """Which global-baseline changes this engagement's freeze left out (D54, report-only).
+
+    §4.5 makes the answer to "why does this engagement not have the new deny" *by design* -- it
+    froze -- and by design is the kind of answer that is invisible without SQL, which is
+    DEFERRED 11.1 again. So this reports it, in the D14 spirit: **it reports, it does not
+    decide.** Nothing here feeds the merge, the listing's rows or the policy version, and it
+    writes nothing.
+
+    Two kinds, both positions read from ``policy_change_seq``: a baseline **published after** the
+    freeze that is still active (not applied), and a baseline **retired after** the freeze that
+    was in force at it (still applied, so the engagement has not followed the retirement). A row
+    published and retired after the freeze changed nothing for anyone and is not listed. An
+    engagement with no recorded freeze (``baseline_frozen_through`` NULL) has nothing frozen
+    out: its baseline is live, and the result is empty.
+
+    The eligibility clause (whose rows these could be) is the merge's own, ``_ELIGIBLE``.
+    """
+    frozen = conn.execute(
+        text(f"SELECT {_FROZEN_POINT}"), {"eid": engagement_id},
+    ).scalar_one()
+    if frozen is None:
+        return ()
+    rows = conn.execute(
+        text(f"""
+            SELECT id, layer, version, customer_id, document, active,
+                   COALESCE(created_seq, 0) AS created_seq, deactivated_seq
+            FROM policy_layers
+            WHERE {_ELIGIBLE} AND {_IS_GLOBAL_BASELINE}
+            ORDER BY id
+        """),
+        {"eid": engagement_id, "cust": None},
+    ).mappings().all()
+    out: list[FrozenOutLayer] = []
+    for row in rows:
+        newer = row["created_seq"] >= frozen
+        if newer and row["active"]:
+            change, applied = PUBLISHED_AFTER_FREEZE, False
+        elif (not newer and not row["active"]
+              and row["deactivated_seq"] is not None and row["deactivated_seq"] > frozen):
+            change, applied = RETIRED_AFTER_FREEZE, True
+        else:
+            continue
+        out.append(FrozenOutLayer(
+            id=row["id"], layer=row["layer"], version=row["version"],
+            customer_id=row["customer_id"], document=row["document"] or {},
+            change=change, still_applied=applied,
+        ))
+    return tuple(out)
+
+
 def load_effective_policy(
     conn: Connection, engagement_id: str
 ) -> EffectivePolicy:
@@ -513,9 +619,13 @@ __all__ = [
     "GLOBAL",
     "EffectiveLayer",
     "EmergencyOverlayError",
+    "FrozenOutLayer",
+    "PUBLISHED_AFTER_FREEZE",
     "PolicyLayerError",
+    "RETIRED_AFTER_FREEZE",
     "deactivate_policy_layer",
     "list_effective_policy_layers",
+    "list_frozen_out_baseline_changes",
     "load_effective_policy",
     "max_applicable_layer_id",
     "publish_policy_layer",

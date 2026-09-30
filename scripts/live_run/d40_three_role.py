@@ -440,9 +440,10 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
             nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox
             ) -> dict[str, Any]:
     engagement_id = uid("ENG-D40-MAIN")
+    # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
+    ensure_baseline(engagement_id)
     registered = setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=web_ip,
                                   customer_id="CUST-D40-LOCAL")
-    ensure_baseline(engagement_id)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 
@@ -618,9 +619,10 @@ class OneShotMisleadingReviewer:
 def injection_experiment(*, rounds: int, nmap_ip: str,
                          nmap_sandbox: DockerSandbox) -> dict[str, Any]:
     engagement_id = uid("ENG-D40-INJECT")
+    # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
+    ensure_baseline(engagement_id)
     setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=None,
                      customer_id="CUST-D40-INJECT")
-    ensure_baseline(engagement_id)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 

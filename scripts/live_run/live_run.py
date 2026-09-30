@@ -329,12 +329,14 @@ def main() -> int:
 
     engagement_id = uid("ENG-D11")
     customer_id = "CUST-D11-LOCAL"
+    # 5.20 (D54): an engagement freezes the global baseline that exists when it is created, so
+    # the baseline has to exist first -- published after, it would never reach this engagement.
+    policy_version, published_now = publish_baseline(engagement_id)
     seed_engagement(engagement_id, customer_id)
     scope_object_id, asset_id = seed_registries(
         engagement_id, allowlist_cidr=args.allowlist, target_ip=target_ip,
         actions=["network.recon", "network.scan"],
     )
-    policy_version, published_now = publish_baseline(engagement_id)
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
 

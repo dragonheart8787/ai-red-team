@@ -41,7 +41,7 @@ from control_plane.state.db import (
     global_auditor_scope,
     global_policy_admin_scope,
 )
-from tests.helpers import deactivate_global_layer, publish_global_layer
+from tests.helpers import deactivate_global_layer, make_engagement, publish_global_layer
 
 REPO = Path(__file__).resolve().parents[1]
 CLI = REPO / "scripts" / "manage_global_policy.py"
@@ -173,8 +173,14 @@ def test_global_policy_admin_publishes_and_retires_global_layers(engagement_id, 
     try:
         assert _active(layer_id)
         if customer is None:     # a customer-scoped row applies to that customer only (5.35)
-            with engagement_scope(engagement_id) as conn:
-                assert token in load_effective_policy(conn, engagement_id).data_deny
+            # A baseline reaches only engagements created after it (5.20), so the one that
+            # checks it is created now; the others are live and the fixture's serves.
+            target = engagement_id
+            if layer == "baseline_global":
+                target = _uid("ENG-AFTER")
+                make_engagement(target, "CUST-GPA-AFTER")
+            with engagement_scope(target) as conn:
+                assert token in load_effective_policy(conn, target).data_deny
         # The publication is on the global trail, attributed to the actor.
         with global_auditor_scope() as conn:
             rows = conn.execute(text(

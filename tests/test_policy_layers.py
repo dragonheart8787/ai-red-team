@@ -505,9 +505,14 @@ class _ReplayedResult:
 
 
 @pytest.fixture
-def layered_engagement(engagement_id):
+def layered_engagement(db_available):
     """One global layer and one engagement-scoped layer, both active, plus a
-    retired one and another engagement's, neither of which may be listed."""
+    retired one and another engagement's, neither of which may be listed.
+
+    The engagement is created *after* the global baseline is published: an engagement freezes
+    the baseline that exists when it is created (5.20), so a baseline published afterwards would
+    never reach it, and this fixture exists to have one that does.
+    """
     action = _token("action")
     other_engagement = _uid("ENG-OTHER")
 
@@ -515,6 +520,8 @@ def layered_engagement(engagement_id):
         layer="baseline_global", version=_version(),
         document={"actions": {action: ALLOW}}, actor="platform-owner",
     )
+    engagement_id = _uid("ENG-LAYERED")
+    make_engagement(engagement_id, "CUST-LAYERED")
     with engagement_scope(engagement_id) as conn:
         scoped_id = publish_policy_layer(
             conn, engagement_id=engagement_id, layer="engagement",
@@ -634,9 +641,12 @@ def test_an_invisible_attribution_says_so_rather_than_being_blank(layered_engage
     foreign = _uid("ENG-FOREIGN")
 
     make_engagement(foreign, "CUST-FOREIGN")
+    # An overlay, not a baseline: eid froze its baseline when the fixture created it (5.20), so
+    # a baseline published now would not be listed; what is under test is the attribution of a
+    # global layer, which does not depend on which kind it is.
     invisible_id = publish_global_layer(
-        layer="baseline_global", version=_version(),
-        document={"actions": {_token("action"): ALLOW}}, actor="someone-elses-operator",
+        layer=EMERGENCY_OVERLAY, version=_version(),
+        document={"data_deny": [_token("class")]}, actor="someone-elses-operator",
     )
 
     try:
@@ -716,30 +726,22 @@ def test_the_listing_writes_nothing(layered_engagement):
             text("SELECT count(*) FROM audit_log")).scalar_one() == audit_before
 
 
-def test_an_engagement_with_no_layers_lists_nothing_and_denies_everything():
-    """The empty case reads the same both ways (§4.5, I10)."""
+def test_an_engagement_with_no_layers_lists_nothing_and_denies_everything(monkeypatch):
+    """The empty case reads the same both ways (§4.5, I10).
+
+    The shared predicate is made to select nothing rather than the database being emptied: the
+    property is what the listing and the merge do with an empty set, and emptying the global
+    layers of a shared database to observe it is the kind of test that leaves the suite in a
+    different state (and, since 5.37, would need the global writer's connection to do).
+    """
+    from control_plane.policy import layers as layers_module
+
     eid = _uid("ENG-EMPTY")
     make_engagement(eid, "CUST-EMPTY")
+    monkeypatch.setattr(layers_module, "_select_applicable", lambda *a, **k: [])
     with engagement_scope(eid) as conn:
-        globals_ = [
-            r[0] for r in conn.execute(
-                text("SELECT id FROM policy_layers WHERE active "
-                     "AND engagement_id IS NULL")).all()
-        ]
-    # Retire everything global so this engagement genuinely sees nothing -- on the only
-    # connection that may (5.37) -- and put it all back, whatever happens: global layers
-    # belong to the whole database and this test does not own them.
-    for layer_id in globals_:
-        deactivate_global_layer(layer_id, actor="test-cleanup")
-    try:
-        with engagement_scope(eid) as conn:
-            listed = list_effective_policy_layers(conn, eid)
-            policy = load_effective_policy(conn, eid)
-        assert listed == ()
-        assert policy.action_decision("network.scan") == DENY
-    finally:
-        with global_policy_admin_scope() as conn:
-            for layer_id in globals_:
-                conn.execute(
-                    text("UPDATE policy_layers SET active = TRUE WHERE id = :i"),
-                    {"i": layer_id})
+        listed = list_effective_policy_layers(conn, eid)
+        policy = load_effective_policy(conn, eid)
+
+    assert listed == ()
+    assert policy.action_decision("network.scan") == DENY

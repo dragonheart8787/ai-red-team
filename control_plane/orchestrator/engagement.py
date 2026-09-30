@@ -127,27 +127,31 @@ def create_engagement(
     — the same function the broker already uses for capability re-
     authorization — rather than a second implementation of "what version is
     this" (the D30/D33 lesson about two things that must independently agree).
-    Stated plainly because the column's own comment claims more than this
-    does: it is *recorded*, honestly, as the version in force at this moment.
-    It is not *consulted* by anything — ``load_effective_policy`` live-merges
-    the currently active ``baseline_global`` / ``customer`` / ``engagement`` /
-    ``emergency_overlay`` layers on every decision, exactly as it did before
-    this function existed, and does not read this column. The frozen-baseline
-    enforcement §4.5 describes (a later global-policy publish should not
-    retroactively affect an already-open engagement's baseline) has never been
-    built; making the stored number real does not build it. That gap is
-    tracked separately as DEFERRED 5.20 rather than left to look resolved
-    because the placeholder is gone.
+    It is *recorded*, as the version in force at this moment, and nothing consults it.
+
+    **The baseline is frozen here (ACCEPTANCE 5.20, D54).** What §4.5's frozen Baseline
+    Global Snapshot needs is a different number: ``baseline_frozen_through``, the engagement's
+    position in ``policy_change_seq`` at creation, which ``load_effective_policy`` reads (through
+    the one shared predicate) to keep the global baseline that was in force now and ignore one
+    published later. It comes from ``policy_freeze_point()`` in the database. So a baseline has
+    to exist *before* the engagement it is meant to govern; an engagement created first is
+    frozen without it. Only the emergency overlay reaches an open engagement afterwards.
     """
     assert_registry_admin(conn)
     version = current_policy_version(conn, engagement_id, customer_id=customer_id)
+    # The freeze point (5.20, D54): this engagement's position in policy_change_seq, the one
+    # order in which baselines are published and retired. Allocated by the database (a function
+    # only registry_admin may run), never computed here, so it cannot be forged or repeated.
+    frozen_through = conn.execute(text("SELECT policy_freeze_point()")).scalar_one()
     try:
         conn.execute(
             text("""
-                INSERT INTO engagements (engagement_id, customer_id, policy_snapshot_version)
-                VALUES (:eid, :cid, :version)
+                INSERT INTO engagements (engagement_id, customer_id, policy_snapshot_version,
+                                         baseline_frozen_through)
+                VALUES (:eid, :cid, :version, :frozen)
             """),
-            {"eid": engagement_id, "cid": customer_id, "version": version},
+            {"eid": engagement_id, "cid": customer_id, "version": version,
+             "frozen": frozen_through},
         )
     except IntegrityError as exc:
         raise EngagementAlreadyExists(
@@ -160,6 +164,7 @@ def create_engagement(
         payload={
             "customer_id": customer_id,
             "policy_snapshot_version": version,
+            "baseline_frozen_through": frozen_through,
             # Explicit rather than omitted: a reader of the trail should see
             # "no scope was registered at creation" as a stated fact, not
             # infer it from the key's absence (§8.9's own standard for

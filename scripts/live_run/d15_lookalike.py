@@ -310,9 +310,11 @@ def main() -> int:
     network = sandbox.network_name([ALLOWLIST])
     target_ip = container_ip(args.target_container, network)
     engagement_id = uid("ENG-D15")
+    # 5.20 (D54): an engagement freezes the global baseline that exists when it is created, so
+    # the baseline has to exist first -- published after, it would never reach this engagement.
+    publish_baseline(engagement_id)
     registered = setup(engagement_id, target_ip, scope_plan)
     lab_scope = registered[ALLOWLIST]
-    publish_baseline(engagement_id)
     assert_policy_permits_scanning(engagement_id)
 
     with engagement_scope(engagement_id) as conn:

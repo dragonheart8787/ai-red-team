@@ -125,10 +125,11 @@ def test_one_customers_deny_layer_does_not_restrict_another(two_customers):
         assert token not in load_effective_policy(conn, ctx["eng_b"]).data_deny
 
 
-@pytest.mark.parametrize("layer", ["baseline_global", "emergency_overlay", "engagement"])
+@pytest.mark.parametrize("layer", ["emergency_overlay", "engagement"])
 def test_the_rule_is_about_the_customer_id_not_the_layer_name(two_customers, layer):
-    """A baseline or overlay that names a customer is that customer's; only one that
-    names none is everyone's."""
+    """An overlay or engagement layer that names a customer is that customer's; only one that
+    names none is everyone's. (The baseline case is the next test: an engagement freezes the
+    baseline that exists when it is created, so it has to be published first.)"""
     ctx = two_customers
     token = _uid("class")
     _publish(ctx, from_engagement=ctx["eng_a"], layer=layer,
@@ -138,6 +139,22 @@ def test_the_rule_is_about_the_customer_id_not_the_layer_name(two_customers, lay
         assert token in load_effective_policy(conn, ctx["eng_a"]).data_deny
     with engagement_scope(ctx["eng_b"]) as conn:
         assert token not in load_effective_policy(conn, ctx["eng_b"]).data_deny
+
+
+def test_a_baseline_that_names_a_customer_is_that_customers_baseline(two_customers):
+    """Published before the engagements exist, so that both freeze it; the customer id then
+    decides who it governs."""
+    ctx = two_customers
+    token = _uid("class")
+    _publish(ctx, from_engagement=None, layer="baseline_global",
+             document={"data_deny": [token]}, customer_id=ctx["alpha"])
+    late_a, late_b = _uid("ENG-LATE-A"), _uid("ENG-LATE-B")
+    make_engagement(late_a, ctx["alpha"])
+    make_engagement(late_b, ctx["beta"])
+    with engagement_scope(late_a) as conn:
+        assert token in load_effective_policy(conn, late_a).data_deny
+    with engagement_scope(late_b) as conn:
+        assert token not in load_effective_policy(conn, late_b).data_deny
 
 
 def test_an_engagement_layer_naming_a_different_customer_is_not_applied(two_customers):
@@ -153,10 +170,11 @@ def test_an_engagement_layer_naming_a_different_customer_is_not_applied(two_cust
 
 
 def test_a_layer_naming_no_customer_still_applies_to_everyone(two_customers):
-    """The negative control: this fix must not scope layers that were never customer-scoped."""
+    """The negative control: this fix must not scope layers that were never customer-scoped.
+    An overlay, which is live for every engagement; a baseline is covered by the freeze tests."""
     ctx = two_customers
     token = _uid("class")
-    _publish(ctx, from_engagement=ctx["eng_a"], layer="baseline_global",
+    _publish(ctx, from_engagement=ctx["eng_a"], layer="emergency_overlay",
              document={"data_deny": [token]}, customer_id=None)
     for eng in (ctx["eng_a"], ctx["eng_b"]):
         with engagement_scope(eng) as conn:
@@ -281,20 +299,25 @@ def test_one_predicate_feeds_every_reader():
     a private copy of the applicability predicate; a fix to the shared one would have left the
     version -- and so which capabilities are revoked -- describing a different set of layers.
 
-    Nothing outside ``control_plane/policy/layers.py`` reads ``policy_layers``, and inside it
-    exactly one statement has the applicability shape (``WHERE active IS TRUE``). Writes are not
-    reads and are not counted; ``deactivate_policy_layer``'s by-id lookup is a different shape."""
-    outside, applicability = [], []
+    Nothing outside ``control_plane/policy/layers.py`` reads ``policy_layers``. Inside it, the
+    reads are exactly three: the shared applicability fragment (the only one that decides what is
+    in force), ``deactivate_policy_layer``'s by-id lookup, and the report-only
+    ``list_frozen_out_baseline_changes``. The report's eligibility clause is the fragment's own
+    (``_ELIGIBLE``), so it cannot describe different rows than the merge does. Writes are not
+    reads and are not counted."""
+    outside, inside = [], []
     for path in CONTROL_PLANE.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         rel = str(path.relative_to(CONTROL_PLANE.parent))
         for match in re.finditer(r"FROM\s+policy_layers", source, flags=re.IGNORECASE):
             line = source.count("\n", 0, match.start()) + 1
-            if rel != "control_plane/policy/layers.py":
-                outside.append(f"{rel}:{line}")
-            elif re.match(r"\s+WHERE\s+active\s+IS\s+TRUE", source[match.end():match.end() + 60]):
-                applicability.append(f"{rel}:{line}")
+            (inside if rel == "control_plane/policy/layers.py" else outside).append(
+                f"{rel}:{line}")
     assert not outside, f"policy_layers is read outside layers.py: {outside}"
-    assert len(applicability) == 1, (
-        "the applicability predicate must exist exactly once "
-        f"(layers.py::_APPLICABLE); found: {applicability}")
+    assert len(inside) == 3, (
+        "layers.py should read policy_layers in exactly three places (the shared applicability "
+        f"fragment, deactivate's lookup, the frozen-out report); found: {inside}")
+    source = (CONTROL_PLANE / "policy" / "layers.py").read_text(encoding="utf-8")
+    assert source.count("{_ELIGIBLE}") == 2, (
+        "the merge's fragment and the frozen-out report must both take their eligibility clause "
+        "from _ELIGIBLE, not restate it")

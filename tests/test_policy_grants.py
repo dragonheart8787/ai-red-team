@@ -105,15 +105,20 @@ def test_app_role_can_still_publish_and_retire_a_layer(engagement_id):
     assert active is False
 
 
-def test_app_role_can_still_flip_the_active_flag_either_way(engagement_id, layer):
-    """Reactivation is not a production operation, but ``active`` is the one column the role
-    is granted, and the D14 tests set it back to TRUE. Pins that the grant is the column, not
-    just one direction of it."""
+def test_app_role_can_retire_a_layer_but_not_bring_it_back(engagement_id, layer):
+    """``active`` is the one column the role is granted, and it goes one way. Since 5.20 a
+    retired layer stays retired (migration 0015): a frozen baseline is defined by when a layer
+    was in force, and a second life would break that interval. Re-publish instead."""
+    import sqlalchemy
+
     with engagement_scope(engagement_id) as conn:
         conn.execute(text("UPDATE policy_layers SET active = FALSE WHERE id = :i"), {"i": layer})
-        conn.execute(text("UPDATE policy_layers SET active = TRUE WHERE id = :i"), {"i": layer})
         assert conn.execute(text("SELECT active FROM policy_layers WHERE id = :i"),
-                            {"i": layer}).scalar_one() is True
+                            {"i": layer}).scalar_one() is False
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="stays retired"):
+        with engagement_scope(engagement_id) as conn:
+            conn.execute(text("UPDATE policy_layers SET active = TRUE WHERE id = :i"),
+                         {"i": layer})
 
 
 def test_the_overlay_check_still_holds_for_the_runtime_roles_own_rows(engagement_id):
