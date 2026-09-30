@@ -1,6 +1,6 @@
 # D54 — Policy Snapshot freeze (ACCEPTANCE 5.20): design note
 
-**Status: design only. No code, schema or grant has been changed.** This answers the four
+**Status: design only for 5.20 -- nothing here is built. Update (D54 follow-up): the two prerequisites this note found were taken ahead of the freeze and are done -- 5.35 (customer scoping; the shared predicate now feeds all three readers) and 5.36 (migration 0013 narrowed the runtime role's grants). Sections 1, 3 and 5 are written as the state before that work; the notes marked *since done* say what changed.** This answers the four
 questions D54 asked and ends with the decisions that are yours. Every fact below was read in
 the code or **executed against the local test database** (an ephemeral database of
 `ENG-TEST`/`ENG-X-*` engagements; the experiment layers were deactivated afterwards);
@@ -36,7 +36,7 @@ Today (verified):
 
 **It changes the predicate, and it does not need two rules — but there is a bigger finding first.**
 
-**Finding: there are already three copies of the predicate, not one.** The D14 guarantee is that
+**Finding: there are already three copies of the predicate, not one.** *(Since done: `current_policy_version` now reads the shared predicate, with a structural test. The freeze's clause is one more line in that single place.)* The D14 guarantee is that
 enforcement and the listing share `_APPLICABLE`. Verified true for those two
 (`load_effective_policy`, `list_effective_policy_layers`). But `broker.current_policy_version`
 (`broker.py:231`) hand-writes the same `WHERE active IS TRUE AND (engagement_id IS NULL OR
@@ -133,7 +133,7 @@ engagements), needs a join in the loader, the listing and the version, and a mig
 table with RLS and grants. More surface, more places to disagree — the property D14 spent an
 entire deliverable removing.
 
-**Recommendation: V, with the grants.** The consistency risk in V (mutable rows) is closed by a
+**Recommendation: V, with the grants.** *(Since done: the grants are migration 0013 -- `policy_layers`: INSERT/SELECT + `UPDATE (active)`; `engagements`: SELECT + `UPDATE (status, kill_switch_engaged, updated_at)`. The freeze's boundary column will be covered by that column list by construction: the runtime role cannot write it.)* The consistency risk in V (mutable rows) is closed by a
 two-line privilege change that also fixes the same gap for its own sake; the consistency risk in S
 (copy vs source) has no equivalent fix. Both are judged as D14 judged them: prefer reporting the
 rows the merge used over a recomputed copy of them.
@@ -176,9 +176,8 @@ a larger id, so the existing value *is* the boundary — the change is one new c
 
 ## 5. Proposed change, if approved (nothing done)
 
-1. Migration `0013`: `engagements.baseline_frozen_through BIGINT NULL`; `REVOKE UPDATE, DELETE ON
-   policy_layers FROM cyberorch_app` + `GRANT UPDATE (active)`; `REVOKE UPDATE ON engagements FROM
-   cyberorch_app` + `GRANT UPDATE (status, kill_switch_engaged, updated_at)`.
+1. Migration `0014`: `engagements.baseline_frozen_through BIGINT NULL` (the grant changes it listed are
+   already 0013; the new column is unwritable by the runtime role without any further grant).
 2. `layers.py`: the shared fragment above; `current_policy_version` delegates to it;
    `list_effective_policy_layers` adds `frozen_out`.
 3. `engagement.py`: `create_engagement` writes the boundary (from the value it already computes) and
@@ -197,22 +196,22 @@ concentrated in one place — a wrong boundary drops a deny — which is why §1
 
 | # | Decision | My default |
 |---|---|---|
-| 1 | What freezes: baseline only, or also `customer` / `engagement` layers | **Baseline only.** `engagement` layers are the in-flight adjustment channel; `customer` is undefined until 5.35 is settled |
+| 1 | What freezes: baseline only, or also `customer` / `engagement` layers | **Baseline only.** `engagement` layers are the in-flight adjustment channel. `customer` layers are now well-defined (5.35) but §4.5's own text splits the freeze into a baseline snapshot plus a live overlay, so the smaller change is still baseline first; freezing customer layers would be a separate, later step |
 | 2 | A newer baseline that *tightens*: immune, or penetrates | **Immune**; only an overlay reaches a frozen engagement (§2) |
 | 3 | A frozen-in baseline row is later deactivated: does the engagement follow? | **Follows** (`active` still honoured) — deactivation is deliberate and audited, and a row that can never be retired for open engagements is worse. It is a widening path that exists today and that D16's `CHECK` does not cover |
 | 4 | Pointer (V) or copy (S) | **V**, with the grants in §3 |
 | 5 | Legacy engagements | **Stay live** (`NULL`), no backfill |
-| 6 | Bundle the privilege hardening (`policy_layers`, `engagements` columns) and the `current_policy_version` de-duplication | **Yes, both** — the second is a prerequisite, the first is what makes V sound |
+| 6 | Bundle the privilege hardening (`policy_layers`, `engagements` columns) and the `current_policy_version` de-duplication | **Done ahead of the freeze** (5.36, 5.35). Closing 5.36 found 5.37 -- who may write and retire *global* layers -- which sharpens decision 3 |
 | 7 | Fleet tightening ergonomics | **Report-only** `frozen_out`; no auto-promotion |
 
 ## 7. Findings this turned up (recorded as candidates, not fixed)
 
-* **5.35 — `customer` policy layers are not customer-scoped.** `_APPLICABLE` never reads
+* **5.35 — `customer` policy layers are not customer-scoped.** *(Closed at D54, follow-up.)* `_APPLICABLE` never reads
   `customer_id`. Executed: a `customer` layer published with `customer_id = CUST-ALPHA` was applied to
   an engagement of `CUST-BETA` — including `actions: {a: ALLOW}`, which turned `DENY` into `ALLOW` for
   the other customer's engagement. Fail-safe for denies, cross-customer widening for allows. Not
   reachable in a single-customer deployment.
-* **5.36 — the runtime role can rewrite `policy_layers` and any column of `engagements`.** Above (§3).
+* **5.36 — the runtime role can rewrite `policy_layers` and any column of `engagements`.** *(Closed at D54, follow-up, migration 0013.)* Above (§3).
   Resolved as part of 5.20 if decision 6 is taken; otherwise it stands as a Class B candidate.
 
 ## 8. What this note does not do
