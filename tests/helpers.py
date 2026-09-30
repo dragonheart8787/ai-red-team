@@ -7,9 +7,10 @@ import uuid
 from sqlalchemy import Connection, text
 
 from control_plane.orchestrator.engagement import create_engagement
+from control_plane.policy.layers import deactivate_policy_layer, publish_policy_layer
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
-from control_plane.state.db import registry_admin_scope
+from control_plane.state.db import global_policy_admin_scope, registry_admin_scope
 
 
 def make_engagement(
@@ -82,3 +83,27 @@ class EngagementManager:
             return register_metadata(
                 conn, engagement_id=self.engagement_id, actor=actor, **kwargs
             )
+
+
+def publish_global_layer(
+    *, layer: str, version: int, document, actor: str = "test-harness",
+    customer_id: str | None = None,
+) -> int:
+    """Publish a *global* policy layer the only way the database allows (5.37).
+
+    A global layer applies to every engagement, so it is written on the
+    ``global_policy_admin`` connection with no engagement bound -- not from an
+    ``engagement_scope``, which the runtime role can no longer use for it. Commits on its
+    own, so the row is visible to every later engagement connection.
+    """
+    with global_policy_admin_scope() as conn:
+        return publish_policy_layer(
+            conn, engagement_id=None, layer=layer, version=version, document=document,
+            actor=actor, scoped_to_engagement=False, customer_id=customer_id,
+        )
+
+
+def deactivate_global_layer(layer_id: int, *, actor: str = "test-teardown") -> bool:
+    """Retire a global layer on the ``global_policy_admin`` connection (5.37)."""
+    with global_policy_admin_scope() as conn:
+        return deactivate_policy_layer(conn, layer_id=layer_id, actor=actor)

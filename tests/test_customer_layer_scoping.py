@@ -33,7 +33,7 @@ from control_plane.policy.layers import (
 )
 from control_plane.policy.merge import ALLOW, DENY
 from control_plane.state.db import engagement_scope
-from tests.helpers import make_engagement
+from tests.helpers import deactivate_global_layer, make_engagement, publish_global_layer
 
 CONTROL_PLANE = Path(__file__).resolve().parents[1] / "control_plane"
 
@@ -54,24 +54,37 @@ def two_customers(db_available):
     eng_a, eng_b = _uid("ENG-A"), _uid("ENG-B")
     make_engagement(eng_a, alpha)
     make_engagement(eng_b, beta)
-    published: list[tuple[str, int]] = []
+    published: list[tuple[str | None, int]] = []
     yield {"alpha": alpha, "beta": beta, "eng_a": eng_a, "eng_b": eng_b,
            "published": published}
     for eng, layer_id in published:
-        with engagement_scope(eng) as conn:
-            deactivate_policy_layer(conn, engagement_id=eng, layer_id=layer_id,
-                                    actor="test-teardown")
+        if eng is None:      # a global row: retired on the only connection that may (5.37)
+            deactivate_global_layer(layer_id)
+        else:
+            with engagement_scope(eng) as conn:
+                deactivate_policy_layer(conn, engagement_id=eng, layer_id=layer_id,
+                                        actor="test-teardown")
 
 
 def _publish(ctx, *, from_engagement, layer="customer", document, customer_id,
              scoped_to_engagement=False):
-    with engagement_scope(from_engagement) as conn:
-        layer_id = publish_policy_layer(
-            conn, engagement_id=from_engagement, layer=layer, version=_version(),
-            document=document, actor="platform-owner", customer_id=customer_id,
-            scoped_to_engagement=scoped_to_engagement,
+    """A customer-scoped row has ``engagement_id IS NULL`` like a global one, so it is written
+    by ``global_policy_admin`` (5.37); ``from_engagement`` matters only for an
+    engagement-scoped row."""
+    if scoped_to_engagement:
+        with engagement_scope(from_engagement) as conn:
+            layer_id = publish_policy_layer(
+                conn, engagement_id=from_engagement, layer=layer, version=_version(),
+                document=document, actor="platform-owner", customer_id=customer_id,
+                scoped_to_engagement=True,
+            )
+        ctx["published"].append((from_engagement, layer_id))
+    else:
+        layer_id = publish_global_layer(
+            layer=layer, version=_version(), document=document, actor="platform-owner",
+            customer_id=customer_id,
         )
-    ctx["published"].append((from_engagement, layer_id))
+        ctx["published"].append((None, layer_id))
     return layer_id
 
 
@@ -97,17 +110,6 @@ def test_one_customers_allow_layer_does_not_widen_another_customers_engagement(t
         "the layer must still apply to the customer it was published for")
     assert _decision(ctx["eng_b"], action) == DENY, (
         "a layer published for another customer widened this engagement (ACCEPTANCE 5.35)")
-
-
-def test_publishing_from_the_other_customers_engagement_changes_nothing(two_customers):
-    """Where a layer is published *from* is not what scopes it. D11-7 already made the
-    publishing engagement irrelevant for global rows; the customer is the scope."""
-    ctx = two_customers
-    action = f"probe.{uuid.uuid4().hex[:8]}"
-    _publish(ctx, from_engagement=ctx["eng_b"], document={"actions": {action: ALLOW}},
-             customer_id=ctx["alpha"])
-    assert _decision(ctx["eng_a"], action) == ALLOW
-    assert _decision(ctx["eng_b"], action) == DENY
 
 
 def test_one_customers_deny_layer_does_not_restrict_another(two_customers):

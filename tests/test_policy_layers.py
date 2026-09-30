@@ -31,8 +31,12 @@ from control_plane.policy.layers import (
     publish_policy_layer,
 )
 from control_plane.policy.merge import ALLOW, DENY, UNIVERSE
-from control_plane.state.db import engagement_scope
-from tests.helpers import make_engagement
+from control_plane.state.db import engagement_scope, global_policy_admin_scope
+from tests.helpers import (
+    deactivate_global_layer,
+    make_engagement,
+    publish_global_layer,
+)
 
 
 def _uid(prefix: str) -> str:
@@ -107,22 +111,20 @@ def test_a_global_layer_is_visible_from_every_engagement(engagement_id):
     """
     token = _token("GLOBAL_PII")
     other = f"ENG-OTHER-{uuid.uuid4().hex[:8]}"
-    with engagement_scope(engagement_id) as conn:
-        layer_id = publish_policy_layer(
-            conn, engagement_id=engagement_id, layer=EMERGENCY_OVERLAY,
-            version=_version(), document={"data_deny": [token]},
-            actor="incident-commander",
-        )
+    # A global layer is written on the global_policy_admin connection (5.37), not from an
+    # engagement -- which is also why this no longer needs an engagement to publish from.
+    layer_id = publish_global_layer(
+        layer=EMERGENCY_OVERLAY, version=_version(), document={"data_deny": [token]},
+        actor="incident-commander",
+    )
     make_engagement(other, "CUST")
     try:
         with engagement_scope(other) as conn:
             assert token in load_effective_policy(conn, other).data_deny
-    finally:
         with engagement_scope(engagement_id) as conn:
-            deactivate_policy_layer(
-                conn, engagement_id=engagement_id, layer_id=layer_id,
-                actor="test-cleanup",
-            )
+            assert token in load_effective_policy(conn, engagement_id).data_deny
+    finally:
+        deactivate_global_layer(layer_id, actor="test-cleanup")
 
 
 def test_an_engagement_scoped_layer_stays_in_its_engagement(engagement_id):
@@ -202,12 +204,24 @@ def test_bypassing_the_api_still_hits_the_database_constraint(
     """
     import json
 
-    with engagement_scope(engagement_id) as conn:
+    # The CHECK is what is being asserted, so the INSERT has to reach it: a *global*
+    # overlay row comes from the only role allowed to write one (5.37). Through the runtime
+    # role the same statement is refused earlier, by row-level security (see
+    # tests/test_global_policy_admin.py), and would never test the constraint.
+    with global_policy_admin_scope() as conn:
         with pytest.raises(IntegrityError, match="emergency_overlay_can_only_tighten"):
             conn.execute(
                 text("INSERT INTO policy_layers (layer, version, document) "
                      "VALUES (:l, 99, CAST(:d AS jsonb))"),
                 {"l": EMERGENCY_OVERLAY, "d": json.dumps(document)},
+            )
+    # And an engagement-scoped overlay row -- the runtime role's own kind -- meets the same CHECK.
+    with engagement_scope(engagement_id) as conn:
+        with pytest.raises(IntegrityError, match="emergency_overlay_can_only_tighten"):
+            conn.execute(
+                text("INSERT INTO policy_layers (layer, version, engagement_id, document) "
+                     "VALUES (:l, 99, :e, CAST(:d AS jsonb))"),
+                {"l": EMERGENCY_OVERLAY, "e": engagement_id, "d": json.dumps(document)},
             )
 
 
@@ -497,12 +511,11 @@ def layered_engagement(engagement_id):
     action = _token("action")
     other_engagement = _uid("ENG-OTHER")
 
+    global_id = publish_global_layer(
+        layer="baseline_global", version=_version(),
+        document={"actions": {action: ALLOW}}, actor="platform-owner",
+    )
     with engagement_scope(engagement_id) as conn:
-        global_id = publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global",
-            version=_version(), document={"actions": {action: ALLOW}},
-            actor="platform-owner",
-        )
         scoped_id = publish_policy_layer(
             conn, engagement_id=engagement_id, layer="engagement",
             version=_version(), document={"data_deny": [_token("class")]},
@@ -537,11 +550,7 @@ def layered_engagement(engagement_id):
     # accumulation DEFERRED 11.1 exists because of -- and a test that leaves one
     # behind is the mechanism that produced the nineteen. The engagement-scoped
     # rows are harmless and are left alone.
-    with engagement_scope(engagement_id) as conn:
-        deactivate_policy_layer(
-            conn, engagement_id=engagement_id, layer_id=global_id,
-            actor="test-teardown",
-        )
+    deactivate_global_layer(global_id)
 
 
 def test_the_listing_returns_exactly_the_rows_the_merge_consumed(layered_engagement):
@@ -625,20 +634,18 @@ def test_an_invisible_attribution_says_so_rather_than_being_blank(layered_engage
     foreign = _uid("ENG-FOREIGN")
 
     make_engagement(foreign, "CUST-FOREIGN")
-    with engagement_scope(foreign) as conn:
-        invisible_id = publish_policy_layer(
-            conn, engagement_id=foreign, layer="baseline_global",
-            version=_version(), document={"actions": {_token("action"): ALLOW}},
-            actor="someone-elses-operator",
-        )
+    invisible_id = publish_global_layer(
+        layer="baseline_global", version=_version(),
+        document={"actions": {_token("action"): ALLOW}}, actor="someone-elses-operator",
+    )
 
-    with engagement_scope(eid) as conn:
-        listed = {layer.id: layer for layer in list_effective_policy_layers(conn, eid)}
+    try:
+        with engagement_scope(eid) as conn:
+            listed = {layer.id: layer for layer in list_effective_policy_layers(conn, eid)}
+    finally:
         # Same reason as the fixture's teardown: retire it before asserting, so
         # a failing assertion cannot leave a global layer behind.
-        deactivate_policy_layer(
-            conn, engagement_id=eid, layer_id=invisible_id, actor="test-teardown",
-        )
+        deactivate_global_layer(invisible_id)
 
     # An engagement-scoped layer published from this engagement has its audit
     # row here, so the publisher is named.
@@ -714,25 +721,25 @@ def test_an_engagement_with_no_layers_lists_nothing_and_denies_everything():
     eid = _uid("ENG-EMPTY")
     make_engagement(eid, "CUST-EMPTY")
     with engagement_scope(eid) as conn:
-        # Retire everything global so this engagement genuinely sees nothing.
         globals_ = [
             r[0] for r in conn.execute(
                 text("SELECT id FROM policy_layers WHERE active "
                      "AND engagement_id IS NULL")).all()
         ]
-        for layer_id in globals_:
-            deactivate_policy_layer(
-                conn, engagement_id=eid, layer_id=layer_id, actor="test-cleanup")
-
-        listed = list_effective_policy_layers(conn, eid)
-        policy = load_effective_policy(conn, eid)
-
+    # Retire everything global so this engagement genuinely sees nothing -- on the only
+    # connection that may (5.37) -- and put it all back, whatever happens: global layers
+    # belong to the whole database and this test does not own them.
+    for layer_id in globals_:
+        deactivate_global_layer(layer_id, actor="test-cleanup")
+    try:
+        with engagement_scope(eid) as conn:
+            listed = list_effective_policy_layers(conn, eid)
+            policy = load_effective_policy(conn, eid)
         assert listed == ()
         assert policy.action_decision("network.scan") == DENY
-
-        # Put them back: global layers belong to the whole database and this
-        # test does not own them.
-        for layer_id in globals_:
-            conn.execute(
-                text("UPDATE policy_layers SET active = TRUE WHERE id = :i"),
-                {"i": layer_id})
+    finally:
+        with global_policy_admin_scope() as conn:
+            for layer_id in globals_:
+                conn.execute(
+                    text("UPDATE policy_layers SET active = TRUE WHERE id = :i"),
+                    {"i": layer_id})

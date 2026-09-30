@@ -57,7 +57,11 @@ from control_plane.policy.layers import load_effective_policy, publish_policy_la
 from control_plane.provenance import graph  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import register_scope_object  # noqa: E402
-from control_plane.state.db import engagement_scope, registry_admin_scope  # noqa: E402
+from control_plane.state.db import (  # noqa: E402
+    engagement_scope,
+    global_policy_admin_scope,
+    registry_admin_scope,
+)
 from tool_gateway.sandbox import (  # noqa: E402
     DockerSandbox,
     SandboxUnavailable,
@@ -140,7 +144,9 @@ def publish_baseline(engagement_id: str) -> tuple[int, bool]:
 
     Returns (policy layer id, whether it was published now).
     """
-    with engagement_scope(engagement_id) as conn:
+    # A global baseline is the global_policy_admin's to write (5.37); this harness is an
+    # operator-run script, so it opens that connection the way the CLI does.
+    with global_policy_admin_scope() as conn:
         existing = conn.execute(
             text("SELECT id FROM policy_layers WHERE active IS TRUE "
                  "AND engagement_id IS NULL AND layer = 'baseline_global' "
@@ -149,7 +155,7 @@ def publish_baseline(engagement_id: str) -> tuple[int, bool]:
         if existing is not None:
             return int(existing), False
         return publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global", version=1,
+            conn, engagement_id=None, layer="baseline_global", version=1,
             document=BASELINE_DOCUMENT, actor=ACTOR,
         ), True
 

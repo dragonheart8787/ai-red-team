@@ -65,6 +65,7 @@ from control_plane.policy.merge import (
     resolve_action,
     validate_emergency_overlay,
 )
+from control_plane.state.db import assert_global_policy_admin
 
 EMERGENCY_OVERLAY = "emergency_overlay"
 
@@ -84,7 +85,7 @@ class PolicyLayerError(ValueError):
 def publish_policy_layer(
     conn: Connection,
     *,
-    engagement_id: str,
+    engagement_id: str | None,
     layer: str,
     version: int,
     document: Mapping[str, Any],
@@ -97,9 +98,16 @@ def publish_policy_layer(
     ``scoped_to_engagement`` decides whether the layer applies globally
     (``engagement_id IS NULL``, which is how baseline and emergency layers reach
     every engagement) or only to this one. It is an explicit argument rather
-    than inferred from ``engagement_id`` because the caller always has an
-    engagement in hand — the RLS connection requires one — and inferring would
-    make "publish globally" unreachable.
+    than inferred from ``engagement_id`` so that "publish globally" is always a
+    deliberate act.
+
+    **A global layer needs the ``global_policy_admin`` connection (5.37, D54).** It applies
+    to every engagement, so writing one is not the runtime role's to do: the database
+    refuses ``cyberorch_app`` an INSERT without an engagement, and this function says so by
+    name instead of leaving the caller with an RLS error. Such a call passes
+    ``engagement_id=None`` and a connection opened as ``global_policy_admin`` -- in practice
+    ``scripts/manage_global_policy.py``. An engagement-scoped layer is unchanged: it is
+    written on the ordinary engagement connection.
 
     Returns the new row's id, which is what ``current_policy_version`` reports
     once this layer is active, so a caller can record what it published against.
@@ -117,6 +125,8 @@ def publish_policy_layer(
         )
     if not actor:
         raise PolicyLayerError("policy layer writes must name an actor (§4.4)")
+    if scoped_to_engagement and not engagement_id:
+        raise PolicyLayerError("an engagement-scoped layer must name its engagement_id")
     if layer == "customer" and not scoped_to_engagement and not customer_id:
         # ACCEPTANCE 5.35. A row with neither an engagement nor a customer applies to every
         # engagement of every customer, so a 'customer' layer published without naming one
@@ -131,6 +141,10 @@ def publish_policy_layer(
         # Raises EmergencyOverlayError, which callers may want to catch
         # separately from a malformed request.
         validate_emergency_overlay(document)
+
+    if not scoped_to_engagement:
+        # Checked after the validation above so a malformed request is still reported as one.
+        assert_global_policy_admin(conn)
 
     row_id = conn.execute(
         text("""
@@ -175,9 +189,16 @@ def publish_policy_layer(
 
 
 def deactivate_policy_layer(
-    conn: Connection, *, engagement_id: str, layer_id: int, actor: str
+    conn: Connection, *, engagement_id: str | None = None, layer_id: int, actor: str
 ) -> bool:
     """Retire a layer. Soft, like the registries.
+
+    **A global layer is retired by ``global_policy_admin`` only (5.37, D54).** Retiring an
+    emergency overlay is a relaxation, and it used to be reachable from any engagement's
+    runtime connection. The database now refuses that; this function raises first, naming the
+    connection that is needed. ``engagement_id`` is for an engagement-scoped layer and may be
+    left out for a global one. A layer the connection cannot see (an engagement-scoped row
+    from the global role, or another engagement's) reports ``False``, like an absent one.
 
     This does not revoke capabilities directly, and removing a layer can only
     widen the effective policy — allow lists intersect, deny lists union, rate
@@ -201,11 +222,17 @@ def deactivate_policy_layer(
     ).mappings().one_or_none()
     if before is None:
         return False
+    if before["engagement_id"] is None:
+        assert_global_policy_admin(conn)
 
-    conn.execute(
+    retired = conn.execute(
         text("UPDATE policy_layers SET active = FALSE WHERE id = :lid"),
         {"lid": layer_id},
-    )
+    ).rowcount
+    if retired != 1:
+        # Row-level security can hide a row from an UPDATE that the SELECT above saw. Never
+        # audit a retirement that did not happen.
+        return False
     # D11-7: deactivating a global layer is a global operation. The layer's own
     # engagement_id decides — NULL means it was global — not the engagement the
     # deactivator is connected through.

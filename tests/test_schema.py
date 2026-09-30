@@ -14,7 +14,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from control_plane.state.db import engagement_scope, get_engine
+from control_plane.state.db import (
+    engagement_scope,
+    get_engine,
+    get_global_policy_admin_engine,
+)
 from control_plane.state.models import metadata as sa_metadata
 
 # Kept in step with ENGAGEMENT_SCOPED in the migration.
@@ -147,9 +151,12 @@ def test_evidence_insert_and_select_still_work(engagement_id):
 
 
 def test_emergency_overlay_cannot_carry_scope_allow(db_available):
-    """§4.5: the overlay may only tighten, enforced by the schema itself."""
+    """§4.5: the overlay may only tighten, enforced by the schema itself.
+
+    A global overlay row is written by ``global_policy_admin`` (5.37); the runtime role is
+    refused before the CHECK is reached, which would leave the CHECK untested."""
     with pytest.raises(IntegrityError) as err:
-        with get_engine().begin() as conn:
+        with get_global_policy_admin_engine().begin() as conn:
             conn.execute(text("""
                 INSERT INTO policy_layers (layer, version, document)
                 VALUES ('emergency_overlay', 99, '{"scope_allow": ["*"]}'::jsonb)
@@ -159,7 +166,7 @@ def test_emergency_overlay_cannot_carry_scope_allow(db_available):
 
 def test_emergency_overlay_cannot_allow_an_action(db_available):
     with pytest.raises(IntegrityError) as err:
-        with get_engine().begin() as conn:
+        with get_global_policy_admin_engine().begin() as conn:
             conn.execute(text("""
                 INSERT INTO policy_layers (layer, version, document)
                 VALUES ('emergency_overlay', 98,
@@ -169,7 +176,7 @@ def test_emergency_overlay_cannot_allow_an_action(db_available):
 
 
 def test_emergency_overlay_may_deny(db_available):
-    with get_engine().begin() as conn:
+    with get_global_policy_admin_engine().begin() as conn:
         conn.execute(text("""
             INSERT INTO policy_layers (layer, version, document)
             VALUES ('emergency_overlay', 97,

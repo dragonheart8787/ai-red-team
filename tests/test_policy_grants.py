@@ -116,17 +116,19 @@ def test_app_role_can_still_flip_the_active_flag_either_way(engagement_id, layer
                             {"i": layer}).scalar_one() is True
 
 
-def test_the_overlay_check_still_holds_for_the_only_role_that_can_insert(engagement_id):
-    """5.36 must not have traded one guarantee for another: an INSERT that would relax
-    through the overlay is still refused by the table's own CHECK (D16)."""
+def test_the_overlay_check_still_holds_for_the_runtime_roles_own_rows(engagement_id):
+    """5.36 must not have traded one guarantee for another: an engagement-scoped overlay that
+    would relax is still refused by the table's own CHECK (D16). (A *global* overlay is not the
+    runtime role's to write at all since 5.37; tests/test_policy_layers.py covers the CHECK
+    through the role that is.)"""
     from sqlalchemy.exc import IntegrityError
 
     with engagement_scope(engagement_id) as conn:
         with pytest.raises(IntegrityError, match="emergency_overlay_can_only_tighten"):
             conn.execute(
-                text("INSERT INTO policy_layers (layer, version, document) "
-                     "VALUES ('emergency_overlay', 98, CAST(:d AS jsonb))"),
-                {"d": json.dumps({"actions": {"network.scan": "ALLOW"}})},
+                text("INSERT INTO policy_layers (layer, version, engagement_id, document) "
+                     "VALUES ('emergency_overlay', 98, :e, CAST(:d AS jsonb))"),
+                {"e": engagement_id, "d": json.dumps({"actions": {"network.scan": "ALLOW"}})},
             )
 
 
@@ -193,6 +195,8 @@ TABLE_PRIVILEGES = {
     "credential_admin": {"policy_layers": set(), "engagements": {"SELECT"}},
     "ui_reader": {"policy_layers": set(), "engagements": {"SELECT"}},
     "global_auditor": {"policy_layers": set(), "engagements": set()},
+    # 5.37: the only writer of global policy layers; nothing on engagements.
+    "global_policy_admin": {"policy_layers": {"SELECT", "INSERT"}, "engagements": set()},
 }
 ALL_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
 
@@ -236,17 +240,25 @@ def test_the_app_roles_column_updates_are_exactly_these(db_available, table):
     assert updatable == APP_UPDATABLE_COLUMNS[table]
 
 
+#: The one other role that may update anything on these tables: the global policy writer, and
+#: only the column that retires a layer (row-confined to global rows by migration 0014).
+OTHER_ROLE_UPDATABLE = {("global_policy_admin", "policy_layers"): {"active"}}
+
+
 @pytest.mark.parametrize("role", ["registry_admin", "credential_admin", "ui_reader",
-                                  "global_auditor"])
+                                  "global_auditor", "global_policy_admin"])
 @pytest.mark.parametrize("table", ["policy_layers", "engagements"])
-def test_no_other_role_can_update_either_table_at_all(db_available, role, table):
-    """None of them held UPDATE before 0013 and none may after: this is about the runtime
-    role, and a fix that reached for a different role would only move the gap."""
+def test_no_other_role_can_update_either_table_beyond_its_one_column(db_available, role, table):
+    """None of them held UPDATE before 0013 and none may after, except the global policy
+    writer's ``active`` (5.37): this is about the runtime role, and a fix that reached for a
+    different role would only move the gap."""
     with engagement_scope(_uid("ENG-CAT")) as conn:
         columns = [r[0] for r in conn.execute(text(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema = 'public' AND table_name = :t"), {"t": table})]
-        assert not any(
-            conn.execute(text("SELECT has_column_privilege(:r, :t, :c, 'UPDATE')"),
-                         {"r": role, "t": table, "c": c}).scalar_one()
-            for c in columns)
+        updatable = {
+            c for c in columns
+            if conn.execute(text("SELECT has_column_privilege(:r, :t, :c, 'UPDATE')"),
+                            {"r": role, "t": table, "c": c}).scalar_one()
+        }
+    assert updatable == OTHER_ROLE_UPDATABLE.get((role, table), set())

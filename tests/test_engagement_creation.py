@@ -22,8 +22,8 @@ from control_plane.orchestrator.engagement import (
     create_engagement,
     get_engagement,
 )
-from control_plane.policy.layers import publish_policy_layer
 from control_plane.state.db import engagement_scope, registry_admin_scope
+from tests.helpers import deactivate_global_layer, publish_global_layer
 
 
 def _uid(prefix: str) -> str:
@@ -88,19 +88,21 @@ def test_the_policy_snapshot_is_the_real_current_version(engagement_id):
     id, so its own snapshot reads only the global layers, computed
     independently here rather than assumed to match.
     """
-    with engagement_scope(engagement_id) as conn:
-        publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global",
-            version=_version(), document={"actions": {_uid("action"): "ALLOW"}},
-            actor="platform-owner",
-        )
+    layer_id = publish_global_layer(
+        layer="baseline_global", version=_version(),
+        document={"actions": {_uid("action"): "ALLOW"}}, actor="platform-owner",
+    )
 
     eid = _uid("ENG-SNAP")
-    with registry_admin_scope(eid) as conn:
-        expected = current_policy_version(conn, eid)
-        state = create_engagement(
-            conn, engagement_id=eid, customer_id="CUST-SNAP", actor="engagement-manager",
-        )
+    try:
+        with registry_admin_scope(eid) as conn:
+            expected = current_policy_version(conn, eid)
+            state = create_engagement(
+                conn, engagement_id=eid, customer_id="CUST-SNAP",
+                actor="engagement-manager",
+            )
+    finally:
+        deactivate_global_layer(layer_id)
 
     with engagement_scope(state.engagement_id) as conn:
         stored = conn.execute(
@@ -132,11 +134,15 @@ def test_load_effective_policy_does_not_read_the_snapshot(engagement_id):
         before = load_effective_policy(conn, eid)
         assert token not in before.data_deny
 
-        publish_policy_layer(
-            conn, engagement_id=eid, layer="baseline_global",
-            version=_version(), document={"data_deny": [token]}, actor="platform-owner",
-        )
-        after = load_effective_policy(conn, eid)
+    layer_id = publish_global_layer(
+        layer="baseline_global", version=_version(),
+        document={"data_deny": [token]}, actor="platform-owner",
+    )
+    try:
+        with engagement_scope(eid) as conn:
+            after = load_effective_policy(conn, eid)
+    finally:
+        deactivate_global_layer(layer_id)
     assert token in after.data_deny, (
         "a post-creation baseline publish did not apply -- if this starts "
         "failing, the frozen-baseline enforcement has been built and 5.20 "

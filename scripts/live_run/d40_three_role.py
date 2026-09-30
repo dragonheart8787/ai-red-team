@@ -88,7 +88,11 @@ from control_plane.registry.scope_registry import (  # noqa: E402
     list_scope_objects,
     register_scope_object,
 )
-from control_plane.state.db import engagement_scope, registry_admin_scope  # noqa: E402
+from control_plane.state.db import (  # noqa: E402
+    engagement_scope,
+    global_policy_admin_scope,
+    registry_admin_scope,
+)
 from scripts.live_run.d17_supervisor import (  # noqa: E402
     build_state,
     duplication,
@@ -170,9 +174,11 @@ def uid(prefix: str) -> str:
 #: rather than fighting it, and costs nothing extra since these are exactly
 #: the semantics a real deployment's actual baseline would carry.
 def ensure_baseline(engagement_id: str) -> None:
-    with engagement_scope(engagement_id) as conn:
+    # A global baseline is the global_policy_admin's to write (5.37); this harness is an
+    # operator-run script, so it opens that connection the way the CLI does.
+    with global_policy_admin_scope() as conn:
         publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global",
+            conn, engagement_id=None, layer="baseline_global",
             version=int(uuid.uuid4().int % 1_000_000_000),
             document={
                 "actions": {"network.scan": "ALLOW", "network.recon": "ALLOW",
