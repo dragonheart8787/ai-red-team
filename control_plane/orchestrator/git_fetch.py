@@ -86,16 +86,24 @@ def _basic_auth_header(auth_token: str) -> str:
 
 def fetch_repo(
     location: str, branch: str, *, timeout_seconds: int = 120,
-    auth_token: str | None = None,
+    auth_token: str | None = None, depth: int = 1, bare: bool = False,
 ) -> FetchedRepo:
     """Shallow-clone ``location`` at ``branch`` into a fresh temp directory.
 
-    Shallow (``--depth 1``): Semgrep scans a working tree, not history, and a
-    full clone of a large repository costs minutes and gigabytes for no
-    benefit here. Shallow does not mean approximate — the resolved commit
-    (below) is the exact, real HEAD of that branch at fetch time, which is
-    exactly the value D11-3's lesson (docs/ADR_SEMGREP.md §1.2) requires
-    enter the execution fingerprint.
+    Shallow (``--depth 1`` by default): Semgrep scans a working tree, not
+    history, and a full clone of a large repository costs minutes and
+    gigabytes for no benefit here. Shallow does not mean approximate — the
+    resolved commit (below) is the exact, real HEAD of that branch at fetch
+    time, which is exactly the value D11-3's lesson (docs/ADR_SEMGREP.md §1.2)
+    requires enter the execution fingerprint.
+
+    ``depth`` and ``bare`` exist for Gitleaks (D55), which reads history. A tip
+    commit id names every ancestor of it, so ``(commit_sha, depth)`` still
+    determines exactly what was fetched. ``bare`` produces no working tree: a
+    scanner that reads its suppressions from the tree it audits (Gitleaks does,
+    three ways) has nothing there to read. Note git ignores ``--depth`` for a
+    clone from a plain filesystem path (it needs ``file://``); a real remote
+    URL honours it.
 
     ``auth_token``, when given, authenticates the clone (D44) — this is the
     seam `docs/ADR_SEMGREP.md` §3.2 named and this document's own §4.2
@@ -111,8 +119,12 @@ def fetch_repo(
     delete on its own success or failure, so a caller inspecting the tree
     after a partial failure still can.
     """
+    if depth < 1:
+        raise GitFetchError(f"clone depth must be at least 1, got {depth}")
     local_path = tempfile.mkdtemp(prefix="cyberorch-repo-")
-    command = ["git", "clone", "--depth", "1", "--branch", branch, "--single-branch"]
+    command = ["git", "clone", "--depth", str(depth), "--branch", branch, "--single-branch"]
+    if bare:
+        command.append("--bare")
     if auth_token:
         command += ["-c", f"http.extraHeader={_basic_auth_header(auth_token)}"]
     command += [location, local_path]

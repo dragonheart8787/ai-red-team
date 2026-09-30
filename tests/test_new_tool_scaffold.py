@@ -35,7 +35,7 @@ scaffold = importlib.util.module_from_spec(_spec)
 sys.modules["new_tool_scaffold"] = scaffold
 _spec.loader.exec_module(scaffold)
 
-NAME, ACTION = "gitleaks", "secrets.scan"
+NAME, ACTION = "sampletool", "secrets.scan"
 
 
 @pytest.fixture()
@@ -59,17 +59,17 @@ def _load(path: Path, module_name: str):
 
 def test_it_writes_the_expected_files_and_nothing_into_the_repository(generated):
     expected = {
-        "tool_gateway/adapters/gitleaks.py",
-        "tests/test_gitleaks_adapter.py",
-        "tool_gateway/images/gitleaks.Dockerfile",
-        "tool_gateway/images/build_gitleaks_image.sh",
-        "REGISTRATION_gitleaks.md",
-        "docs/ADR_GITLEAKS.md",
+        "tool_gateway/adapters/sampletool.py",
+        "tests/test_sampletool_adapter.py",
+        "tool_gateway/images/sampletool.Dockerfile",
+        "tool_gateway/images/build_sampletool_image.sh",
+        "REGISTRATION_sampletool.md",
+        "docs/ADR_SAMPLETOOL.md",
     }
     written = {str(p.relative_to(generated)) for p in generated.rglob("*") if p.is_file()}
     assert written == expected
-    assert not (REPO / "tool_gateway" / "adapters" / "gitleaks.py").exists()
-    assert os.access(generated / "tool_gateway/images/build_gitleaks_image.sh", os.X_OK)
+    assert not (REPO / "tool_gateway" / "adapters" / "sampletool.py").exists()
+    assert os.access(generated / "tool_gateway/images/build_sampletool_image.sh", os.X_OK)
 
 
 def test_it_never_overwrites(generated):
@@ -79,9 +79,9 @@ def test_it_never_overwrites(generated):
 
 @pytest.mark.parametrize("name,action,message", [
     ("semgrep", "secrets.scan", "already exists"),        # an existing adapter file
-    ("gitleaks", "code.scan", "already served"),           # an existing action
+    ("sampletool", "code.scan", "already served"),           # an existing action
     ("Bad-Name", "secrets.scan", "invalid --name"),
-    ("gitleaks", "noverb", "invalid --action"),
+    ("sampletool", "noverb", "invalid --action"),
 ])
 def test_it_refuses_collisions_and_malformed_requests(tmp_path, name, action, message):
     with pytest.raises(scaffold.ScaffoldError, match=message):
@@ -98,7 +98,9 @@ def test_it_refuses_to_write_into_the_repository_root():
 # It decides nothing
 # ---------------------------------------------------------------------------
 
-DECISIONS = ("WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH", "GITLEAKS_VERSION")
+DECISIONS = (
+    "WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH", "SAMPLETOOL_VERSION",
+)
 
 
 def _assigned(tree: ast.Module, name: str):
@@ -112,7 +114,7 @@ def _assigned(tree: ast.Module, name: str):
 
 @pytest.mark.parametrize("decision", DECISIONS)
 def test_every_judgement_is_emitted_undecided(generated, decision):
-    tree = ast.parse((generated / "tool_gateway/adapters/gitleaks.py").read_text())
+    tree = ast.parse((generated / "tool_gateway/adapters/sampletool.py").read_text())
     value = _assigned(tree, decision)
     assert isinstance(value, ast.Name) and value.id == "NotImplemented", (
         f"{decision} must be emitted as NotImplemented; a default would be the scaffold "
@@ -121,7 +123,7 @@ def test_every_judgement_is_emitted_undecided(generated, decision):
 
 
 def test_the_generated_view_shows_a_model_none_of_the_tools_output(generated):
-    module = _load(generated / "tool_gateway/adapters/gitleaks.py", "gitleaks_view_probe")
+    module = _load(generated / "tool_gateway/adapters/sampletool.py", "sampletool_view_probe")
     view = module.derive_view("secret=hunter2", "boom")
     assert view["untrusted_content"] is True
     assert "hunter2" not in repr(view) and "boom" not in repr(view)
@@ -129,7 +131,7 @@ def test_the_generated_view_shows_a_model_none_of_the_tools_output(generated):
 
 
 def test_the_generated_command_and_version_are_not_invented(generated):
-    module = _load(generated / "tool_gateway/adapters/gitleaks.py", "gitleaks_cmd_probe")
+    module = _load(generated / "tool_gateway/adapters/sampletool.py", "sampletool_cmd_probe")
     with pytest.raises(NotImplementedError, match="DECIDE\\(command\\)"):
         module.build_plan(constraints={}, budget={}, target="x")
     with pytest.raises(NotImplementedError, match="DECIDE\\(version\\)"):
@@ -137,7 +139,7 @@ def test_the_generated_command_and_version_are_not_invented(generated):
 
 
 def test_the_untouched_adapter_fails_the_contract_on_every_decision(generated):
-    module = _load(generated / "tool_gateway/adapters/gitleaks.py", "gitleaks_untouched")
+    module = _load(generated / "tool_gateway/adapters/sampletool.py", "sampletool_untouched")
     problems = "\n".join(adapter_kit.adapter_violations(module, action=ACTION))
     for decision in ("WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH"):
         assert decision in problems, f"{decision} passed the contract while undecided"
@@ -145,13 +147,13 @@ def test_the_untouched_adapter_fails_the_contract_on_every_decision(generated):
 
 
 def test_the_dockerfile_and_build_script_refuse_to_build_until_chosen(generated):
-    dockerfile = (generated / "tool_gateway/images/gitleaks.Dockerfile").read_text()
-    assert "exit 1" in dockerfile and "ENTRYPOINT [\"/DECIDE/path/to/gitleaks\"]" in dockerfile
-    assert not re.search(r"^ARG GITLEAKS_VERSION=\S", dockerfile, re.M), (
+    dockerfile = (generated / "tool_gateway/images/sampletool.Dockerfile").read_text()
+    assert "exit 1" in dockerfile and "ENTRYPOINT [\"/DECIDE/path/to/sampletool\"]" in dockerfile
+    assert not re.search(r"^ARG SAMPLETOOL_VERSION=\S", dockerfile, re.M), (
         "the pin must have no default"
     )
-    script = (generated / "tool_gateway/images/build_gitleaks_image.sh").read_text()
-    assert 'GITLEAKS_VERSION="${GITLEAKS_VERSION:-}"' in script
+    script = (generated / "tool_gateway/images/build_sampletool_image.sh").read_text()
+    assert 'SAMPLETOOL_VERSION="${SAMPLETOOL_VERSION:-}"' in script
     assert "DECIDE(version)" in script and "DECIDE(selfcheck)" in script
     # The self-check must run exactly as the sandbox does, or it proves nothing (D31, D36).
     for flag in ("--network none", "--cap-drop ALL", "no-new-privileges:true", "--read-only"):
@@ -159,7 +161,7 @@ def test_the_dockerfile_and_build_script_refuse_to_build_until_chosen(generated)
 
 
 def test_the_generated_build_script_is_valid_shell_and_refuses_to_run_undecided(generated):
-    script = generated / "tool_gateway/images/build_gitleaks_image.sh"
+    script = generated / "tool_gateway/images/build_sampletool_image.sh"
     assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
 
     # No docker needed: the refusal comes before the first docker call.
@@ -172,7 +174,7 @@ def test_the_generated_build_script_is_valid_shell_and_refuses_to_run_undecided(
 
     versioned = subprocess.run(
         ["bash", str(script)], capture_output=True, text=True,
-        env={"PATH": os.environ["PATH"], "GITLEAKS_VERSION": "8.18.4"},
+        env={"PATH": os.environ["PATH"], "SAMPLETOOL_VERSION": "8.18.4"},
     )
     assert versioned.returncode == 1
     assert "DECIDE(selfcheck)" in versioned.stderr, (
@@ -191,15 +193,15 @@ def _run_generated_tests(out: Path, extra: str = "") -> subprocess.CompletedProc
         import tool_gateway.adapters as pkg
 
         spec = importlib.util.spec_from_file_location(
-            "tool_gateway.adapters.gitleaks", r"{out}/tool_gateway/adapters/gitleaks.py")
+            "tool_gateway.adapters.sampletool", r"{out}/tool_gateway/adapters/sampletool.py")
         module = importlib.util.module_from_spec(spec)
-        sys.modules["tool_gateway.adapters.gitleaks"] = module
+        sys.modules["tool_gateway.adapters.sampletool"] = module
         spec.loader.exec_module(module)
-        pkg.gitleaks = module
+        pkg.sampletool = module
         {extra}
     '''))
     return subprocess.run(
-        [sys.executable, "-m", "pytest", str(out / "tests" / "test_gitleaks_adapter.py"),
+        [sys.executable, "-m", "pytest", str(out / "tests" / "test_sampletool_adapter.py"),
          "-q", "-p", "no:cacheprovider", "-rA", "--no-header",
          "-k", "not authorized", "--rootdir", str(out)],
         cwd=REPO, capture_output=True, text=True,
@@ -237,29 +239,29 @@ def test_an_untouched_scaffold_is_red_and_never_skipped(generated):
 
 def test_filling_in_the_decisions_turns_the_local_contract_green_and_only_that(generated):
     """The path to green exists, and it goes through the person, not around them."""
-    path = generated / "tool_gateway/adapters/gitleaks.py"
+    path = generated / "tool_gateway/adapters/sampletool.py"
     text = path.read_text()
     for decision, value in {
         "WRITES_DATA": "False", "CHANGES_STATE": "False", "REQUIRES_PROXY": "False",
-        "NEEDS_DISPATCH": '"dispatch_scan"', "GITLEAKS_VERSION": '"8.18.4"',
+        "NEEDS_DISPATCH": '"dispatch_scan"', "SAMPLETOOL_VERSION": '"8.18.4"',
     }.items():
         text, n = re.subn(
             rf"^{decision} = NotImplemented", f"{decision} = {value}", text, flags=re.M
         )
         assert n == 1, decision
     path.write_text(text)
-    module = _load(path, "gitleaks_decided")
+    module = _load(path, "sampletool_decided")
 
     assert adapter_kit.adapter_violations(module, action=ACTION) == []
-    assert module.tool_version() == "gitleaks-8.18.4"
+    assert module.tool_version() == "sampletool-8.18.4"
 
     # ...but it is not registered, and the wiring checks say so, one by one.
     wiring = "\n".join(adapter_kit.registration_violations(module, action=ACTION))
     assert "registry.ADAPTERS['secrets.scan'] is not this adapter" in wiring
-    assert "EVIDENCE_PREFIX has no entry for TOOL 'gitleaks'" in wiring
-    assert "build_gitleaks_image.sh" in wiring
+    assert "EVIDENCE_PREFIX has no entry for TOOL 'sampletool'" in wiring
+    assert "build_sampletool_image.sh" in wiring
     # ...and the analysis a person owes before registering: no document, no registration.
-    assert "no docs/ADR_GITLEAKS.md" in wiring
+    assert "no docs/ADR_SAMPLETOOL.md" in wiring
 
 
 # ---------------------------------------------------------------------------

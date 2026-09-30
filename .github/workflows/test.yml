@@ -107,6 +107,15 @@ jobs:
         # mounts, or the redaction wired in front of the evidence it produces.
         run: ./tool_gateway/images/build_semgrep_image.sh
 
+      - name: Build the gitleaks image
+        # D55's code.secrets runs in a container of its own, built by the
+        # registry-less scratch route (host git + a sha256-verified pinned
+        # gitleaks release). tests/test_gitleaks_e2e.py runs the real binary in
+        # it, including the case that matters most -- a secret that exists only
+        # in history -- and fails rather than skips without it (same convention
+        # as every image above; forgotten for semgrep at D43 and bloodhound at D49).
+        run: ./tool_gateway/images/build_gitleaks_image.sh
+
       - name: Build the bloodhound image
         # D49's tests/test_dns_server_kernel_evidence.py runs the real
         # bloodhound-python binary in a real container and asserts against an

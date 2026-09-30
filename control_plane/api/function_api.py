@@ -988,6 +988,11 @@ def execution_constraints(
         constraints["auth_mode"] = target_block["auth_mode"]
     if target_block.get("exclude_paths") is not None:
         constraints["exclude_paths"] = target_block["exclude_paths"]
+    # history_depth (D55): how many commits back code.secrets reads. Carried by the
+    # same rule as every field above; without this line a proposal naming it is
+    # scanned at the adapter's default depth and nothing says so.
+    if target_block.get("history_depth") is not None:
+        constraints["history_depth"] = target_block["history_depth"]
     # dns_server (D49): the nameserver ad_collector.build_plan passes to
     # bloodhound-python's own -ns flag. Carried through by the same rule as
     # every field above -- dispatch_collection, not this function, is what

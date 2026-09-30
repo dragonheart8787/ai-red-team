@@ -44,7 +44,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap, semgrep
+from tool_gateway.adapters import (
+    ad_collector,
+    browser,
+    gitleaks,
+    http_get,
+    http_post,
+    nmap,
+    semgrep,
+)
 
 #: Action → adapter module.
 #:
@@ -64,6 +72,7 @@ ADAPTERS = MappingProxyType({
     browser.ACTION: browser,
     ad_collector.ACTION: ad_collector,
     semgrep.ACTION: semgrep,
+    gitleaks.ACTION: gitleaks,
 })
 
 #: A capability naming an action no adapter implements.
