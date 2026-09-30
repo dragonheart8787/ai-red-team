@@ -64,22 +64,16 @@ MULTI_ACTION_ADAPTERS: Mapping[str, str] = {
 }
 
 #: ``(action, constraint key)`` pairs that ``build_plan`` reads but that
-#: ``execution_constraints`` does not carry from a proposal. The first four are
-#: benign; the ``web.post`` body/content_type pair is a **known gap**, recorded
-#: as ACCEPTANCE 5.29 -- it is here so the suite stays honest, not so it stays
-#: quiet.
+#: ``execution_constraints`` does not carry from a proposal. All three are benign
+#: (validation-only or carried another way). The ``web.post`` body/content_type pair
+#: was a known gap here until ACCEPTANCE 5.29 was fixed; it is carried now, and the
+#: staleness test is what made removing the exemption a required step, not a tidy-up.
 CARRY_EXEMPTIONS: Mapping[tuple[str, str], str] = {
     ("web.get", "method"):
         "validation only: an absent method means this adapter's own GET, so "
         "there is nothing a proposal needs to carry",
     ("web.post", "method"):
         "validation only: an absent method means this adapter's own POST",
-    ("web.post", "body"):
-        "KNOWN GAP (ACCEPTANCE 5.29): no proposal field can supply a body and "
-        "execution_constraints does not carry one, so a web.post capability "
-        "issued through propose_action can never build a plan",
-    ("web.post", "content_type"):
-        "KNOWN GAP (ACCEPTANCE 5.29): same as body -- not carried",
     ("ad.collect", "max_queries_issued"):
         "carried by budget.tool.max_queries_issued instead; the constraint "
         "spelling is an alternative nothing derives from a proposal",
