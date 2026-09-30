@@ -176,7 +176,7 @@ a larger id, so the existing value *is* the boundary — the change is one new c
 
 ## 5. Proposed change, if approved (nothing done)
 
-1. Migration `0014`: `engagements.baseline_frozen_through BIGINT NULL` (the grant changes it listed are
+1. Migration `0015`: `engagements.baseline_frozen_through BIGINT NULL` (the grant changes it listed are
    already 0013; the new column is unwritable by the runtime role without any further grant).
 2. `layers.py`: the shared fragment above; `current_policy_version` delegates to it;
    `list_effective_policy_layers` adds `frozen_out`.
@@ -198,10 +198,10 @@ concentrated in one place — a wrong boundary drops a deny — which is why §1
 |---|---|---|
 | 1 | What freezes: baseline only, or also `customer` / `engagement` layers | **Baseline only.** `engagement` layers are the in-flight adjustment channel. `customer` layers are now well-defined (5.35) but §4.5's own text splits the freeze into a baseline snapshot plus a live overlay, so the smaller change is still baseline first; freezing customer layers would be a separate, later step |
 | 2 | A newer baseline that *tightens*: immune, or penetrates | **Immune**; only an overlay reaches a frozen engagement (§2) |
-| 3 | A frozen-in baseline row is later deactivated: does the engagement follow? | **Follows** (`active` still honoured) — deactivation is deliberate and audited, and a row that can never be retired for open engagements is worse. It is a widening path that exists today and that D16's `CHECK` does not cover |
+| 3 | A frozen-in baseline row is later deactivated: does the engagement follow? | **Follows** (`active` still honoured) — deactivation is deliberate and audited, and a row that can never be retired for open engagements is worse. It is a widening path that D16's `CHECK` does not cover, but since 5.37 it is an operator's act over the `global_policy_admin` connection, not something a runtime credential can do |
 | 4 | Pointer (V) or copy (S) | **V**, with the grants in §3 |
 | 5 | Legacy engagements | **Stay live** (`NULL`), no backfill |
-| 6 | Bundle the privilege hardening (`policy_layers`, `engagements` columns) and the `current_policy_version` de-duplication | **Done ahead of the freeze** (5.36, 5.35). Closing 5.36 found 5.37 -- who may write and retire *global* layers -- which sharpens decision 3 |
+| 6 | Bundle the privilege hardening (`policy_layers`, `engagements` columns) and the `current_policy_version` de-duplication | **Done ahead of the freeze** (5.36, 5.35). Closing 5.36 found 5.37 -- who may write and retire *global* layers -- and **5.37 is now closed too** (migration 0014, the `global_policy_admin` role). That gives decision 3 a cleaner premise: a frozen-in baseline row can only be retired over that one operator-held connection, not by any engagement's runtime credential, so "the engagement follows a deactivation" now means "an operator decided to retire a baseline" |
 | 7 | Fleet tightening ergonomics | **Report-only** `frozen_out`; no auto-promotion |
 
 ## 7. Findings this turned up (recorded as candidates, not fixed)
