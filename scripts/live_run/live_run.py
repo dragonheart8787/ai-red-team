@@ -149,7 +149,8 @@ def publish_baseline(engagement_id: str) -> tuple[int, bool]:
     with global_policy_admin_scope() as conn:
         existing = conn.execute(
             text("SELECT id FROM policy_layers WHERE active IS TRUE "
-                 "AND engagement_id IS NULL AND layer = 'baseline_global' "
+                 "AND engagement_id IS NULL AND customer_id IS NULL "
+                 "AND layer = 'baseline_global' "
                  "ORDER BY id DESC LIMIT 1")
         ).scalar_one_or_none()
         if existing is not None:

@@ -107,3 +107,29 @@ def deactivate_global_layer(layer_id: int, *, actor: str = "test-teardown") -> b
     """Retire a global layer on the ``global_policy_admin`` connection (5.37)."""
     with global_policy_admin_scope() as conn:
         return deactivate_policy_layer(conn, layer_id=layer_id, actor=actor)
+
+
+_TEST_BASELINE_ID: int | None = None
+
+
+def ensure_test_baseline() -> int | None:
+    """Make sure a global baseline exists, as ``create_engagement`` now requires (5.20, D54).
+
+    An engagement created with no baseline in force is refused, so every test that makes one
+    needs the platform owner's step to have happened. If none is active this publishes a
+    **neutral** one (an empty document adds nothing to the merge) on the ``global_policy_admin``
+    connection and returns its id, so the session can retire it; if one exists it publishes
+    nothing and returns ``None``. A fresh CI database has none, which is exactly the case.
+    """
+    global _TEST_BASELINE_ID
+    with global_policy_admin_scope() as conn:
+        exists = conn.execute(text(
+            "SELECT 1 FROM policy_layers WHERE layer = 'baseline_global' "
+            "AND engagement_id IS NULL AND customer_id IS NULL AND active IS TRUE LIMIT 1"
+        )).first()
+    if exists:
+        return None
+    _TEST_BASELINE_ID = publish_global_layer(
+        layer="baseline_global", version=uuid.uuid4().int % 2_000_000_000, document={},
+        actor="test-harness")
+    return _TEST_BASELINE_ID

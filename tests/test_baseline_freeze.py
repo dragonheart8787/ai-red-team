@@ -519,7 +519,7 @@ def test_the_cli_shows_what_was_frozen_out(glob):
 BASELINE_CALLS = {"publish_baseline", "ensure_baseline"}
 ENGAGEMENT_CALLS = {"setup", "seed_engagement", "setup_engagement", "create_engagement"}
 LIVE_RUN = ["live_run", "verify_d12", "d13_worker", "d15_lookalike", "d17_supervisor",
-            "d40_three_role"]
+            "d40_three_role", "d45_ad_collection_e2e", "d50_ad_collector_auth_probe"]
 
 
 def _called_names(node):

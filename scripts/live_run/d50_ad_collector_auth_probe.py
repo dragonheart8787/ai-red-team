@@ -46,6 +46,7 @@ from control_plane.state.db import (  # noqa: E402
     registry_admin_scope,
 )
 from control_plane.vault import vault  # noqa: E402
+from scripts.live_run.live_run import publish_baseline  # noqa: E402
 from tool_gateway.adapters import ad_collector  # noqa: E402
 from tool_gateway.sandbox import DockerSandbox  # noqa: E402
 
@@ -133,6 +134,8 @@ def probe_2_delivery() -> None:
     load_dotenv()
     cidr = "10.93.0.0/24"
     eng = f"ENG-D50-{uuid.uuid4().hex[:8]}"
+    # 5.20 (D54): create_engagement refuses when no global baseline is in force.
+    publish_baseline(eng)
     with registry_admin_scope(eng) as conn:
         create_engagement(conn, engagement_id=eng, customer_id="CUST-D50", actor=ACTOR)
     box = DockerSandbox(image=IMAGE)

@@ -16,7 +16,12 @@ from sqlalchemy import text
 
 from control_plane.config import load_dotenv
 from control_plane.state.db import get_engine
-from tests.helpers import EngagementManager, make_engagement
+from tests.helpers import (
+    EngagementManager,
+    deactivate_global_layer,
+    ensure_test_baseline,
+    make_engagement,
+)
 
 # Credentials come from the environment or the gitignored .env that
 # scripts/init_db.sh writes — never from a literal in the test suite.
@@ -46,6 +51,24 @@ def db_available() -> bool:
             pytest.skip(message)
         pytest.fail(message, pytrace=False)
     return True
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _a_global_baseline_exists():
+    """``create_engagement`` refuses when no global baseline is in force (5.20, D54), so a
+    session that makes engagements needs one. Ensured once, for the whole session, and retired
+    afterwards only if this session published it. Skipped when there is no database: tests that
+    need one fail through ``db_available`` with the better message."""
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:  # pragma: no cover - environment guard, reported by db_available
+        yield
+        return
+    published = ensure_test_baseline()
+    yield
+    if published is not None:
+        deactivate_global_layer(published, actor="test-session-teardown")
 
 
 @pytest.fixture

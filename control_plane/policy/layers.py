@@ -499,6 +499,22 @@ def _publication_audit(
     return {int(row["subject_id"]): row for row in rows}
 
 
+def has_global_baseline(
+    conn: Connection, engagement_id: str, *, customer_id: str | None = None
+) -> bool:
+    """Is a global baseline in force for an engagement created now (5.20, D54)?
+
+    Asked of the shared applicability fragment, not of a query of its own: it is "would the merge
+    see a global ``baseline_global`` row for a live engagement of this customer", and the answer
+    for an engagement whose row does not exist yet is exactly what ``create_engagement`` needs to
+    know before it freezes one. A baseline scoped to another customer does not count (5.35); an
+    engagement-scoped row that merely carries the name does not either.
+    """
+    rows = _select_applicable(
+        conn, engagement_id, "id, layer, engagement_id", customer_id=customer_id)
+    return any(r["layer"] == "baseline_global" and r["engagement_id"] is None for r in rows)
+
+
 PUBLISHED_AFTER_FREEZE = "published_after_freeze"
 RETIRED_AFTER_FREEZE = "retired_after_freeze"
 
@@ -624,6 +640,7 @@ __all__ = [
     "PolicyLayerError",
     "RETIRED_AFTER_FREEZE",
     "deactivate_policy_layer",
+    "has_global_baseline",
     "list_effective_policy_layers",
     "list_frozen_out_baseline_changes",
     "load_effective_policy",
