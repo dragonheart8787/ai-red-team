@@ -165,7 +165,7 @@ Nothing was dropped between the ledger and the skeleton; what the skeleton does
 
 | ACCEPTANCE | Finding | Class |
 |---|---|---|
-| **5.29** | `web.post` can never build a plan through `propose_action` (no way to carry a body); `web.get` and `web.post` have never been driven past policy into dispatch by a committed test | C — open; analysis in `D53_5_29_WEB_POST_BODY_ANALYSIS.md` |
+| **5.29** | `web.post` can never build a plan through `propose_action` (no way to carry a body); `web.get` and `web.post` have never been driven past policy into dispatch by a committed test | C — **decided and closed** (option C); analysis and decision in `D53_5_29_WEB_POST_BODY_ANALYSIS.md` |
 | **5.30** | `ad_collector.tool_version()` host-probes and returns `"unknown"` (the D43 `ab2849a` defect, unfixed in its sibling) | B — **closed `d708117`** |
 | **5.31** | A repository named in scanned source by location alone is not escalated by D20, because a `repo` is compared as an opaque string and the only runnable form carries `#branch` | B — **closed `178c9e1`** |
 
@@ -174,4 +174,4 @@ D52's keying a `url` by its host) that changed behaviour outside this deliverabl
 scope, so they waited for a go-ahead. **The closeout gave it and both are fixed**, each
 with a test shown red against the pre-fix code and green after. Row 14 above was the
 live case; with 5.30 fixed the exemption table it used is empty, and the staleness test
-that guards the empty table remains. 5.29 is a design decision and stays open.
+that guards the empty table remains. 5.29 was a design decision, made afterwards (a constructed-test-data body, refused at propose time if it matches a known secret format), and is closed too.

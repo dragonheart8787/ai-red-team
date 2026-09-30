@@ -19,7 +19,9 @@ Option A) — it sharpens the mechanism behind it. Full account:
 `docs/D45_AD_COLLECTION_E2E_REPORT.md` §6, and
 `docs/ACCEPTANCE_MVP1_AGENTS.md` 5.24's own addendum.
 
-**Addendum (D50)**: §7 records one place where the implemented design does not
+**Addendum (D53 closeout)**: §9 records that a `web.post` request body is not a vault
+use case yet (ACCEPTANCE 5.29): the vault has no delivery path for it, and the body is
+restricted to constructed test data. **Addendum (D50)**: §7 records one place where the implemented design does not
 meet §2.1 (the secret reaches the tool's argv and is visible in the host
 process table), and lays out options with evidence. **No option was adopted**;
 it is tracked as ACCEPTANCE 5.26. **Revision (D50-B)**: §8 changes what an
@@ -919,3 +921,52 @@ The secret still reaches the tool's argv and the `0644` file (§7, ACCEPTANCE
 5.26 — deliberately not addressed here). This revision is about *what a
 credential is*, not about how it is delivered.
 
+
+---
+
+## 9. Addendum (D53 closeout, ACCEPTANCE 5.29) — a `web.post` body is not a vault use case (yet)
+
+**Why this is here.** `web.post` gained a way to carry a request body
+(`docs/D53_5_29_WEB_POST_BODY_ANALYSIS.md`). The decision there rests on this
+document's §0: the Credential Vault is the one mechanism approved to bring a
+*real* secret into an execution path, so a Worker-authored body may only be
+*constructed test data*. That is not a new principle, and the question that
+followed — could a POST that needs a real credential be routed through the vault
+instead of being left unsupported? — was checked against the interface rather than
+assumed.
+
+**Verified (read in the code, and pinned by
+`tests/test_web_post_body.py::test_the_vault_has_no_delivery_path_for_a_web_post_body`):**
+
+* The capability side is generic. `issue_capability(credential_id=…)` and
+  `check_preconditions` (revocation, `CREDENTIAL_MISSING`/`CREDENTIAL_REVOKED`) do
+  not care which action holds the id, and `revoke_credential`'s cascade already
+  covers any capability that carries one.
+* The dispatch side is not. Only `dispatch_collection` (`mount_for_run`,
+  `identity_for`) and `dispatch_code_scan` (`material_for`) resolve a credential.
+  **`dispatch_scan` — the path `web.post` takes — never reads
+  `capability.credential_id`**, so an id on a `web.post` capability would be ignored.
+* The vault has no type for it. `CREDENTIAL_TYPES = ("ad_domain_bind", "git_token")`
+  is enforced in Python and by a `CHECK` on `credential_material.credential_type`
+  (migration 0012). `mount_for_run` refuses anything but `ad_domain_bind`, and
+  `material_for` is documented as never to be handed to a sandbox — the body is fed
+  to curl on stdin **inside** a sandbox.
+
+**So the pattern is possible but is not built**, and it is a new delivery mode, not a
+reuse of either existing one. Resolving a `credential_id` control-plane-side and
+composing it into the body before send would need: (a) a new `credential_type` and a
+migration; (b) a third delivery mode into a sandboxed process (stdin), which this
+document's own rule requires be *decided* here, not inferred at a call site; (c) a
+placeholder syntax in the body, with the approval describing the template and D30's
+"the approval describes exactly what is sent" reconsidered for the resolved bytes (the
+argument D50-B made for an identity, applied to a field); and (d) a decision about the
+reply, which can echo the secret straight back into evidence that only pattern-based
+redaction stands between and a model. §2.2's blast-radius statement, written for
+`ad.collect`, would need restating for a container that talks to the target.
+
+**Disposition.** A `web.post` that needs a *real* credential is **not supported today**.
+It is not a hidden hole: a body in a known secret format is refused at propose time, and
+the refusal message says a real credential belongs in the vault. The route for that
+scenario is an extension of this document — a new ADR section for the delivery mode
+above — not something the body carry provides. Nothing here is decided beyond
+recording that.

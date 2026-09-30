@@ -1,9 +1,9 @@
 # ACCEPTANCE 5.29 — carrying a `web.post` body: what D43-4's redaction can and cannot do
 
-**Status: investigation only. Nothing is implemented and no option is chosen.** 5.29
-stays Class C. This note is what was asked for before deciding whether the full ADR-gate
-process runs: the verification results, and at least two options with their trade-offs.
-Everything under "Verified" was executed or read in the code named, not recalled.
+**Status: decided and implemented (option C) — see section 6.** Sections 1–5 are the
+investigation as it was put to the decision-maker, left unchanged: the verification
+results, and the options with their trade-offs. Everything under "Verified" was
+executed or read in the code named, not recalled.
 
 ## 1. The question
 
@@ -139,3 +139,59 @@ It does not change `redaction.py`, `execution_constraints`, or the Worker schema
 not claim the option ranking is settled; the recommendation, if asked for one, is that
 question 1 decides between C and B and that A is the weakest (a heuristic display filter
 in front of plaintext storage).
+
+---
+
+## 6. Decision and implementation (option C)
+
+**Decided:** a Worker-authored body is *constructed test data only* and never a real
+secret. This continues the trust model of `ADR_CREDENTIAL_VAULT.md` section 0 — the
+vault is the one mechanism approved to bring a real secret into an execution path — and
+is not a new principle. Option B (by reference) would create a second secret entry point,
+against "one fact, one authoritative source"; A and D were excluded in section 3. The
+reviewer LLM keeps seeing the body: once a body cannot hold a real secret, judging what a
+proposal would send is part of its job, and D44's "no LLM should see a secret" concern
+does not apply.
+
+**Implemented:**
+
+1. `function_api.execution_constraints` carries `body` and `content_type` (the bug the D53
+   report named), unmodified — never redacted or truncated (section 2.3).
+2. `propose_action` refuses, at step 1b **before `_persist_proposal`**, a body that
+   (a) the adapter would refuse (not a string, over `MAX_REQUEST_BODY_BYTES`, content type
+   outside the allowlist), or (b) matches a known secret **format**. Refused, not masked.
+   The audit record names the formats found and never the value; the reviewer is not shown
+   the proposal; no proposal row, capability or run exists. A proposal that names no body
+   is unchanged (still unbuildable at dispatch).
+3. The detector is `redaction.detect_secret_formats`, which reads the *same*
+   `_WHOLE_MATCH_PATTERNS` list `redact_snippet` masks (`KNOWN_SECRET_FORMATS`): AWS access
+   key id, PEM private key, JWT-shaped token, bearer token, credential in a URL.
+   A body is checked both as sent and percent-decoded, because `Bearer%20<token>` in a
+   form-encoded body is the same token.
+4. Deliberately **not** refused: the name-based `credential-assignment` heuristic and the
+   `length-cap`. The first cannot tell a constructed `password=hunter2` from a real one and
+   flags any variable so named; the second is a display backstop. Refusing either would
+   reject ordinary forms and JSON, which is the over-defence the decision excluded.
+   Consequently `password=Test1234` in a form field and `{"password": "hunter2"}` pass —
+   which is the intended use of a constructed value.
+
+**The vault question (checked before implementing).** Could a POST that needs a real
+credential reference a vault `credential_id`, resolved control-plane-side and composed
+into the body at dispatch, with the Worker handling only the id? Result: **not with the
+interface as it is.** The capability side is generic (`credential_id` is issued, checked
+for revocation and cascaded for any action), but `dispatch_scan` never reads it, the vault
+has no credential type for it (`CREDENTIAL_TYPES`, plus a DB `CHECK`), and both delivery
+modes are ruled out (`material_for` must never reach a sandbox; `mount_for_run` refuses
+all but `ad_domain_bind`, and delivers a file, not stdin). It is a **new delivery mode**,
+which `ADR_CREDENTIAL_VAULT.md` requires be decided in that document. Recorded there as
+section 9; pinned by a test. So the honest wording is: *a POST that needs a real
+credential is not supported today; the route is a D44 extension, not something this
+change provides* — not "handled by D44".
+
+**Known limits, stated rather than glossed.** The detector recognises a fixed set of
+shapes: a secret in no known format (a bare hex API key, a password in JSON) passes, as the
+redactor's own docstring says of itself. Percent-decoding is the only normalisation; a
+secret hidden by base64, JSON `\uXXXX` escapes or splitting across fields is not caught.
+The decision rests on the policy (bodies are constructed values) more than on the detector,
+which is a guard against a Worker that is handed or invents a well-known secret shape, not
+a proof that none is present.
