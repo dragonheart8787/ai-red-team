@@ -969,4 +969,5 @@ It is not a hidden hole: a body in a known secret format is refused at propose t
 the refusal message says a real credential belongs in the vault. The route for that
 scenario is an extension of this document — a new ADR section for the delivery mode
 above — not something the body carry provides. Nothing here is decided beyond
-recording that.
+recording that. The four decisions in the previous paragraph are ACCEPTANCE **5.32**, an
+open candidate to be evaluated when a real requirement appears, not before.

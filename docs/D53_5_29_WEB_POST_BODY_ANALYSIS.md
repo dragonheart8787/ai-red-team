@@ -195,3 +195,8 @@ secret hidden by base64, JSON `\uXXXX` escapes or splitting across fields is not
 The decision rests on the policy (bodies are constructed values) more than on the detector,
 which is a guard against a Worker that is handed or invents a well-known secret shape, not
 a proof that none is present.
+
+**Follow-ups recorded (not worked).** The four vault-extension decisions (credential
+type, delivery mode, approval wording, reply echo) are ACCEPTANCE **5.32**; the standing
+caveat that the detector is a guard and the policy is the guarantee is **5.33**; a
+real-container test for `web.get`/`web.post` over the egress proxy is **5.34**.
