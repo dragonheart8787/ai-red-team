@@ -250,3 +250,21 @@ Decisions 5 and 6 are as written. What remains a property of the design, not a d
 must exist before the engagement it is to govern; an engagement created before any baseline is
 frozen without one (all actions default DENY until its own layers say otherwise); and lifting a
 restriction that a frozen engagement froze in is now an *overlay retirement*, an operator's act.
+
+### 9.1 Follow-up: an engagement is refused when no baseline exists
+
+**Added after the seven decisions; not part of them.** The consequence noted just above -- "an
+engagement created before any baseline is frozen without one (all actions default to DENY)" -- is
+a silent failure: nothing errors, the engagement is simply unable to do anything. Once the freeze
+was built that state was reachable by an operator who created an engagement on a fresh system, so
+`create_engagement` now refuses it with `NoBaselinePublished`: checked before anything is written
+or a freeze point is allocated, audited as `engagement.creation_refused` (`no_baseline_published`),
+and worded to say what is missing and to run `scripts/manage_global_policy.py publish` over the
+`global_policy_admin` connection.
+
+Two details worth stating. It asks the shared applicability fragment ("would the merge see a global
+baseline for this customer"), so a baseline published for *another* customer does not satisfy it
+(5.35) and an engagement-scoped row named `baseline_global` does not either. And it changes what the
+test suite and the harnesses must do first: `tests/conftest.py` ensures a neutral baseline for the
+session (and retires it if it published it), and the two AD-collection scripts (d45, d50), which had
+been relying on an engagement-scoped layer alone, publish one before they create their engagement.
