@@ -442,7 +442,7 @@ The strict criterion; `authz.rego`; the Worker's schema and prompt (still no
 because no production code constructs an `Observation` yet. Two questions that
 follow are recorded as candidates rather than answered here:
 `ACCEPTANCE_MVP1_AGENTS.md` **5.27** (whether a directory object returned by LDAP
-is "established" in D20's sense — Class C) and **5.28** (the mechanism has only
+is "established" in D20's sense — **decided at D54**: it is not, by itself; see the rule in that entry) and **5.28** (the mechanism has only
 ever been verified by tests and hand-built harness scripts).
 
 ### 8.6 Verification

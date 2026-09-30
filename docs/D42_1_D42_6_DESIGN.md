@@ -195,14 +195,28 @@ This is a design *note* for whoever writes that harness integration, not
 new code this deliverable produces — the same way `d40_three_role.py`
 was the harness, not a control-plane change.
 
-> **D52 pointer — read before implementing this section.** The instruction
-> above to pass the full set of discovered `fqdn`/`ip` identities as
-> `observed_identities` assumes that "LDAP returned this object" and D20's
-> *established* are the same thing. That equivalence has **not** been
-> confirmed and must not be taken as given: it is recorded as
-> `ACCEPTANCE_MVP1_AGENTS.md` **5.27** (Class C). Whoever writes this harness
-> must read 5.27 and settle the question first, not implement the paragraph
-> above literally. The original text is left unchanged.
+> **D54 decision — this replaces the D52 pointer that stood here. Read it before implementing this
+> section: it overrides the instruction above to pass the *full* set of discovered identities.**
+>
+> **Decided rule (D54, ACCEPTANCE 5.27).** A node in the Security Graph is evidence
+> that a *directory contains a record*; it is not evidence that the host or identity
+> it names is alive or reachable, and it is **never by itself "established"** in D20's
+> sense. Any harness that fills `Observation.observed_identities` from Security Graph
+> rows must include an identity only when a *structural observation* of that same
+> identity also exists in this engagement: a tool run whose own network exchange with
+> it succeeded (for example an Nmap run that saw the host respond, or an HTTP/browser
+> transaction that reached it). The `ad.collect` run itself counts only for the host
+> it connected to (the domain controller it bound to), never for the objects it merely
+> read from that host. A graph identity with no such observation may reach a Worker
+> only as `Observation.content`, where it escalates like any other
+> named-but-unobserved target. D20's strict criterion, `_discovery_provenance` and the
+> Rego rule are unchanged; this rule constrains what a harness may put in the field.
+> It does not decide how a graph `fqdn` and a scanned `ip` for the same machine are
+> matched (names are never resolved, §8.9/I8), and it does not replace the end-to-end
+> verification 5.28 requires when a harness is first written.
+>
+> Canonical text: `ACCEPTANCE_MVP1_AGENTS.md` **5.27**; the same wording is in
+> `ADR_BLOODHOUND_NEO4J.md` §1.6. The original paragraph above is left unchanged.
 
 ### 1.9 I8 verification requirement (binding on implementation)
 

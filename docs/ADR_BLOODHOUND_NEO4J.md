@@ -203,6 +203,31 @@ capability** — and that needs to be verified with the same kind of
 adversarial-fixture-and-real-resolver test D13/D15 already used, not assumed
 because the discovery/authorization split holds elsewhere.
 
+> **D54 decision on "established" — read this with the paragraph above; on this one question it
+> supersedes the comparison drawn there.** The paragraph above puts LDAP-returned objects in the
+> same category as what a scan observes. For *authorization* that changes nothing (Discovery ⊥
+> Authorization holds). For D20's *established* it does not hold, and the rule is now decided:
+>
+> **Decided rule (D54, ACCEPTANCE 5.27).** A node in the Security Graph is evidence
+> that a *directory contains a record*; it is not evidence that the host or identity
+> it names is alive or reachable, and it is **never by itself "established"** in D20's
+> sense. Any harness that fills `Observation.observed_identities` from Security Graph
+> rows must include an identity only when a *structural observation* of that same
+> identity also exists in this engagement: a tool run whose own network exchange with
+> it succeeded (for example an Nmap run that saw the host respond, or an HTTP/browser
+> transaction that reached it). The `ad.collect` run itself counts only for the host
+> it connected to (the domain controller it bound to), never for the objects it merely
+> read from that host. A graph identity with no such observation may reach a Worker
+> only as `Observation.content`, where it escalates like any other
+> named-but-unobserved target. D20's strict criterion, `_discovery_provenance` and the
+> Rego rule are unchanged; this rule constrains what a harness may put in the field.
+> It does not decide how a graph `fqdn` and a scanned `ip` for the same machine are
+> matched (names are never resolved, §8.9/I8), and it does not replace the end-to-end
+> verification 5.28 requires when a harness is first written.
+>
+> Canonical text: `ACCEPTANCE_MVP1_AGENTS.md` **5.27**; the same wording is in
+> `D42_1_D42_6_DESIGN.md` §1.8. The original paragraph above is left unchanged.
+
 ---
 
 ## 2. Metadata / data model — dividing labor between Neo4j and Postgres
