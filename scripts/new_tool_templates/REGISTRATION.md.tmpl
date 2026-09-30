@@ -24,6 +24,14 @@ comes before the code.
       `./tool_gateway/images/build_{{name}}_image.sh`, before the test suite. Real-container
       tests fail (not skip) on the runner without it -- forgotten for semgrep at D43 and for
       bloodhound at D49.
+- [ ] `NEEDS_DISPATCH` names a function that really serves this adapter (D56). Not just an
+      existing name: `adapter_kit.dispatch_violations` routes a probe capability for
+      `{{action}}` through the real `_dispatch_for_action` and fails if the function is
+      bound to another adapter by name (as `dispatch_code_scan` was to Semgrep until D55)
+      or refuses this action as unknown.
+- [ ] `KNOWN_CLASSIFICATION` agrees with `authz.rego` for the action's *name* (D56):
+      `classification_violations` asks OPA. Scaffold-time fact for `{{action}}`:
+{{CLASSIFICATION_FACT_MD}}
 - [ ] If `NEEDS_DISPATCH` names a *new* dispatch function: add it to
       `function_api._DISPATCH_FUNCTIONS` and to `tests/test_dispatch_routing.py`'s
       `_KNOWN_DISPATCH_FUNCTIONS`, and write the function (Part B).
@@ -35,10 +43,12 @@ comes before the code.
       whether a scope for this tool authorizes *acting* or only *collecting* (D42-1).
       If it needs a new target type: `agents/llm/worker_base.py` `TARGET_TYPES`,
       `control_plane/canonicalizer/target.py`, and a `scope_registry` write guard.
-- [ ] **Known classification.** Does `{{action}}` join `requires_known_classification` in
-      `control_plane/policy/rego/authz.rego`? `web.get` and `code.*` do; `web.render`,
-      `ad.collect` and `network.*` do not -- each was argued separately (D32, D43-3).
-      Add Rego tests either way (`policy_tests/authz_test.rego`).
+- [ ] **Known classification.** Should `{{action}}` require one, and if so does its name
+      make the rule fire? `web.get` and `code.*` do; `web.render`, `ad.collect` and
+      `network.*` do not -- each was argued separately (D32, D43-3). The code form of the
+      answer is `KNOWN_CLASSIFICATION` (checked against the rule, Part A); the *argument*
+      is yours. Add Rego tests either way (`policy_tests/authz_test.rego`) -- nothing
+      checks that they exist.
 - [ ] **Side effects and egress** (`WRITES_DATA`, `CHANGES_STATE`, `REQUIRES_PROXY`) --
       from what the *built command* does to the target.
 - [ ] **Evidence.** Which parts of the output a model sees, what is redacted, what is

@@ -15,7 +15,9 @@ Each historical failure a check descends from:
 * image not built in CI ........ 8168084 (semgrep, D43), 203d8d6 (bloodhound, D49)
 * host-probe ``tool_version`` .. ab2849a (semgrep, D43)
 * constraint dropped ........... D37 (web port/path/scheme), D45 (ad.collect, code.scan)
-* dispatch mis-routed .......... D45; ``NEEDS_DISPATCH`` itself is D46
+* dispatch mis-routed .......... D45; ``NEEDS_DISPATCH`` itself is D46; that the function
+                                 behind the name serves the adapter is D56 (found at D55)
+* classification gate skipped .. D56: the action's spelling decides it, and nothing said so
 * side-effect profile omitted .. D34 (``test_web_post.py`` also pins the bools)
 """
 
@@ -143,6 +145,7 @@ def _as_module(cls):
     "CHANGES_STATE is NotImplemented",
     "REQUIRES_PROXY is NotImplemented",
     "NEEDS_DISPATCH 'dispatch_nothing'",
+    "KNOWN_CLASSIFICATION is None",
     "AdapterError must be a ValueError subclass",
     "build_plan is missing keyword(s) ['budget']",
     "tool_version() must return a non-empty string",
@@ -220,3 +223,256 @@ def test_a_hyphenated_tool_name_maps_to_an_underscored_file(tmp_path):
 def test_the_existing_tools_are_exempt_and_the_gate_reads_nothing_for_them():
     for _action, adapter in _REGISTERED:
         assert adapter_kit.threat_model_violations(adapter) == []
+
+
+# ---------------------------------------------------------------------------
+# D56 -- NEEDS_DISPATCH is checked by what is behind the name, not the name
+# ---------------------------------------------------------------------------
+# D53's checks verified that ``NEEDS_DISPATCH`` names a real function that
+# ``_DISPATCH_FUNCTIONS`` maps. D55 then routed a second tool to
+# ``dispatch_code_scan``, which was hard-wired to Semgrep, and every one of those
+# checks stayed green. These tests are what would have failed.
+
+@pytest.mark.parametrize("action,adapter", _REGISTERED, ids=_IDS)
+def test_the_function_behind_needs_dispatch_serves_the_adapter(action, adapter):
+    problems = adapter_kit.dispatch_violations(adapter, action=action)
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("action,adapter", _REGISTERED, ids=_IDS)
+def test_the_probe_really_reaches_the_adapters_own_build_plan(action, adapter):
+    """The behavioural check is not vacuous: for every action it can reach, it reaches
+    *that adapter's* ``build_plan``. ``ad.collect`` is the declared exception -- its
+    function stops at the credential check first, so the static check carries it."""
+    reached, audits, error = adapter_kit.probe_dispatch(action)
+    assert error is None, error
+    if action == "ad.collect":
+        assert reached is None
+        assert [a["reasons"] for a in audits] == [("unbuildable_plan",)]
+    else:
+        assert reached == adapter.__name__, (action, reached)
+        assert audits == []
+
+
+def _mutated_dispatch_code_scan(tmp_path, monkeypatch):
+    """The real ``dispatch_code_scan`` with D55's fix put back the way it was.
+
+    Built from the tree's own source, so it is the function as it is with exactly one
+    change: ``adapter = semgrep`` instead of resolving the adapter from the action.
+    """
+    import inspect
+    import textwrap
+    import types
+
+    from control_plane.api import function_api
+    from control_plane.orchestrator import dispatch
+
+    source = textwrap.dedent(inspect.getsource(dispatch.dispatch_code_scan))
+    fixed = (
+        "adapter = registry.adapter_for(capability.action)\n"
+        "    if adapter is None or getattr(adapter, \"NEEDS_DISPATCH\", None) "
+        "!= \"dispatch_code_scan\":"
+    )
+    assert source.count(fixed) == 1, "the D55 resolution is not where this test expects it"
+    old = source.replace(fixed, "adapter = semgrep\n    if capability.action != adapter.ACTION:")
+    path = tmp_path / "old_dispatch_code_scan.py"
+    path.write_text(old)
+    scratch = dict(vars(dispatch))
+    exec(compile(old, str(path), "exec"), scratch)  # noqa: S102 - test-only, our own source
+    built = scratch["dispatch_code_scan"]
+    # Rebind to the module's *live* globals, so the probe's patches (and every helper
+    # the function calls) are the real ones -- the function is otherwise byte-for-byte
+    # the tree's own, with its source file on disk for `inspect`.
+    old_function = types.FunctionType(
+        built.__code__, vars(dispatch), built.__name__, built.__defaults__, built.__closure__,
+    )
+    old_function.__kwdefaults__ = built.__kwdefaults__
+    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", old_function)
+
+
+def test_the_d55_case_is_caught_and_the_d53_checks_alone_do_not_catch_it(tmp_path, monkeypatch):
+    """dispatch_code_scan hard-wired to Semgrep again. Gitleaks is routed to it."""
+    from tool_gateway.adapters import gitleaks, semgrep
+
+    _mutated_dispatch_code_scan(tmp_path, monkeypatch)
+
+    # What D53 checked -- the name resolves, the local contract holds -- is still green:
+    assert adapter_kit.adapter_violations(gitleaks, action=gitleaks.ACTION) == []
+    assert adapter_kit.adapter_violations(semgrep, action=semgrep.ACTION) == []
+    # ...and Semgrep, whom the function *is* bound to, is still fine:
+    assert adapter_kit.dispatch_violations(semgrep, action=semgrep.ACTION) == []
+
+    # What D56 checks is red, on both independent grounds:
+    problems = adapter_kit.dispatch_violations(gitleaks, action=gitleaks.ACTION)
+    text = "\n".join(problems)
+    assert "bound to ['semgrep'] by name" in text
+    assert "refuses 'code.secrets' as 'no_adapter_for_action'" in text
+    assert adapter_kit.registration_violations(gitleaks, action=gitleaks.ACTION), (
+        "the wired-in check every tool already runs must go red too"
+    )
+
+
+def test_the_probe_alone_catches_a_function_that_hides_its_binding(monkeypatch):
+    """Without the static check: a function that resolves ``semgrep`` dynamically names no
+    adapter, and never refuses -- it just runs the wrong tool. Only the probe sees it."""
+    import sys
+
+    from control_plane.api import function_api
+    from tool_gateway.adapters import gitleaks
+
+    def _hides(conn, *, capability, **_):
+        module = sys.modules["tool_gateway.adapters." + "sem" + "grep"]
+        module.build_plan(constraints={}, budget={}, target="x#main")
+
+    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", _hides)
+    assert adapter_kit._adapter_modules_bound_by(_hides) == set()
+    problems = adapter_kit.dispatch_violations(gitleaks, action=gitleaks.ACTION)
+    assert any("ran tool_gateway.adapters.semgrep.build_plan" in p for p in problems), problems
+
+
+def test_the_static_check_alone_catches_a_binding_the_probe_never_reaches(monkeypatch):
+    """Without the probe: an adapter named only on a path the probe does not take."""
+    from control_plane.api import function_api
+    from control_plane.orchestrator import dispatch
+    from tool_gateway.adapters import gitleaks, semgrep
+
+    def _dormant(conn, *, capability, **_):
+        adapter = dispatch.registry.adapter_for(capability.action)
+        if capability.action == "never.probed":
+            adapter = semgrep
+        adapter.build_plan(constraints={}, budget={}, target="x#main")
+
+    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", _dormant)
+    problems = adapter_kit.dispatch_violations(gitleaks, action=gitleaks.ACTION)
+    assert any("bound to ['semgrep'] by name" in p for p in problems), problems
+    assert not any("ran " in p or "refuses" in p for p in problems), "the probe is clean here"
+
+
+def test_a_binding_hidden_in_a_helper_is_followed(monkeypatch):
+    from control_plane.api import function_api
+    from control_plane.orchestrator import dispatch
+    from tool_gateway.adapters import gitleaks, semgrep
+
+    def _helper():
+        return semgrep
+
+    _helper.__module__ = dispatch.__name__
+    monkeypatch.setattr(dispatch, "_d56_helper", _helper, raising=False)
+
+    def _via_helper(conn, *, capability, **_):
+        _d56_helper().build_plan(constraints={}, budget={}, target="x#main")  # noqa: F821
+
+    _via_helper.__globals__["_d56_helper"] = _helper
+    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", _via_helper)
+    assert adapter_kit._adapter_modules_bound_by(_via_helper) == {"semgrep"}
+    assert any(
+        "bound to ['semgrep']" in p
+        for p in adapter_kit.dispatch_violations(gitleaks, action=gitleaks.ACTION)
+    )
+
+
+def test_a_dispatch_function_that_cannot_be_probed_is_reported_not_skipped(monkeypatch):
+    from control_plane.api import function_api
+    from tool_gateway.adapters import gitleaks
+
+    def _needs_a_database(conn, *, capability, **_):
+        raise RuntimeError("needs a real connection")
+
+    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", _needs_a_database)
+    problems = adapter_kit.dispatch_violations(gitleaks, action=gitleaks.ACTION)
+    assert any("probing 'dispatch_code_scan' raised RuntimeError" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# D56 -- the action's name is a classification decision, made on the record
+# ---------------------------------------------------------------------------
+
+def _classified(action, declared, *, writes=False, changes=False):
+    import types
+
+    module = types.ModuleType("fake_classified")
+    module.WRITES_DATA, module.CHANGES_STATE = writes, changes
+    module.KNOWN_CLASSIFICATION = declared
+    return module, action
+
+
+EXEMPT = "exempt: reads a public banner fragment, not a resource's content"
+
+
+@pytest.mark.parametrize("action,adapter", _REGISTERED, ids=_IDS)
+def test_every_adapter_states_its_classification_position_and_the_rule_agrees(action, adapter):
+    assert adapter_kit.adapter_violations(adapter, action=action) == []
+    assert adapter_kit.classification_violations(adapter, action=action) == []
+
+
+def test_the_rule_is_asked_of_opa_not_copied_into_python():
+    ask = adapter_kit.rego_requires_known_classification
+    assert ask("code.secrets") is True and ask("web.get") is True
+    assert ask("secrets.scan") is False and ask("network.scan") is False
+    assert ask("secrets.scan", True, False) is True, "a writing action triggers it regardless"
+    assert ask("secrets.scan", False, True) is True
+
+
+def test_an_example_name_used_without_confirming_it_is_caught():
+    """The scaffold's old example, ``secrets.scan``, taken at face value: the adapter says
+    it needs a classification, and the rule -- which keys on the spelling -- never asks."""
+    module, action = _classified("secrets.scan", "required")
+    problems = adapter_kit.classification_violations(module, action=action)
+    assert len(problems) == 1
+    assert "'required' but authz.rego does NOT require" in problems[0]
+    assert "silently never applies" in problems[0]
+    assert "'secrets.scan'" in problems[0]
+
+
+def test_the_same_name_confirmed_on_purpose_is_accepted():
+    module, action = _classified("secrets.scan", EXEMPT)
+    assert adapter_kit.classification_violations(module, action=action) == []
+
+
+def test_a_name_the_rule_covers_needs_no_exemption_and_forbids_a_false_one():
+    module, action = _classified("code.secrets", "required")
+    assert adapter_kit.classification_violations(module, action=action) == []
+    module, action = _classified("code.secrets", EXEMPT)
+    problems = adapter_kit.classification_violations(module, action=action)
+    assert problems and "the exemption is not in force" in problems[0]
+    assert "because of the action's name" in problems[0]
+
+
+def test_an_exemption_that_a_writing_tool_cannot_have_is_named_as_such():
+    module, action = _classified("secrets.scan", EXEMPT, writes=True)
+    problems = adapter_kit.classification_violations(module, action=action)
+    assert problems and "because the adapter writes data or changes state" in problems[0]
+
+
+@pytest.mark.parametrize("declared", [
+    NotImplemented, None, "", "REQUIRED", "yes", True, "exempt", "exempt:", "exempt: n/a",
+    "exempt: TODO decide",
+])
+def test_an_undecided_or_ceremonial_answer_is_not_an_answer(declared):
+    module, action = _classified("secrets.scan", declared)
+    module.NEEDS_DISPATCH = "dispatch_scan"
+    problems = adapter_kit.adapter_violations(module, action=action)
+    assert any("KNOWN_CLASSIFICATION" in p for p in problems), (declared, problems)
+    assert adapter_kit.classification_violations(module, action=action) == [], (
+        "an undecided declaration is reported once, by the local contract"
+    )
+
+
+def test_when_opa_cannot_be_run_the_action_is_unconfirmed_not_assumed_fine(monkeypatch):
+    module, action = _classified("secrets.scan", EXEMPT)
+    adapter_kit.rego_requires_known_classification.cache_clear()
+    monkeypatch.setattr(adapter_kit.shutil, "which", lambda name: None)
+    try:
+        problems = adapter_kit.classification_violations(module, action=action)
+    finally:
+        adapter_kit.rego_requires_known_classification.cache_clear()
+    assert problems and "cannot evaluate authz.rego" in problems[0]
+
+
+def test_the_classification_check_is_part_of_the_registration_checks(monkeypatch):
+    """So it runs for every tool through the wiring test and ``--check``, not only here."""
+    from tool_gateway.adapters import gitleaks
+
+    monkeypatch.setattr(gitleaks, "KNOWN_CLASSIFICATION", EXEMPT)
+    text = "\n".join(adapter_kit.registration_violations(gitleaks, action=gitleaks.ACTION))
+    assert "the exemption is not in force" in text

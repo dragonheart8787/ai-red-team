@@ -42,6 +42,19 @@ IMAGE = "cyberorch/{{name}}:local"
 WRITES_DATA = NotImplemented
 CHANGES_STATE = NotImplemented
 
+#: DECIDE(classification) -- onboarding §1. Whether this action must have a known
+#: data classification before it runs is decided by the action's **name** in
+#: control_plane/policy/rego/authz.rego (``requires_known_classification``), and by
+#: nothing about the tool. Fact at scaffold time, for ``{{action}}``:
+{{CLASSIFICATION_FACT}}
+#: State ``"required"`` or ``"exempt: <reason, at least 20 characters>"``. Not a
+#: default: ``tests/adapter_kit.classification_violations`` compares your answer
+#: with the rule, so ``"required"`` for a name the rule does not cover fails (the
+#: gate would silently never apply), and ``"exempt"`` is a person accepting that
+#: skip on the record. Until this line is an answer, the name passed to ``--action`` is a
+#: string somebody typed, not a decision.
+KNOWN_CLASSIFICATION = NotImplemented
+
 #: DECIDE(egress) -- onboarding §3/§4. True: the tool speaks HTTP(S) and must go
 #: through the egress proxy (D34). False: raw TCP/UDP confined by the network
 #: namespace (nmap), or no network at all (Semgrep, D43-5). Not a default in

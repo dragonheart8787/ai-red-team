@@ -193,6 +193,16 @@ BLOODHOUND_VERSION = "1.9.0"
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: not argued: see ACCEPTANCE 5.48.
+KNOWN_CLASSIFICATION = (
+    'exempt: no argument is recorded either way -- ad.collect was left outside the rule '
+    'at D42 and stands as it was (ACCEPTANCE 5.48)'
+)
+
 #: LDAP goes through the sandbox's raw namespace, the same as nmap's TCP —
 #: there is no application-layer HTTP here for the §8.3 egress proxy to
 #: read, so routing through it would add a hop that inspects nothing.

@@ -78,6 +78,14 @@ DELIBERATELY_UNIMPLEMENTED = ("web.put", "web.delete")
 WRITES_DATA = True
 CHANGES_STATE = True
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D32's reasoning, and the rule also fires on its own for a writing action
+#: (WRITES_DATA/CHANGES_STATE).
+KNOWN_CLASSIFICATION = "required"
+
 #: This adapter reads a request body from the capability, so `propose_action`
 #: judges a proposed ``body`` (size, content type, known secret formats) before
 #: anything records it -- see `function_api.refuse_proposed_body` (ACCEPTANCE 5.29).

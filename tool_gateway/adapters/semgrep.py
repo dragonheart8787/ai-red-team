@@ -67,6 +67,13 @@ SEMGREP_VERSION = "1.178.0"
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D43-3: a source-code scanner ingests the whole repository.
+KNOWN_CLASSIFICATION = "required"
+
 #: No application-layer protocol for the D34 egress proxy to read, and no
 #: egress at all in this container in the first place (module docstring).
 REQUIRES_PROXY = False

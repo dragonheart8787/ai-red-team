@@ -45,7 +45,11 @@ D45 and D51 each found that a claim written from memory was false.
 ## 2. Authorization and classification
 
 * Does `<action>` need a **known classification** as a prerequisite
-  (`requires_known_classification`)? Argue it for this tool independently.
+  (`requires_known_classification`)? Argue it for this tool independently. The rule keys
+  on the action's **spelling**, so the name you gave the action is part of the answer: state
+  it as `KNOWN_CLASSIFICATION` in the adapter (`"required"` / `"exempt: <reason>"`), and the
+  check compares it with the rule (D56). A name that silently skips the gate is a decision
+  you have to have made.
   Precedent: `web.get` joined (D32: a GET is no more lenient than a POST on the
   same resource); `code.*` joined (D43-3, argued separately); `web.render`,
   `ad.collect` and `network.*` did not.

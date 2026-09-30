@@ -32,7 +32,7 @@ looked at what the tool's data is, and recorded in `docs/ADR_<TOOL>.md`:
 |---|---|
 | What a scope object for the tool authorizes | D42-1: `ad_domain` authorizes *collecting*, never *acting on what is collected* |
 | Precision and containment of the target | D43-1: pin repo + branch, not a commit; D43-2: refuse subdirectory containment |
-| Whether the action needs a known classification | D32 yes for `web.get`; D43-3 yes for `code.*`; no for `web.render`, `ad.collect`, `network.*` |
+| Whether the action needs a known classification | D32 yes for `web.get`; D43-3 yes for `code.*`; no for `web.render`, `ad.collect`, `network.*`. **Decided by the action's spelling** in `authz.rego`, so choosing the name is part of the decision (D56): the adapter states `KNOWN_CLASSIFICATION` (`"required"` or `"exempt: <reason>"`) and the check compares it with the rule |
 | What a model may read of the output, and what is redacted or cut | D43-4: redact snippets before they leave the adapter; mark first-party content |
 | Whether the tool gets the network, and by which route | proxy (web), namespace allowlist (nmap), none at all (Semgrep) |
 | What the tool does to its target (`WRITES_DATA`, `CHANGES_STATE`) | D34: `web.post` ended the argument that `web.*` only reads |
@@ -62,7 +62,7 @@ by name in `adapter_kit.PRE_D53_TOOLS`; a test pins that set and nothing may be 
 | # | Step | Who | Output |
 |---|---|---|---|
 | 1 | Write the threat-model ADR from the template; get the decisions signed off | a person | `docs/ADR_<TOOL>.md`, status *accepted* |
-| 2 | `python scripts/new_tool_scaffold.py --name <tool> --action <ns.verb> --out <scratch>` | script | adapter, tests, Dockerfile, build script, ADR copy, registration list |
+| 2 | `python scripts/new_tool_scaffold.py --name <tool> --action <ns.verb> --out <scratch>` — the `--action` is a choice, not a formality: the script prints whether the classification gate applies to that spelling | script | adapter, tests, Dockerfile, build script, ADR copy, registration list |
 | 3 | Review and copy the output into the repository | a person | files in place |
 | 4 | Replace every `DECIDE(...)` in the adapter with the ADR's answer | a person | adapter constants + `build_plan` + `derive_view` |
 | 5 | Choose the image (§3); build it; run its self-check | a person | image + `build_<tool>_image.sh` passing |
@@ -167,8 +167,8 @@ The scaffold generates `tests/test_<tool>_adapter.py`. Every test is a check fro
 
 | Test | Catches | Origin |
 |---|---|---|
-| local contract | undecided constants; a bad `NEEDS_DISPATCH`; a host-probe `tool_version` | D34, D43, D46 |
-| wired in everywhere | no registry entry, no evidence prefix, no CI build step, a constraint `execution_constraints` drops, no decided ADR | D37, D43, D45, D49 |
+| local contract | undecided constants (incl. `KNOWN_CLASSIFICATION`); a bad `NEEDS_DISPATCH`; a host-probe `tool_version` | D34, D43, D46, D56 |
+| wired in everywhere | no registry entry, no evidence prefix, no CI build step, a constraint `execution_constraints` drops, no decided ADR; **the function behind `NEEDS_DISPATCH` is bound to another adapter or refuses this action** (`dispatch_violations`: static and a probe through the real `_dispatch_for_action`); **`KNOWN_CLASSIFICATION` disagrees with what `authz.rego` does to the action's name** (`classification_violations`, asked of OPA) | D37, D43, D45, D49, D56 |
 | fingerprint accounting | an input `build_plan` reads that neither reaches `as_params` nor is declared out, pinned both ways | D11-3 |
 | non-adapter fingerprint dimensions *(placeholder)* | commit, ruleset hash, allowlist, credential id — dimensions no code can enumerate | D11-3, D43-1 |
 | derive_view untrusted + JSON | a view a model could read as trusted | §4.4 |

@@ -100,6 +100,7 @@ def test_it_refuses_to_write_into_the_repository_root():
 
 DECISIONS = (
     "WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH", "SAMPLETOOL_VERSION",
+    "KNOWN_CLASSIFICATION",
 )
 
 
@@ -141,7 +142,9 @@ def test_the_generated_command_and_version_are_not_invented(generated):
 def test_the_untouched_adapter_fails_the_contract_on_every_decision(generated):
     module = _load(generated / "tool_gateway/adapters/sampletool.py", "sampletool_untouched")
     problems = "\n".join(adapter_kit.adapter_violations(module, action=ACTION))
-    for decision in ("WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH"):
+    for decision in (
+        "WRITES_DATA", "CHANGES_STATE", "REQUIRES_PROXY", "NEEDS_DISPATCH", "KNOWN_CLASSIFICATION",
+    ):
         assert decision in problems, f"{decision} passed the contract while undecided"
     assert "tool_version() raised NotImplementedError" in problems
 
@@ -244,6 +247,10 @@ def test_filling_in_the_decisions_turns_the_local_contract_green_and_only_that(g
     for decision, value in {
         "WRITES_DATA": "False", "CHANGES_STATE": "False", "REQUIRES_PROXY": "False",
         "NEEDS_DISPATCH": '"dispatch_scan"', "SAMPLETOOL_VERSION": '"8.18.4"',
+        # The answer nobody would question for a tool that scans for secrets -- and the one
+        # the rule does not agree with, for this spelling. Form-valid on purpose: the local
+        # contract accepts it, the classification check below is what must not.
+        "KNOWN_CLASSIFICATION": '"required"',
     }.items():
         text, n = re.subn(
             rf"^{decision} = NotImplemented", f"{decision} = {value}", text, flags=re.M
@@ -262,6 +269,10 @@ def test_filling_in_the_decisions_turns_the_local_contract_green_and_only_that(g
     assert "build_sampletool_image.sh" in wiring
     # ...and the analysis a person owes before registering: no document, no registration.
     assert "no docs/ADR_SAMPLETOOL.md" in wiring
+    # ...and the example action name taken at face value is caught (D56): the adapter says
+    # "required", the rule -- which keys on the spelling -- says nothing of the kind.
+    assert "KNOWN_CLASSIFICATION is 'required' but authz.rego does NOT require" in wiring
+    assert "'secrets.scan'" in wiring
 
 
 # ---------------------------------------------------------------------------
@@ -272,3 +283,68 @@ def test_check_is_clean_for_a_fully_wired_tool_and_names_a_missing_one():
     assert scaffold.check("semgrep") == []
     with pytest.raises(scaffold.ScaffoldError, match="not in the repository"):
         scaffold.check("nosuchtool")
+
+
+# ---------------------------------------------------------------------------
+# The action name is a decision (D56)
+# ---------------------------------------------------------------------------
+
+def test_the_scaffold_says_what_the_action_name_does_to_the_classification_gate(
+    generated, capsys,
+):
+    """``secrets.scan`` -- once the scaffold's own example -- does not hit the rule."""
+    adapter = (generated / "tool_gateway/adapters/sampletool.py").read_text()
+    assert "DECIDE(classification)" in adapter
+    assert "authz.rego does NOT require a known classification for 'secrets.scan'" in adapter
+    registration = (generated / "REGISTRATION_sampletool.md").read_text()
+    assert "does NOT require a known classification for 'secrets.scan'" in registration
+
+    assert scaffold.main(["--name", "othertool", "--action", "secrets.scan",
+                          "--out", str(generated.parent / "second")]) == 0
+    out = capsys.readouterr().out
+    assert "CLASSIFICATION GATE for 'secrets.scan': NO." in out
+    assert "DECIDE(classification)" in out
+
+
+def test_a_name_the_rule_covers_is_reported_as_covered(tmp_path, capsys):
+    assert scaffold.main(["--name", "othertool", "--action", "code.secrets2",
+                          "--out", str(tmp_path / "o")]) == 0
+    assert "CLASSIFICATION GATE for 'code.secrets2': YES." in capsys.readouterr().out
+    text = (tmp_path / "o/tool_gateway/adapters/othertool.py").read_text()
+    assert "authz.rego REQUIRES a known classification for 'code.secrets2'" in text
+
+
+def test_the_classification_fact_is_asked_of_the_rule_not_hard_coded():
+    fact, applies = scaffold.classification_fact("web.get")
+    assert applies == "yes" and "REQUIRES" in fact
+    fact, applies = scaffold.classification_fact("nothing.here")
+    assert applies == "no" and "does NOT require" in fact
+
+
+def test_the_usage_text_no_longer_offers_an_example_name_to_copy():
+    """The name in the usage text is what a person copies. It must not be a real one."""
+    doc = scaffold.__doc__
+    assert "secrets.scan" not in doc and "<namespace>.<verb>" in doc
+    assert "gitleaks" not in doc.lower()
+
+
+def test_check_flags_an_unconfirmed_action_name_on_a_tool_in_the_repository(monkeypatch):
+    """``--check`` on a tool copied into the repository: the action name the rule does not
+    cover, declared "required" without anyone having noticed, is UNRESOLVED."""
+    from tool_gateway.adapters import semgrep
+
+    assert scaffold.check("semgrep") == [], "the unmodified tool is consistent (the control)"
+
+    monkeypatch.setattr(semgrep, "ACTION", "secrets.scan")
+    text = "\n".join(scaffold.check("semgrep"))
+    assert "'required' but authz.rego does NOT require" in text
+    assert "silently never applies" in text
+
+
+def test_check_flags_an_exemption_the_rule_contradicts(monkeypatch):
+    from tool_gateway.adapters import semgrep
+
+    monkeypatch.setattr(
+        semgrep, "KNOWN_CLASSIFICATION", "exempt: because this tool only reads, so it is fine",
+    )
+    assert "the exemption is not in force" in "\n".join(scaffold.check("semgrep"))

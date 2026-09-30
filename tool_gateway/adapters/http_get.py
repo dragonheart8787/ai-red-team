@@ -79,6 +79,13 @@ METHOD = "GET"
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D32: a GET returns the resource's whole document, which is what data_class describes.
+KNOWN_CLASSIFICATION = "required"
+
 #: Every web.* run goes through the policy-aware egress proxy (§8.3, D34).
 #:
 #: Dispatch refuses to run a proxy-requiring adapter with no proxy rather than

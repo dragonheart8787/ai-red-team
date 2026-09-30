@@ -35,10 +35,14 @@ asserting, so one run reports everything wrong instead of the first thing.
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
+import functools
 import inspect
 import json
 import re
+import shutil
+import subprocess
 import textwrap
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -50,6 +54,10 @@ IMAGES_DIR = REPO_ROOT / "tool_gateway" / "images"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
 
 _IMAGE_NAME = re.compile(r"^cyberorch/([a-z0-9][a-z0-9-]*):local$")
+
+#: ``KNOWN_CLASSIFICATION`` (D56): the adapter's stated position on whether its action
+#: needs a known data classification before it runs. ``exempt`` carries the reason.
+_KNOWN_CLASSIFICATION = re.compile(r"^(required|exempt: \S.{18,})$")
 
 # ---------------------------------------------------------------------------
 # Declared exceptions. Each one carries its reason, and each one is checked for
@@ -255,6 +263,16 @@ def adapter_violations(adapter: ModuleType, *, action: str | None = None) -> lis
                 "understates what the tool does to a target"
             )
 
+    classification = getattr(adapter, "KNOWN_CLASSIFICATION", None)
+    if not isinstance(classification, str) or not _KNOWN_CLASSIFICATION.match(classification):
+        out.append(
+            f"{name}: KNOWN_CLASSIFICATION is {classification!r}; it must be 'required' or "
+            "'exempt: <the reason, at least 20 characters>' (D56). Whether an action needs a "
+            "known classification is decided by its NAME in authz.rego's "
+            "requires_known_classification, so this is a decision about the name: state it, "
+            "and classification_violations checks it against the rule"
+        )
+
     needs = getattr(adapter, "NEEDS_DISPATCH", None)
     real_function = callable(getattr(dispatch, str(needs), None))
     if needs not in function_api._DISPATCH_FUNCTIONS or not real_function:
@@ -353,6 +371,102 @@ def _derive_view_violations(adapter: ModuleType) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Tier 1b'' -- what the action's NAME does in the policy (D56)
+# ---------------------------------------------------------------------------
+
+REGO_DIR = REPO_ROOT / "control_plane" / "policy" / "rego"
+
+
+@functools.cache
+def rego_requires_known_classification(
+    action: str, writes_data: bool = False, changes_state: bool = False,
+) -> bool | None:
+    """Whether ``authz.rego`` requires a known classification for this action.
+
+    Asked of OPA itself, over the policy in the tree, so the answer is the rule's
+    and not a second list kept in Python (the D25 / D30 one-authority rule).
+    ``None`` when OPA cannot be run -- the caller must treat that as unresolved,
+    never as "no".
+    """
+    opa = shutil.which("opa")
+    if opa is None:
+        return None
+    completed = subprocess.run(
+        [opa, "eval", "--format", "json", "--data", str(REGO_DIR), "--stdin-input",
+         "data.cyberorch.authz.requires_known_classification"],
+        input=json.dumps({"action": {
+            "action": action, "writes_data": writes_data, "changes_state": changes_state,
+        }}),
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except ValueError:
+        return None
+    results = payload.get("result")
+    if not results:
+        return False  # the rule is undefined for this input: it does not apply
+    return results[0]["expressions"][0]["value"] is True
+
+
+def classification_violations(adapter: ModuleType, *, action: str) -> list[str]:
+    """The adapter's ``KNOWN_CLASSIFICATION`` agrees with what the rule does to its name.
+
+    The action *namespace* is a policy decision made by accident. ``code.*`` and
+    ``web.get`` require a known classification because of how they are spelled; an
+    action spelled ``secrets.scan`` does not, and nothing says so -- every other
+    check stays green while the D43-3 gate silently never applies. So an adapter
+    must state its position (``"required"`` / ``"exempt: <reason>"``) and this
+    check compares it with the rule, both ways:
+
+    * says ``required`` but the rule does not fire for the name -> the gate is not
+      in force. Rename the action, change the rule (with ``policy_tests``), or
+      say ``exempt`` and why;
+    * says ``exempt`` but the rule fires -> the exemption is not real.
+
+    What it cannot do is decide which is *right*. ``exempt: <reason>`` is a
+    person accepting a silent skip on purpose, on the record; the reason is
+    reviewed with the ADR.
+    """
+    name = adapter.__name__
+    declared = getattr(adapter, "KNOWN_CLASSIFICATION", None)
+    if not isinstance(declared, str) or not _KNOWN_CLASSIFICATION.match(declared):
+        return []  # adapter_violations reports the malformed/undecided declaration
+    writes = getattr(adapter, "WRITES_DATA", False) is True
+    changes = getattr(adapter, "CHANGES_STATE", False) is True
+    by_name = rego_requires_known_classification(action, False, False)
+    effective = rego_requires_known_classification(action, writes, changes)
+    if by_name is None or effective is None:
+        return [
+            f"{name}: cannot evaluate authz.rego (is `opa` on PATH?), so {action!r}'s "
+            "classification behaviour is unconfirmed"
+        ]
+    wants = declared == "required"
+    if wants and not effective:
+        return [
+            f"{name}: KNOWN_CLASSIFICATION is 'required' but authz.rego does NOT require a "
+            f"known classification for {action!r}: the D32/D43-3 gate silently never applies "
+            "to this action. The rule keys on the action's spelling (web.get, web.post, "
+            "web.put, web.delete, data.*, code.*) and on writes_data/changes_state. Rename the "
+            "action into a namespace it covers, or extend the rule with policy_tests, or state "
+            "'exempt: <reason>' if skipping the gate is the decision"
+        ]
+    if not wants and effective:
+        why = (
+            "because the adapter writes data or changes state"
+            if not by_name else "because of the action's name"
+        )
+        return [
+            f"{name}: KNOWN_CLASSIFICATION is {declared!r} but authz.rego DOES require a known "
+            f"classification for {action!r} ({why}): the exemption is not in force. Correct the "
+            "declaration, or change the rule deliberately"
+        ]
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Tier 1b -- the adapter, as registered
 # ---------------------------------------------------------------------------
 
@@ -376,6 +490,8 @@ def registration_violations(adapter: ModuleType, *, action: str) -> list[str]:
         )
 
     out.extend(threat_model_violations(adapter))
+    out.extend(dispatch_violations(adapter, action=action))
+    out.extend(classification_violations(adapter, action=action))
 
     image = getattr(adapter, "IMAGE", None)
     slug = image_slug(image) if isinstance(image, str) else None
@@ -401,6 +517,167 @@ def registration_violations(adapter: ModuleType, *, action: str) -> list[str]:
                 "is silently dropped on the real path (the D37 and D45 defect). Carry it "
                 "there, or declare it in adapter_kit.CARRY_EXEMPTIONS with the reason"
             )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Tier 1b' -- the dispatch function behind NEEDS_DISPATCH (D56)
+# ---------------------------------------------------------------------------
+
+def _short_name(module: ModuleType) -> str:
+    return module.__name__.rsplit(".", 1)[-1]
+
+
+def _adapter_modules_bound_by(function: Callable[..., Any]) -> set[str]:
+    """Adapter modules a dispatch function names directly, or through helpers.
+
+    ``dispatch_collection`` is *meant* to name ``ad_collector`` (it serves that
+    one action); ``dispatch_code_scan`` was written when it served one tool and
+    named ``semgrep`` (``adapter = semgrep``), which the D55 second tool ran
+    into. A function that resolves its adapter from the capability
+    (``registry.adapter_for(capability.action)``) names none. The closure
+    follows calls to other functions defined in ``dispatch.py``, so a
+    hard-wired helper does not hide behind an innocent-looking body.
+    """
+    from control_plane.orchestrator import dispatch
+    from tool_gateway import registry
+
+    adapters = {_short_name(m) for m in registry.ADAPTERS.values()}
+    bound: set[str] = set()
+    seen: set[str] = set()
+    pending = [function]
+    while pending:
+        current = pending.pop()
+        if current.__qualname__ in seen:
+            continue
+        seen.add(current.__qualname__)
+        tree = ast.parse(textwrap.dedent(inspect.getsource(current)))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                if node.id in adapters:
+                    bound.add(node.id)
+                callee = getattr(dispatch, node.id, None)
+                if inspect.isfunction(callee) and callee.__module__ == dispatch.__name__:
+                    pending.append(callee)
+    return bound
+
+
+class _ProbeReached(Exception):  # noqa: N818 - a sentinel, not an error
+    """The routed dispatch function got as far as an adapter's ``build_plan``."""
+
+    def __init__(self, module_name: str) -> None:
+        super().__init__(module_name)
+        self.module_name = module_name
+
+
+def probe_dispatch(action: str) -> tuple[str | None, list[Mapping[str, Any]], Exception | None]:
+    """Route a capability for ``action`` through the real ``_dispatch_for_action``.
+
+    Returns ``(module reached, audit records written, unexpected error)``: the
+    module whose ``build_plan`` the routed function called first (every adapter's
+    ``build_plan`` is a sentinel for the duration), the ``record_audit`` calls it
+    made on the way, and any exception that was not the sentinel. Nothing touches
+    a database, a sandbox or a network.
+    """
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from control_plane.api import function_api
+    from control_plane.orchestrator import dispatch
+    from tool_gateway import registry
+
+    capability = SimpleNamespace(
+        revoked=False, is_live=lambda: True, action=action, constraints={},
+        budget=SimpleNamespace(as_dict=lambda: {}), credential_id=None,
+        capability_id="CAP-D56-PROBE",
+    )
+    audits: list[Mapping[str, Any]] = []
+
+    def _record_audit(**kwargs: Any) -> None:
+        audits.append(kwargs)
+
+    def _reach(module: ModuleType):
+        def _build_plan(*args: Any, **kwargs: Any) -> Any:
+            raise _ProbeReached(module.__name__)
+        return _build_plan
+
+    reached: str | None = None
+    error: Exception | None = None
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(dispatch, "record_audit", _record_audit))
+        stack.enter_context(mock.patch.object(dispatch, "_set_state", lambda *a, **k: None))
+        for module in {id(m): m for m in registry.ADAPTERS.values()}.values():
+            stack.enter_context(mock.patch.object(module, "build_plan", _reach(module)))
+        try:
+            function_api._dispatch_for_action(
+                conn=object(), engagement_id="ENG-D56-PROBE", proposal_id="PROP-D56-PROBE",
+                capability=capability, target="probe#main", actor="d56-probe", sandbox=None,
+                network_allowlist=None, execution_context=None,
+                proxy_url="http://probe.invalid:1", ca_cert_pem=None, proxy_cert_spki=None,
+            )
+        except _ProbeReached as hit:
+            reached = hit.module_name
+        except Exception as exc:  # noqa: BLE001 - an unprobeable function is itself the finding
+            error = exc
+    return reached, audits, error
+
+
+def dispatch_violations(adapter: ModuleType, *, action: str) -> list[str]:
+    """``NEEDS_DISPATCH`` names a function that really serves *this* adapter (D56).
+
+    The D53 checks verified the **name**: it is a real function, and
+    ``function_api._DISPATCH_FUNCTIONS`` maps it. That left D55's case green --
+    ``dispatch_code_scan`` hard-wired to Semgrep still passed every check while a
+    Gitleaks capability routed to it was refused as an unknown action (or, with the
+    refusal removed, ran Semgrep). Two independent checks of what is *behind* the
+    name:
+
+    * **static** -- the adapters the routed function names (directly, or through
+      a helper in ``dispatch.py``) are only this one. A function bound to another
+      adapter cannot serve this one, whatever else it does;
+    * **behavioural** -- :func:`probe_dispatch` calls the *real* routed function
+      (``function_api._dispatch_for_action``, the code ``propose_action`` runs)
+      with a capability for this action. It must not reach another adapter's
+      ``build_plan`` and must not refuse the action as unknown. (For
+      ``dispatch_collection`` the probe stops earlier, at its credential check,
+      so the static check carries the weight there.)
+    """
+    from control_plane.api import function_api
+    from tool_gateway import registry
+
+    name = adapter.__name__
+    needs = getattr(adapter, "NEEDS_DISPATCH", None)
+    function = function_api._DISPATCH_FUNCTIONS.get(needs)
+    if function is None:
+        return []  # adapter_violations already says the name resolves to nothing
+
+    out: list[str] = []
+    foreign = _adapter_modules_bound_by(function) - {_short_name(adapter)}
+    if foreign:
+        out.append(
+            f"{name}: NEEDS_DISPATCH {needs!r} is a function bound to {sorted(foreign)} by name, "
+            "so it cannot serve this adapter (the D55 case: dispatch_code_scan was hard-wired "
+            "to semgrep). Resolve the adapter from capability.action, or give this adapter its "
+            "own dispatch function"
+        )
+
+    reached, audits, error = probe_dispatch(action)
+    if error is not None:
+        out.append(
+            f"{name}: probing {needs!r} raised {type(error).__name__}: {error}. The probe stops "
+            "the function at its first build_plan or refusal; a dispatch function that needs "
+            "more than that before either must teach the probe (adapter_kit.probe_dispatch)"
+        )
+    if reached is not None and reached != name:
+        out.append(
+            f"{name}: a capability for {action!r} routed to {needs!r} ran {reached}.build_plan "
+            "-- the function behind the name is serving a different adapter"
+        )
+    if any(registry.UNKNOWN_ACTION in tuple(a.get("reasons") or ()) for a in audits):
+        out.append(
+            f"{name}: {needs!r} refuses {action!r} as {registry.UNKNOWN_ACTION!r}: the "
+            "function behind NEEDS_DISPATCH does not handle this action"
+        )
     return out
 
 

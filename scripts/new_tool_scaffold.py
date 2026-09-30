@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Generate the mechanical parts of a new tool adapter (D53).
 
-    python scripts/new_tool_scaffold.py --name gitleaks --action secrets.scan --out /tmp/gl
-    python scripts/new_tool_scaffold.py --check gitleaks
+    python scripts/new_tool_scaffold.py --name <tool> --action <namespace>.<verb> --out <dir>
+    python scripts/new_tool_scaffold.py --check <tool>
 
 The first form writes an adapter, its tests, a Dockerfile and build script, an
 ADR worksheet and a registration checklist into ``--out``. It touches nothing in
 the repository: you review the output and copy it in.
+
+The ``--action`` you pass is not a formality. Whether the action needs a known
+classification (``authz.rego``'s ``requires_known_classification``) is decided by
+its *spelling* -- ``code.*`` and ``web.get`` do, most other names do not -- so the
+scaffold evaluates the rule for the name you chose, prints the answer, and writes it
+into the generated adapter as a ``DECIDE(classification)`` marker. It never picks
+the name for you and has no default.
 
 What it is not
 --------------
@@ -30,6 +37,7 @@ import argparse
 import importlib
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -56,9 +64,50 @@ class ScaffoldError(Exception):
     """The request cannot be honoured; nothing was written."""
 
 
-def _render(text: str, name: str, action: str) -> str:
+def classification_fact(action: str) -> tuple[str, str]:
+    """``(one-line fact, does the gate apply: 'yes' | 'no' | 'unknown')`` for this action name.
+
+    Asked of OPA through ``adapter_kit`` (one authority: the rule, not a copy of its
+    patterns). By name alone: an adapter that writes data or changes state also
+    triggers the rule, which is a property of the tool and not known here.
+    """
+    sys.path.insert(0, str(REPO))
+    from tests import adapter_kit
+
+    applies = adapter_kit.rego_requires_known_classification(action, False, False)
+    if applies is None:
+        return (
+            f"could NOT be evaluated (is `opa` on PATH?) -- {action!r} is unconfirmed",
+            "unknown",
+        )
+    if applies:
+        return (
+            f"authz.rego REQUIRES a known classification for {action!r}, by its name.",
+            "yes",
+        )
     return (
-        text.replace("{{Name}}", name.capitalize())
+        f"authz.rego does NOT require a known classification for {action!r}. The D32/D43-3 "
+        "gate will silently not apply (unless the tool writes data or changes state, which "
+        "triggers the rule separately). If this tool reads content, that is probably not "
+        "what you want: rename into a namespace the rule covers (code.*, web.get/post/put/"
+        "delete, data.*) or extend the rule with policy_tests -- or, if skipping the gate is "
+        "the decision, say so with `exempt: <reason>`.",
+        "no",
+    )
+
+
+def _render(text: str, name: str, action: str) -> str:
+    fact, _ = classification_fact(action)
+    code_fact = "\n".join(
+        textwrap.wrap(fact, 84, initial_indent="#:   ", subsequent_indent="#:   ")
+    )
+    md_fact = "\n".join(
+        textwrap.wrap(fact, 80, initial_indent="      ", subsequent_indent="      ")
+    )
+    return (
+        text.replace("{{CLASSIFICATION_FACT_MD}}", md_fact)
+        .replace("{{CLASSIFICATION_FACT}}", code_fact)
+        .replace("{{Name}}", name.capitalize())
         .replace("{{NAME}}", name.upper())
         .replace("{{name}}", name)
         .replace("{{action}}", action)
@@ -142,7 +191,10 @@ def _count_markers(paths: list[Path]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--name", help="tool name: lower-case letters and digits")
-    parser.add_argument("--action", help="action string, e.g. secrets.scan")
+    parser.add_argument(
+        "--action",
+        help="<namespace>.<verb>. The spelling decides whether the classification gate applies",
+    )
     parser.add_argument("--out", type=Path, help="empty directory to write into (required)")
     parser.add_argument("--check", metavar="NAME", help="check a tool already in the repository")
     args = parser.parse_args(argv)
@@ -166,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
 
     for path in written:
         print(f"wrote {path}")
+    fact, applies = classification_fact(args.action)
+    print(
+        f"\nCLASSIFICATION GATE for {args.action!r}: {applies.upper()}. {fact}\n"
+        "  This is decided by the action's spelling, not by the tool. Confirm it on purpose: "
+        "KNOWN_CLASSIFICATION in the adapter (DECIDE(classification))."
+    )
     print(
         f"\n{_count_markers(written)} DECIDE markers. Nothing is registered and nothing is "
         "decided; the generated adapter fails its contract check on purpose.\n"

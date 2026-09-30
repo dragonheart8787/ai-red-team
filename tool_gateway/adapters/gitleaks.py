@@ -58,6 +58,14 @@ GITLEAKS_VERSION = "8.30.1"
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D43-3 carried and argued again (docs/ADR_GITLEAKS.md D55-2): its output is an inventory
+#: of where the customer's credentials are.
+KNOWN_CLASSIFICATION = "required"
+
 #: No network at all -- the repository arrives as a read-only bind mount, fetched
 #: by the control plane (D43-5 Option B). The container is given no route, so
 #: there is nothing for the D34 proxy to mediate.
