@@ -52,6 +52,16 @@ ACTION_NAMESPACE = "web."
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: Required (ACCEPTANCE 5.48): a rendered page is the whole document a GET returns,
+#: after the target's own JavaScript has run -- D32's argument for web.get, applied
+#: to the capability D36 added after it. It had been outside the rule with no argument
+#: recorded for the exclusion.
+KNOWN_CLASSIFICATION = "required"
+
 #: Every web.* run goes through the policy-aware egress proxy (§8.3).
 REQUIRES_PROXY = True
 

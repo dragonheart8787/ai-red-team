@@ -266,13 +266,15 @@ def main() -> int:
     network = sandbox.network_name([ALLOWLIST])
     target_ip = container_ip("d11-target", network)
     engagement_id = uid("ENG-D125")
+    # 5.20 (D54): an engagement freezes the global baseline that exists when it is created, so
+    # the baseline has to exist first -- published after, it would never reach this engagement.
+    policy_layer_id, published_now = publish_baseline(engagement_id)
     with registry_admin_scope(engagement_id) as conn:
         create_engagement(
             conn, engagement_id=engagement_id, customer_id="CUST-D12-LOCAL",
             actor=ACTOR,
         )
     scope_object_id = setup(engagement_id, target_ip)
-    policy_layer_id, published_now = publish_baseline(engagement_id)
     effective = assert_policy_permits_scanning(engagement_id)
     reviewer = build_reviewer(backend)
 

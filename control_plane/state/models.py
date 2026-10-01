@@ -39,6 +39,9 @@ engagements = Table(
     Column("status", Text, nullable=False),
     Column("kill_switch_engaged", Boolean, nullable=False),
     Column("policy_snapshot_version", Integer, nullable=False),
+    # 5.20 (D54): position in policy_change_seq at which the global baseline was frozen; NULL =
+    # no freeze recorded (created before migration 0015), so the baseline is live.
+    Column("baseline_frozen_through", BigInteger),
     _ts("created_at"), _ts("updated_at"),
 )
 
@@ -52,6 +55,10 @@ policy_layers = Table(
     Column("document", JSONB, nullable=False),
     Column("active", Boolean, nullable=False),
     _ts("created_at"),
+    # 5.20 (D54): a layer's one life is [created_seq, deactivated_seq) in policy_change_seq,
+    # stamped by a trigger; neither column is writable by any role.
+    Column("created_seq", BigInteger),
+    Column("deactivated_seq", BigInteger),
 )
 
 scope_registry = Table(

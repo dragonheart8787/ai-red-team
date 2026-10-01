@@ -7,9 +7,10 @@ import uuid
 from sqlalchemy import Connection, text
 
 from control_plane.orchestrator.engagement import create_engagement
+from control_plane.policy.layers import deactivate_policy_layer, publish_policy_layer
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
-from control_plane.state.db import registry_admin_scope
+from control_plane.state.db import global_policy_admin_scope, registry_admin_scope
 
 
 def make_engagement(
@@ -82,3 +83,53 @@ class EngagementManager:
             return register_metadata(
                 conn, engagement_id=self.engagement_id, actor=actor, **kwargs
             )
+
+
+def publish_global_layer(
+    *, layer: str, version: int, document, actor: str = "test-harness",
+    customer_id: str | None = None,
+) -> int:
+    """Publish a *global* policy layer the only way the database allows (5.37).
+
+    A global layer applies to every engagement, so it is written on the
+    ``global_policy_admin`` connection with no engagement bound -- not from an
+    ``engagement_scope``, which the runtime role can no longer use for it. Commits on its
+    own, so the row is visible to every later engagement connection.
+    """
+    with global_policy_admin_scope() as conn:
+        return publish_policy_layer(
+            conn, engagement_id=None, layer=layer, version=version, document=document,
+            actor=actor, scoped_to_engagement=False, customer_id=customer_id,
+        )
+
+
+def deactivate_global_layer(layer_id: int, *, actor: str = "test-teardown") -> bool:
+    """Retire a global layer on the ``global_policy_admin`` connection (5.37)."""
+    with global_policy_admin_scope() as conn:
+        return deactivate_policy_layer(conn, layer_id=layer_id, actor=actor)
+
+
+_TEST_BASELINE_ID: int | None = None
+
+
+def ensure_test_baseline() -> int | None:
+    """Make sure a global baseline exists, as ``create_engagement`` now requires (5.20, D54).
+
+    An engagement created with no baseline in force is refused, so every test that makes one
+    needs the platform owner's step to have happened. If none is active this publishes a
+    **neutral** one (an empty document adds nothing to the merge) on the ``global_policy_admin``
+    connection and returns its id, so the session can retire it; if one exists it publishes
+    nothing and returns ``None``. A fresh CI database has none, which is exactly the case.
+    """
+    global _TEST_BASELINE_ID
+    with global_policy_admin_scope() as conn:
+        exists = conn.execute(text(
+            "SELECT 1 FROM policy_layers WHERE layer = 'baseline_global' "
+            "AND engagement_id IS NULL AND customer_id IS NULL AND active IS TRUE LIMIT 1"
+        )).first()
+    if exists:
+        return None
+    _TEST_BASELINE_ID = publish_global_layer(
+        layer="baseline_global", version=uuid.uuid4().int % 2_000_000_000, document={},
+        actor="test-harness")
+    return _TEST_BASELINE_ID

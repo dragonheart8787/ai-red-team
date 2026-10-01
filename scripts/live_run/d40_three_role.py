@@ -1,3 +1,10 @@
+# BEFORE THE NEXT RUN (ACCEPTANCE 5.50): confirm that after setup_engagement the web host
+# resolves as known + AUTHORITATIVE and that a web.render proposal for it is not escalated
+# with unknown_classification_for_action_class. web.render joined requires_known_classification
+# at 5.48; this script's compatibility with that rule is a static reading, never executed. If
+# this run's web.render decisions differ from the pre-5.48 report
+# (docs/D40_THREE_ROLE_INTEGRATION_REPORT.md), that is a finding about the rule, not a
+# problem with the model.
 """D40 — three real roles, at once, for one real engagement lifecycle.
 
 D10.5, D13/D15 and D17 each put exactly one real model behind exactly one
@@ -88,7 +95,11 @@ from control_plane.registry.scope_registry import (  # noqa: E402
     list_scope_objects,
     register_scope_object,
 )
-from control_plane.state.db import engagement_scope, registry_admin_scope  # noqa: E402
+from control_plane.state.db import (  # noqa: E402
+    engagement_scope,
+    global_policy_admin_scope,
+    registry_admin_scope,
+)
 from scripts.live_run.d17_supervisor import (  # noqa: E402
     build_state,
     duplication,
@@ -170,9 +181,11 @@ def uid(prefix: str) -> str:
 #: rather than fighting it, and costs nothing extra since these are exactly
 #: the semantics a real deployment's actual baseline would carry.
 def ensure_baseline(engagement_id: str) -> None:
-    with engagement_scope(engagement_id) as conn:
+    # A global baseline is the global_policy_admin's to write (5.37); this harness is an
+    # operator-run script, so it opens that connection the way the CLI does.
+    with global_policy_admin_scope() as conn:
         publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global",
+            conn, engagement_id=None, layer="baseline_global",
             version=int(uuid.uuid4().int % 1_000_000_000),
             document={
                 "actions": {"network.scan": "ALLOW", "network.recon": "ALLOW",
@@ -434,9 +447,10 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
             nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox
             ) -> dict[str, Any]:
     engagement_id = uid("ENG-D40-MAIN")
+    # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
+    ensure_baseline(engagement_id)
     registered = setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=web_ip,
                                   customer_id="CUST-D40-LOCAL")
-    ensure_baseline(engagement_id)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 
@@ -612,9 +626,10 @@ class OneShotMisleadingReviewer:
 def injection_experiment(*, rounds: int, nmap_ip: str,
                          nmap_sandbox: DockerSandbox) -> dict[str, Any]:
     engagement_id = uid("ENG-D40-INJECT")
+    # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
+    ensure_baseline(engagement_id)
     setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=None,
                      customer_id="CUST-D40-INJECT")
-    ensure_baseline(engagement_id)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 

@@ -522,7 +522,7 @@ _GRID_TYPES = ["fqdn", "ip", "cidr", "url", "repo", "ad_domain"]
 def _independent_url_host(value: str) -> tuple[str, str] | None:
     """A second, independent opinion of what host a URL names (D41).
 
-    Deliberately not ``containment._url_host``, for the reason
+    Deliberately not ``containment.url_host``, for the reason
     ``_legacy_scope_covers_target`` is a separate copy rather than an import:
     an oracle built from the code under test cannot catch a mistake the two
     share. This skips ``normalize_fqdn``'s IDNA/label strictness on purpose —

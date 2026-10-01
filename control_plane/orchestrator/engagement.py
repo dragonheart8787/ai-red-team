@@ -48,6 +48,7 @@ from control_plane.capability.broker import (
     revoke_capabilities_for_credential,
     revoke_capabilities_for_scope_object,
 )
+from control_plane.policy.layers import has_global_baseline
 from control_plane.registry.scope_registry import deactivate_scope_object
 from control_plane.state.db import (
     assert_registry_admin,
@@ -74,6 +75,22 @@ class EngagementAlreadyExists(ValueError):
     assert_registry_admin` turns a permission-denied three frames deep into a
     message naming the actual mistake.
     """
+
+
+class NoBaselinePublished(RuntimeError):
+    """Raised by :func:`create_engagement` when no global baseline is in force (5.20, D54).
+
+    An engagement freezes the global baseline that exists when it is created; created with none,
+    it would be frozen at an *empty* authorization baseline and every action would default to
+    DENY until its own layers said otherwise -- silently, because nothing would have failed. Not
+    a permissions error and not a database error: the system is missing a prerequisite, and the
+    message says which and how to supply it.
+    """
+
+    def __init__(self, message: str, *, engagement_id: str, customer_id: str) -> None:
+        super().__init__(message)
+        self.engagement_id = engagement_id
+        self.customer_id = customer_id
 
 
 @dataclass(frozen=True)
@@ -127,27 +144,57 @@ def create_engagement(
     — the same function the broker already uses for capability re-
     authorization — rather than a second implementation of "what version is
     this" (the D30/D33 lesson about two things that must independently agree).
-    Stated plainly because the column's own comment claims more than this
-    does: it is *recorded*, honestly, as the version in force at this moment.
-    It is not *consulted* by anything — ``load_effective_policy`` live-merges
-    the currently active ``baseline_global`` / ``customer`` / ``engagement`` /
-    ``emergency_overlay`` layers on every decision, exactly as it did before
-    this function existed, and does not read this column. The frozen-baseline
-    enforcement §4.5 describes (a later global-policy publish should not
-    retroactively affect an already-open engagement's baseline) has never been
-    built; making the stored number real does not build it. That gap is
-    tracked separately as DEFERRED 5.20 rather than left to look resolved
-    because the placeholder is gone.
+    It is *recorded*, as the version in force at this moment, and nothing consults it.
+
+    **The baseline is frozen here (ACCEPTANCE 5.20, D54).** What §4.5's frozen Baseline
+    Global Snapshot needs is a different number: ``baseline_frozen_through``, the engagement's
+    position in ``policy_change_seq`` at creation, which ``load_effective_policy`` reads (through
+    the one shared predicate) to keep the global baseline that was in force now and ignore one
+    published later. It comes from ``policy_freeze_point()`` in the database. So a baseline has
+    to exist *before* the engagement it is meant to govern; an engagement created first is
+    frozen without it. Only the emergency overlay reaches an open engagement afterwards.
+
+    **Created with none, it is refused** (:class:`NoBaselinePublished`) rather than frozen at an
+    empty baseline where every action silently defaults to DENY. That refusal was added after the
+    freeze itself, as a follow-up to the ordering dependency the freeze introduced -- it is not
+    one of the seven decisions taken at D54.
     """
     assert_registry_admin(conn)
-    version = current_policy_version(conn, engagement_id)
+    # 5.20 (D54): refuse to freeze an empty baseline. Checked before anything is written or a
+    # freeze point is allocated, so a refusal leaves no engagement, no audit "created" record and
+    # no consumed position in policy_change_seq.
+    if not has_global_baseline(conn, engagement_id, customer_id=customer_id):
+        reason = "no_baseline_published"
+        record_audit(
+            engagement_id=engagement_id, actor=actor, event_type="engagement.creation_refused",
+            subject_type="engagement", subject_id=engagement_id, decision="DENY",
+            reasons=(reason,), payload={"customer_id": customer_id},
+        )
+        raise NoBaselinePublished(
+            f"cannot create engagement {engagement_id!r}: this system has no published "
+            f"baseline_global layer in force for customer {customer_id!r}. An engagement "
+            "freezes the global baseline that exists when it is created (§4.5), so one created "
+            "now would be frozen at an empty authorization baseline and every action would "
+            "default to DENY. Publish a baseline first, over the global_policy_admin connection: "
+            "python scripts/manage_global_policy.py publish --layer baseline_global "
+            "--version <n> --document-file <baseline.json> --actor <you> -- then create the "
+            "engagement.",
+            engagement_id=engagement_id, customer_id=customer_id,
+        )
+    version = current_policy_version(conn, engagement_id, customer_id=customer_id)
+    # The freeze point (5.20, D54): this engagement's position in policy_change_seq, the one
+    # order in which baselines are published and retired. Allocated by the database (a function
+    # only registry_admin may run), never computed here, so it cannot be forged or repeated.
+    frozen_through = conn.execute(text("SELECT policy_freeze_point()")).scalar_one()
     try:
         conn.execute(
             text("""
-                INSERT INTO engagements (engagement_id, customer_id, policy_snapshot_version)
-                VALUES (:eid, :cid, :version)
+                INSERT INTO engagements (engagement_id, customer_id, policy_snapshot_version,
+                                         baseline_frozen_through)
+                VALUES (:eid, :cid, :version, :frozen)
             """),
-            {"eid": engagement_id, "cid": customer_id, "version": version},
+            {"eid": engagement_id, "cid": customer_id, "version": version,
+             "frozen": frozen_through},
         )
     except IntegrityError as exc:
         raise EngagementAlreadyExists(
@@ -160,6 +207,7 @@ def create_engagement(
         payload={
             "customer_id": customer_id,
             "policy_snapshot_version": version,
+            "baseline_frozen_through": frozen_through,
             # Explicit rather than omitted: a reader of the trail should see
             # "no scope was registered at creation" as a stated fact, not
             # infer it from the key's absence (§8.9's own standard for

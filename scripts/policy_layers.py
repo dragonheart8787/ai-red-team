@@ -30,12 +30,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.policy.layers import (  # noqa: E402
     list_effective_policy_layers,
+    list_frozen_out_baseline_changes,
     load_effective_policy,
 )
 from control_plane.state.db import engagement_scope  # noqa: E402
 
 
-def render(layers, policy, action: str | None) -> str:
+def render(layers, policy, action: str | None, frozen_out=()) -> str:
     out: list[str] = []
     actions = policy.as_dict()["actions"]
 
@@ -66,10 +67,11 @@ def render(layers, policy, action: str | None) -> str:
     out.append(f"{len(layers)} active layer(s) apply to this engagement:")
     out.append("")
     for layer in layers:
-        marker = "GLOBAL    " if layer.is_global else "engagement"
+        marker = layer.scope.upper().ljust(10)
         out.append(
             f"  [{marker}] id={layer.id} {layer.layer} v{layer.version}"
-            + (f"  engagement_id={layer.engagement_id}" if not layer.is_global else "")
+            + (f"  engagement_id={layer.engagement_id}" if layer.engagement_id else "")
+            + (f"  customer_id={layer.customer_id}" if layer.scope == "customer" else "")
         )
         out.append(f"              {json.dumps(layer.document, sort_keys=True)}")
         if layer.published_by:
@@ -96,6 +98,20 @@ def render(layers, policy, action: str | None) -> str:
     out.append(f"  scope_allow  {merged['scope_allow']}")
     out.append(f"  rate_limit   {merged['rate_limit']}")
 
+    if frozen_out:
+        out.append("")
+        out.append(
+            "frozen out (5.20): this engagement froze the global baseline when it was created. "
+            "These baseline changes since then are NOT followed -- report only, nothing here "
+            "affects a decision:"
+        )
+        for item in frozen_out:
+            state = ("still in force for this engagement (retired since)"
+                     if item.still_applied else "NOT in force for this engagement")
+            out.append(f"  id={item.id} {item.layer} v{item.version}  "
+                       f"{item.change}: {state}")
+            out.append(f"              {json.dumps(item.document, sort_keys=True)}")
+
     if any(layer.is_global for layer in layers):
         out.append("")
         out.append(
@@ -120,11 +136,13 @@ def main() -> int:
     with engagement_scope(args.engagement) as conn:
         layers = list_effective_policy_layers(conn, args.engagement)
         policy = load_effective_policy(conn, args.engagement)
+        frozen_out = list_frozen_out_baseline_changes(conn, args.engagement)
 
     if args.as_json:
         print(json.dumps({
             "engagement_id": args.engagement,
             "layers": [layer.as_dict() for layer in layers],
+            "frozen_out": [item.as_dict() for item in frozen_out],
             "effective_policy": policy.as_dict(),
             "action": args.action,
             "action_decision": (
@@ -132,7 +150,7 @@ def main() -> int:
             ),
         }, indent=2, default=str))
     else:
-        print(render(layers, policy, args.action))
+        print(render(layers, policy, args.action, frozen_out))
 
     # Exit non-zero when the named action is not permitted, so this is usable
     # in a shell condition without parsing the output.

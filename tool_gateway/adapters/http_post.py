@@ -23,6 +23,12 @@ What this adapter refuses, and why each refusal is load-bearing:
   from ``constraints["body"]``, which travelled through OPA and the broker. A
   body assembled from a previous response would let the target dictate what is
   written to it next, which is I8 inverted with side effects attached.
+* **A body that is constructed test data, never a real secret (ACCEPTANCE 5.29).**
+  ``propose_action`` carries the body from the proposal into the capability and
+  refuses, before anything records it, a body in a known secret format or one this
+  module would refuse (size, content type). A real credential enters an execution
+  path only through the D44 vault, which has no delivery path for a request body
+  yet -- see ``docs/ADR_CREDENTIAL_VAULT.md`` section 9.
 * **``--data-binary``, never ``--data``.** curl's ``--data`` strips newlines
   and, given ``@``, reads a *file* off the tool container. A target-influenced
   string reaching it would be a file-read primitive. ``--data-binary`` with the
@@ -71,6 +77,20 @@ DELIBERATELY_UNIMPLEMENTED = ("web.put", "web.delete")
 #: unknowable is the only direction I6c permits.
 WRITES_DATA = True
 CHANGES_STATE = True
+
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D32's reasoning, and the rule also fires on its own for a writing action
+#: (WRITES_DATA/CHANGES_STATE).
+KNOWN_CLASSIFICATION = "required"
+
+#: This adapter reads a request body from the capability, so `propose_action`
+#: judges a proposed ``body`` (size, content type, known secret formats) before
+#: anything records it -- see `function_api.refuse_proposed_body` (ACCEPTANCE 5.29).
+#: An adapter without this attribute is never asked about a body.
+CARRIES_BODY = True
 
 #: Every web.* run goes through the policy-aware egress proxy (§8.3, D34).
 REQUIRES_PROXY = True

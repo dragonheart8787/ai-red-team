@@ -174,3 +174,44 @@ def test_dns_server_must_be_a_valid_ip_not_a_hostname():
 def test_dns_server_rejects_garbage():
     with pytest.raises(ad_collector.AdapterError, match="not-an-ip"):
         _build(_creds(dns_server="not-an-ip"))
+
+
+# ---------------------------------------------------------------------------
+# tool_version (ACCEPTANCE 5.30): the control plane is not the sandbox
+# ---------------------------------------------------------------------------
+
+def test_tool_version_is_the_pinned_image_version_and_never_a_host_probe(monkeypatch):
+    """bloodhound-python lives in the Dockerfile image, not on the machine that
+    computes the fingerprint. A probe returned ``"unknown"`` there, so a tool upgrade
+    could not change the fingerprint and a re-collection could be skipped as done
+    (the defect D43 fixed for Semgrep at ``ab2849a``).
+
+    The host below *has* a bloodhound-python -- a different one -- and any attempt to
+    ask it fails the test: the answer must not depend on the host at all.
+    """
+    import shutil
+    import subprocess
+
+    def _forbidden(*_a, **_k):
+        raise AssertionError("tool_version() probed the host")
+
+    monkeypatch.setattr(shutil, "which", lambda *_a, **_k: "/usr/bin/bloodhound-python")
+    monkeypatch.setattr(subprocess, "run", _forbidden)
+    monkeypatch.setattr(subprocess, "check_output", _forbidden)
+
+    assert ad_collector.tool_version() == f"bloodhound-python-{ad_collector.BLOODHOUND_VERSION}"
+
+
+def test_the_pinned_version_is_the_version_the_image_is_built_with():
+    """A pinned constant is only honest while it equals the image. Hand-kept numbers
+    drift (D11-3's reasoning, applied to a version), so the Dockerfile's build arg and
+    the build script's default are checked against it."""
+    import re
+
+    from tests.adapter_kit import IMAGES_DIR
+
+    version = ad_collector.BLOODHOUND_VERSION
+    dockerfile = (IMAGES_DIR / "bloodhound.Dockerfile").read_text()
+    script = (IMAGES_DIR / "build_bloodhound_image.sh").read_text()
+    assert re.search(rf"^ARG BLOODHOUND_VERSION={re.escape(version)}$", dockerfile, re.M)
+    assert f'BLOODHOUND_VERSION="${{BLOODHOUND_VERSION:-{version}}}"' in script

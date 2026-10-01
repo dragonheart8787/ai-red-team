@@ -759,8 +759,10 @@ def main() -> int:
     def fresh(label: str, *, finding_state: str = "candidate"
               ) -> tuple[str, dict[str, str], str, tuple[str, ...]]:
         engagement_id = uid(f"ENG-D17-{label}")
-        registered = setup(engagement_id, target_ip)
+        # 5.20 (D54): an engagement freezes the global baseline that exists when it is created, so
+        # the baseline has to exist first -- published after, it would never reach this engagement.
         publish_baseline(engagement_id)
+        registered = setup(engagement_id, target_ip)
         assert_policy_permits_scanning(engagement_id)
         lab_scope = registered[ALLOWLIST]
 

@@ -65,6 +65,14 @@ _WHOLE_MATCH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("credential-in-url", re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]+:[^\s@/]+@")),
 )
 
+#: The labels of the secret formats recognised by *shape* alone -- the
+#: whole-match patterns above, which need no variable name to be secret-shaped.
+#: The single list of "known secret formats" (the D25 rule): a caller that wants
+#: to know whether text *contains* one (:func:`detect_secret_formats`) reads the
+#: same patterns :func:`redact_snippet` masks, so a format added above is refused
+#: and redacted together, never in one place only.
+KNOWN_SECRET_FORMATS: tuple[str, ...] = tuple(label for label, _ in _WHOLE_MATCH_PATTERNS)
+
 #: Group-preserving: `name = "value"` -> `name = "[REDACTED:credential]"`.
 #: The variable name and quoting survive; only the literal value is masked.
 #: This is deliberately the broadest, least specific pattern (any variable
@@ -129,3 +137,25 @@ def redact_snippet(text: str) -> RedactedSnippet:
         capped_lines.append(line)
 
     return RedactedSnippet(text="\n".join(capped_lines), patterns_matched=tuple(matched))
+
+
+def detect_secret_formats(text: str) -> tuple[str, ...]:
+    """The known secret formats present in ``text``, by label, in table order.
+
+    Detection only -- nothing is masked, nothing is truncated. It exists for a
+    caller that must *refuse* rather than redact (ACCEPTANCE 5.29: a ``web.post``
+    body is refused at propose time, because what a human approves and what curl
+    sends have to be the same bytes, so a masked copy is not an option).
+
+    It deliberately answers a narrower question than :func:`redact_snippet`:
+    only the formats recognisable from their shape. It does not report the
+    name-based ``credential-assignment`` heuristic, which flags any variable named
+    ``password`` holding a quoted literal and cannot tell a constructed test value
+    from a real secret, nor the display-only ``length-cap``. Refusing on either
+    would reject an ordinary form field or a long body, which is over-defence, not
+    safety. Like the rest of this module, it claims a known set of shapes and no
+    more.
+    """
+    return tuple(
+        label for label, pattern in _WHOLE_MATCH_PATTERNS if pattern.search(text)
+    )

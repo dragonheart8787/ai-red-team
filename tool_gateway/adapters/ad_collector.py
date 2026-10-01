@@ -156,8 +156,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-import shutil
-import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -181,12 +179,37 @@ ACTION = "ad.collect"
 #: rather than the StubSandbox every prior ad.collect test supplied.
 IMAGE = "cyberorch/bloodhound:local"
 
+#: Must equal ``BLOODHOUND_VERSION`` in tool_gateway/images/bloodhound.Dockerfile
+#: and in build_bloodhound_image.sh (a test compares all three). The tool is
+#: installed inside the image, not on the control-plane host that computes the
+#: fingerprint, so there is no host binary whose presence says anything about what
+#: actually runs -- see ``tool_version``.
+BLOODHOUND_VERSION = "1.9.0"
+
 #: A collection run issues LDAP reads and writes nothing to the domain it
 #: queries — the same D31/D34 reasoning nmap's port scan and web.get give,
 #: applied to LDAP instead of TCP/HTTP: nothing in the command this adapter
 #: builds has a write verb of any kind.
 WRITES_DATA = False
 CHANGES_STATE = False
+
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: Exempt, argued at ACCEPTANCE 5.48 (docs/ADR_BLOODHOUND_NEO4J.md, "Status update
+#: (ACCEPTANCE 5.48)"): collection is discovery, not content access. D42-1 option C makes
+#: an ad_domain scope authorize *collecting* and nothing else, and what a run surfaces
+#: enters as OBSERVED, never AUTHORITATIVE (ADR §1.5/§1.6); a graph node carries identity
+#: and no classification (tests/test_schema.py: security_graph tables have no
+#: classification columns). That is the exemption ARCHITECTURE §5 row 1 gives passive
+#: recon -- discovery that classification work starts from, so it cannot wait for it.
+KNOWN_CLASSIFICATION = (
+    "exempt: collection is discovery, not content access -- D42-1 option C: an ad_domain "
+    "scope authorizes collecting only, and what is collected enters as OBSERVED, never "
+    "AUTHORITATIVE, carrying no classification of its own; the same exemption ARCHITECTURE "
+    "section 5 row 1 gives passive recon (ACCEPTANCE 5.48)"
+)
 
 #: LDAP goes through the sandbox's raw namespace, the same as nmap's TCP —
 #: there is no application-layer HTTP here for the §8.3 egress proxy to
@@ -289,17 +312,18 @@ class AdCollectPlan:
 
 
 def tool_version() -> str:
-    """The installed bloodhound-python version, for the fingerprint (§7)."""
-    binary = shutil.which("bloodhound-python")
-    if binary is None:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            [binary, "--version"], capture_output=True, text=True, timeout=10, check=False
-        ).stdout
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover
-        return "unknown"
-    return out.strip() or "unknown"
+    """The pinned bloodhound-python version, for the fingerprint (§7).
+
+    Not a host subprocess check. This tool runs from a Dockerfile-built image
+    (``BLOODHOUND_VERSION``), not from an export of the host's own installed binary
+    the way nmap's image is, so the control plane -- a different machine from the
+    sandbox -- has no reason to have it, and probing for it returned ``"unknown"``
+    in every deployment. A fingerprint that cannot see a tool upgrade skips a
+    re-collection the upgrade should have triggered (ACCEPTANCE 5.30; the defect
+    D43 fixed for Semgrep at ``ab2849a``, and the precedent followed here:
+    semgrep.py and browser.py return a pinned constant for the identical reason).
+    """
+    return f"bloodhound-python-{BLOODHOUND_VERSION}"
 
 
 def tool_deadline(max_duration_seconds: int) -> int:

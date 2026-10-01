@@ -65,12 +65,17 @@ from control_plane.policy.merge import (
     resolve_action,
     validate_emergency_overlay,
 )
+from control_plane.state.db import assert_global_policy_admin
 
 EMERGENCY_OVERLAY = "emergency_overlay"
 
 #: How a layer's reach is reported. A word, not an inference from a null column.
 GLOBAL = "global"
 ENGAGEMENT = "engagement"
+#: A layer with a NULL ``engagement_id`` that names a customer (ACCEPTANCE 5.35). Stored
+#: like a global row, so a reader who inferred scope from the null column would call it
+#: global -- the D11-6 confusion -- and it applies to one customer's engagements only.
+CUSTOMER = "customer"
 
 
 class PolicyLayerError(ValueError):
@@ -80,7 +85,7 @@ class PolicyLayerError(ValueError):
 def publish_policy_layer(
     conn: Connection,
     *,
-    engagement_id: str,
+    engagement_id: str | None,
     layer: str,
     version: int,
     document: Mapping[str, Any],
@@ -93,9 +98,16 @@ def publish_policy_layer(
     ``scoped_to_engagement`` decides whether the layer applies globally
     (``engagement_id IS NULL``, which is how baseline and emergency layers reach
     every engagement) or only to this one. It is an explicit argument rather
-    than inferred from ``engagement_id`` because the caller always has an
-    engagement in hand — the RLS connection requires one — and inferring would
-    make "publish globally" unreachable.
+    than inferred from ``engagement_id`` so that "publish globally" is always a
+    deliberate act.
+
+    **A global layer needs the ``global_policy_admin`` connection (5.37, D54).** It applies
+    to every engagement, so writing one is not the runtime role's to do: the database
+    refuses ``cyberorch_app`` an INSERT without an engagement, and this function says so by
+    name instead of leaving the caller with an RLS error. Such a call passes
+    ``engagement_id=None`` and a connection opened as ``global_policy_admin`` -- in practice
+    ``scripts/manage_global_policy.py``. An engagement-scoped layer is unchanged: it is
+    written on the ordinary engagement connection.
 
     Returns the new row's id, which is what ``current_policy_version`` reports
     once this layer is active, so a caller can record what it published against.
@@ -113,11 +125,26 @@ def publish_policy_layer(
         )
     if not actor:
         raise PolicyLayerError("policy layer writes must name an actor (§4.4)")
+    if scoped_to_engagement and not engagement_id:
+        raise PolicyLayerError("an engagement-scoped layer must name its engagement_id")
+    if layer == "customer" and not scoped_to_engagement and not customer_id:
+        # ACCEPTANCE 5.35. A row with neither an engagement nor a customer applies to every
+        # engagement of every customer, so a 'customer' layer published without naming one
+        # would be the cross-customer leak again, reached by omission. Confined to a single
+        # engagement it is harmless, so that case is left alone.
+        raise PolicyLayerError(
+            "a customer layer published globally must name its customer_id: without one it "
+            "would apply to every customer's engagements (ACCEPTANCE 5.35)"
+        )
 
     if layer == EMERGENCY_OVERLAY:
         # Raises EmergencyOverlayError, which callers may want to catch
         # separately from a malformed request.
         validate_emergency_overlay(document)
+
+    if not scoped_to_engagement:
+        # Checked after the validation above so a malformed request is still reported as one.
+        assert_global_policy_admin(conn)
 
     row_id = conn.execute(
         text("""
@@ -162,9 +189,16 @@ def publish_policy_layer(
 
 
 def deactivate_policy_layer(
-    conn: Connection, *, engagement_id: str, layer_id: int, actor: str
+    conn: Connection, *, engagement_id: str | None = None, layer_id: int, actor: str
 ) -> bool:
     """Retire a layer. Soft, like the registries.
+
+    **A global layer is retired by ``global_policy_admin`` only (5.37, D54).** Retiring an
+    emergency overlay is a relaxation, and it used to be reachable from any engagement's
+    runtime connection. The database now refuses that; this function raises first, naming the
+    connection that is needed. ``engagement_id`` is for an engagement-scoped layer and may be
+    left out for a global one. A layer the connection cannot see (an engagement-scoped row
+    from the global role, or another engagement's) reports ``False``, like an absent one.
 
     This does not revoke capabilities directly, and removing a layer can only
     widen the effective policy — allow lists intersect, deny lists union, rate
@@ -188,11 +222,17 @@ def deactivate_policy_layer(
     ).mappings().one_or_none()
     if before is None:
         return False
+    if before["engagement_id"] is None:
+        assert_global_policy_admin(conn)
 
-    conn.execute(
+    retired = conn.execute(
         text("UPDATE policy_layers SET active = FALSE WHERE id = :lid"),
         {"lid": layer_id},
-    )
+    ).rowcount
+    if retired != 1:
+        # Row-level security can hide a row from an UPDATE that the SELECT above saw. Never
+        # audit a retirement that did not happen.
+        return False
     # D11-7: deactivating a global layer is a global operation. The layer's own
     # engagement_id decides — NULL means it was global — not the engagement the
     # deactivator is connected through.
@@ -258,17 +298,76 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
 #: by discipline. ``test_the_listing_returns_exactly_the_rows_the_merge_consumed``
 #: still watches the statements ``load_effective_policy`` actually issues, so a
 #: future edit that stops using this helper is caught rather than assumed away.
-_APPLICABLE = """
+#:
+#: **Three readers, one predicate (D54).** ``current_policy_version`` in the broker had kept
+#: a hand-written copy of the first two lines of this WHERE, which the two functions above
+#: never noticed because nothing tied it to them. It now calls :func:`max_applicable_layer_id`
+#: below, and ``test_one_predicate_feeds_every_reader`` fails on any other read of the table.
+#:
+#: **Customer scope (ACCEPTANCE 5.35).** A layer that names a ``customer_id`` applies only to
+#: engagements of that customer, whatever the layer is called; one that names none applies as
+#: before. Before D54 this clause did not exist, and a ``customer`` layer published for one
+#: customer was in force for every engagement in the database (executed: an ``ALLOW`` for
+#: ``CUST-ALPHA`` turned ``DENY`` into ``ALLOW`` for a ``CUST-BETA`` engagement). The
+#: engagement's own customer comes from its row; ``:cust`` supplies it only for the one caller
+#: whose row does not exist yet (``create_engagement`` computing the version it is about to
+#: store). An engagement that has no row and is given no customer matches no customer-scoped
+#: layer -- fail closed, never "everyone's".
+#:
+#: **The frozen baseline (ACCEPTANCE 5.20, D54).** §4.5: the global baseline is frozen when an
+#: engagement is created, and only the emergency overlay reaches an open engagement afterwards.
+#: Decided: only the *global baseline* freezes (``layer = 'baseline_global'`` with a NULL
+#: ``engagement_id``); customer layers, engagement layers and the overlay stay live. A frozen
+#: engagement (``baseline_frozen_through`` set) is governed by the baseline rows that were in
+#: force at its freeze point, in ``policy_change_seq`` order: published before it, and either
+#: still active or retired *after* it. A baseline published later never reaches it, tightening or
+#: widening; one retired later is still in force for it. ``NULL`` means no freeze was recorded and
+#: the row is judged as it always was (``active``) -- absent means unknown, never "frozen at 0".
+#: This is one extra clause on one category of row, in this one statement; the merge, the
+#: listing and the policy version all read it from here.
+_FROZEN_POINT = (
+    "(SELECT e.baseline_frozen_through FROM engagements e WHERE e.engagement_id = :eid)"
+)
+_IS_GLOBAL_BASELINE = "layer = 'baseline_global' AND engagement_id IS NULL"
+_ELIGIBLE = """(engagement_id IS NULL OR engagement_id = :eid)
+      AND (customer_id IS NULL
+           OR customer_id = COALESCE(
+                (SELECT e.customer_id FROM engagements e WHERE e.engagement_id = :eid),
+                :cust))"""
+
+_APPLICABLE = f"""
     FROM policy_layers
-    WHERE active IS TRUE
-      AND (engagement_id IS NULL OR engagement_id = :eid)
+    WHERE {_ELIGIBLE}
+      AND CASE
+            WHEN {_IS_GLOBAL_BASELINE} AND {_FROZEN_POINT} IS NOT NULL
+              THEN COALESCE(created_seq, 0) < {_FROZEN_POINT}
+                   AND (active IS TRUE OR deactivated_seq > {_FROZEN_POINT})
+            ELSE active IS TRUE
+          END
 """
 
 
-def _select_applicable(conn: Connection, engagement_id: str, columns: str):
+def _select_applicable(
+    conn: Connection, engagement_id: str, columns: str, *, customer_id: str | None = None,
+):
     return conn.execute(
-        text(f"SELECT {columns} {_APPLICABLE} ORDER BY id"), {"eid": engagement_id},
+        text(f"SELECT {columns} {_APPLICABLE} ORDER BY id"),
+        {"eid": engagement_id, "cust": customer_id},
     ).mappings().all()
+
+
+def max_applicable_layer_id(
+    conn: Connection, engagement_id: str, *, customer_id: str | None = None,
+) -> int:
+    """The highest id among the layers in force here -- the policy version (§4.5).
+
+    Exists so the broker's ``current_policy_version`` reads the same set the merge and the
+    listing do, from the same predicate, instead of describing it a second time.
+    """
+    return conn.execute(
+        text(f"SELECT coalesce(max(id), 0) {_APPLICABLE}"),
+        {"eid": engagement_id, "cust": customer_id},
+    ).scalar_one()
 
 
 @dataclass(frozen=True)
@@ -354,6 +453,7 @@ def list_effective_policy_layers(
     layers: list[EffectiveLayer] = []
     for row in rows:
         is_global = row["engagement_id"] is None
+        is_customer = is_global and row["customer_id"] is not None
         published = attribution.get(row["id"])
         note = None
         if published is None:
@@ -367,7 +467,7 @@ def list_effective_policy_layers(
             )
         layers.append(EffectiveLayer(
             id=row["id"], layer=row["layer"], version=row["version"],
-            scope=GLOBAL if is_global else ENGAGEMENT,
+            scope=CUSTOMER if is_customer else (GLOBAL if is_global else ENGAGEMENT),
             engagement_id=row["engagement_id"], customer_id=row["customer_id"],
             document=row["document"] or {}, created_at=row["created_at"],
             published_by=published["actor"] if published else None,
@@ -397,6 +497,105 @@ def _publication_audit(
         {"ids": [str(i) for i in layer_ids]},
     ).mappings().all()
     return {int(row["subject_id"]): row for row in rows}
+
+
+def has_global_baseline(
+    conn: Connection, engagement_id: str, *, customer_id: str | None = None
+) -> bool:
+    """Is a global baseline in force for an engagement created now (5.20, D54)?
+
+    Asked of the shared applicability fragment, not of a query of its own: it is "would the merge
+    see a global ``baseline_global`` row for a live engagement of this customer", and the answer
+    for an engagement whose row does not exist yet is exactly what ``create_engagement`` needs to
+    know before it freezes one. A baseline scoped to another customer does not count (5.35); an
+    engagement-scoped row that merely carries the name does not either.
+    """
+    rows = _select_applicable(
+        conn, engagement_id, "id, layer, engagement_id", customer_id=customer_id)
+    return any(r["layer"] == "baseline_global" and r["engagement_id"] is None for r in rows)
+
+
+PUBLISHED_AFTER_FREEZE = "published_after_freeze"
+RETIRED_AFTER_FREEZE = "retired_after_freeze"
+
+
+@dataclass(frozen=True)
+class FrozenOutLayer:
+    """A global-baseline change the engagement's freeze deliberately did not follow (D54).
+
+    ``change`` is ``published_after_freeze`` (a newer baseline: **not** in force for this
+    engagement) or ``retired_after_freeze`` (a baseline row that was in force at the freeze and
+    has since been retired: **still** in force for this engagement, ``still_applied``). It is a
+    report -- see :func:`list_frozen_out_baseline_changes` -- and decides nothing.
+    """
+
+    id: int
+    layer: str
+    version: int
+    customer_id: str | None
+    document: Mapping[str, Any]
+    change: str
+    still_applied: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "layer": self.layer, "version": self.version,
+            "customer_id": self.customer_id, "document": dict(self.document),
+            "change": self.change, "still_applied": self.still_applied,
+        }
+
+
+def list_frozen_out_baseline_changes(
+    conn: Connection, engagement_id: str
+) -> tuple[FrozenOutLayer, ...]:
+    """Which global-baseline changes this engagement's freeze left out (D54, report-only).
+
+    §4.5 makes the answer to "why does this engagement not have the new deny" *by design* -- it
+    froze -- and by design is the kind of answer that is invisible without SQL, which is
+    DEFERRED 11.1 again. So this reports it, in the D14 spirit: **it reports, it does not
+    decide.** Nothing here feeds the merge, the listing's rows or the policy version, and it
+    writes nothing.
+
+    Two kinds, both positions read from ``policy_change_seq``: a baseline **published after** the
+    freeze that is still active (not applied), and a baseline **retired after** the freeze that
+    was in force at it (still applied, so the engagement has not followed the retirement). A row
+    published and retired after the freeze changed nothing for anyone and is not listed. An
+    engagement with no recorded freeze (``baseline_frozen_through`` NULL) has nothing frozen
+    out: its baseline is live, and the result is empty.
+
+    The eligibility clause (whose rows these could be) is the merge's own, ``_ELIGIBLE``.
+    """
+    frozen = conn.execute(
+        text(f"SELECT {_FROZEN_POINT}"), {"eid": engagement_id},
+    ).scalar_one()
+    if frozen is None:
+        return ()
+    rows = conn.execute(
+        text(f"""
+            SELECT id, layer, version, customer_id, document, active,
+                   COALESCE(created_seq, 0) AS created_seq, deactivated_seq
+            FROM policy_layers
+            WHERE {_ELIGIBLE} AND {_IS_GLOBAL_BASELINE}
+            ORDER BY id
+        """),
+        {"eid": engagement_id, "cust": None},
+    ).mappings().all()
+    out: list[FrozenOutLayer] = []
+    for row in rows:
+        newer = row["created_seq"] >= frozen
+        if newer and row["active"]:
+            change, applied = PUBLISHED_AFTER_FREEZE, False
+        elif (not newer and not row["active"]
+              and row["deactivated_seq"] is not None and row["deactivated_seq"] > frozen):
+            change, applied = RETIRED_AFTER_FREEZE, True
+        else:
+            continue
+        out.append(FrozenOutLayer(
+            id=row["id"], layer=row["layer"], version=row["version"],
+            customer_id=row["customer_id"], document=row["document"] or {},
+            change=change, still_applied=applied,
+        ))
+    return tuple(out)
 
 
 def load_effective_policy(
@@ -431,13 +630,20 @@ def load_effective_policy(
 
 __all__ = [
     "EMERGENCY_OVERLAY",
+    "CUSTOMER",
     "ENGAGEMENT",
     "GLOBAL",
     "EffectiveLayer",
     "EmergencyOverlayError",
+    "FrozenOutLayer",
+    "PUBLISHED_AFTER_FREEZE",
     "PolicyLayerError",
+    "RETIRED_AFTER_FREEZE",
     "deactivate_policy_layer",
+    "has_global_baseline",
     "list_effective_policy_layers",
+    "list_frozen_out_baseline_changes",
     "load_effective_policy",
+    "max_applicable_layer_id",
     "publish_policy_layer",
 ]

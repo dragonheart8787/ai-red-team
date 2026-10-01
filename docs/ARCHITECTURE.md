@@ -384,6 +384,8 @@ Effective Policy =
 `Emergency Overlay` 是專門給「發現 policy engine 本身有漏洞，需要立刻全域收緊」用的通道，跟 baseline 分開存放、分開審核（例如只能新增 deny 規則，schema 上直接不允許 allow 欄位），這樣不需要動到既有 Engagement 的授權記錄就能 hotfix。
 
 - 加 `policy_snapshot_version` 欄位，Engagement 建立時凍結指向 Baseline Global Snapshot 的版本。
+
+> **D54 pointer（原文不改）：** 上面這條在 D39 之前只是一個從未被讀取的欄位。Baseline 凍結現已實作（`ACCEPTANCE_MVP1_AGENTS.md` **5.20**、`docs/D54_POLICY_SNAPSHOT_FREEZE_DESIGN.md`）：只凍結 `baseline_global`（全域）；建立之後才發布或被停用的 baseline 都不影響已建立的 engagement，只有 Emergency Overlay 能穿透。凍結點不是 `policy_snapshot_version`，而是 `engagements.baseline_frozen_through`（`policy_change_seq` 上的位置）。
 - `data_access.deny` 和 `scope.deny` 在三層（含 Emergency Overlay 共四層）merge 時做**聯集**（denylist 只會變多不會變少），`scope.allow` 做**交集**（allowlist 只會變窄不會變寬）——這是 §1.2(b) 提到的漏洞的具體修法，必須寫成 code，不能只在文件裡描述。
 
 **修正（v0.3）——上面這段程式碼本身有一個嚴重的 algebra bug，這輪 review 抓到的：`intersect`/`union`/`min` 沒有定義「這一層沒設定這個欄位」是什麼意思。** 例如 Emergency Overlay 的 schema 只允許新增 deny 規則，本來就不該有 `scope_allow`；但如果程式碼把「沒設定」當成字面上的空集合 `[]`，`intersect(GlobalAllow, [], CustomerAllow, EngagementAllow) = []`——一啟用 Emergency Overlay，整個 Engagement 會被意外全部 deny。反過來 `actions.get(k, DENY)` 也有對稱的問題：如果某個 action key 在某層完全沒提到，`get` 預設回傳 `DENY` 會讓「沒表態」被誤判成「明確禁止」，跟前面 allow-list 的問題方向相反但一樣是 bug。
@@ -548,6 +550,8 @@ decision := "ALLOW" if {
     count(approval_reasons) == 0
 }
 ```
+
+> **D20 更新（此片段中的 `untrusted_discovery_source` 規則已被取代）**：上面 `input.action.discovery.source == "web_content"` 是原始寫法，保留作為設計歷程。現行規則改以 `input.action.discovery.introduced_by_untrusted == true` 觸發（`control_plane/policy/rego/authz.rego`）；該事實由 `agents/llm/worker_base.py::_discovery_provenance` 確定性計算，Worker 不再自報 `discovery.source`。授權面不變：這條規則仍只是 `approval_reasons`，只能加嚴。詳見 `docs/ADR_DISCOVERY_SOURCE.md`，以及 §8.9 的對應更新。
 Precedence 固定是 `DENY > HUMAN_APPROVAL > ALLOW`，這樣不管未來加多少條 deny/approval 規則，都不會出現「兩條 complete rule 同時成立」的 evaluation conflict——這也是 OPA 官方推薦處理多條件政策的慣用寫法（partial set rule 天生允許多條同時成立，不會像 complete rule 那樣衝突）。
 
 **修正（v0.2 保留，v0.3 進一步拆分）——OPA 的輸入不能全部信任 Policy Reviewer AI。**
@@ -840,6 +844,8 @@ v0.2 原本把這兩件事混進同一個 `target_source` 欄位（`dns_resolved
 > **Discovery can create candidate assets. Discovery can never create authorization.**
 
 具體規則：`discovery.source == "web_content"`（從網頁內容、使用者可控文字擷取）一律強制 HUMAN_APPROVAL，不管 Policy Reviewer 給的 risk_hint 是什麼（§5 Rego 的 `approval_reasons`）；`discovery.source == "dns"` 只代表「連線路由資訊」，要執行任何 action 前仍然要在 `authorization.scope_object_id` 查到對應的 scope object，且該 scope object 的 `allowed_actions` 要涵蓋這個 action——**單純因為 IP 是從 scope 內 domain 解析出來的，不足以自動授權對這個 IP 做 `network.scan`**（見 §4.1.5 的具體例子）。
+
+> **D20 更新（上一段的觸發條件已改）**：「`discovery.source == "web_content"` 一律強制 HUMAN_APPROVAL」是 D20 之前的寫法，原文保留作為設計歷程。D13/D15 證明它有兩個洞：lure 藏在 nmap banner 這類非 web 通道時不會觸發；而且 `source` 由 Worker 自報，同一份 evidence 會分裂成 8/10 對 2/10。現行做法：升級的觸發條件是 pipeline 確定性計算的事實 `discovery.introduced_by_untrusted`（「不是 offered scope object、不是工具實測觀察到的身分、只出現在不可信內容中」），`source` 只剩描述性的管道標籤，Worker 不再回報它。`discovery.source == "dns"` 那句與 I8 本身不變。決定與理由見 `docs/ADR_DISCOVERY_SOURCE.md`（D20，Option A、strict；D52 對「同一個目標」與 `url` 型目標的補強見其 §8）。
 
 這條防線跟 §5 的 Authorization/Metadata Resolver 是同一種設計哲學的兩個應用：**AI 的語意判斷只能拿來加嚴，事實性的、影響「能不能執行」的關鍵欄位一律要有 deterministic 的授權來源，不能靠發現方式的可信度替代。**
 

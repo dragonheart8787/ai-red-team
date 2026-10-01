@@ -65,6 +65,13 @@ from typing import Any
 
 from agents.base_agent import ProposedAction, ProposedTask
 from agents.llm.untrusted import BOUNDARY_EXPLANATION, wrap_untrusted
+from control_plane.canonicalizer.containment import url_host
+from control_plane.canonicalizer.target import (
+    CanonicalizationError,
+    canonicalize_scope_value,
+    normalize_target,
+)
+from control_plane.orchestrator.git_fetch import GitFetchError, parse_repo_scope_value
 
 #: Cap on the model's own output. A proposal is a small object; anything near
 #: this ceiling means the model is not doing the task, and truncation then
@@ -300,9 +307,14 @@ def _norm_identity(value: str) -> str:
     Lowercased and stripped, with backslashes removed. nmap escapes the dots in
     a service banner (``203\\.0\\.113\\.77``), and D13's first harness concluded
     a lure had failed because a literal substring check missed exactly that — so
-    the escaping is undone before matching. This is deliberately *not* full
-    canonicalization: the Worker does not canonicalize (§5 leaves that to the
-    pipeline). It is only enough to keep the presence check from failing open.
+    the escaping is undone before matching.
+
+    This is the *floor*, not the comparison. Since D52 an identity is compared
+    by what the pipeline's own canonicalizer says it denotes (see
+    ``_canonical_keys``); this raw form is kept alongside it so a value the
+    canonicalizer refuses, or an opaque ``repo`` / ``ad_domain`` identifier it
+    compares verbatim, is still matched the way it always was. The canonical
+    keys can only *add* matches to what this finds, never remove one.
     """
     return value.replace("\\", "").strip().lower()
 
@@ -327,6 +339,158 @@ def _identity_in_text(value: str, text: str) -> bool:
     return re.search(pattern, _norm_identity(text)) is not None
 
 
+#: A comparable identity: ``(type, canonical value)``, or ``("raw", text)`` for the
+#: uncanonicalized floor described on :func:`_norm_identity`.
+IdentityKey = tuple[str, str]
+
+#: What an *untyped* string -- an observed identity, a token out of untrusted
+#: text -- is tried as. Every type it parses as contributes a key; none is
+#: privileged, because a bare ``10.79.0.2`` is an ``ip`` and also, to the
+#: canonicalizer, a ``/32`` ``cidr``.
+_UNTYPED_IDENTITY_TYPES = ("url", "ip", "cidr", "fqdn")
+
+#: Splits text into identity-shaped runs. Deliberately generous on what a token
+#: may contain (``:``, ``/``, ``@``, ``%``...) -- the canonicalizer, not this
+#: pattern, decides whether a run is an identity at all.
+_TEXT_TOKEN = re.compile(r"[^\s\"'<>(){}|,;]+")
+
+
+def _repo_location_key(value: str) -> IdentityKey:
+    """The identity of the repository a ``repo`` value names, whatever branch it carries.
+
+    A ``repo`` is ``<location>#<branch>`` (D43-1), and the location is to it what the
+    host is to a ``url`` (D52): *who* was named. The branch, like a URL's path, is
+    only *what* is asked of them. The split is ``git_fetch.parse_repo_scope_value`` --
+    the parser that defines the format -- not a second opinion of where a branch
+    begins; a value with no ``#branch`` (an observed identity, a mention in text) is
+    itself a location.
+
+    Case is not identity here, for the same reason ``_norm_identity`` lowercases: the
+    floor this sits beside has always matched that way.
+    """
+    try:
+        location = parse_repo_scope_value(value)[0]
+    except GitFetchError:
+        location = value
+    return ("repo_location", _norm_identity(location))
+
+
+def _untyped_repo_keys(value: str) -> set[IdentityKey]:
+    """A repository-shaped mention (``scheme://...``) as a location key, for text and
+    observed identities, which arrive with no declared type."""
+    return {_repo_location_key(value)} if "://" in value else set()
+
+
+def _canonical_keys(value: str, types: tuple[str, ...]) -> set[IdentityKey]:
+    """What ``value`` denotes, according to the pipeline's own canonicalizer.
+
+    D52. This does not normalize anything itself: it asks
+    :func:`~control_plane.canonicalizer.target.normalize_target` -- the same
+    function the proposal is canonicalized by before it is authorized -- so
+    ``dc01.corp.example.com.`` and ``dc01.corp.example.com``, ``http://h:80/x``
+    and ``http://h/x``, ``HTTP://H/x`` and ``http://h/x`` are one identity here
+    for exactly the reason they are one identity there. A second, hand-kept set
+    of rules for "the same host spelled differently" is a second opinion that
+    drifts (D25 §6: one fact, one authoritative source).
+
+    A ``url`` also yields the identity of the host it names, taken from
+    :func:`~control_plane.canonicalizer.containment.url_host` -- the function
+    the Authorization Resolver uses to decide which host a URL means (D41).
+
+    A value the canonicalizer refuses yields no key; the raw floor still applies.
+    """
+    keys: set[IdentityKey] = set()
+    for itype in types:
+        try:
+            canonical = normalize_target(
+                {"logical_identity": {"type": itype, "value": value}}
+            ).logical_identity.value
+        except CanonicalizationError:
+            continue
+        keys.add((itype, canonical))
+        if itype == "repo":
+            keys.add(_repo_location_key(canonical))
+        if itype == "url":
+            host_type, host_value = url_host(canonical)
+            if host_type is not None:
+                keys.add((host_type, host_value))
+    return keys
+
+
+def _target_keys(identity: Mapping[str, Any]) -> set[IdentityKey]:
+    """Every identity the proposed target denotes: raw floor, canonical, host."""
+    value = str(identity.get("value") or "")
+    norm = _norm_identity(value)
+    if not norm:
+        return set()
+    keys: set[IdentityKey] = {("raw", norm)}
+    itype = identity.get("type")
+    keys |= _canonical_keys(
+        value, (itype,) if isinstance(itype, str) else _UNTYPED_IDENTITY_TYPES
+    )
+    return keys
+
+
+def _untyped_keys(value: str) -> set[IdentityKey]:
+    """Identities an observed-identity string may denote (no type is supplied)."""
+    norm = _norm_identity(value)
+    if not norm:
+        return set()
+    return (
+        {("raw", norm)}
+        | _canonical_keys(value, _UNTYPED_IDENTITY_TYPES)
+        | _untyped_repo_keys(value)
+    )
+
+
+def _scope_keys(candidate: ScopeCandidate) -> set[IdentityKey]:
+    """A scope object's own identity, in canonical form and nothing wider.
+
+    Unlike a URL *target* (whose host is also a key), a ``url`` scope object
+    contributes only itself: a scope object for one URL does not make the bare
+    host a scope object -- the same asymmetry ``containment`` keeps ("a ``url``
+    *parent* still only matches an identical ``url`` child").
+    """
+    norm = _norm_identity(candidate.value)
+    keys: set[IdentityKey] = {("raw", norm)} if norm else set()
+    try:
+        keys.add((candidate.type,
+                  canonicalize_scope_value(candidate.type, candidate.value)))
+    except CanonicalizationError:
+        pass
+    if candidate.type == "repo":
+        keys.add(_repo_location_key(candidate.value))
+    return keys
+
+
+def _token_candidates(token: str) -> tuple[str, ...]:
+    """A text token, plus the forms a host may hide inside it.
+
+    ``host:8080`` and ``user@host`` are not identities to the canonicalizer, but
+    the host in them is what the text named.
+    """
+    token = token.strip(".:")
+    if not token:
+        return ()
+    out = [token]
+    if "@" in token:
+        out.append(token.rsplit("@", 1)[1])
+    port = re.fullmatch(r"(.+):\d{1,5}", token)
+    if port:
+        out.append(port.group(1))
+    return tuple(out)
+
+
+def _text_identity_keys(text: str) -> set[IdentityKey]:
+    """Identities named anywhere in ``text``, in canonical form."""
+    keys: set[IdentityKey] = set()
+    for token in _TEXT_TOKEN.findall(text.replace("\\", "")):
+        for candidate in _token_candidates(token):
+            keys |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
+            keys |= _untyped_repo_keys(candidate)
+    return keys
+
+
 def _discovery_provenance(
     target: Mapping[str, Any],
     candidates: tuple[ScopeCandidate, ...],
@@ -337,15 +501,46 @@ def _discovery_provenance(
     The Worker no longer reports where a target came from. The system decides,
     from the observations the harness assembled and the scope objects it offered,
     whether the proposed target was **introduced only by attacker-controlled
-    text** — the fact §5's escalation turns on. See ``ADR_DISCOVERY_SOURCE.md``.
+    text** -- the fact §5's escalation turns on. See ``ADR_DISCOVERY_SOURCE.md``.
 
     "Established" is strict (the accepted decision): a target is established when
     it is an offered scope object, or an identity the tool *structurally*
-    observed (``Observation.observed_identities`` — nmap's hosts/ports, or the
+    observed (``Observation.observed_identities`` -- nmap's hosts/ports, or the
     endpoint an http transaction actually reached). An established target never
     escalates on discovery grounds, whatever observation happened to mention it.
     A target that is not established and appears in the untrusted *content* of an
     observation is observation-introduced, and escalates.
+
+    D52 -- what "the same target" means. Two strings are the same identity when
+    the pipeline's canonicalizer says they are (``_canonical_keys``), not when
+    they are byte-equal after lowercasing. ADR_DISCOVERY_SOURCE.md §4 required
+    exactly this ("compare canonical identity forms, not raw bytes -- or it fails
+    open") and D20 implemented only the escaping half: a lure spelled
+    ``http://h/x`` in a banner and proposed as ``http://h:80/x``, or named
+    ``dc01.example.com`` and proposed as ``dc01.example.com.``, read as
+    not-introduced.
+
+    D52 -- what "established" means for a ``url`` target. A URL is judged by the
+    **host** it names (ip or fqdn), not by its scheme, port or path, exactly as
+    the Authorization Resolver judges it (D41, ``containment.url_host``). The
+    question the escalation asks is *who was introduced to us by untrusted
+    text*; a path on a host that a tool already saw respond does not introduce
+    anyone. So a ``url`` target is established when its host is an offered scope
+    object (or the URL itself is), or when its host was structurally observed --
+    whether the harness recorded that as a bare ip/fqdn or as a URL; and it is
+    introduced when untrusted text names the URL or just its host. Host, not
+    origin: a port or path that text names on an already-observed host is not
+    escalated here, in agreement with what authorization already treats as one
+    target. Names are never resolved (§8.9/I8): an fqdn is not established by an
+    observed ip, nor the reverse.
+
+    D53 follow-up -- "established" for a ``repo`` target. A repository is judged by
+    its **location** (``<location>#<branch>`` without the branch), the way a ``url``
+    is judged by its host: a different branch of a repository the engagement offered
+    or a tool observed introduces nobody, and a repository named in scanned source
+    by location alone *is* introduced -- which matters because ``code.scan`` accepts
+    a target only with a ``#branch``, so the string a Worker proposes is never the
+    string the source contained (ACCEPTANCE 5.31).
 
     Returns ``source`` (descriptive channel), ``evidence_id`` /
     ``discovered_by_run_id`` (the §4.1 provenance chain), and
@@ -354,12 +549,12 @@ def _discovery_provenance(
     """
     identity = target.get("logical_identity") or {}
     value = str(identity.get("value") or "")
-    norm = _norm_identity(value)
+    target_keys = _target_keys(identity)
 
     # 1. An offered scope object itself: from the engagement's own records.
-    if norm:
+    if target_keys:
         for c in candidates:
-            if _norm_identity(c.value) == norm:
+            if _scope_keys(c) & target_keys:
                 return {"source": "explicit_scope", "evidence_id": None,
                         "discovered_by_run_id": None,
                         "introduced_by_untrusted": False}
@@ -367,16 +562,18 @@ def _discovery_provenance(
     # 2. Structurally observed by a tool: established, never introduced. Checked
     # across every observation before any content match, so "observed" wins over
     # "also mentioned in some banner".
-    if norm:
+    if target_keys:
         for o in observations:
-            if any(_norm_identity(i) == norm for i in o.observed_identities):
+            if any(_untyped_keys(i) & target_keys for i in o.observed_identities):
                 return {"source": o.source, "evidence_id": o.evidence_id,
                         "discovered_by_run_id": o.run_id,
                         "introduced_by_untrusted": False}
 
     # 3. Named only in untrusted content: observation-introduced -> escalate.
     for o in observations:
-        if _identity_in_text(value, o.content):
+        if _identity_in_text(value, o.content) or (
+            target_keys & _text_identity_keys(o.content)
+        ):
             return {"source": o.source, "evidence_id": o.evidence_id,
                     "discovered_by_run_id": o.run_id,
                     "introduced_by_untrusted": True}

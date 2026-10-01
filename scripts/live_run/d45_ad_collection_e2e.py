@@ -105,6 +105,7 @@ from control_plane.state.db import (  # noqa: E402
     registry_admin_scope,
 )
 from control_plane.vault.vault import store_credential  # noqa: E402
+from scripts.live_run.live_run import publish_baseline  # noqa: E402
 from tool_gateway.adapters import ad_collector  # noqa: E402
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable  # noqa: E402
 
@@ -268,6 +269,10 @@ def part_one_two_three(*, domain: str, username: str, secret: str,
     dispatch -> real bloodhound-python -> Security Graph attempt -> audit.
     """
     engagement_id = uid("ENG-D45")
+    # 5.20 (D54): create_engagement refuses when no global baseline is in force, and freezes the one
+    # that is. The ALLOW this run needs is its own engagement-scoped layer (see setup()); the
+    # baseline is only the prerequisite, published by the shared harness helper.
+    publish_baseline(engagement_id)
     with registry_admin_scope(engagement_id) as conn:
         create_engagement(
             conn, engagement_id=engagement_id, customer_id="CUST-D45-LOCAL", actor=ACTOR,

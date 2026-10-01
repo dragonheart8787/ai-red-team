@@ -435,6 +435,141 @@ test_code_scan_against_a_deny_listed_repo_is_denied_not_escalated if {
 	"forbidden_data" in r.deny_reasons
 }
 
+# code.secrets (D55, docs/ADR_GITLEAKS.md D55-2). D43-3 is carried, not
+# inherited: the `code.*` pattern already matches it, and these three cases
+# are what stop that from being an accident of a wildcard. The argument for it
+# is stronger than for code.scan -- this action's whole output is an inventory of
+# where the customer's credentials are -- and the last case is the reason a
+# repository nobody has classified must not be scanned unattended.
+code_secrets_base := object.union(code_scan_base, {
+	"action": {"action": "code.secrets"},
+	"policy": {
+		"actions": {"code.secrets": "ALLOW"},
+		"scope_objects": [{
+			"id": "SCOPE-2",
+			"type": "repo",
+			"value": "github.com/acme/backend:main",
+			"allowed_actions": ["code.secrets"],
+		}],
+	},
+})
+
+test_code_secrets_against_an_unclassified_repo_needs_a_human if {
+	r := authz.result with input as object.union(code_secrets_base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [],
+	}})
+
+	r.decision == "HUMAN_APPROVAL"
+	"unknown_classification_for_action_class" in r.approval_reasons
+}
+
+test_code_secrets_against_a_classified_non_sensitive_repo_runs_unattended if {
+	r := authz.result with input as object.union(code_secrets_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["source_code"],
+		"resource_class": ["repository"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+test_code_secrets_against_a_deny_listed_repo_is_denied_not_escalated if {
+	r := authz.result with input as object.union(code_secrets_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["PII"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "DENY"
+	"forbidden_data" in r.deny_reasons
+}
+
+# A scope for code.scan does not authorize code.secrets: allowed_actions is per
+# action, and reading a repository's history for credentials is not a
+# consequence of being allowed to run a static analyzer over its tree.
+test_a_code_scan_scope_does_not_authorize_code_secrets if {
+	r := authz.result with input as object.union(code_secrets_base, {
+		"policy": {
+			"actions": {"code.secrets": "ALLOW"},
+			"scope_objects": [{
+				"id": "SCOPE-2",
+				"type": "repo",
+				"value": "github.com/acme/backend:main",
+				"allowed_actions": ["code.scan"],
+			}],
+		},
+		"resource_metadata": {
+			"known": true,
+			"data_class": ["source_code"],
+			"classification": {"authority": "AUTHORITATIVE"},
+			"observations": [],
+		},
+	})
+
+	r.decision == "DENY"
+	"target_out_of_scope" in r.deny_reasons
+}
+
+# web.render joined at ACCEPTANCE 5.48, on D32's argument unchanged (a rendered page
+# is the whole document a GET returns, after the target's JavaScript has run). The
+# three cases are D32's own three, for the action D36 added after it.
+web_render_base := object.union(base, {
+	"action": {"action": "web.render"},
+	"policy": {
+		"actions": {"web.render": "ALLOW"},
+		"scope_objects": [{
+			"id": "SCOPE-2",
+			"type": "cidr",
+			"value": "10.20.0.0/24",
+			"allowed_actions": ["network.recon", "network.scan", "web.render"],
+		}],
+	},
+})
+
+test_web_render_against_an_unclassified_host_needs_a_human if {
+	r := authz.result with input as object.union(web_render_base, {"resource_metadata": {
+		"known": false,
+		"data_class": [],
+		"classification": {"authority": "UNKNOWN"},
+		"observations": [],
+	}})
+
+	r.decision == "HUMAN_APPROVAL"
+	"unknown_classification_for_action_class" in r.approval_reasons
+}
+
+test_web_render_against_a_classified_non_sensitive_host_runs_unattended if {
+	r := authz.result with input as object.union(web_render_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["network_service"],
+		"resource_class": ["web_content"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+test_web_render_against_denied_data_is_denied_not_escalated if {
+	r := authz.result with input as object.union(web_render_base, {"resource_metadata": {
+		"known": true,
+		"data_class": ["PII"],
+		"classification": {"authority": "AUTHORITATIVE"},
+		"observations": [],
+	}})
+
+	r.decision == "DENY"
+	"forbidden_data" in r.deny_reasons
+}
+
 test_unknown_classification_blocks_actions_that_write if {
 	r := authz.result with input as object.union(base, {
 		"action": {"writes_data": true},

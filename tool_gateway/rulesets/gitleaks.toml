@@ -1,0 +1,16 @@
+# The Gitleaks configuration every scan runs under (D55), mounted read-only at
+# /rules/gitleaks.toml. It is passed with --config on every run, so the scanned
+# repository's own .gitleaks.toml (which gitleaks would otherwise discover and
+# obey) is never the one in force: a repository must not be able to rewrite the
+# rules its own audit is run with. See docs/ADR_GITLEAKS.md §4.
+#
+# useDefault = true extends the rule set compiled into the pinned gitleaks binary
+# (tool_version() records which). This file adds no rules and no allowlists of
+# its own: an allowlist here would be an unreviewed decision that some secrets do
+# not count. ruleset_version() is a content hash of THIS FILE, so adding a rule or
+# an allowlist changes the execution fingerprint and cannot be served from a
+# cached "clean" run; a change of the *default* rules arrives with a version bump
+# of the binary instead, which changes tool_version.
+
+[extend]
+useDefault = true

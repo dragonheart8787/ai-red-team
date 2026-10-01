@@ -1,5 +1,14 @@
 # ADR: Semgrep — Phase 1 investigation (D43)
 
+Status: **implemented (D43), wired through `propose_action` at D45/D46, private repositories at D44.**
+As implemented: D43-1 repo + mutable branch with the resolved commit in the fingerprint, D43-2
+subdirectory containment refused, D43-3 `code.*` requires a known classification, D43-4 snippets
+redacted before a model reads them (`control_plane/evidence/redaction.py`), D43-5 a control-plane-side
+fetch handed in as a read-only mount, D43-6 private repositories deferred and then delivered by the
+D44 Vault. The second tool of this family, Gitleaks, is `docs/ADR_GITLEAKS.md` (D55).
+
+*(Earlier status line, kept as written. It describes the stage this document was written in, not the current state.)*
+
 Status: **investigation only, D43. No code, schema, migration, or Rego change
 is made until the decisions in §4 are confirmed.** No `semgrep` binary is
 invoked, no repository is cloned, and nothing about D42's BloodHound/Security

@@ -10,6 +10,8 @@
 #   credential_admin the Credential Vault's write path (D44) — a separate
 #                    role, not registry_admin widened; write access to
 #                    credential_material and credentials, nothing else
+#   global_policy_admin the only writer of global policy layers (5.37, D54) —
+#                    an operator's CLI role, never a service's
 #
 # Passwords are never hardcoded here. They are taken from the environment, or
 # from a gitignored .env, or generated randomly on first run and written to
@@ -59,6 +61,7 @@ gen_vault_key() {
 : "${GLOBAL_AUDITOR_PASSWORD:=$(gen_password)}"
 : "${UI_READER_PASSWORD:=$(gen_password)}"
 : "${CREDENTIAL_ADMIN_PASSWORD:=$(gen_password)}"
+: "${GLOBAL_POLICY_ADMIN_PASSWORD:=$(gen_password)}"
 : "${VAULT_MASTER_KEY:=$(gen_vault_key)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
@@ -95,6 +98,7 @@ super_psql \
     -v "global_auditor_password=$GLOBAL_AUDITOR_PASSWORD" \
     -v "ui_reader_password=$UI_READER_PASSWORD" \
     -v "credential_admin_password=$CREDENTIAL_ADMIN_PASSWORD" \
+    -v "global_policy_admin_password=$GLOBAL_POLICY_ADMIN_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -118,6 +122,7 @@ REGISTRY_ADMIN_PASSWORD=${REGISTRY_ADMIN_PASSWORD}
 GLOBAL_AUDITOR_PASSWORD=${GLOBAL_AUDITOR_PASSWORD}
 UI_READER_PASSWORD=${UI_READER_PASSWORD}
 CREDENTIAL_ADMIN_PASSWORD=${CREDENTIAL_ADMIN_PASSWORD}
+GLOBAL_POLICY_ADMIN_PASSWORD=${GLOBAL_POLICY_ADMIN_PASSWORD}
 VAULT_MASTER_KEY=${VAULT_MASTER_KEY}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
@@ -125,6 +130,7 @@ REGISTRY_ADMIN_DATABASE_URL=postgresql+psycopg://registry_admin:${REGISTRY_ADMIN
 GLOBAL_AUDITOR_DATABASE_URL=postgresql+psycopg://global_auditor:${GLOBAL_AUDITOR_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 UI_READER_DATABASE_URL=postgresql+psycopg://ui_reader:${UI_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 CREDENTIAL_ADMIN_DATABASE_URL=postgresql+psycopg://credential_admin:${CREDENTIAL_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+GLOBAL_POLICY_ADMIN_DATABASE_URL=postgresql+psycopg://global_policy_admin:${GLOBAL_POLICY_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 

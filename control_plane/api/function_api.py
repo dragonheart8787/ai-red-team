@@ -58,6 +58,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import unquote_plus
 
 from sqlalchemy import Connection, text
 
@@ -67,6 +68,7 @@ from control_plane.canonicalizer.authorization import resolve_authorization
 from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
 from control_plane.capability.broker import Budget, issue_capability
+from control_plane.evidence.redaction import detect_secret_formats
 from control_plane.orchestrator.dispatch import (
     dispatch_code_scan,
     dispatch_collection,
@@ -76,7 +78,8 @@ from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
 from control_plane.registry.scope_registry import list_scope_objects
-from tool_gateway.registry import side_effect_floor
+from tool_gateway.adapters._http import AdapterError
+from tool_gateway.registry import adapter_for, side_effect_floor
 
 ALLOW = "ALLOW"
 DENY = "DENY"
@@ -356,6 +359,72 @@ def _dispatch_for_action(
     return dispatch_fn(conn, **{k: v for k, v in all_kwargs.items() if k in accepted})
 
 
+#: Deny reasons for a proposal whose request body is refused at the door.
+BODY_INVALID = "web_post_body_invalid"
+BODY_HAS_SECRET_FORMAT = "body_contains_secret_format"
+
+
+def body_secret_formats(body: str) -> tuple[str, ...]:
+    """The known secret formats in a request body, as sent *and* as decoded.
+
+    The redactor's patterns are written against text as a person would read it.
+    A body is often form-encoded (``application/x-www-form-urlencoded`` is the
+    adapter's default), where ``Bearer%20<token>`` or ``%3A``/``%40`` inside a
+    URL credential would pass a check of the raw string on the encoding alone.
+    So both the raw and the percent-decoded form are checked. Still a known set of
+    shapes and no more (see :mod:`control_plane.evidence.redaction`).
+    """
+    found = list(detect_secret_formats(body))
+    for label in detect_secret_formats(unquote_plus(body)):
+        if label not in found:
+            found.append(label)
+    return tuple(found)
+
+
+def refuse_proposed_body(proposal: ProposedAction) -> tuple[str, str] | None:
+    """``(deny_reason, failure)`` if this proposal's body must be refused, else None.
+
+    ACCEPTANCE 5.29, option C. A body is Worker-authored, *constructed* test data.
+    A real secret enters an execution path only through the D44 vault (ADR
+    section 0), so a body that matches a known secret **format** is refused
+    outright -- not masked, because the approved body and the sent body must be
+    the same bytes (D30). Run before ``_persist_proposal`` on purpose: a body
+    that got as far as the proposal row, the reviewer's prompt or the audit
+    trail would already have reached the surfaces the analysis lists, and a
+    refusal after that would be too late.
+
+    Applies only to an adapter that declares ``CARRIES_BODY`` (web.post); for any
+    other action ``body`` is not a field anyone reads. The failure message names
+    the *formats* found, never the value.
+
+    A proposal that names no body is not judged here: it stays what it was, a
+    capability ``build_plan`` refuses as unbuildable, so this change alters no
+    decision for it.
+    """
+    adapter = adapter_for(proposal.action)
+    if adapter is None or not getattr(adapter, "CARRIES_BODY", False):
+        return None
+    target = proposal.target
+    if "body" not in target:
+        return None
+    try:
+        adapter.validate_body(
+            {"body": target["body"], "content_type": target.get("content_type")}
+        )
+    except AdapterError as exc:
+        return BODY_INVALID, str(exc)
+    formats = body_secret_formats(target["body"])
+    if formats:
+        return BODY_HAS_SECRET_FORMAT, (
+            f"the request body matches a known secret format ({', '.join(formats)}). "
+            "A web.post body must be constructed test data; a real credential "
+            "belongs in the D44 vault, which has no delivery path for a request "
+            "body yet (ACCEPTANCE 5.29)"
+        )
+    return None
+
+
+
 def propose_action(
     conn: Connection,
     *,
@@ -406,6 +475,23 @@ def propose_action(
         return ActionOutcome(
             decision=DENY, proposal_id=proposal_id,
             deny_reasons=("target_not_canonicalizable",), failure=str(exc),
+        )
+
+    # --- 1b. The request body, before anything records it ---------------------
+    body_refusal = refuse_proposed_body(proposal)
+    if body_refusal is not None:
+        reason, failure = body_refusal
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="proposal.rejected", subject_type="action_proposal",
+            subject_id=proposal_id, decision=DENY, reasons=(reason,),
+            # The refusal is recorded; the body never is. `failure` names the
+            # formats found and is safe to store.
+            payload={"error": failure, "action": proposal.action},
+        )
+        return ActionOutcome(
+            decision=DENY, proposal_id=proposal_id,
+            deny_reasons=(reason,), failure=failure,
         )
 
     _persist_proposal(conn, engagement_id, proposal_id, proposal, target, agent_id)
@@ -870,6 +956,17 @@ def execution_constraints(
         constraints["port"] = target_block["port"]
     if target_block.get("path") is not None:
         constraints["path"] = target_block["path"]
+    # web.post (5.29, D53): the request body and its content type. Without these
+    # `http_post.build_plan` -- which reads the body from the capability alone, by
+    # design -- raised on every capability issued through here. They are carried
+    # unmodified (never redacted or truncated: what is approved is what is sent,
+    # D30), and only after `propose_action` has refused a body in a known secret
+    # format (`refuse_proposed_body`) or one the adapter would refuse. web.get
+    # ignores them: its `build_plan` reads neither.
+    if target_block.get("body") is not None:
+        constraints["body"] = target_block["body"]
+    if target_block.get("content_type") is not None:
+        constraints["content_type"] = target_block["content_type"]
     if target_block.get("scheme") is not None:
         # https on a non-443 port (the D35 target on 8443) is expressed by the
         # scheme, not inferrable from a bare IP; the adapters read it.
@@ -891,6 +988,11 @@ def execution_constraints(
         constraints["auth_mode"] = target_block["auth_mode"]
     if target_block.get("exclude_paths") is not None:
         constraints["exclude_paths"] = target_block["exclude_paths"]
+    # history_depth (D55): how many commits back code.secrets reads. Carried by the
+    # same rule as every field above; without this line a proposal naming it is
+    # scanned at the adapter's default depth and nothing says so.
+    if target_block.get("history_depth") is not None:
+        constraints["history_depth"] = target_block["history_depth"]
     # dns_server (D49): the nameserver ad_collector.build_plan passes to
     # bloodhound-python's own -ns flag. Carried through by the same rule as
     # every field above -- dispatch_collection, not this function, is what

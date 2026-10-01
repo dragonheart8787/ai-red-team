@@ -138,7 +138,7 @@ def address_contains(network_value: str, child_type: str, child_value: str) -> b
         return False
 
 
-def _url_host(value: str) -> tuple[str, str] | tuple[None, None]:
+def url_host(value: str) -> tuple[str, str] | tuple[None, None]:
     """The ``(type, value)`` of the host a URL names, or ``(None, None)``.
 
     Parsing, not resolution: the host is a substring already present in
@@ -149,6 +149,12 @@ def _url_host(value: str) -> tuple[str, str] | tuple[None, None]:
     (:func:`~control_plane.canonicalizer.target.normalize_ip` /
     :func:`~control_plane.canonicalizer.target.normalize_fqdn`) rather than a
     second, parallel opinion of what makes a valid IP or FQDN.
+
+    Public since D52: the Worker side's discovery-provenance computation
+    (``worker_base._discovery_provenance``) judges a ``url`` target's
+    "established" status by the host it names, and takes that host from here so
+    authorization (D41) and discovery provenance (D20) can never disagree about
+    which host a URL is. Nothing in the control plane imports it back.
 
     Never raises, per this module's own rule: a URL this cannot make sense of
     names no host, and a value that names no host contains nothing.
@@ -229,7 +235,7 @@ def identity_contains(
         return False
 
     if child_type == "url" and parent_type in ("fqdn", "ip", "cidr"):
-        host_type, host_value = _url_host(child_value)
+        host_type, host_value = url_host(child_value)
         if host_type is None:
             return False
         return identity_contains(parent_type, parent_value, host_type, host_value)

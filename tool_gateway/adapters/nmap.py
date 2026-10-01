@@ -40,6 +40,18 @@ TOOL = "nmap"
 WRITES_DATA = False
 CHANGES_STATE = False
 
+#: Whether this action needs a known data classification before it runs (D56). This is a
+#: fact about the action's *name* in control_plane/policy/rego/authz.rego
+#: (requires_known_classification), stated here so that it is a decision and not a
+#: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
+#: D32/D43-3 argued this per action; network.* was left outside the rule as a service
+#: fragment, not a document.
+KNOWN_CLASSIFICATION = (
+    'exempt: network.* reads service banners, fragments incidental to identifying a '
+    "service rather than a resource's whole content; the rule leaves it out on purpose "
+    '(authz.rego, above requires_known_classification)'
+)
+
 #: Raw TCP goes through the namespace, not the egress proxy (§8.3). There is no
 #: application protocol in a port scan for a proxy to read, which is exactly
 #: why §8.3 splits enforcement by protocol in the first place.

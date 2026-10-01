@@ -228,7 +228,9 @@ _SELECT_CAPABILITY = """
 """
 
 
-def current_policy_version(conn: Connection, engagement_id: str) -> int:
+def current_policy_version(
+    conn: Connection, engagement_id: str, *, customer_id: str | None = None,
+) -> int:
     """The version of the policy currently in force for this engagement.
 
     Defined as the highest id among active policy layers that apply here —
@@ -254,15 +256,18 @@ def current_policy_version(conn: Connection, engagement_id: str) -> int:
     The version never repeats: ids come from a sequence and nothing reactivates
     a layer, so a decreased maximum is still a value no earlier capability
     recorded.
+
+    **Not a query of its own (D54).** The set is chosen by the one applicability predicate in
+    ``control_plane/policy/layers.py``, the same one the merge and the listing use, so which
+    layers move this number and which layers are in force cannot differ. This function used to
+    carry a private copy of that predicate, and a customer scoping fix (ACCEPTANCE 5.35) made
+    the cost visible: with two copies, capabilities would have been revoked for another
+    customer's policy. ``customer_id`` is for the one caller whose engagement row does not
+    exist yet, ``create_engagement``.
     """
-    return conn.execute(
-        text("""
-            SELECT coalesce(max(id), 0) FROM policy_layers
-            WHERE active IS TRUE
-              AND (engagement_id IS NULL OR engagement_id = :eid)
-        """),
-        {"eid": engagement_id},
-    ).scalar_one()
+    from control_plane.policy.layers import max_applicable_layer_id
+
+    return max_applicable_layer_id(conn, engagement_id, customer_id=customer_id)
 
 
 def _check_scope_object_still_live(

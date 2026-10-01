@@ -25,6 +25,7 @@ _REGISTRY_ADMIN_ENGINE: Engine | None = None
 _GLOBAL_AUDITOR_ENGINE: Engine | None = None
 _UI_READER_ENGINE: Engine | None = None
 _CREDENTIAL_ADMIN_ENGINE: Engine | None = None
+_GLOBAL_POLICY_ADMIN_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -77,6 +78,20 @@ def credential_admin_url() -> str:
     )
 
 
+def global_policy_admin_url() -> str:
+    """The global policy writer's connection string (5.37, D54).
+
+    Read only by ``global_policy_admin_scope``, which only the operator CLI
+    (``scripts/manage_global_policy.py``) opens; ``tests/test_global_policy_admin.py``
+    fails if any other control-plane, agent or tool-gateway module reaches for it.
+    """
+    return require_env(
+        "GLOBAL_POLICY_ADMIN_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export GLOBAL_POLICY_ADMIN_DATABASE_URL "
+             "for the global_policy_admin role.",
+    )
+
+
 def get_engine() -> Engine:
     global _ENGINE
     if _ENGINE is None:
@@ -125,6 +140,16 @@ def get_ui_reader_engine() -> Engine:
     return _UI_READER_ENGINE
 
 
+def get_global_policy_admin_engine() -> Engine:
+    """Engine for the global policy writer (5.37, D54). Operator CLI only."""
+    global _GLOBAL_POLICY_ADMIN_ENGINE
+    if _GLOBAL_POLICY_ADMIN_ENGINE is None:
+        _GLOBAL_POLICY_ADMIN_ENGINE = create_engine(
+            global_policy_admin_url(), pool_pre_ping=True, future=True
+        )
+    return _GLOBAL_POLICY_ADMIN_ENGINE
+
+
 def get_credential_admin_engine() -> Engine:
     """A fifth pool, for the one role allowed to write credential material (D44).
 
@@ -143,9 +168,10 @@ def get_credential_admin_engine() -> Engine:
 def reset_engine() -> None:
     """Drop the cached engines (tests switch roles between connections)."""
     global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE, _UI_READER_ENGINE
-    global _CREDENTIAL_ADMIN_ENGINE
+    global _CREDENTIAL_ADMIN_ENGINE, _GLOBAL_POLICY_ADMIN_ENGINE
     for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE,
-                   _UI_READER_ENGINE, _CREDENTIAL_ADMIN_ENGINE):
+                   _UI_READER_ENGINE, _CREDENTIAL_ADMIN_ENGINE,
+                   _GLOBAL_POLICY_ADMIN_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
@@ -153,12 +179,14 @@ def reset_engine() -> None:
     _GLOBAL_AUDITOR_ENGINE = None
     _UI_READER_ENGINE = None
     _CREDENTIAL_ADMIN_ENGINE = None
+    _GLOBAL_POLICY_ADMIN_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
 GLOBAL_AUDITOR_ROLE = "global_auditor"
 UI_READER_ROLE = "ui_reader"
 CREDENTIAL_ADMIN_ROLE = "credential_admin"
+GLOBAL_POLICY_ADMIN_ROLE = "global_policy_admin"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -189,6 +217,22 @@ def assert_credential_admin(conn: Connection) -> None:
         raise PermissionError(
             f"credential writes require the {CREDENTIAL_ADMIN_ROLE} connection "
             f"(D44); this connection is {role!r}. Use credential_admin_scope()."
+        )
+
+
+def assert_global_policy_admin(conn: Connection) -> None:
+    """Refuse a global-layer write on a connection that is not global_policy_admin (5.37).
+
+    The database already refuses it (a restrictive RLS policy on ``policy_layers``), and
+    the tests assert that directly; this names the actual mistake -- the wrong connection
+    -- instead of "new row violates row-level security policy" three frames down.
+    """
+    role = conn.execute(text("SELECT current_user")).scalar_one()
+    if role != GLOBAL_POLICY_ADMIN_ROLE:
+        raise PermissionError(
+            f"publishing or retiring a global policy layer requires the "
+            f"{GLOBAL_POLICY_ADMIN_ROLE} connection (5.37); this connection is {role!r}. "
+            "It is an operator's action: use scripts/manage_global_policy.py."
         )
 
 
@@ -316,4 +360,26 @@ def ui_reader_scope(engagement_id: str) -> Iterator[Connection]:
     unbypassable. A console that wants to show two engagements opens this twice.
     """
     with _scoped(get_ui_reader_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def global_policy_admin_scope() -> Iterator[Connection]:
+    """Write a *global* policy layer as ``global_policy_admin`` (5.37, D54).
+
+    No engagement is bound, on purpose: a global layer belongs to none, and a
+    restrictive policy on ``policy_layers`` confines this role to rows with
+    ``engagement_id IS NULL`` whatever an engagement setting might say. The only
+    connection in the system that can publish or retire a baseline, an emergency
+    overlay or a global customer layer.
+
+    **Operator use only.** ``scripts/manage_global_policy.py`` is the intended caller. It
+    is not for the dispatch path, an agent, the console or any service, for the reason
+    that the role exists: retiring an emergency overlay is a relaxation, the same
+    seriousness as the kill switch, and it must be a person's decision made with a
+    credential no automated component holds. ``tests/test_global_policy_admin.py`` scans
+    the control plane, the agents and the tool gateway for any other reference to this
+    function or to its connection string, and fails on one.
+    """
+    with get_global_policy_admin_engine().begin() as conn:
         yield conn

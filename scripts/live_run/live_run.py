@@ -57,7 +57,11 @@ from control_plane.policy.layers import load_effective_policy, publish_policy_la
 from control_plane.provenance import graph  # noqa: E402
 from control_plane.registry.metadata_registry import register_metadata  # noqa: E402
 from control_plane.registry.scope_registry import register_scope_object  # noqa: E402
-from control_plane.state.db import engagement_scope, registry_admin_scope  # noqa: E402
+from control_plane.state.db import (  # noqa: E402
+    engagement_scope,
+    global_policy_admin_scope,
+    registry_admin_scope,
+)
 from tool_gateway.sandbox import (  # noqa: E402
     DockerSandbox,
     SandboxUnavailable,
@@ -140,16 +144,19 @@ def publish_baseline(engagement_id: str) -> tuple[int, bool]:
 
     Returns (policy layer id, whether it was published now).
     """
-    with engagement_scope(engagement_id) as conn:
+    # A global baseline is the global_policy_admin's to write (5.37); this harness is an
+    # operator-run script, so it opens that connection the way the CLI does.
+    with global_policy_admin_scope() as conn:
         existing = conn.execute(
             text("SELECT id FROM policy_layers WHERE active IS TRUE "
-                 "AND engagement_id IS NULL AND layer = 'baseline_global' "
+                 "AND engagement_id IS NULL AND customer_id IS NULL "
+                 "AND layer = 'baseline_global' "
                  "ORDER BY id DESC LIMIT 1")
         ).scalar_one_or_none()
         if existing is not None:
             return int(existing), False
         return publish_policy_layer(
-            conn, engagement_id=engagement_id, layer="baseline_global", version=1,
+            conn, engagement_id=None, layer="baseline_global", version=1,
             document=BASELINE_DOCUMENT, actor=ACTOR,
         ), True
 
@@ -323,12 +330,14 @@ def main() -> int:
 
     engagement_id = uid("ENG-D11")
     customer_id = "CUST-D11-LOCAL"
+    # 5.20 (D54): an engagement freezes the global baseline that exists when it is created, so
+    # the baseline has to exist first -- published after, it would never reach this engagement.
+    policy_version, published_now = publish_baseline(engagement_id)
     seed_engagement(engagement_id, customer_id)
     scope_object_id, asset_id = seed_registries(
         engagement_id, allowlist_cidr=args.allowlist, target_ip=target_ip,
         actions=["network.recon", "network.scan"],
     )
-    policy_version, published_now = publish_baseline(engagement_id)
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
 

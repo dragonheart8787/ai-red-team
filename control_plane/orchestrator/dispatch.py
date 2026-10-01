@@ -46,7 +46,15 @@ from control_plane.orchestrator.git_fetch import (
 )
 from control_plane.vault import vault
 from tool_gateway import registry
-from tool_gateway.adapters import ad_collector, browser, http_get, http_post, nmap, semgrep
+from tool_gateway.adapters import (
+    ad_collector,
+    browser,
+    gitleaks,
+    http_get,
+    http_post,
+    nmap,
+    semgrep,
+)
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
@@ -181,6 +189,7 @@ adapter_for = registry.adapter_for
 EVIDENCE_PREFIX = {
     nmap.TOOL: "NMAP", http_get.TOOL: "HTTP", http_post.TOOL: "HTTP",
     browser.TOOL: "BROWSER", ad_collector.TOOL: "ADCOLLECT", semgrep.TOOL: "CODE",
+    gitleaks.TOOL: "SECRETS",
 }
 
 #: A malformed collection result: the run succeeded, but its stdout could
@@ -829,7 +838,7 @@ def dispatch_code_scan(
     fresh_for_seconds: int = 1800,
     ruleset_path: str | None = None,
 ) -> DispatchOutcome:
-    """Run one ``code.scan`` (Semgrep) and record its evidence (D43).
+    """Run one code-scan action (``code.scan``, ``code.secrets``) and record it (D43, D55).
 
     A third bespoke dispatch function, alongside :func:`dispatch_scan` and
     :func:`dispatch_collection`, for the same reason ``dispatch_collection``
@@ -868,8 +877,13 @@ def dispatch_code_scan(
     if capability.revoked or not capability.is_live():
         return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
 
-    adapter = semgrep
-    if capability.action != adapter.ACTION:
+    # The adapter is the one the capability's action names, not a hard-wired
+    # one (D55: this function serves every code-scan tool, and was written
+    # when there was one). It must also *declare* this function as its
+    # dispatch -- an action routed here whose adapter says otherwise is the D45
+    # gap, and is refused rather than run with nothing mounted.
+    adapter = registry.adapter_for(capability.action)
+    if adapter is None or getattr(adapter, "NEEDS_DISPATCH", None) != "dispatch_code_scan":
         # Routed here by the caller naming the action explicitly, the same
         # as dispatch_collection -- refused rather than silently run under
         # the wrong adapter if that ever drifts.
@@ -955,7 +969,11 @@ def dispatch_code_scan(
         auth_token = material.fields.get("secret")
 
     try:
-        fetched = fetch_repo(location, branch, auth_token=auth_token)
+        fetched = fetch_repo(
+            location, branch, auth_token=auth_token,
+            depth=getattr(plan, "fetch_depth", 1),
+            bare=getattr(adapter, "FETCH_BARE", False),
+        )
     except GitFetchError as exc:
         record_audit(
             engagement_id=engagement_id, actor=actor,
@@ -1061,17 +1079,30 @@ def dispatch_code_scan(
             tool=adapter.TOOL, tool_version=tool_version, ruleset_version=rules_version,
         )
 
-        status = SUCCEEDED if result.succeeded else FAILED
+        # A tool may declare that its exit code cannot tell "found nothing"
+        # from "could not read the input" (Gitleaks, D55: an unreadable
+        # repository is reported as "no leaks found", exit 0). Such a run is
+        # FAILED, not SUCCEEDED -- so it is not a clean bill of health in the
+        # evidence and, because only SUCCEEDED runs are ever served from the
+        # dedup cache, not a "already scanned" for the next proposal either.
+        incomplete_reason = None
+        completeness = getattr(adapter, "scan_incomplete_reason", None)
+        if result.succeeded and completeness is not None:
+            incomplete_reason = completeness(result.stdout, result.stderr)
+        status = SUCCEEDED if result.succeeded and incomplete_reason is None else FAILED
         _finish_run(
             conn, run_id, status, exit_code=result.exit_code,
             fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
         )
         _set_state(conn, proposal_id, status)
+        audit_payload = {**result.as_dict(), "evidence_id": evidence_id}
+        if incomplete_reason is not None:
+            audit_payload["scan_incomplete_reason"] = incomplete_reason
         record_audit(
             engagement_id=engagement_id, actor=actor,
             event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
             decision="ALLOW" if status == SUCCEEDED else None,
-            payload={**result.as_dict(), "evidence_id": evidence_id},
+            payload=audit_payload,
         )
         return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
     finally:

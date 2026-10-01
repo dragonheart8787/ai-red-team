@@ -32,6 +32,20 @@
 --                    registry_admin. SELECT+INSERT on credential_material
 --                    and credentials, nothing else -- see migration 0012.
 --
+--   global_policy_admin  the only role that publishes or retires a *global* policy
+--                    layer (baseline_global, emergency_overlay, a global customer
+--                    layer -- every row with engagement_id IS NULL), 5.37 / D54.
+--                    A new role for a new duty, as credential_admin was for the
+--                    Vault: the runtime role every Worker, Reviewer and Supervisor
+--                    call runs as could publish and retire global layers, which
+--                    made retiring an emergency overlay -- a relaxation -- a
+--                    runtime-credential operation. Its reach is INSERT/SELECT and
+--                    UPDATE (active) on policy_layers, confined by a restrictive RLS
+--                    policy to rows with engagement_id IS NULL, and nothing else. It
+--                    is used by an operator's CLI (scripts/manage_global_policy.py),
+--                    never by a service: no dispatch, agent or console path may open
+--                    its connection (a test scans for that).
+--
 -- Run as a superuser, before the first migration. Passwords come from psql
 -- variables so none is committed: see scripts/init_db.sh.
 --
@@ -55,6 +69,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ui_reader') THEN
         CREATE ROLE ui_reader LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'global_policy_admin') THEN
+        CREATE ROLE global_policy_admin LOGIN;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'credential_admin') THEN
         CREATE ROLE credential_admin LOGIN;
@@ -111,3 +128,11 @@ ALTER ROLE ui_reader
 ALTER ROLE credential_admin
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'credential_admin_password';
+
+-- The global policy writer (5.37, D54). NOBYPASSRLS like every other role here:
+-- what confines it to global rows is the restrictive policy in migration 0014, not
+-- trust. It holds no grant on any registry, credential or audit table -- its audit
+-- record is written by the ordinary audit path, as for every other operation.
+ALTER ROLE global_policy_admin
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'global_policy_admin_password';
