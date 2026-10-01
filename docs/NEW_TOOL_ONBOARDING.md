@@ -84,7 +84,7 @@ templates encode the ones marked *template*; the rest are yours.
 **Image**
 - Pin the tool to an exact version; `tool_version()` returns that constant. It must
   never probe a binary on the control-plane host — the tool lives in the image
-  (D43 `ab2849a`; found unfixed in `ad_collector` at D53, ACCEPTANCE 5.30, fixed after). *Enforced.*
+  (D43 `ab2849a`; found unfixed in `ad_collector` at D53, ACCEPTANCE 5.30, fixed after). *Enforced* for an adapter whose image is a `<slug>.Dockerfile`; **not** for a scratch-route image, which has no such file (ACCEPTANCE 5.45) -- a test of your own is then the only guard.
 - Bake a manifest recording the version and base; the build script checks it. *Template.*
 - Run as a non-root user that owns nothing. *Template.*
 - The sandbox runs the container `cap_drop=ALL`, `read_only`, `no-new-privileges`,
@@ -98,7 +98,11 @@ templates encode the ones marked *template*; the rest are yours.
   see the libraries the stdlib's C extensions `dlopen`; a symlink can replace the
   interpreter it was meant to point at; an explicit document root beats `WORKDIR`;
   python needs `-u` or its startup line never leaves the buffer (D31, five rounds).
-  The Dockerfile route avoids all of these; prefer it.
+  The Dockerfile route avoids all of these; prefer it. **Use the scratch route only when it cannot
+  be avoided** -- Gitleaks (D55) did: the development container's egress policy denies distro
+  mirrors, so `apt` could not be run where the image had to be built and verified. There is no
+  template for it yet (ACCEPTANCE 5.44); `build_gitleaks_image.sh` is the worked example, with a
+  sha256-pinned download and a self-check that exercises the tool's *job* on a fixture.
 
 **Self-check** (the build script; *template*)
 - Run the tool **exactly as the sandbox does**: `--network none --cap-drop ALL
@@ -106,7 +110,10 @@ templates encode the ones marked *template*; the rest are yours.
   adapter's `TMPFS` declares. A check under looser flags proves nothing.
 - **Print the output before gating on it.** A check that discards it reports "cannot
   launch" with no cause (D36).
-- The check must need no target: a required positional broke `--self-check` (D36).
+- For a tool that can start with no input, the check needs no target: a required positional
+  broke `--self-check` (D36). For a tool whose failure is a *silent no-op* (Gitleaks reads
+  nothing and says "no leaks found"), `--version` proves nothing and the check must run its job
+  on a built-in fixture (D55, ACCEPTANCE 5.44).
   A Python entrypoint needs an `if __name__ == "__main__"` guard or it imports, does
   nothing, and exits 0 (D36 `3e5598e`, three CI rounds).
 

@@ -1,5 +1,12 @@
 # ADR: Credential Vault — Phase 1 investigation (D44)
 
+Status: **implemented (D44); revised at D50** (§7.11 disposes of the argv options; D50-B binds a
+credential's identity at store time, §8); **extended at the D53 closeout**
+(§9: a `web.post` body is not a real-credential route). The "Investigation and design only" paragraph
+below is the stage this document was written in.
+
+*(Earlier status line, kept as written. It describes the stage this document was written in, not the current state.)*
+
 Investigation and design only. No schema, migration, code, or Rego was
 written or changed for this document. Every claim below about the current
 system was checked against the tree at the time of writing (D43, commit

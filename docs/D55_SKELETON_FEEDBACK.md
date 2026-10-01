@@ -5,7 +5,7 @@ marker) are closed — `adapter_kit.dispatch_violations` and `classification_vio
 `KNOWN_CLASSIFICATION` / `DECIDE(classification)` marker. Gaps 1, 2, 5 and 6 are ACCEPTANCE
 5.44–5.47. Everything below is the report as written at D55.
 
-Status: **report only.** No change was made to the skeleton (`scripts/new_tool_scaffold.py`,
+Status (as written at D55; see the D56 update above): **report only.** No change was made to the skeleton (`scripts/new_tool_scaffold.py`,
 `tests/adapter_kit.py`, the templates, `docs/NEW_TOOL_ONBOARDING.md`) except the single
 test-data rename in §5, item 1, which CI forced. Every gap below is recorded for a separate decision.
 

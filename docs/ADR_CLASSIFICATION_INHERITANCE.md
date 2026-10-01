@@ -1,5 +1,11 @@
 # ADR: classification inheritance — downward restriction only
 
+Status: **accepted and implemented, D25 step 2 (`4b0f1b5`) — downward restriction only; closes
+ACCEPTANCE 5.1** (`canonicalizer/metadata.py::_inherited_observations`; the successor review
+`ACCEPTANCE_MVP15_WEB_AGENT.md` records the closure).
+
+*(Earlier status line, kept as written. It describes the stage this document was written in, not the current state.)*
+
 Status: **proposed, D25. Awaiting a decision before any implementation.** No
 schema, Metadata Resolver, or Rego change is made until the direction in §7 is
 chosen. Addresses item 5.1 (hierarchical classification inheritance) on the

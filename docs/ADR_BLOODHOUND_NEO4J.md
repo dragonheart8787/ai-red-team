@@ -1,5 +1,15 @@
 # ADR: BloodHound + Neo4j — Phase 1 investigation (D42)
 
+Status: **decided and implemented (D42–D50).** As signed off: D42-1 option C (`ad_domain` authorizes
+collecting only), D42-3 option A (Postgres is the sole classification authority), D42-4 (the
+provenance/security-graph split unchanged), D42-6 (a bulk-collection shape, `dispatch_collection`),
+and **D42-5: Postgres only — Neo4j was not adopted** (`docs/D42_1_D42_6_DESIGN.md`,
+`docs/D42_2_CTE_BENCHMARK.md`; `control_plane/provenance/graph.py` says the same). Implementation
+and its end-to-end verification are in the status updates below; the classification position of
+`ad.collect` is argued in "Status update (ACCEPTANCE 5.48)".
+
+*(Earlier status line, kept as written. It describes the stage this document was written in, not the current state.)*
+
 Status: **investigation only, D42. No code, schema, migration, or Rego change
 is made until the decisions in §5 are confirmed.** This is step one of what
 the brief itself calls a bigger build than D31 or D34 — the brief's own
@@ -10,9 +20,9 @@ document is that confirmation pass, not a partial implementation.
 signed off. D42-2 has been closed with a real measurement rather than the
 architectural argument alone — see `docs/D42_2_CTE_BENCHMARK.md` and
 `scripts/bench/d42_bloodhound_cte_bench.py`/`docs/d42_bench/`. D42-5
-(Neo4j vs. Postgres-only) is being decided against those numbers; see that
-document's own "Reading these numbers against D42-5" section rather than
-this ADR's §3/§5, which predate the measurement.
+(Neo4j vs. Postgres-only) was decided **Postgres-only** against those numbers (see that
+document's "Reading these numbers against D42-5" section and `docs/D42_1_D42_6_DESIGN.md`);
+this ADR's §3/§5 predate the measurement and describe the options as they stood.
 
 **Status update (D45/D46)**: §4's design was implemented and then driven
 end to end for the first time at D45, which found the real production entry

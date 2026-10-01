@@ -1,5 +1,10 @@
 # D42-1 / D42-6 implementation design
 
+Status: **implemented (D42, `91ae7a6`) and driven through `propose_action` at D45/D46** — see
+`docs/ADR_BLOODHOUND_NEO4J.md`'s status updates and `docs/D45_AD_COLLECTION_E2E_REPORT.md`.
+
+*(Earlier status line, kept as written. It describes the stage this document was written in, not the current state.)*
+
 Status: **design only. No code, schema, migration, or Rego change is made by
 this document.** Builds directly on decisions already signed off in
 `docs/ADR_BLOODHOUND_NEO4J.md` (D42-1 Option C, D42-3 Option A, D42-5:

@@ -85,8 +85,13 @@ Answer each; the answers become `derive_view`.
 * **The carrier.** Five rounds so far, each closer to production content:
   nmap banner (D13), look-alike scope object (D15), served GET body (D31), POST
   reply generated in reaction to our input (D34), DOM node inserted by runtime
-  JavaScript (D37); a fabricated graph edge for BloodHound (D42 I8). `code.scan`
-  has none (found at D53). **What is this tool's?** Write the payload, and state
+  JavaScript (D37); a fabricated graph edge for BloodHound (D42 I8); commit metadata
+  for Gitleaks (D55). `code.scan` had none until the D53 replay wrote one. **A second kind
+  exists that is not an address at all:** a tool that obeys instructions found in its
+  target (Gitleaks and a repository's own `.gitleaks.toml`, `.gitleaksignore` and inline
+  allow comments, D55) -- the kit has no helper for it yet (ACCEPTANCE 5.46), so write that
+  test by hand, with a negative control that removes the defence and shows the suppression
+  working. **What is this tool's?** Write the payload, and state
   the property that must hold: *an address the system did not already authorize
   cannot gain authorization by being mentioned in content it read* (I8).
 * **Egress.** Does the tool need the network? Through the proxy (HTTP, D34), the
