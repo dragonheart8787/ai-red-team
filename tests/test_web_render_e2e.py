@@ -223,3 +223,69 @@ def test_a_lure_that_only_a_rendered_page_surfaces_cannot_be_authorized(
         )
         assert lured.authorized is False
         assert "target_not_covered_by_scope_object" in lured.reasons
+
+
+# ---------------------------------------------------------------------------
+# web.render needs a known classification (ACCEPTANCE 5.48) -- D32's three cases
+# ---------------------------------------------------------------------------
+# D32 put web.get under requires_known_classification because a GET returns the
+# resource's whole document, which is what data_class describes. A rendered page is
+# that document after the target's own JavaScript has run: no less content, so no
+# case for exempting it. The Rego tests state the rule; these drive it through
+# propose_action, where D32 drove its own, with the browser's real inputs.
+
+def _render_decision(engagement_id, registry, *, classification):
+    """``classification``: ``"none"`` (nothing registered), ``"clean"`` (AUTHORITATIVE,
+    not deny-listed) or ``"pii"`` (AUTHORITATIVE, a class the baseline denies)."""
+    scope_id = f"SCOPE-{engagement_id[-10:]}"
+    registry.scope(scope_object_id=scope_id, type="cidr", value=ALLOWED_CIDR,
+                   allowed_actions=["web.render"])
+    if classification != "none":
+        registry.metadata(
+            asset_id=f"ASSET-{engagement_id[-10:]}", identity_type="ip",
+            identity_value=TARGET_IP, authority="AUTHORITATIVE",
+            source="customer_declared", resource_class=["web_content"],
+            data_class=["PII"] if classification == "pii" else ["network_service"],
+        )
+    sandbox = _RenderStubSandbox()
+    proposal = ProposedAction(
+        action="web.render",
+        target={"logical_identity": {"type": "ip", "value": TARGET_IP},
+                "port": TARGET_PORT, "path": "/dynamic.html", "scheme": "https"},
+        authorization={"source": "engagement_scope", "scope_object_id": scope_id},
+        discovery={"source": "explicit_scope"},
+        writes_data=False, changes_state=False,
+    )
+    with engagement_scope(engagement_id) as conn:
+        outcome = propose_action(
+            conn, engagement_id=engagement_id, proposal=proposal,
+            reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
+            agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
+            proxy_url="http://10.86.0.2:3128", proxy_cert_spki="PINPINPIN",
+            budget=Budget(tool={"browser": {"max_subresources_per_navigation": 8}}),
+        )
+    return outcome, sandbox
+
+
+def test_a_render_of_an_unclassified_host_needs_a_human(engagement_id, registry):
+    """Before 5.48 this was ALLOW: the browser ran against a host nobody had classified."""
+    outcome, sandbox = _render_decision(engagement_id, registry, classification="none")
+    assert outcome.decision == "HUMAN_APPROVAL"
+    assert "unknown_classification_for_action_class" in outcome.approval_reasons
+    assert outcome.run_id is None and sandbox.runs == [], "nothing may run before the human"
+
+
+def test_a_render_of_a_classified_non_sensitive_host_still_runs_unattended(
+    engagement_id, registry,
+):
+    """The measured cost, pinned (D32): the ordinary case is not made unusable."""
+    outcome, sandbox = _render_decision(engagement_id, registry, classification="clean")
+    assert outcome.decision == "ALLOW", (outcome.deny_reasons, outcome.approval_reasons)
+    assert outcome.run_id is not None and len(sandbox.runs) == 1
+
+
+def test_a_render_of_denied_data_is_denied_not_escalated(engagement_id, registry):
+    outcome, sandbox = _render_decision(engagement_id, registry, classification="pii")
+    assert outcome.decision == "DENY"
+    assert "forbidden_data" in outcome.deny_reasons
+    assert outcome.run_id is None and sandbox.runs == []

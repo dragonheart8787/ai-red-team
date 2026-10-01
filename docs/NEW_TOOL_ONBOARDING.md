@@ -32,7 +32,7 @@ looked at what the tool's data is, and recorded in `docs/ADR_<TOOL>.md`:
 |---|---|
 | What a scope object for the tool authorizes | D42-1: `ad_domain` authorizes *collecting*, never *acting on what is collected* |
 | Precision and containment of the target | D43-1: pin repo + branch, not a commit; D43-2: refuse subdirectory containment |
-| Whether the action needs a known classification | D32 yes for `web.get`; D43-3 yes for `code.*`; no for `web.render`, `ad.collect`, `network.*`. **Decided by the action's spelling** in `authz.rego`, so choosing the name is part of the decision (D56): the adapter states `KNOWN_CLASSIFICATION` (`"required"` or `"exempt: <reason>"`) and the check compares it with the rule |
+| Whether the action needs a known classification | D32 yes for `web.get`; 5.48 yes for `web.render` (D32's argument, applied to what D36 added); D43-3 yes for `code.*`; no for `network.*` (a banner is a fragment) and `ad.collect` (collection is discovery, argued at 5.48 in `ADR_BLOODHOUND_NEO4J.md`). **Decided by the action's spelling** in `authz.rego`, so choosing the name is part of the decision (D56): the adapter states `KNOWN_CLASSIFICATION` (`"required"` or `"exempt: <reason>"`) and the check compares it with the rule |
 | What a model may read of the output, and what is redacted or cut | D43-4: redact snippets before they leave the adapter; mark first-party content |
 | Whether the tool gets the network, and by which route | proxy (web), namespace allowlist (nmap), none at all (Semgrep) |
 | What the tool does to its target (`WRITES_DATA`, `CHANGES_STATE`) | D34: `web.post` ended the argument that `web.*` only reads |

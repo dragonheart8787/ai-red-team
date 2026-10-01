@@ -150,8 +150,17 @@ observed_data_class contains class if {
 # production credentials is exactly the resource_class/data_class a human
 # should confirm is understood before an LLM-mediated pipeline starts
 # reading and summarizing matched snippets.
+#
+# web.render joined at ACCEPTANCE 5.48 -- not a new argument but D32's, applied
+# to a capability D36 added after it. A rendered page is the same whole document a
+# GET returns, after the target's own JavaScript has run: strictly *more* content
+# than the static GET that is already on the list, and the resource's data_class
+# describes exactly that. It was outside the list with no argument recorded for
+# the exclusion anywhere (found at D56, when every adapter had to state its
+# position). The exemption D32's reasoning keeps -- a fragment incidental to
+# identifying a service -- does not reach a rendered document.
 requires_known_classification if {
-	some pattern in {"data.*", "web.get", "web.post", "web.put", "web.delete", "code.*"}
+	some pattern in {"data.*", "web.get", "web.post", "web.put", "web.delete", "web.render", "code.*"}
 	pattern_matches(pattern, input.action.action)
 }
 

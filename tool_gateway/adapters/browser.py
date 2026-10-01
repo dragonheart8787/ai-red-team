@@ -56,12 +56,11 @@ CHANGES_STATE = False
 #: fact about the action's *name* in control_plane/policy/rego/authz.rego
 #: (requires_known_classification), stated here so that it is a decision and not a
 #: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
-#: not argued: see ACCEPTANCE 5.48.
-KNOWN_CLASSIFICATION = (
-    'exempt: no argument is recorded either way -- web.render predates the per-action '
-    'review that put web.get and code.* under the rule, and stands as it was (ACCEPTANCE '
-    '5.48)'
-)
+#: Required (ACCEPTANCE 5.48): a rendered page is the whole document a GET returns,
+#: after the target's own JavaScript has run -- D32's argument for web.get, applied
+#: to the capability D36 added after it. It had been outside the rule with no argument
+#: recorded for the exclusion.
+KNOWN_CLASSIFICATION = "required"
 
 #: Every web.* run goes through the policy-aware egress proxy (§8.3).
 REQUIRES_PROXY = True

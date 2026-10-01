@@ -28,6 +28,37 @@ as verified for its wiring, not yet for a real domain controller in
 practice. Full account: `docs/D45_AD_COLLECTION_E2E_REPORT.md` and
 `docs/D46_DISPATCH_ROUTING_AUDIT_REPORT.md`.
 
+**Status update (ACCEPTANCE 5.48) -- `ad.collect` and the classification gate.** `ad.collect`
+does **not** require a known classification (`authz.rego`'s `requires_known_classification`;
+`ad_collector.KNOWN_CLASSIFICATION` is `"exempt: ..."`). Until 5.48 that was a state, not a
+decision: D42 decided how a domain enters scope (D42-1) and never asked the §5 question of the
+action. The argument, now on the record:
+
+1. **D42-1 option C, §1.5/§1.6.** An `ad_domain` scope authorizes *collecting* and nothing else;
+   every entity a run surfaces is a discovery candidate that enters as `OBSERVED`, never
+   `AUTHORITATIVE`, and is never itself grounds for a capability (I8).
+2. **A collected node carries no classification (§2.3).** Identity (SID, hostname) and structure
+   only; classification stays with the Postgres registry, keyed by that identity
+   (`tests/test_schema.py::test_security_graph_tables_have_no_classification_columns`). A run
+   produces no classified content for the gate to describe -- it produces the discovery
+   candidates classification work starts from.
+3. **That is `ARCHITECTURE.md` §5 table row 1:** an action whose output is the raw material of
+   classification needs none first ("不需要——這正是分類資料的來源之一"). Stated carefully: the row
+   names `network.passive_identification`, which exists only as that row (nothing implements
+   it; ACCEPTANCE, D32 analysis), so it is the *principle* here and not an implemented
+   precedent. The implemented analogue is `network.scan`, exempt for the adjacent reason (a
+   banner is a fragment, not a document).
+
+**What this does not argue.** `ad.collect` reads a customer's directory, and user and group
+identities are personal data; D32's and D43-3's "does it touch the resource's content" test can
+be pointed at it. The exemption rests on points 1-3, and on two other gates the action keeps: it
+cannot run without a credential issued for the engagement (`dispatch_collection` refuses
+without a `credential_id`, D50-F1) or without an `ad_domain` scope, and nothing it surfaces can
+be acted on without its own scope (D42-1). What is **not** gated is a human confirming the
+directory's sensitivity before it is read. If a customer's directory must be treated as
+sensitive first, that is a classification row for the `ad_domain` and `ad.collect` added to the
+rule, with its own tests -- a policy change, not a reading of this exemption.
+
 This is the first tool this project has ever considered whose native output
 is a **relationship graph** (`User —MemberOf→ Group —GenericAll→ Computer`)
 rather than a classification of, or scan result against, one resource. Every
@@ -623,7 +654,7 @@ questions above — but it must not be silently assumed solved because a
 
 | # | Decision | Options on the table | This document's lean |
 |---|---|---|---|
-| **D42-1** | How does an AD domain enter scope? | (A) `ad_domain` authorizes the whole domain for any action; (B) no new type, per-computer `fqdn`/`ip` only; (C) `ad_domain` authorizes *collection* only, every follow-up action needs its own scope object | (C) |
+| **D42-1** *(its classification consequence is argued in the "Status update (ACCEPTANCE 5.48)" above)* | How does an AD domain enter scope? | (A) `ad_domain` authorizes the whole domain for any action; (B) no new type, per-computer `fqdn`/`ip` only; (C) `ad_domain` authorizes *collection* only, every follow-up action needs its own scope object | (C) |
 | **D42-2** | Should the Neo4j-vs-Postgres-CTE question be settled by a measured comparison (synthetic graph, same query, both engines) before committing? | Yes / no, the architectural argument in §2.2 is sufficient | **Closed — measured, see `docs/D42_2_CTE_BENCHMARK.md`** |
 | **D42-3** | If Neo4j is adopted, how does classification authority divide? | (A) Neo4j opaque-identity-only, Postgres sole classification authority; (B) extend D25 inheritance across the database boundary; (C) Neo4j fully opaque, join deferred to query time | (A) |
 | **D42-4** | Does the Provenance/Security Graph split need any change for BloodHound? | Treat a collection run as one more `RUN --produced--> EVIDENCE` provenance edge, unchanged | No change needed (low-confidence decision point — flagged in case something was missed) |

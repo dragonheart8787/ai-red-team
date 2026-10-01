@@ -197,10 +197,18 @@ CHANGES_STATE = False
 #: fact about the action's *name* in control_plane/policy/rego/authz.rego
 #: (requires_known_classification), stated here so that it is a decision and not a
 #: coincidence of spelling; tests/adapter_kit.classification_violations compares the two.
-#: not argued: see ACCEPTANCE 5.48.
+#: Exempt, argued at ACCEPTANCE 5.48 (docs/ADR_BLOODHOUND_NEO4J.md, "Status update
+#: (ACCEPTANCE 5.48)"): collection is discovery, not content access. D42-1 option C makes
+#: an ad_domain scope authorize *collecting* and nothing else, and what a run surfaces
+#: enters as OBSERVED, never AUTHORITATIVE (ADR §1.5/§1.6); a graph node carries identity
+#: and no classification (tests/test_schema.py: security_graph tables have no
+#: classification columns). That is the exemption ARCHITECTURE §5 row 1 gives passive
+#: recon -- discovery that classification work starts from, so it cannot wait for it.
 KNOWN_CLASSIFICATION = (
-    'exempt: no argument is recorded either way -- ad.collect was left outside the rule '
-    'at D42 and stands as it was (ACCEPTANCE 5.48)'
+    "exempt: collection is discovery, not content access -- D42-1 option C: an ad_domain "
+    "scope authorizes collecting only, and what is collected enters as OBSERVED, never "
+    "AUTHORITATIVE, carrying no classification of its own; the same exemption ARCHITECTURE "
+    "section 5 row 1 gives passive recon (ACCEPTANCE 5.48)"
 )
 
 #: LDAP goes through the sandbox's raw namespace, the same as nmap's TCP —
