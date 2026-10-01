@@ -1,3 +1,10 @@
+# BEFORE THE NEXT RUN (ACCEPTANCE 5.50): confirm that after setup_engagement the web host
+# resolves as known + AUTHORITATIVE and that a web.render proposal for it is not escalated
+# with unknown_classification_for_action_class. web.render joined requires_known_classification
+# at 5.48; this script's compatibility with that rule is a static reading, never executed. If
+# this run's web.render decisions differ from the pre-5.48 report
+# (docs/D40_THREE_ROLE_INTEGRATION_REPORT.md), that is a finding about the rule, not a
+# problem with the model.
 """D40 — three real roles, at once, for one real engagement lifecycle.
 
 D10.5, D13/D15 and D17 each put exactly one real model behind exactly one
