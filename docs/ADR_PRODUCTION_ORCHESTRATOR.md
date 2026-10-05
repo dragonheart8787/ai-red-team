@@ -3,6 +3,15 @@
 Status: **proposed — investigation and design only; nothing here is decided.** Eighteen decision
 points are collected in §8, each marked ⚑ where it needs your call. §8.2 lists which ones block which.
 
+**Addendum (D59).** X12 / D58-14 (cross-engagement network reachability) was taken out of this document and
+fixed on its own, in `docs/D59_NETWORK_ISOLATION_REPORT.md` (ACCEPTANCE 5.52). Two corrections to what is
+written below: (1) the reachability was wider than E9 showed — TCP and HTTP-through-the-proxy as well as ICMP,
+the last being an authorization bypass; (2) the direction is decided: **two engagements are never live on one
+network** (a private bridge per engagement is impossible, Docker refuses an identical subnet), so same-range
+engagements serialize and the orchestrator must treat `NetworkInUse` as "retry later". The "Option (A)
+in-process semaphores" of D58-13 should account for that, and the 15-container pool ceiling (X6) is unchanged.
+Everything below is otherwise as written at `ad2c8d5`.
+
 Investigation and design only. No schema, migration, code, Rego, harness or service skeleton was
 written or changed for this document. Every claim below about the current system was checked against
 the tree at the time of writing (`d64b335`, post-D57 merge), and each is tagged with *how* it was

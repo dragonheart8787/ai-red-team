@@ -58,6 +58,7 @@ from tool_gateway.adapters import (
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
+    NetworkNotAvailable,
     SandboxResult,
     SandboxUnavailable,
 )
@@ -221,6 +222,38 @@ def _build_plan_params(adapter) -> frozenset[str]:
     import inspect
 
     return frozenset(inspect.signature(adapter.build_plan).parameters)
+
+
+#: The sandbox refused before any container existed because the network is held
+#: by another engagement, or its range collides with another network (D59).
+#: Distinct from UNKNOWN_OUTCOME on purpose: nothing started, so the outcome is
+#: *known* and the same proposal can be tried again once the network is free.
+#: Recording it as unknown (what every ``SandboxUnavailable`` gets) would park a
+#: proposal for a human over something the system can simply retry.
+NETWORK_UNAVAILABLE = "network_unavailable"
+
+
+def _network_refused(
+    conn: Connection, *, engagement_id: str, actor: str, run_id: str,
+    proposal_id: str, exc: NetworkNotAvailable,
+) -> DispatchOutcome:
+    """Record a run the sandbox declined to start for a network reason (D59).
+
+    The audit payload carries the sandbox's message and the stable code, which
+    by construction name no other engagement; who holds the network is in the
+    operator log, not in this engagement's trail.
+    """
+    _finish_run(conn, run_id, FAILED, exit_code=None)
+    _set_state(conn, proposal_id, FAILED)
+    record_audit(
+        engagement_id=engagement_id, actor=actor,
+        event_type="tool_run.refused", subject_type="tool_run", subject_id=run_id,
+        decision=DENY_DECISION, reasons=(NETWORK_UNAVAILABLE, exc.reason),
+        payload={"error": str(exc)},
+    )
+    # run_id is not returned: nothing executed, so propose_action must not draw
+    # an "executed" provenance edge for it.
+    return DispatchOutcome(False, None, FAILED, reason=exc.reason)
 
 
 def dispatch_scan(
@@ -440,6 +473,14 @@ def dispatch_scan(
             # Writable tmpfs the tool's image needs over its read-only root
             # (the browser; D36). None for tools that need no writable path.
             tmpfs=getattr(adapter, "TMPFS", None),
+            # Who this run is for (D59): the sandbox keeps two engagements off one
+            # network, and cannot know which is which unless it is told.
+            engagement_id=engagement_id,
+        )
+    except NetworkNotAvailable as exc:
+        return _network_refused(
+            conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
+            proposal_id=proposal_id, exc=exc,
         )
     except SandboxUnavailable as exc:
         # The tool may or may not have run — the sandbox failed at a point we
@@ -729,6 +770,12 @@ def dispatch_collection(
                 command=plan.command, network_allowlist=allowlist,
                 max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
                 source_mounts={mounted_credential.host_path: adapter.CONTAINER_CRED_PATH},
+                engagement_id=engagement_id,
+            )
+        except NetworkNotAvailable as exc:
+            return _network_refused(
+                conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
+                proposal_id=proposal_id, exc=exc,
             )
         except SandboxUnavailable as exc:
             _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
@@ -814,14 +861,14 @@ def dispatch_collection(
 #: attempted, but the source it names could not be retrieved.
 REPO_FETCH_FAILED = "repo_fetch_failed"
 
-#: Semgrep needs no network access at all (tool_gateway/adapters/semgrep.py
-#: module docstring): the repository and the ruleset both arrive as
-#: read-only bind mounts, not over a network the container has no route on.
-#: DockerSandbox still requires a non-empty CIDR allowlist to build its
-#: internal, gateway-less network (§8.3's validate_allowlist) -- ``internal
-#: =True`` is what removes the route out, not the specific range named
-#: here, so this fixed, otherwise-unused private block stands in for a real
-#: target range that this action has no target range to give.
+#: Semgrep and Gitleaks need no network access at all (the adapters' module
+#: docstrings): the repository and the ruleset both arrive as read-only bind
+#: mounts. This range is therefore only a *record* -- it is what the execution
+#: fingerprint and ``tool_runs.network_allowlist`` carry for "no egress", and what
+#: ``validate_allowlist`` requires to be non-empty. Since D59 the container does
+#: not join a network built from it: ``dispatch_code_scan`` passes
+#: ``no_network=True``. Before that it did, and since the name came from this one
+#: constant, *every* engagement's code scans ran on one shared bridge.
 NO_EGRESS_ALLOWLIST = ["10.255.255.0/29"]
 
 
@@ -1052,6 +1099,17 @@ def dispatch_code_scan(
                     (ruleset_path or adapter.DEFAULT_RULESET_HOST_PATH):
                         adapter.CONTAINER_RULESET_PATH,
                 },
+                engagement_id=engagement_id,
+                # No segment at all (D59). The allowlist above is the fingerprint's
+                # and the audit trail's record that this run had no egress; the
+                # container itself joins no network, so there is nothing for
+                # another engagement's scan to share with it.
+                no_network=True,
+            )
+        except NetworkNotAvailable as exc:
+            return _network_refused(
+                conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
+                proposal_id=proposal_id, exc=exc,
             )
         except SandboxUnavailable as exc:
             _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)

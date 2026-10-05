@@ -444,9 +444,11 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
 # ---------------------------------------------------------------------------
 
 def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
-            nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox
-            ) -> dict[str, Any]:
-    engagement_id = uid("ENG-D40-MAIN")
+            nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox,
+            engagement_id: str | None = None) -> dict[str, Any]:
+    # D59: the egress proxy belongs to one engagement, so main() names it before the
+    # proxy is started and passes the same id here.
+    engagement_id = engagement_id or uid("ENG-D40-MAIN")
     # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
     ensure_baseline(engagement_id)
     registered = setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=web_ip,
@@ -747,6 +749,7 @@ def main() -> int:
     proxy_url = None
     web_ip = None
     proxy_endpoint = None
+    main_engagement_id = uid("ENG-D40-MAIN")
     if not args.skip_web:
         web_target_network = nmap_sandbox.network_name([WEB_TARGET_CIDR])
         web_ip = container_ip(args.web_target_container, web_target_network)
@@ -756,6 +759,7 @@ def main() -> int:
                   "port": WEB_TARGET_PORT, "methods": ["GET"],
                   "max_requests": 500},
             tool_side=[WEB_TOOL_CIDR], target_side=[WEB_TARGET_CIDR],
+            engagement_id=main_engagement_id,
         )
         proxy_url = proxy_endpoint.url
 
@@ -768,7 +772,7 @@ def main() -> int:
         results["main_run"] = main_run(
             rounds=args.rounds, nmap_ip=nmap_ip, web_ip=web_ip,
             proxy_url=proxy_url, nmap_sandbox=nmap_sandbox,
-            browser_sandbox=browser_sandbox,
+            browser_sandbox=browser_sandbox, engagement_id=main_engagement_id,
         )
         if not args.skip_injection:
             results["injection_experiment"] = injection_experiment(

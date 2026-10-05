@@ -139,7 +139,7 @@ def run_command(
     return sandbox.run(
         command=command, network_allowlist=NO_EGRESS_ALLOWLIST,
         max_duration_seconds=timeout, run_id=None, tmpfs=gitleaks.TMPFS,
-        source_mounts=mounts,
+        source_mounts=mounts, no_network=True,
     )
 
 

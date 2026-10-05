@@ -43,6 +43,24 @@ describe a range containing only the scanner. The allowlisted network is
 provisioned once and each run attaches to it, which is also how a real
 deployment works — the range exists because the customer's assets are in it.
 
+**One engagement on a network at a time (D59).** That reuse is correct for the
+*assets* on the network and was wrong for the *tenants*: the name is a hash of
+the allowlist alone, so two engagements authorizing the same range were handed
+the same Docker bridge, and an engagement's tool container (or egress proxy, and
+with it that capability's grant) was a reachable neighbour of the other's --
+ICMP, TCP and HTTP-through-the-proxy all measured as reaching across. A bridge
+with the same subnet cannot exist twice (Docker refuses the second), so two
+engagements cannot each get a private copy of one range; what can be enforced is
+that they are never on it together. Every container this sandbox creates carries
+``OWNER_LABEL`` (the engagement id), and before one is started it is checked
+against every other labelled container on the networks it joins: one belonging to
+a different owner that is live -- or created earlier and about to be -- refuses
+the newcomer with :class:`NetworkInUse`, before it starts. Containers without
+the label (the targets a lab puts on the network) are the range's assets, not
+tenants, and are not counted. Actions that need no network at all (code scans)
+do not join one: ``run(no_network=True)`` uses ``network_mode='none'``, so there
+is no segment to share.
+
 That is also why the tool container drops every capability. A tool holding
 NET_ADMIN could add the missing route itself, which would make the boundary
 advisory. The sandbox is what the design calls the last physical boundary,
@@ -82,9 +100,11 @@ If it is implemented, three things are not negotiable:
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import socket
 import tempfile
@@ -100,6 +120,8 @@ try:  # pragma: no cover - import guard
 except ImportError:  # pragma: no cover
     docker = None
     DockerException = ImageNotFound = NotFound = Exception
+
+logger = logging.getLogger("cyberorch.sandbox")
 
 DEFAULT_IMAGE = "cyberorch/nmap:local"
 
@@ -172,6 +194,53 @@ class SandboxUnavailable(RuntimeError):
     Raised rather than degraded into a skip or a simulated run. A sandbox that
     silently does not sandbox is worse than one that refuses to start.
     """
+
+
+class NetworkNotAvailable(SandboxUnavailable):
+    """The sandbox refused *before any container existed* because of the network.
+
+    A subclass so every existing ``except SandboxUnavailable`` still catches it,
+    and a separate type because callers must be able to tell it apart: nothing
+    started, so unlike a failure at or after ``start()`` the outcome is known and
+    the action can be retried later. ``reason`` is a stable code; the message
+    never names another engagement.
+    """
+
+    reason = "network_unavailable"
+
+
+class NetworkInUse(NetworkNotAvailable):
+    """Another engagement has a live container on a network this one would join (D59)."""
+
+    reason = "network_in_use_by_another_engagement"
+
+
+class NetworkRangeConflict(NetworkNotAvailable):
+    """Docker refused the network because its range overlaps an existing one."""
+
+    reason = "network_range_conflicts_with_another_network"
+
+
+#: Label every sandbox-created container carries: the engagement it works for
+#: (``NO_OWNER`` when the caller named none -- probes and lab scripts). Two
+#: containers with different owners are never live on one network at once.
+OWNER_LABEL = "cyberorch.owner"
+NO_OWNER = ""
+
+#: Container states in which a container can still send or receive.
+_LIVE_STATES = frozenset({"created", "running", "paused", "restarting"})
+
+
+def _creation_key(container) -> tuple[int, int, str]:
+    """When a container was created, as a sortable key (ties broken by id).
+
+    Docker prints ``Created`` as RFC 3339 with the fraction trimmed of trailing
+    zeros, so the strings do not sort as times; parse them.
+    """
+    stamp = container.attrs["Created"].rstrip("Z")
+    whole, _, fraction = stamp.partition(".")
+    seconds = calendar.timegm(time.strptime(whole, "%Y-%m-%dT%H:%M:%S"))
+    return (seconds, int((fraction + "000000000")[:9]), container.id)
 
 
 @dataclass(frozen=True)
@@ -306,9 +375,56 @@ class DockerSandbox:
                 labels={"cyberorch.allowlist": ",".join(allowlist)},
             )
         except DockerException as exc:
+            if "overlap" in str(exc).lower():
+                # Provably nothing started, and not a daemon fault: a range that
+                # collides with a network Docker already has (another engagement's
+                # allowlist, or a lab's). Typed so dispatch records "not started"
+                # rather than "unknown outcome".
+                raise NetworkRangeConflict(
+                    f"the range {list(allowlist)} overlaps an existing network and "
+                    "cannot be given its own"
+                ) from exc
             raise SandboxUnavailable(
                 f"could not create the confined network for {allowlist}: {exc}"
             ) from exc
+
+    def _assert_exclusive(self, container, network_names: Sequence[str], owner: str) -> None:
+        """Refuse to start ``container`` beside another engagement's (D59).
+
+        Called after the container is created and attached, before it is started,
+        so nothing of this run has executed when it is refused. Two callers can
+        reach this at the same moment, so it must not be "look, then go": each
+        sees the other's created container. The rule that decides it is creation
+        order -- a container yields only to a live container of another owner that
+        is running, or that was created before it. The later of two simultaneous
+        creators therefore always sees the earlier one and refuses, while the
+        earlier ignores the later (which is about to refuse) and proceeds; exactly
+        one wins and the loser has not started.
+        """
+        client = self.client()
+        mine = _creation_key(container)
+        for network_name in network_names:
+            for other in client.containers.list(
+                all=True, filters={"label": OWNER_LABEL, "network": network_name},
+            ):
+                if other.id == container.id:
+                    continue
+                other.reload()
+                other_owner = (other.labels or {}).get(OWNER_LABEL, NO_OWNER)
+                if other_owner == owner or other.status not in _LIVE_STATES:
+                    continue
+                if other.status == "created" and _creation_key(other) > mine:
+                    continue
+                # The operator needs to know who; the message (which reaches the
+                # refused engagement's audit trail) must not say.
+                logger.warning(
+                    "network %s refused for owner %r: container %s of owner %r is %s on it",
+                    network_name, owner, other.short_id, other_owner, other.status,
+                )
+                raise NetworkInUse(
+                    "the network for this allowlist is in use by another engagement; "
+                    "nothing was started"
+                )
 
     def remove_network(self, allowlist: Sequence[str]) -> None:
         """Tear down an allowlist network. Used by tests and engagement teardown."""
@@ -323,6 +439,7 @@ class DockerSandbox:
         self, *, grant: Mapping[str, Any], tool_side: Sequence[str],
         target_side: Sequence[str], run_id: str | None = None,
         leaf_cert_pem: str | None = None, leaf_key_pem: str | None = None,
+        engagement_id: str | None = None,
     ) -> ProxyEndpoint:
         """Start the proxy bridging the tool-side and target-side networks.
 
@@ -344,6 +461,14 @@ class DockerSandbox:
         neither, the proxy is HTTP-only and refuses CONNECT, the honest D34
         answer for "cannot inspect this tunnel". Both or neither: a cert
         without a key is a misconfiguration, not a mode.
+
+        ``engagement_id`` names who the proxy works for (D59). The proxy
+        carries one capability's grant and listens on the tool-side network, so
+        any container that can reach it can spend that grant; it is therefore
+        held to the same rule as a tool run -- refused with
+        :class:`NetworkInUse` if another engagement has a live container on
+        either network -- and, as a tenant of the tool-side network itself,
+        keeps other engagements' tool containers off it for as long as it lives.
         """
         if bool(leaf_cert_pem) != bool(leaf_key_pem):
             raise ValueError("leaf_cert_pem and leaf_key_pem must be given together")
@@ -416,10 +541,15 @@ class DockerSandbox:
             mem_limit=self.memory_limit,
             pids_limit=self.pids_limit,
             labels={"cyberorch.egress_proxy": "1",
-                    "cyberorch.run_id": run_id or ""},
+                    "cyberorch.run_id": run_id or "",
+                    OWNER_LABEL: engagement_id or NO_OWNER},
         )
         try:
             target_network.connect(container)
+            self._assert_exclusive(
+                container, [tool_network.name, target_network.name],
+                engagement_id or NO_OWNER,
+            )
             container.start()
             container.reload()
             networks = container.attrs["NetworkSettings"]["Networks"]
@@ -515,7 +645,7 @@ class DockerSandbox:
 
     def probe_egress(
         self, *, target: str, port: int, network_allowlist: Sequence[str],
-        timeout_seconds: int = 5,
+        timeout_seconds: int = 5, engagement_id: str | None = None,
     ) -> str:
         """Ask the kernel whether the sandbox can reach an address.
 
@@ -548,6 +678,7 @@ class DockerSandbox:
                      target, str(port)],
             network_allowlist=network_allowlist,
             max_duration_seconds=timeout_seconds + 10,
+            engagement_id=engagement_id,
         )
         combined = f"{result.stdout}\n{result.stderr}"
         if "Network is unreachable" in combined:
@@ -584,8 +715,23 @@ class DockerSandbox:
         ca_cert_pem: str | None = None,
         tmpfs: Mapping[str, str] | None = None,
         source_mounts: Mapping[str, str] | None = None,
+        engagement_id: str | None = None,
+        no_network: bool = False,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
+
+        ``engagement_id`` is who the run is for (D59), recorded on the container
+        as ``OWNER_LABEL``. If a container of a *different* owner is live on the
+        network this run would join, :class:`NetworkInUse` is raised before this
+        run's container starts. Omitting it is allowed (probes, lab scripts) and
+        makes the run an owner of its own -- distinct from every engagement, so
+        it is kept apart from them too; production dispatch always passes it.
+
+        ``no_network`` runs the container with ``network_mode='none'``: no
+        interface but loopback, and no network object for another engagement to
+        share. The allowlist is still validated and recorded (for the
+        fingerprint and the audit trail) but nothing is attached to it. For
+        actions that need no network at all -- code scans.
 
         ``max_duration_seconds`` is enforced by killing the container, not by
         asking the tool to stop. A budget the tool could ignore is a number in
@@ -632,7 +778,8 @@ class DockerSandbox:
         client = self.client()
 
         run_id = run_id or uuid.uuid4().hex[:12]
-        network = self.ensure_network(allowlist)
+        owner = engagement_id or NO_OWNER
+        network = None if no_network else self.ensure_network(allowlist)
         container = None
         started = time.monotonic()
         ca_file: str | None = None
@@ -649,7 +796,7 @@ class DockerSandbox:
             container = client.containers.create(
                 image=self.image,
                 command=list(command),
-                network=network.name,
+                network="none" if network is None else network.name,
                 volumes=volumes,
                 # Writable tmpfs over a read-only root, for a tool that must
                 # write somewhere (the browser). Empty for nmap/curl.
@@ -664,8 +811,11 @@ class DockerSandbox:
                 read_only=True,
                 mem_limit=self.memory_limit,
                 pids_limit=self.pids_limit,
-                labels={"cyberorch.run_id": run_id},
+                labels={"cyberorch.run_id": run_id, OWNER_LABEL: owner},
             )
+            if network is not None:
+                # Before start: a refused run has executed nothing.
+                self._assert_exclusive(container, [network.name], owner)
             # Attached before start, not after: a container that runs to
             # completion between start() and attach() leaves the write with
             # nowhere to go, and the tool waits on a stdin that never closes

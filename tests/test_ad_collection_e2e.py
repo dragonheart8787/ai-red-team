@@ -116,7 +116,8 @@ class _RecordingDockerSandbox:
         _RecordingDockerSandbox.instances.append(self)
 
     def run(self, *, command, network_allowlist, max_duration_seconds, run_id=None,
-            stdin=None, ca_cert_pem=None, tmpfs=None, source_mounts=None):
+            stdin=None, ca_cert_pem=None, tmpfs=None, source_mounts=None,
+            engagement_id=None, no_network=False):
         self.runs.append({
             "command": list(command), "network_allowlist": list(network_allowlist),
             "source_mounts": dict(source_mounts or {}),

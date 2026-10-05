@@ -115,7 +115,8 @@ class StubSandbox:
         self.stdout, self.stderr, self.exit_code = stdout, stderr, exit_code
 
     def run(self, *, command, network_allowlist, max_duration_seconds,
-            run_id=None, tmpfs=None, source_mounts=None):
+            run_id=None, tmpfs=None, source_mounts=None,
+            engagement_id=None, no_network=False):
         self.runs.append({"command": list(command), "source_mounts": dict(source_mounts or {})})
         return SandboxResult(
             exit_code=self.exit_code, stdout=self.stdout, stderr=self.stderr,

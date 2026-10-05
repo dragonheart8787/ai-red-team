@@ -55,7 +55,8 @@ class StubSandbox:
         self.runs: list[dict] = []
 
     def run(self, *, command, network_allowlist, max_duration_seconds,
-            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None):
+            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None,
+            engagement_id=None, no_network=False):
         self.runs.append({
             "command": list(command), "allowlist": list(network_allowlist),
             "stdin": stdin, "ca_cert_pem": ca_cert_pem, "tmpfs": tmpfs,
