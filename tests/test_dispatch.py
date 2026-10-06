@@ -34,7 +34,10 @@ from control_plane.orchestrator.dispatch import (
     dispatch_scan,
     reconcile_stale_dispatches,
 )
-from control_plane.state.db import engagement_scope
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
 ALLOWED_CIDR = "10.78.0.0/24"
@@ -156,7 +159,7 @@ def test_successful_scan_writes_evidence_run_and_state(engagement_id, sandbox,
         proposal_id = _proposal(conn, engagement_id)
         capability = _capability(conn, engagement_id)
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            engagement_id=engagement_id, proposal_id=proposal_id,
             capability=capability, target=scan_target, actor="orchestrator",
             sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
             execution_context=execution_context(auth_context_id="AUTHCTX-1"),
@@ -204,7 +207,7 @@ def test_scan_is_audited_from_start_to_finish(engagement_id, sandbox, scan_targe
         proposal_id = _proposal(conn, engagement_id)
         capability = _capability(conn, engagement_id)
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            engagement_id=engagement_id, proposal_id=proposal_id,
             capability=capability, target=scan_target, actor="orchestrator",
             sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
         )
@@ -229,7 +232,7 @@ def test_a_revoked_capability_cannot_dispatch(engagement_id, sandbox, scan_targe
         from control_plane.capability.broker import get_capability
 
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            engagement_id=engagement_id, proposal_id=proposal_id,
             capability=get_capability(conn, capability.capability_id),
             target=scan_target, actor="orchestrator", sandbox=sandbox,
             network_allowlist=[ALLOWED_CIDR],
@@ -287,7 +290,7 @@ def test_a_second_identical_scan_is_deduplicated(engagement_id, sandbox, scan_ta
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id)
         first = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id), capability=capability,
             target=scan_target, actor="orchestrator", sandbox=sandbox,
             network_allowlist=[ALLOWED_CIDR],
@@ -296,7 +299,7 @@ def test_a_second_identical_scan_is_deduplicated(engagement_id, sandbox, scan_ta
 
         second_proposal = _proposal(conn, engagement_id)
         second = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=second_proposal,
+            engagement_id=engagement_id, proposal_id=second_proposal,
             capability=capability, target=scan_target, actor="orchestrator",
             sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
         )
@@ -326,7 +329,7 @@ def test_the_same_host_scanned_for_different_ports_is_not_deduplicated(
     """
     with engagement_scope(engagement_id) as conn:
         narrow = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id),
             capability=_capability(conn, engagement_id, ports="8080"),
             target=scan_target, actor="orchestrator", sandbox=sandbox,
@@ -335,7 +338,7 @@ def test_the_same_host_scanned_for_different_ports_is_not_deduplicated(
         assert narrow.state == SUCCEEDED
 
         wider = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id),
             capability=_capability(conn, engagement_id, ports="8080,9090"),
             target=scan_target, actor="orchestrator", sandbox=sandbox,
@@ -371,7 +374,7 @@ def test_a_scan_confined_elsewhere_is_not_the_same_execution(
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id)
         blind = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id), capability=capability,
             target=scan_target, actor="orchestrator", sandbox=sandbox,
             network_allowlist=[unreachable],
@@ -386,7 +389,7 @@ def test_a_scan_confined_elsewhere_is_not_the_same_execution(
         )
 
         seeing = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id), capability=capability,
             target=scan_target, actor="orchestrator", sandbox=sandbox,
             network_allowlist=[ALLOWED_CIDR],
@@ -480,7 +483,7 @@ def test_an_unavailable_sandbox_yields_unknown_outcome(engagement_id, scan_targe
         proposal_id = _proposal(conn, engagement_id)
         capability = _capability(conn, engagement_id)
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            engagement_id=engagement_id, proposal_id=proposal_id,
             capability=capability, target=scan_target, actor="orchestrator",
             sandbox=broken, network_allowlist=[ALLOWED_CIDR],
         )
@@ -511,7 +514,7 @@ def test_a_capability_the_adapter_cannot_read_is_refused_not_raised(engagement_i
         proposal_id = _proposal(conn, engagement_id)
 
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            engagement_id=engagement_id, proposal_id=proposal_id,
             capability=capability, target="10.78.0.10", actor="orchestrator",
             sandbox=_ExplodingSandbox(), network_allowlist=[ALLOWED_CIDR],
         )

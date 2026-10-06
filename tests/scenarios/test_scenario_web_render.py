@@ -35,8 +35,11 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import propose_action
 from control_plane.capability.broker import Budget
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-from control_plane.state.db import engagement_scope
 from control_plane.tls.engagement_ca import generate_ca, leaf_spki_pin, sign_leaf
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import browser
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -170,7 +173,7 @@ def _render(conn, engagement_id, scope_id, topology, *, path, budget):
         writes_data=False, changes_state=False,
     )
     return propose_action(
-        conn, engagement_id=engagement_id, proposal=proposal,
+        engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
         agent_id="worker-1", sandbox=DockerSandbox(image=browser.IMAGE),
         network_allowlist=[TOOL_CIDR],

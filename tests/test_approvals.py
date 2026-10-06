@@ -26,7 +26,11 @@ from control_plane.audit.query import events_for_subject
 from control_plane.orchestrator.dispatch import reconcile_stale_dispatches
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import deactivate_scope_object
-from control_plane.state.db import engagement_scope, registry_admin_scope
+from control_plane.state.db import registry_admin_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 
 CIDR = "10.79.0.0/24"
 HOST = "10.79.0.2"
@@ -59,7 +63,7 @@ def _escalated_proposal(conn, engagement_id, scope_id):
         discovery={"source": "explicit_scope"},
     )
     return propose_action(
-        conn, engagement_id=engagement_id, proposal=proposal,
+        engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
         policy=_policy(), agent_id="worker-1",
     )
@@ -98,7 +102,7 @@ def _escalated_with_params(conn, engagement_id, scope_id, *, ports, scan_type):
         discovery={"source": "explicit_scope"},
     )
     return propose_action(
-        conn, engagement_id=engagement_id, proposal=proposal,
+        engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
         policy=_policy(), agent_id="worker-1",
     )
@@ -184,7 +188,7 @@ def test_a_proposal_naming_no_parameters_still_records_what_was_granted(
     )
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
             policy=_policy(), agent_id="worker-1",
         )
@@ -245,7 +249,7 @@ def test_the_allow_path_and_the_approval_path_grant_the_same_constraints(
 
     with engagement_scope(eid2) as conn:
         auto = propose_action(
-            conn, engagement_id=eid2, proposal=allowed,
+            engagement_id=eid2, proposal=allowed,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="worker-1",
             sandbox=_NoSandbox(), network_allowlist=[CIDR],
         )
@@ -383,7 +387,7 @@ def test_only_a_human_approval_proposal_can_be_approved(engagement_id, registry)
                            "scope_object_id": scope_id},
             discovery={"source": "explicit_scope"})
         denied = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="w")
         assert denied.decision == "DENY"
         with pytest.raises(ApprovalError, match="not awaiting a human"):

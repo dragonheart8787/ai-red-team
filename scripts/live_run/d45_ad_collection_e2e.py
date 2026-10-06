@@ -238,7 +238,7 @@ def run_main_dispatch(*, engagement_id: str, domain: str, scope_object_id: str,
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=policy, agent_id="d45-scripted-worker",
             actor=ACTOR, sandbox=sandbox, network_allowlist=network_allowlist,
             budget=Budget(max_duration_seconds=max_duration_seconds),

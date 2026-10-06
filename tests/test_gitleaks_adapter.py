@@ -19,9 +19,12 @@ from sqlalchemy import text
 
 from control_plane.capability.broker import Budget, issue_capability
 from control_plane.orchestrator.dispatch import FAILED, SUCCEEDED, dispatch_code_scan
-from control_plane.state.db import engagement_scope
 from tests import adapter_kit
 from tests.gitleaks_support import CANARY, commit, git, history_only_secret_repo
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import gitleaks
 from tool_gateway.sandbox import SandboxResult
 
@@ -155,7 +158,7 @@ def _dispatch(conn, engagement_id, *, target, sandbox, depth=None, ruleset_path=
         },
     )
     return dispatch_code_scan(
-        conn, engagement_id=engagement_id, proposal_id=proposal_id,
+        engagement_id=engagement_id, proposal_id=proposal_id,
         capability=result.capability, target=target, actor="orchestrator",
         sandbox=sandbox, ruleset_path=ruleset_path,
     )

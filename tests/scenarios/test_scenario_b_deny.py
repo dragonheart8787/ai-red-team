@@ -30,7 +30,10 @@ from control_plane.api import function_api
 from control_plane.api.function_api import create_task, propose_action
 from control_plane.audit.query import reconstruct_decision
 from control_plane.provenance import graph
-from control_plane.state.db import engagement_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tests.scenarios.conftest import (
     ALLOWED_CIDR,
     DENIED_TARGET_IP,
@@ -85,7 +88,7 @@ def _run_scenario_b(engagement, effective_policy, spies):
                               created_by=planner.agent_id)
         proposal = worker.propose(task=task, task_id=task_id)
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=reviewer, policy=effective_policy,
             agent_id=worker.agent_id, sandbox=sandbox_spy,
             network_allowlist=[ALLOWED_CIDR],

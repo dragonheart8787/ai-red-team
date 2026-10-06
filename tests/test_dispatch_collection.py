@@ -46,8 +46,12 @@ from control_plane.orchestrator.dispatch import (
     UNPARSEABLE_COLLECTION_RESULT,
     dispatch_collection,
 )
-from control_plane.state.db import credential_admin_scope, engagement_scope
+from control_plane.state.db import credential_admin_scope
 from control_plane.vault.vault import store_credential
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tests.test_vault import _legacy_store
 from tool_gateway import registry
 from tool_gateway.adapters import ad_collector
@@ -190,7 +194,7 @@ def _store_domain_credential(
 
 def _dispatch(conn, engagement_id, capability, *, sandbox, target=TARGET_DOMAIN):
     return dispatch_collection(
-        conn, engagement_id=engagement_id,
+        engagement_id=engagement_id,
         proposal_id=_proposal(conn, engagement_id, action=capability.action),
         capability=capability, target=target, actor="orchestrator",
         sandbox=sandbox, network_allowlist=["10.0.0.0/8"],
@@ -249,7 +253,7 @@ def test_wrong_action_on_the_capability_is_refused_before_anything_runs(engageme
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id, action="network.scan")
         outcome = dispatch_collection(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action="network.scan"),
             capability=capability, target=TARGET_DOMAIN, actor="orchestrator",
             sandbox=_ExplodingSandbox(),
@@ -549,7 +553,7 @@ def test_same_credential_same_domain_is_a_dedup_hit(engagement_id):
             conn, engagement_id, constraints=constraints, credential_id=credential_id,
         )
         first = dispatch_collection(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action=cap1.action),
             capability=cap1, target=TARGET_DOMAIN, actor="orchestrator",
             sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],
@@ -560,7 +564,7 @@ def test_same_credential_same_domain_is_a_dedup_hit(engagement_id):
             conn, engagement_id, constraints=constraints, credential_id=credential_id,
         )
         second = dispatch_collection(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action=cap2.action),
             capability=cap2, target=TARGET_DOMAIN, actor="orchestrator",
             sandbox=_ExplodingSandbox(), network_allowlist=["10.0.0.0/8"],
@@ -580,7 +584,7 @@ def test_a_different_credential_against_the_same_domain_is_not_a_dedup_hit(engag
         credential_a = _store_domain_credential(engagement_id, secret="secret-a-value")
         cap1 = _capability(conn, engagement_id, constraints=constraints, credential_id=credential_a)
         first = dispatch_collection(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action=cap1.action),
             capability=cap1, target=TARGET_DOMAIN, actor="orchestrator",
             sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],
@@ -590,7 +594,7 @@ def test_a_different_credential_against_the_same_domain_is_not_a_dedup_hit(engag
         credential_b = _store_domain_credential(engagement_id, secret="secret-b-value")
         cap2 = _capability(conn, engagement_id, constraints=constraints, credential_id=credential_b)
         second = dispatch_collection(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action=cap2.action),
             capability=cap2, target=TARGET_DOMAIN, actor="orchestrator",
             sandbox=StubSandbox(), network_allowlist=["10.0.0.0/8"],

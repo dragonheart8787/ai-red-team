@@ -35,7 +35,7 @@ check (below) only demonstrates a red result for ``ad.collect``/
 
 Mutation-verified, not merely believed: with ``_dispatch_for_action``'s body
 temporarily reverted to the pre-D45 shape (unconditionally
-``return dispatch_scan(conn, ...)``, ignoring the action entirely — the
+``return dispatch_scan(...)``, ignoring the action entirely — the
 exact defect D45 found and this file exists to catch),
 ``test_every_registered_action_routes_to_its_declared_dispatch_function``
 failed for ``ad.collect`` and ``code.scan`` (both routed to ``dispatch_scan``
@@ -98,7 +98,7 @@ class _RecordingDispatch:
         self.calls: list[dict] = []
         self.__signature__ = inspect.signature(_KNOWN_DISPATCH_FUNCTIONS[name])
 
-    def __call__(self, conn, **kwargs):
+    def __call__(self, **kwargs):
         self.calls.append(kwargs)
         return f"SENTINEL-{self.name}"
 
@@ -143,7 +143,7 @@ def test_every_registered_action_routes_to_its_declared_dispatch_function(
 
     capability = SimpleNamespace(action=action)
     result = function_api._dispatch_for_action(
-        conn=object(), engagement_id="ENG-TEST", proposal_id="PROP-TEST",
+        engagement_id="ENG-TEST", proposal_id="PROP-TEST",
         capability=capability, target="target", actor="tester",
         sandbox=None, network_allowlist=None, execution_context=None,
         proxy_url=None, ca_cert_pem=None, proxy_cert_spki=None,

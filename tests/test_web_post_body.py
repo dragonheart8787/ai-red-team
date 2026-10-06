@@ -33,7 +33,10 @@ from control_plane.api.function_api import execution_constraints, propose_action
 from control_plane.capability.broker import Budget
 from control_plane.evidence import redaction
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-from control_plane.state.db import engagement_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import http_post
 from tool_gateway.sandbox import SandboxResult
 
@@ -137,13 +140,12 @@ def _post_proposal(scope_id, **target_extra):
 def _propose(engagement_id, proposal, *, sandbox=None, reviewer=None):
     sandbox = sandbox if sandbox is not None else _CurlStubSandbox()
     reviewer = reviewer if reviewer is not None else _SpyReviewer()
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal, reviewer=reviewer,
-            policy=_policy(), agent_id="worker-1", sandbox=sandbox,
-            network_allowlist=[ALLOWED_CIDR], proxy_url=PROXY,
-            budget=Budget(max_duration_seconds=60),
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal, reviewer=reviewer,
+        policy=_policy(), agent_id="worker-1", sandbox=sandbox,
+        network_allowlist=[ALLOWED_CIDR], proxy_url=PROXY,
+        budget=Budget(max_duration_seconds=60),
+    )
     return outcome, sandbox, reviewer
 
 

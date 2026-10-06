@@ -20,8 +20,11 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import propose_action
 from control_plane.capability.broker import Budget
 from control_plane.policy.layers import load_effective_policy
-from control_plane.state.db import engagement_scope
 from tests.helpers import EngagementManager, make_engagement
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tests.test_baseline_freeze import Globals, glob  # noqa: F401 - pytest fixture
 
 CIDR = "10.57.0.0/24"
@@ -54,7 +57,7 @@ def _propose(eid: str, action: str):
     )
     with engagement_scope(eid) as conn:
         return propose_action(
-            conn, engagement_id=eid, proposal=proposal,
+            engagement_id=eid, proposal=proposal,
             reviewer=HonestFakeReviewer(risk_hint="low"),
             policy=load_effective_policy(conn, eid),
             agent_id="worker-1", network_allowlist=[CIDR], budget=Budget(max_duration_seconds=30),

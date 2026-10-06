@@ -199,7 +199,7 @@ def run_case(*, engagement_id: str, proposal: ProposedAction, budget: Budget,
         with engagement_scope(engagement_id) as conn:
             policy = load_effective_policy(conn, engagement_id)
             outcome = function_api.propose_action(
-                conn, engagement_id=engagement_id, proposal=proposal,
+                engagement_id=engagement_id, proposal=proposal,
                 reviewer=reviewer, policy=policy, agent_id="d12-5-worker",
                 sandbox=sandbox, network_allowlist=[ALLOWLIST], budget=budget,
                 execution_context={"auth_context_id": "AUTHCTX-D12-5"},

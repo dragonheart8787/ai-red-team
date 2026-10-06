@@ -54,6 +54,7 @@ are recorded together and can be read back with
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -61,14 +62,16 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from agents.base_agent import ProposedAction, ProposedTask, ReviewerOpinion
 from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
 from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
-from control_plane.capability.broker import Budget, issue_capability
+from control_plane.capability.broker import Budget, get_capability, issue_capability
 from control_plane.evidence.redaction import detect_secret_formats
+from control_plane.orchestrator import stages
 from control_plane.orchestrator.dispatch import (
     dispatch_code_scan,
     dispatch_collection,
@@ -78,8 +81,11 @@ from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
 from control_plane.registry.scope_registry import list_scope_objects
+from control_plane.state.db import engagement_scope
 from tool_gateway.adapters._http import AdapterError
 from tool_gateway.registry import adapter_for, side_effect_floor
+
+logger = logging.getLogger("cyberorch.api")
 
 ALLOW = "ALLOW"
 DENY = "DENY"
@@ -278,7 +284,6 @@ _DISPATCH_FUNCTIONS = {
 
 
 def _dispatch_for_action(
-    conn: Connection,
     *,
     engagement_id: str,
     proposal_id: str,
@@ -356,7 +361,7 @@ def _dispatch_for_action(
     # inspect.signature technique dispatch.py's own _build_plan_params
     # already uses to hand each adapter only the proxy-trust input it takes.
     accepted = frozenset(inspect.signature(dispatch_fn).parameters)
-    return dispatch_fn(conn, **{k: v for k, v in all_kwargs.items() if k in accepted})
+    return dispatch_fn(**{k: v for k, v in all_kwargs.items() if k in accepted})
 
 
 #: Deny reasons for a proposal whose request body is refused at the door.
@@ -425,8 +430,40 @@ def refuse_proposed_body(proposal: ProposedAction) -> tuple[str, str] | None:
 
 
 
+@dataclass
+class _Run:
+    """One ``propose_action`` call: what it was given, and what its stages have learned."""
+
+    engagement_id: str
+    proposal: ProposedAction
+    target: Any
+    reviewer: Any
+    policy: EffectivePolicy
+    agent_id: str
+    actor: str
+    sandbox: Any
+    network_allowlist: Sequence[str] | None
+    execution_context: Mapping[str, Any] | None
+    capability_ttl_seconds: int | None
+    requested_budget: Budget
+    proxy_url: str | None
+    ca_cert_pem: str | None
+    proxy_cert_spki: str | None
+    credential_id: str | None
+    # Learned as the stages run. None when this call resumed a proposal past the stage that
+    # produces them -- the committed rows are then the source of truth, not this object.
+    opinion: ReviewerOpinion | None = None
+    metadata: Any = None
+    decision: Any = None
+
+
+#: Returned by a stage that lost the race for its own transition: someone else (a retry, a
+#: restarted service) already moved the proposal on. Not a failure -- the driver reloads the stage
+#: and goes on.
+_RELOAD = object()
+
+
 def propose_action(
-    conn: Connection,
     *,
     engagement_id: str,
     proposal: ProposedAction,
@@ -443,8 +480,40 @@ def propose_action(
     ca_cert_pem: str | None = None,
     proxy_cert_spki: str | None = None,
     credential_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> ActionOutcome:
-    """Canonicalize, resolve, review, decide, and only then act.
+    """Canonicalize, resolve, review, decide, and only then act -- in stages that each commit.
+
+    **This function takes no connection (D58-5, D60).** It used to run on one the caller opened,
+    which made the whole pipeline one transaction that committed only at the caller's exit: a crash,
+    a Postgres restart or a kill switch in the middle rolled every state row back and left only the
+    audit trail to say anything had started. It now opens its own short transactions, the way
+    ``record_audit`` always has, and each commits before the next begins:
+
+    1. **Decide.** The proposal row is committed (``received``); authorization and metadata are
+       resolved; the reviewer is asked and OPA decides *with no transaction held*; then the decision
+       and its reasons are committed (``decided``, or ``closed`` for a DENY / HUMAN_APPROVAL).
+    2. **Issue.** Only for an ALLOW. The broker re-checks the engagement, the kill switch, the
+       credential, the scope and the approval and, if it issues, the capability commits
+       (``capability_issued``); if it refuses, the proposal closes with the reasons.
+    3. **Dispatch** (``dispatch.py``): the run row commits as ``running`` *before* a container
+       exists (``dispatching``); the container runs with no connection held; the evidence and the
+       result commit in their own short transaction the moment it exits (``recorded``).
+    4. **Provenance.** Written afterwards, derived from the committed rows, and repeatable: a
+       failure here cannot touch a result that is already recorded.
+
+    Every transition is a conditional UPDATE (``stages.py``) taken at the start of the transaction
+    that does the stage's work, so a stage happens once however many times it is attempted. A
+    proposal's stage (``action_proposals.pipeline_stage``) is therefore always the last one whose
+    work is fully committed -- that is what a restarted service, or a reconciler, reads.
+
+    **Retrying is safe.** ``idempotency_key`` names the request: a second call with the same key
+    does not create a second proposal. It finds the first, reads its stage, and carries on from the
+    next stage -- never repeating one that committed (no second decision, no second capability, no
+    second dispatch). With no key every call is a new proposal, as before. A key reused for a
+    *different* action or target is refused. A resumed call needs the same arguments it was first
+    given; a proposal found at ``dispatching`` is not re-dispatched (the container may be running
+    or may have run: that is ``unknown_outcome``, the reconciler's, §8.8).
 
     ``credential_id`` (D44/D45) names a Vault-stored credential the issued
     capability should carry — the caller's job to supply, the same way it
@@ -454,9 +523,7 @@ def propose_action(
     ``proxy_url`` / ``ca_cert_pem`` / ``proxy_cert_spki`` are the egress-proxy
     inputs for web.* actions (§8.3, D34/D35/D36). They are threaded straight to
     the Tool Gateway, which hands each adapter only the ones its ``build_plan``
-    declares; a non-web action ignores them. Before D37 these stopped at
-    ``dispatch_scan`` and no web action had been driven through this entry point
-    end to end — D37 closes that by running web.render the whole way.
+    declares; a non-web action ignores them.
     """
     proposal_id = f"PROP-{uuid.uuid4().hex[:10]}"
 
@@ -494,30 +561,118 @@ def propose_action(
             deny_reasons=(reason,), failure=failure,
         )
 
-    _persist_proposal(conn, engagement_id, proposal_id, proposal, target, agent_id)
-    # Attributed to the agent, unlike everything after it, which the
-    # orchestrator does. "Which agent asked for this" is otherwise only in the
-    # proposal row, and the audit trail should stand on its own.
-    record_audit(
-        engagement_id=engagement_id, actor=agent_id, event_type="proposal.submitted",
-        subject_type="action_proposal", subject_id=proposal_id,
-        payload={
-            "action": proposal.action,
-            "target": target.normalized,
-            "authorization": dict(proposal.authorization),
-            "discovery": dict(proposal.discovery),
-            "task_id": proposal.task_id,
-        },
+    run = _Run(
+        engagement_id=engagement_id, proposal=proposal, target=target, reviewer=reviewer,
+        policy=policy, agent_id=agent_id, actor=actor, sandbox=sandbox,
+        network_allowlist=network_allowlist, execution_context=execution_context,
+        capability_ttl_seconds=capability_ttl_seconds,
+        # Resolved before the decision rather than at the broker, because since D12 the policy
+        # checks the requested budget against the size of the target (I3). The same object then
+        # goes to the broker, so what OPA judged and what was issued cannot come apart.
+        requested_budget=budget or Budget(max_duration_seconds=120),
+        proxy_url=proxy_url, ca_cert_pem=ca_cert_pem, proxy_cert_spki=proxy_cert_spki,
+        credential_id=credential_id,
     )
 
-    # --- 2. Authorization Resolver ------------------------------------------
-    authorization = resolve_authorization(
-        conn, target=target, action=proposal.action,
-        authorization=proposal.authorization,
-    )
+    # --- Stage 0: the proposal row, committed -------------------------------
+    key = idempotency_key or f"idem-{proposal_id}"
+    with engagement_scope(engagement_id) as conn:
+        inserted = _persist_proposal(conn, engagement_id, proposal_id, proposal, target,
+                                     agent_id, key)
+        if inserted:
+            # Attributed to the agent, unlike everything after it, which the
+            # orchestrator does. "Which agent asked for this" is otherwise only in the
+            # proposal row, and the audit trail should stand on its own.
+            record_audit(
+                engagement_id=engagement_id, actor=agent_id, event_type="proposal.submitted",
+                subject_type="action_proposal", subject_id=proposal_id,
+                payload={
+                    "action": proposal.action,
+                    "target": target.normalized,
+                    "authorization": dict(proposal.authorization),
+                    "discovery": dict(proposal.discovery),
+                    "task_id": proposal.task_id,
+                },
+            )
+        else:
+            existing = conn.execute(
+                text("SELECT proposal_id, action, target ->> 'normalized' AS normalized "
+                     "FROM action_proposals "
+                     "WHERE engagement_id = :e AND request_idempotency_key = :k"),
+                {"e": engagement_id, "k": key},
+            ).mappings().one()
+    if not inserted:
+        proposal_id = existing["proposal_id"]
+        if existing["action"] != proposal.action or existing["normalized"] != target.normalized:
+            # The key names a request; a different request under it is a bug in the caller, and
+            # silently resuming the first would run something nobody asked for under this name.
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="proposal.rejected", subject_type="action_proposal",
+                subject_id=proposal_id, decision=DENY,
+                reasons=("idempotency_key_reused_with_a_different_request",),
+                payload={"action": proposal.action, "target": target.normalized},
+            )
+            return ActionOutcome(
+                decision=DENY, proposal_id=proposal_id,
+                deny_reasons=("idempotency_key_reused_with_a_different_request",),
+                failure="idempotency key names a different action or target",
+            )
+    return _drive(run, proposal_id)
 
-    # --- 3. Metadata Resolver ------------------------------------------------
-    metadata = resolve_metadata(conn, target=target)
+
+def _stage_of(engagement_id: str, proposal_id: str) -> tuple[str, str | None]:
+    with engagement_scope(engagement_id) as conn:
+        return stages.stage_of(conn, proposal_id)
+
+
+def _drive(run: _Run, proposal_id: str) -> ActionOutcome:
+    """Carry a proposal from whatever stage it is in to the end, committing as it goes."""
+    for _ in range(8):
+        stage, _detail = _stage_of(run.engagement_id, proposal_id)
+        if stage == stages.RECEIVED:
+            out = _decide(run, proposal_id)
+        elif stage == stages.DECIDED:
+            out = _issue(run, proposal_id)
+        elif stage == stages.CAPABILITY_ISSUED:
+            out = _dispatch(run, proposal_id)
+        else:
+            # dispatching / recorded / closed: nothing left for this call to do. Reached by a
+            # resumed proposal; a fresh one returns from the stage that finished it.
+            return _outcome_from_rows(run, proposal_id)
+        if out is not None and out is not _RELOAD:
+            return out
+    raise RuntimeError(f"proposal {proposal_id!r} did not settle after repeated stage passes")
+
+
+def _common(run: _Run, proposal_id: str) -> dict[str, Any]:
+    decision = run.decision
+    return {
+        "proposal_id": proposal_id,
+        "deny_reasons": decision.deny_reasons if decision else (),
+        "approval_reasons": decision.approval_reasons if decision else (),
+        "reviewer_opinion": run.opinion,
+        "metadata_authority": run.metadata.authority if run.metadata else None,
+        "canonical_data_class": run.metadata.data_class if run.metadata else (),
+    }
+
+
+def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
+    """Stage 1: resolve, review, decide -- then commit the decision and nothing else."""
+    proposal, target, eid = run.proposal, run.target, run.engagement_id
+
+    # Reads only, in a transaction of their own: nothing below holds a connection while the
+    # reviewer (a model call) and OPA (a subprocess) run.
+    with engagement_scope(eid) as conn:
+        # --- 2. Authorization Resolver ---
+        authorization = resolve_authorization(
+            conn, target=target, action=proposal.action,
+            authorization=proposal.authorization,
+        )
+        # --- 3. Metadata Resolver ---
+        metadata = resolve_metadata(conn, target=target)
+        scope_objects = list_scope_objects(conn)
+    run.metadata = metadata
 
     # --- 4. Policy Reviewer --------------------------------------------------
     # Runs after the resolvers so it cannot influence what they found, and its
@@ -525,9 +680,10 @@ def propose_action(
     # reviewer claimed alongside what the registry said. That pairing is the
     # evidence for "the AI lied and the kernel was not fooled"; without it the
     # audit trail would show only that the AI said nothing.
-    opinion: ReviewerOpinion = reviewer.review(proposal=proposal, canonical_target=target)
+    opinion: ReviewerOpinion = run.reviewer.review(proposal=proposal, canonical_target=target)
+    run.opinion = opinion
     record_audit(
-        engagement_id=engagement_id, actor=opinion.reviewer_id,
+        engagement_id=eid, actor=opinion.reviewer_id,
         event_type="policy_reviewer.opinion", subject_type="action_proposal",
         subject_id=proposal_id,
         payload={
@@ -545,11 +701,6 @@ def propose_action(
     )
 
     # --- 5. OPA --------------------------------------------------------------
-    # Resolved before the decision rather than at step 6, because since D12 the
-    # policy checks the requested budget against the size of the target (I3).
-    # The same object then goes to the broker, so what OPA judged and what was
-    # issued cannot come apart.
-    requested_budget = budget or Budget(max_duration_seconds=120)
     side_effects = side_effect_floor(
         action=proposal.action,
         writes_data=proposal.writes_data,
@@ -557,8 +708,8 @@ def propose_action(
     )
     policy_input = build_policy_input(
         target=target, action=proposal.action, authorization=authorization,
-        metadata=metadata, policy=policy,
-        scope_objects=list_scope_objects(conn),
+        metadata=metadata, policy=run.policy,
+        scope_objects=scope_objects,
         # The reviewer's words enter here and only here. Both fields are read
         # by approval_reasons alone, so the worst a dishonest reviewer can do
         # is ask for a human.
@@ -566,137 +717,214 @@ def propose_action(
         possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,
         discovery=proposal.discovery,
         # The Worker's claim, floored by what the action's tool actually does
-        # (D34). Before this, worker_base's own docstring was the whole story:
-        # "they are the Worker's description of its own action, they drive
-        # requires_known_classification, and nothing checks them against what
-        # the tool will really do." A Worker proposing web.post with
-        # writes_data=False therefore skipped §5's prerequisite for an action
-        # that writes to the target.
-        #
-        # D31 had an answer for web.get that D34 ended: the flags were
-        # trustworthy because the adapter was structurally incapable of
-        # emitting anything with side effects. Adding web.post makes something
-        # in web.* capable, so the authority moved to the action -- fixed here,
-        # before the decision, and read back off the issued capability at
-        # dispatch, with no parameter on either path that could carry a
-        # different value.
-        #
-        # The floor only raises. A Worker claiming True for a web.get keeps its
-        # caution; lowering it would be the system overriding an agent's
-        # caution with its own optimism, the one direction I6c forbids.
+        # (D34). The floor only raises: lowering it would be the system overriding an agent's
+        # caution with its own optimism, the one direction I6c forbids. See
+        # ``registry.side_effect_floor`` for the argument in full.
         writes_data=side_effects.writes_data,
         changes_state=side_effects.changes_state,
-        capability_request=requested_budget.as_dict(),
+        capability_request=run.requested_budget.as_dict(),
     )
     decision = evaluate(policy_input)
+    run.decision = decision
 
-    _record_decision(conn, proposal_id, decision)
-    record_audit(
-        engagement_id=engagement_id, actor=actor, event_type="policy.decided",
-        subject_type="action_proposal", subject_id=proposal_id,
-        decision=decision.decision,
-        reasons=decision.deny_reasons + decision.approval_reasons,
-        payload={
-            "authorization": authorization.as_dict(),
-            "resource_metadata": metadata.as_dict(),
-            "reviewer_opinion": opinion.as_dict(),
-            "engine_error": decision.engine_error,
-        },
-    )
-    if authorization.scope_object_id:
-        graph.record_edge(
-            conn, engagement_id=engagement_id, from_type="scope_object",
-            from_id=authorization.scope_object_id, to_type="action_proposal",
-            to_id=proposal_id, relation=graph.AUTHORIZED,
-        )
-    if metadata.asset_id:
-        graph.record_edge(
-            conn, engagement_id=engagement_id, from_type="asset",
-            from_id=metadata.asset_id, to_type="action_proposal",
-            to_id=proposal_id, relation=graph.CLASSIFIED,
-        )
+    # --- the decision, committed ----------------------------------------------
+    allowed = decision.decision == ALLOW
+    try:
+        with engagement_scope(eid) as conn:
+            # First statement: win the transition, or do nothing at all. The audit record below
+            # is written only by the winner.
+            stages.take(
+                conn, proposal_id, expected=stages.RECEIVED,
+                new=stages.DECIDED if allowed else stages.CLOSED,
+                detail=None if allowed else f"decision_{decision.decision}",
+            )
+            _record_decision(
+                conn, proposal_id, decision,
+                authorized_scope_object_id=authorization.scope_object_id,
+                classified_asset_id=metadata.asset_id,
+            )
+            record_audit(
+                engagement_id=eid, actor=run.actor, event_type="policy.decided",
+                subject_type="action_proposal", subject_id=proposal_id,
+                decision=decision.decision,
+                reasons=decision.deny_reasons + decision.approval_reasons,
+                payload={
+                    "authorization": authorization.as_dict(),
+                    "resource_metadata": metadata.as_dict(),
+                    "reviewer_opinion": opinion.as_dict(),
+                    "engine_error": decision.engine_error,
+                },
+            )
+    except stages.StageConflict:
+        return _RELOAD
 
-    common = {
-        "proposal_id": proposal_id,
-        "deny_reasons": decision.deny_reasons,
-        "approval_reasons": decision.approval_reasons,
-        "reviewer_opinion": opinion,
-        "metadata_authority": metadata.authority,
-        "canonical_data_class": metadata.data_class,
-    }
-
-    if decision.decision != ALLOW:
+    if not allowed:
         # The function returns here. The Capability Broker and the Tool Gateway
         # are not called — not called and refused, not called with an empty
         # budget. Nothing downstream of this line runs.
-        return ActionOutcome(decision=decision.decision, **common)
+        _record_provenance(run, proposal_id)
+        return ActionOutcome(decision=decision.decision, **_common(run, proposal_id))
+    return None
 
-    # --- 6. Capability Broker ------------------------------------------------
+
+def _issue(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
+    """Stage 2: the broker's decision, committed on its own (independent of dispatch)."""
+    proposal, eid = run.proposal, run.engagement_id
     capability_id = f"CAP-{uuid.uuid4().hex[:10]}"
-    issued = issue_capability(
-        conn, engagement_id=engagement_id, capability_id=capability_id,
-        agent_id=agent_id, action=proposal.action, actor=actor,
-        constraints=execution_constraints(
-            proposal.target, target.logical_identity.value
-        ),
-        budget=requested_budget,
-        ttl_seconds=capability_ttl_seconds or proposal.requested_capability_ttl_seconds,
-        proposal_id=proposal_id,
-        # The scope object the resolver actually authorized against, carried
-        # forward so every later heartbeat can re-check that it still stands
-        # (I8). Taken from the resolution rather than from the proposal: the
-        # proposal is what an agent asked for, the resolution is what was
-        # granted, and only the second is a fact about this system.
-        scope_object_id=authorization.scope_object_id,
-        credential_id=credential_id,
-    )
+    try:
+        with engagement_scope(eid) as conn:
+            stages.take(conn, proposal_id, expected=stages.DECIDED,
+                        new=stages.CAPABILITY_ISSUED)
+            scope_object_id = conn.execute(
+                text("SELECT authorized_scope_object_id FROM action_proposals "
+                     "WHERE proposal_id = :p"),
+                {"p": proposal_id},
+            ).scalar_one()
+            # check_preconditions runs here, in this stage and not at the start of the
+            # pipeline: the engagement's status, the kill switch, the credential, the scope
+            # object and the approval are asked *now*, however long ago the decision was made.
+            issued = issue_capability(
+                conn, engagement_id=eid, capability_id=capability_id,
+                agent_id=run.agent_id, action=proposal.action, actor=run.actor,
+                constraints=execution_constraints(
+                    proposal.target, run.target.logical_identity.value
+                ),
+                budget=run.requested_budget,
+                ttl_seconds=run.capability_ttl_seconds
+                or proposal.requested_capability_ttl_seconds,
+                proposal_id=proposal_id,
+                # The scope object the resolver actually authorized against, carried
+                # forward so every later heartbeat can re-check that it still stands
+                # (I8). Taken from the resolution rather than from the proposal: the
+                # proposal is what an agent asked for, the resolution is what was
+                # granted, and only the second is a fact about this system.
+                scope_object_id=scope_object_id,
+                credential_id=run.credential_id,
+            )
+            if not issued.issued:
+                stages.take(
+                    conn, proposal_id, expected=stages.CAPABILITY_ISSUED, new=stages.CLOSED,
+                    detail="capability_refused:" + ",".join(issued.reasons),
+                )
+    except stages.StageConflict:
+        return _RELOAD
     if not issued.issued:
         # The policy said yes and the broker said no. Both are recorded; the
         # disagreement is the interesting part and must not be flattened.
+        _record_provenance(run, proposal_id)
         return ActionOutcome(
             decision=DENY, deny_reasons=tuple(issued.reasons),
             failure="capability_refused",
-            **{k: v for k, v in common.items() if k != "deny_reasons"},
+            **{k: v for k, v in _common(run, proposal_id).items() if k != "deny_reasons"},
+        )
+    return None
+
+
+def _dispatch(run: _Run, proposal_id: str) -> ActionOutcome:
+    """Stage 3: hand the committed capability to the dispatch function that action needs."""
+    eid = run.engagement_id
+    with engagement_scope(eid) as conn:
+        capability_id = conn.execute(
+            text("SELECT capability_id FROM capabilities WHERE proposal_id = :p "
+                 "ORDER BY issued_at DESC LIMIT 1"),
+            {"p": proposal_id},
+        ).scalar_one_or_none()
+        capability = get_capability(conn, capability_id) if capability_id else None
+    if capability is None:
+        # The stage says a capability was issued and none is there. Nothing runs.
+        with engagement_scope(eid) as conn:
+            stages.advance(conn, proposal_id, expected=stages.CAPABILITY_ISSUED,
+                           new=stages.CLOSED, detail="capability_missing")
+        return ActionOutcome(
+            decision=ALLOW, failure="capability_missing", **_common(run, proposal_id),
         )
 
-    graph.record_edge(
-        conn, engagement_id=engagement_id, from_type="action_proposal",
-        from_id=proposal_id, to_type="capability", to_id=capability_id,
-        relation=graph.ISSUED,
-    )
-
-    # --- 7. Tool Gateway ------------------------------------------------------
     outcome = _dispatch_for_action(
-        conn, engagement_id=engagement_id, proposal_id=proposal_id,
-        capability=issued.capability, target=target.logical_identity.value,
-        actor=actor, sandbox=sandbox, network_allowlist=network_allowlist,
-        execution_context=execution_context,
-        proxy_url=proxy_url, ca_cert_pem=ca_cert_pem,
-        proxy_cert_spki=proxy_cert_spki,
+        engagement_id=eid, proposal_id=proposal_id, capability=capability,
+        target=run.target.logical_identity.value, actor=run.actor, sandbox=run.sandbox,
+        network_allowlist=run.network_allowlist, execution_context=run.execution_context,
+        proxy_url=run.proxy_url, ca_cert_pem=run.ca_cert_pem,
+        proxy_cert_spki=run.proxy_cert_spki,
+    )
+    _record_provenance(run, proposal_id)
+    return ActionOutcome(
+        decision=ALLOW, capability_id=capability.capability_id, run_id=outcome.run_id,
+        evidence_id=outcome.evidence_id, failure=outcome.reason,
+        **_common(run, proposal_id),
     )
 
-    if outcome.run_id:
-        graph.record_edge(
-            conn, engagement_id=engagement_id, from_type="capability",
-            from_id=capability_id, to_type="tool_run", to_id=outcome.run_id,
-            relation=graph.EXECUTED,
-        )
-    if outcome.evidence_id:
-        graph.record_edge(
-            conn, engagement_id=engagement_id, from_type="tool_run",
-            from_id=outcome.run_id, to_type="evidence", to_id=outcome.evidence_id,
-            relation=graph.PRODUCED,
-        )
-    if proposal.task_id and outcome.run_id:
-        graph.record_edge(
-            conn, engagement_id=engagement_id, from_type="task",
-            from_id=proposal.task_id, to_type="action_proposal",
-            to_id=proposal_id, relation=graph.PROPOSED,
+
+def _record_provenance(run: _Run, proposal_id: str) -> None:
+    """Provenance, after the result and apart from it (D60).
+
+    A failure here is logged and nothing else: the proposal's result is already committed, and
+    ``graph.record_provenance`` can be run again for it (``provenance_complete`` says whether it
+    has been).
+    """
+    try:
+        with engagement_scope(run.engagement_id) as conn:
+            graph.record_provenance(
+                conn, engagement_id=run.engagement_id, proposal_id=proposal_id,
+            )
+    except SQLAlchemyError as exc:
+        logger.error(
+            "provenance for %s was not recorded (%s); its result is committed and "
+            "graph.record_provenance can be run again", proposal_id, exc,
         )
 
+
+def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
+    """The outcome of a proposal that this call found already past the stages it could drive.
+
+    Built from what is committed -- the point of committing it -- and nothing is re-executed. A
+    proposal found ``dispatching`` is reported as such and left alone: its container may be
+    running or may have run, which is ``unknown_outcome``, and the reconciler's to resolve.
+    """
+    with engagement_scope(run.engagement_id) as conn:
+        row = conn.execute(
+            text("SELECT decision, decision_reasons, pipeline_stage, stage_detail "
+                 "FROM action_proposals WHERE proposal_id = :p"),
+            {"p": proposal_id},
+        ).mappings().one()
+        capability_id = conn.execute(
+            text("SELECT capability_id FROM capabilities WHERE proposal_id = :p "
+                 "ORDER BY issued_at DESC LIMIT 1"),
+            {"p": proposal_id},
+        ).scalar_one_or_none()
+        run_row = conn.execute(
+            text("SELECT run_id FROM tool_runs WHERE proposal_id = :p "
+                 "ORDER BY started_at DESC, run_id DESC LIMIT 1"),
+            {"p": proposal_id},
+        ).scalar_one_or_none()
+        evidence_id = conn.execute(
+            text("SELECT evidence_id FROM evidence WHERE run_id = :r LIMIT 1"),
+            {"r": run_row},
+        ).scalar_one_or_none() if run_row else None
+    stage, detail = row["pipeline_stage"], row["stage_detail"] or ""
+    reasons = tuple(row["decision_reasons"] or ())
+    decision, failure = row["decision"] or DENY, None
+    deny, approval = (reasons if decision == DENY else ()), (
+        reasons if decision == HUMAN_APPROVAL else ())
+    if stage == stages.DISPATCHING:
+        failure = "dispatch_in_progress_or_unknown_outcome"
+    elif detail.startswith("capability_refused:"):
+        decision, deny, failure = DENY, tuple(detail.split(":", 1)[1].split(",")), \
+            "capability_refused"
+    elif stage == stages.CLOSED and not detail.startswith("decision_"):
+        failure = "dedup_hit" if detail.startswith("dedup_hit:") else detail or None
+        if detail.startswith("dedup_hit:"):
+            run_row = detail.removeprefix("dedup_hit:")
+    elif stage == stages.RECORDED and detail not in ("succeeded", "failed"):
+        failure = detail or None
+    if stage in stages.TERMINAL:
+        _record_provenance(run, proposal_id)
     return ActionOutcome(
-        decision=ALLOW, capability_id=capability_id, run_id=outcome.run_id,
-        evidence_id=outcome.evidence_id, failure=outcome.reason, **common,
+        decision=decision, proposal_id=proposal_id, deny_reasons=deny,
+        approval_reasons=approval, capability_id=capability_id, run_id=run_row,
+        evidence_id=evidence_id, failure=failure,
+        reviewer_opinion=run.opinion,
+        metadata_authority=run.metadata.authority if run.metadata else None,
+        canonical_data_class=run.metadata.data_class if run.metadata else (),
     )
 
 
@@ -1004,11 +1232,17 @@ def execution_constraints(
 
 def _persist_proposal(
     conn: Connection, engagement_id: str, proposal_id: str,
-    proposal: ProposedAction, target, agent_id: str,
-) -> None:
+    proposal: ProposedAction, target, agent_id: str, idempotency_key: str,
+) -> bool:
+    """Insert the proposal; False if one with this idempotency key already exists (D60).
+
+    ``ON CONFLICT DO NOTHING`` on the table's own unique index (engagement, key), so two callers
+    that race with the same key cannot both create a proposal -- the loser gets False and resumes
+    the winner's.
+    """
     import json
 
-    conn.execute(
+    inserted = conn.execute(
         text("""
             INSERT INTO action_proposals (proposal_id, engagement_id, task_id,
                 agent_id, request_idempotency_key, action, target, "authorization",
@@ -1017,10 +1251,12 @@ def _persist_proposal(
             VALUES (:pid, :eid, :tid, :agent, :key, :action, CAST(:target AS jsonb),
                     CAST(:auth AS jsonb), CAST(:disc AS jsonb), :resources,
                     :expected, :writes, :changes, :reason, :ttl)
+            ON CONFLICT (engagement_id, request_idempotency_key) DO NOTHING
+            RETURNING proposal_id
         """),
         {
             "pid": proposal_id, "eid": engagement_id, "tid": proposal.task_id,
-            "agent": agent_id, "key": f"idem-{proposal_id}", "action": proposal.action,
+            "agent": agent_id, "key": idempotency_key, "action": proposal.action,
             # D30: the canonical target *plus* the execution parameters it does
             # not carry. `CanonicalTarget.as_dict()` describes what the target
             # *is* -- logical_identity, port, path, normalized -- because that is
@@ -1049,13 +1285,25 @@ def _persist_proposal(
             "reason": proposal.reason,
             "ttl": proposal.requested_capability_ttl_seconds,
         },
-    )
+    ).scalar_one_or_none()
+    return inserted is not None
 
 
-def _record_decision(conn: Connection, proposal_id: str, decision) -> None:
+def _record_decision(
+    conn: Connection, proposal_id: str, decision, *,
+    authorized_scope_object_id: str | None, classified_asset_id: str | None,
+) -> None:
+    """The decision, its reasons, and the two facts the resolvers established.
+
+    The scope object and asset are kept on the proposal so that its provenance edges can be derived
+    from committed rows later (``graph.record_provenance``) instead of being written alongside the
+    decision from values only this call holds.
+    """
     conn.execute(
         text("UPDATE action_proposals SET decision = :d, decision_reasons = :r, "
+             "authorized_scope_object_id = :scope, classified_asset_id = :asset, "
              "updated_at = now() WHERE proposal_id = :p"),
         {"p": proposal_id, "d": decision.decision,
-         "r": list(decision.deny_reasons + decision.approval_reasons)},
+         "r": list(decision.deny_reasons + decision.approval_reasons),
+         "scope": authorized_scope_object_id, "asset": classified_asset_id},
     )

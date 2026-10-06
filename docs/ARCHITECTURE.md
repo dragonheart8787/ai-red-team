@@ -829,6 +829,8 @@ QUEUED → DISPATCHING → RUNNING → SUCCEEDED / FAILED
                   │
                   └── crash ──▶ UNKNOWN_OUTCOME（絕不自動 retry）
 ```
+**（D60）** 這條 invariant 在 propose_action 還是單一 transaction 的時候，其實碰不到崩潰：run row 在容器結束前根本不存在，reconciler 找不到東西可 reconcile。現在 run row 在容器啟動*之前*就已 commit（`pipeline_stage = dispatching`），見 `docs/D60_PIPELINE_STAGES_REPORT.md`。
+
 `UNKNOWN_OUTCOME` 不能是死胡同——需要一個 reconciliation job，定期對還卡在這個狀態的 dispatch 嘗試向 tool/adapter 查詢實際執行狀態（不是所有工具都支援被動查詢；查得到就更新成真實結果，查不到就保持 `unknown_outcome` 並升級成需要人工介入的 alert，絕不能靜默地重新執行一次可能有副作用的 action）。
 
 ### 8.9 修正：Discovery Provenance ≠ Authorization Provenance（I8）

@@ -41,8 +41,12 @@ from control_plane.capability.broker import Budget
 from control_plane.policy.layers import publish_policy_layer
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import register_scope_object
-from control_plane.state.db import credential_admin_scope, engagement_scope, registry_admin_scope
+from control_plane.state.db import credential_admin_scope, registry_admin_scope
 from control_plane.vault.vault import store_credential
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tests.test_git_fetch_credential import REAL_TOKEN, private_git_server  # noqa: F401
 from tool_gateway.adapters import semgrep
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
@@ -145,7 +149,7 @@ def test_code_scan_runs_end_to_end_through_propose_action(
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
             actor=ACTOR, sandbox=sandbox, network_allowlist=["10.0.0.0/8"],
             budget=Budget(max_duration_seconds=90), credential_id=credential_id,
@@ -246,7 +250,7 @@ def test_code_scan_without_a_credential_still_reaches_dispatch_code_scan(
 
         with engagement_scope(engagement_id) as conn:
             outcome = propose_action(
-                conn, engagement_id=engagement_id, proposal=proposal,
+                engagement_id=engagement_id, proposal=proposal,
                 reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
                 actor=ACTOR, sandbox=DockerSandbox(image=semgrep.IMAGE),
                 network_allowlist=["10.0.0.0/8"], budget=Budget(max_duration_seconds=90),

@@ -26,6 +26,12 @@ Option A) — it sharpens the mechanism behind it. Full account:
 `docs/D45_AD_COLLECTION_E2E_REPORT.md` §6, and
 `docs/ACCEPTANCE_MVP1_AGENTS.md` 5.24's own addendum.
 
+**Update (D60)**: the mechanism D45 found (the whole pipeline in one open transaction, so a mid-flight
+revoke was a no-op against the run) no longer holds — the capability is committed before the container
+starts (`docs/D60_PIPELINE_STAGES_REPORT.md`). §2.2's exposure window is unchanged: nothing stops a running
+container, and the credential file stays for up to `max_duration_seconds` (D44-7 Option A, still the
+accepted position; the active kill is D58-16).
+
 **Addendum (D53 closeout)**: §9 records that a `web.post` request body is not a vault
 use case yet (ACCEPTANCE 5.29): the vault has no delivery path for it, and the body is
 restricted to constructed test data. **Addendum (D50)**: §7 records one place where the implemented design does not

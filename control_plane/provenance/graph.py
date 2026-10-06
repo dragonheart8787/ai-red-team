@@ -133,3 +133,115 @@ def edges_from(conn: Connection, *, node_type: str, node_id: str) -> list[Edge]:
         Edge(r["from_type"], r["from_id"], r["to_type"], r["to_id"], r["relation"])
         for r in rows
     ]
+
+
+def record_edge_once(
+    conn: Connection, *, engagement_id: str, from_type: str, from_id: str,
+    to_type: str, to_id: str, relation: str,
+) -> bool:
+    """Append an edge unless that exact edge is already there; True if it was written.
+
+    The table has no uniqueness constraint (polymorphic edges, see the module docstring), so the
+    idempotency lives here. It is what lets :func:`record_provenance` be run again for a proposal
+    -- after a failure, or by a later backfill -- and add only what is missing.
+    """
+    written = conn.execute(
+        text("""
+            INSERT INTO provenance_edges (engagement_id, from_type, from_id,
+                to_type, to_id, relation)
+            SELECT :eng, :ft, :fi, :tt, :ti, :rel
+            WHERE NOT EXISTS (
+                SELECT 1 FROM provenance_edges
+                WHERE engagement_id = :eng AND from_type = :ft AND from_id = :fi
+                  AND to_type = :tt AND to_id = :ti AND relation = :rel)
+            RETURNING id
+        """),
+        {"eng": engagement_id, "ft": from_type, "fi": from_id,
+         "tt": to_type, "ti": to_id, "rel": relation},
+    ).scalar_one_or_none()
+    return written is not None
+
+
+def record_provenance(conn: Connection, *, engagement_id: str, proposal_id: str) -> bool:
+    """Write a finished proposal's provenance edges, derived from committed rows (D60).
+
+    Provenance used to be written in the same transaction as the result it describes, so one late,
+    cheap edge insert that failed rolled back a tool run that had already succeeded. It is now a
+    step of its own, run *after* the proposal's last stage has committed, and every edge is derived
+    from rows that are already there -- the proposal, its capability, its runs, their evidence --
+    rather than from values held in a caller's memory. So it can be run again: a second call adds
+    only what is missing, and a proposal whose first attempt failed is repaired by calling it.
+
+    Returns False without writing anything for a proposal that is not finished (its stage is not
+    terminal): the edges describe what happened, and it has not finished happening.
+
+    An edge for a run is drawn only if the run was *started* -- it succeeded, failed with an exit
+    code, or ended ``unknown_outcome``. A run row the sandbox refused before any container existed
+    (D59: a network refusal) has none of those, and has not executed anything.
+    """
+    proposal = conn.execute(
+        text("""
+            SELECT task_id, pipeline_stage, stage_detail,
+                   authorized_scope_object_id, classified_asset_id
+            FROM action_proposals WHERE proposal_id = :p
+        """),
+        {"p": proposal_id},
+    ).mappings().one_or_none()
+    if proposal is None or proposal["pipeline_stage"] not in ("recorded", "closed"):
+        return False
+
+    def edge(from_type, from_id, to_type, to_id, relation) -> None:
+        record_edge_once(
+            conn, engagement_id=engagement_id, from_type=from_type, from_id=from_id,
+            to_type=to_type, to_id=to_id, relation=relation,
+        )
+
+    if proposal["authorized_scope_object_id"]:
+        edge("scope_object", proposal["authorized_scope_object_id"],
+             "action_proposal", proposal_id, AUTHORIZED)
+    if proposal["classified_asset_id"]:
+        edge("asset", proposal["classified_asset_id"], "action_proposal", proposal_id,
+             CLASSIFIED)
+    capabilities = conn.execute(
+        text("SELECT capability_id FROM capabilities WHERE proposal_id = :p ORDER BY issued_at"),
+        {"p": proposal_id},
+    ).scalars().all()
+    for capability_id in capabilities:
+        edge("action_proposal", proposal_id, "capability", capability_id, ISSUED)
+
+    ran = False
+    runs = conn.execute(
+        text("""
+            SELECT run_id, capability_id FROM tool_runs
+            WHERE proposal_id = :p
+              AND (status IN ('succeeded', 'unknown_outcome') OR exit_code IS NOT NULL)
+            ORDER BY started_at, run_id
+        """),
+        {"p": proposal_id},
+    ).mappings().all()
+    for run in runs:
+        ran = True
+        if run["capability_id"]:
+            edge("capability", run["capability_id"], "tool_run", run["run_id"], EXECUTED)
+        for evidence_id in conn.execute(
+            text("SELECT evidence_id FROM evidence WHERE run_id = :r ORDER BY evidence_id"),
+            {"r": run["run_id"]},
+        ).scalars().all():
+            edge("tool_run", run["run_id"], "evidence", evidence_id, PRODUCED)
+
+    # A dedup hit ran nothing under this capability but is answered by an earlier run, and the
+    # edge to it is how a reader finds out which (the stage detail carries its id).
+    detail = proposal["stage_detail"] or ""
+    if detail.startswith("dedup_hit:") and capabilities:
+        cached = detail.removeprefix("dedup_hit:")
+        edge("capability", capabilities[-1], "tool_run", cached, EXECUTED)
+        ran = True
+
+    if proposal["task_id"] and ran:
+        edge("task", proposal["task_id"], "action_proposal", proposal_id, PROPOSED)
+
+    conn.execute(
+        text("UPDATE action_proposals SET provenance_complete = TRUE WHERE proposal_id = :p"),
+        {"p": proposal_id},
+    )
+    return True

@@ -442,17 +442,25 @@ def test_code_scans_join_no_network():
     assert isinstance(flag, ast.Constant) and flag.value is True
 
 
-def test_every_sandbox_unavailable_handler_is_preceded_by_the_network_one():
+def test_the_sandbox_unavailable_handler_is_preceded_by_the_network_one():
     """``NetworkNotAvailable`` is a ``SandboxUnavailable``. A handler for the base
     placed first would catch it and record 'unknown outcome' for a run that never
-    started -- the mislabel D59 exists to avoid for this case."""
-    tries = [n for n in ast.walk(_dispatch_tree()) if isinstance(n, ast.Try)
+    started -- the mislabel D59 exists to avoid for this case. Since D60 the handlers
+    live in one place, ``_execute``, which all three dispatch functions go through."""
+    tree = _dispatch_tree()
+    tries = [n for n in ast.walk(tree) if isinstance(n, ast.Try)
              and any(isinstance(h.type, ast.Name) and h.type.id == "SandboxUnavailable"
                      for h in n.handlers)]
-    assert len(tries) == 3
-    for node in tries:
-        names = [h.type.id for h in node.handlers if isinstance(h.type, ast.Name)]
-        assert names.index("NetworkNotAvailable") < names.index("SandboxUnavailable")
+    assert len(tries) == 1
+    names = [h.type.id for h in tries[0].handlers if isinstance(h.type, ast.Name)]
+    assert names.index("NetworkNotAvailable") < names.index("SandboxUnavailable")
+    public = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+              and n.name in ("dispatch_scan", "dispatch_collection", "dispatch_code_scan")}
+    assert len(public) == 3
+    for name, function in public.items():
+        called = {c.func.id for c in ast.walk(function)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        assert "_execute" in called, f"{name} must run its container through _execute"
 
 
 class _RefusingSandbox:
@@ -493,7 +501,7 @@ def test_a_network_refusal_is_failed_not_unknown_outcome(engagement_id, registry
     )
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=policy, agent_id="w",
             sandbox=_RefusingSandbox(exc),
         )

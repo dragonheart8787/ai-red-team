@@ -54,7 +54,11 @@ from control_plane.orchestrator.engagement import (
 )
 from control_plane.registry.metadata_registry import deactivate_metadata
 from control_plane.registry.scope_registry import deactivate_scope_object
-from control_plane.state.db import engagement_scope, registry_admin_scope
+from control_plane.state.db import registry_admin_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 
 
 def _uid(prefix: str) -> str:
@@ -271,7 +275,7 @@ def test_reconstruct_decision_returns_an_ordered_grouped_chain(engagement_id):
     )
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=policy, agent_id="fake-worker",
         )
         chain = reconstruct_decision(conn, proposal_id=outcome.proposal_id)
@@ -323,7 +327,7 @@ def test_reconstruct_decision_follows_the_chain_into_capability_and_run(
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=policy, agent_id="fake-worker",
             sandbox=FailingSandbox(), network_allowlist=["10.82.0.0/24"],
         )
@@ -374,7 +378,7 @@ def test_reconstruct_decision_exposes_the_reviewers_claim_beside_the_truth(
     )
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=AdversarialFakeReviewer(), policy=policy,
             agent_id="fake-worker",
         )
@@ -443,7 +447,7 @@ def _task_with_two_proposals(engagement_id):
                 task_id=task_id,
             )
             outcome = propose_action(
-                conn, engagement_id=engagement_id, proposal=proposal,
+                engagement_id=engagement_id, proposal=proposal,
                 reviewer=HonestFakeReviewer(), policy=policy, agent_id="fake-worker",
             )
             proposal_ids.append(outcome.proposal_id)
@@ -605,8 +609,12 @@ def test_a_failed_audit_write_takes_the_operation_down_with_it(
 
     # AuditWriteError, not a bare exception: the failure is typed so a caller
     # cannot mistake it for an ordinary database hiccup and retry past it.
+    from control_plane.state.db import engagement_scope as transactional_scope
+
     with pytest.raises(AuditWriteError):
-        with engagement_scope(engagement_id) as conn:
+        # The real, transactional scope: this test is about the rollback, which a
+        # statement-by-statement committing scope would not do.
+        with transactional_scope(engagement_id) as conn:
             monkeypatch.setattr(audit_logger, "audit_scope", fail_on_issued)
             issue_capability(
                 conn, engagement_id=engagement_id, capability_id=capability_id,

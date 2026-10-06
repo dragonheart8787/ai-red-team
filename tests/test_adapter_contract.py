@@ -264,10 +264,9 @@ def _mutated_dispatch_code_scan(tmp_path, monkeypatch):
     import textwrap
     import types
 
-    from control_plane.api import function_api
     from control_plane.orchestrator import dispatch
 
-    source = textwrap.dedent(inspect.getsource(dispatch.dispatch_code_scan))
+    source = textwrap.dedent(inspect.getsource(dispatch._code_scan_start))
     fixed = (
         "adapter = registry.adapter_for(capability.action)\n"
         "    if adapter is None or getattr(adapter, \"NEEDS_DISPATCH\", None) "
@@ -279,7 +278,7 @@ def _mutated_dispatch_code_scan(tmp_path, monkeypatch):
     path.write_text(old)
     scratch = dict(vars(dispatch))
     exec(compile(old, str(path), "exec"), scratch)  # noqa: S102 - test-only, our own source
-    built = scratch["dispatch_code_scan"]
+    built = scratch["_code_scan_start"]
     # Rebind to the module's *live* globals, so the probe's patches (and every helper
     # the function calls) are the real ones -- the function is otherwise byte-for-byte
     # the tree's own, with its source file on disk for `inspect`.
@@ -287,7 +286,9 @@ def _mutated_dispatch_code_scan(tmp_path, monkeypatch):
         built.__code__, vars(dispatch), built.__name__, built.__defaults__, built.__closure__,
     )
     old_function.__kwdefaults__ = built.__kwdefaults__
-    monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", old_function)
+    # D60: the adapter is resolved in the first stage, ``_code_scan_start``; the public function
+    # reaches it by name, so the mutation is installed there and the real wrapper runs around it.
+    monkeypatch.setattr(dispatch, "_code_scan_start", old_function)
 
 
 def test_the_d55_case_is_caught_and_the_d53_checks_alone_do_not_catch_it(tmp_path, monkeypatch):
@@ -320,7 +321,7 @@ def test_the_probe_alone_catches_a_function_that_hides_its_binding(monkeypatch):
     from control_plane.api import function_api
     from tool_gateway.adapters import gitleaks
 
-    def _hides(conn, *, capability, **_):
+    def _hides(*, capability, **_):
         module = sys.modules["tool_gateway.adapters." + "sem" + "grep"]
         module.build_plan(constraints={}, budget={}, target="x#main")
 
@@ -336,7 +337,7 @@ def test_the_static_check_alone_catches_a_binding_the_probe_never_reaches(monkey
     from control_plane.orchestrator import dispatch
     from tool_gateway.adapters import gitleaks, semgrep
 
-    def _dormant(conn, *, capability, **_):
+    def _dormant(*, capability, **_):
         adapter = dispatch.registry.adapter_for(capability.action)
         if capability.action == "never.probed":
             adapter = semgrep
@@ -359,7 +360,7 @@ def test_a_binding_hidden_in_a_helper_is_followed(monkeypatch):
     _helper.__module__ = dispatch.__name__
     monkeypatch.setattr(dispatch, "_d56_helper", _helper, raising=False)
 
-    def _via_helper(conn, *, capability, **_):
+    def _via_helper(*, capability, **_):
         _d56_helper().build_plan(constraints={}, budget={}, target="x#main")  # noqa: F821
 
     _via_helper.__globals__["_d56_helper"] = _helper
@@ -375,7 +376,7 @@ def test_a_dispatch_function_that_cannot_be_probed_is_reported_not_skipped(monke
     from control_plane.api import function_api
     from tool_gateway.adapters import gitleaks
 
-    def _needs_a_database(conn, *, capability, **_):
+    def _needs_a_database(*, capability, **_):
         raise RuntimeError("needs a real connection")
 
     monkeypatch.setitem(function_api._DISPATCH_FUNCTIONS, "dispatch_code_scan", _needs_a_database)

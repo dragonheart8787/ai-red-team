@@ -26,7 +26,6 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api import function_api
 from control_plane.api.function_api import propose_action
 from control_plane.policy.engine import evaluate
-from control_plane.state.db import engagement_scope
 from tests.scenarios.conftest import ALLOWED_CIDR, uid
 
 UNCLASSIFIED_IP = "10.79.0.31"
@@ -80,13 +79,12 @@ def _propose(engagement, effective_policy, *, writes_data=False,
         writes_data=writes_data,
         changes_state=changes_state,
     )
-    with engagement_scope(engagement_id) as conn:
-        return propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=effective_policy,
-            agent_id="fake-worker", sandbox=None,
-            network_allowlist=[ALLOWED_CIDR],
-        )
+    return propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=effective_policy,
+        agent_id="fake-worker", sandbox=None,
+        network_allowlist=[ALLOWED_CIDR],
+    )
 
 
 @pytest.mark.parametrize("field", ["writes_data", "changes_state"])

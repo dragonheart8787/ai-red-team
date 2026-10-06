@@ -389,7 +389,7 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=reviewer, policy=policy, agent_id=worker.agent_id,
             sandbox=sandbox, network_allowlist=network_allowlist_for(action),
             budget=budget_for(action),

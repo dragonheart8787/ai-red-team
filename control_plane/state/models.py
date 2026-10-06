@@ -135,6 +135,13 @@ action_proposals = Table(
     Column("requested_capability_ttl_seconds", Integer),
     Column("decision", Text),
     Column("decision_reasons", ARRAY(Text), nullable=False),
+    # D58-5/D60 (migration 0016): where the proposal is in the pipeline, as committed state.
+    Column("pipeline_stage", Text, nullable=False),
+    Column("stage_detail", Text),
+    _ts("stage_updated_at"),
+    Column("authorized_scope_object_id", Text),
+    Column("classified_asset_id", Text),
+    Column("provenance_complete", Boolean, nullable=False),
     _ts("created_at"), _ts("updated_at"),
 )
 

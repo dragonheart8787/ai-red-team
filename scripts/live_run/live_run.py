@@ -174,14 +174,18 @@ def run_pipeline(*, engagement_id: str, scope_object_id: str, target_ip: str,
                               created_by=planner.agent_id)
         claimed = claim_task(conn, engagement_id=engagement_id,
                              agent_id=worker.agent_id)
-        proposal = worker.propose(task=task, task_id=task_id)
+    # D60: the task is committed before the proposal that names it. propose_action opens its own
+    # transactions, so it cannot see (and the proposal's foreign key cannot reference) a task
+    # still sitting in this one.
+    proposal = worker.propose(task=task, task_id=task_id)
 
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=reviewer, policy=policy, agent_id=worker.agent_id,
-            sandbox=sandbox, network_allowlist=allowlist,
-            execution_context={"auth_context_id": "AUTHCTX-D11"},
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=reviewer, policy=policy, agent_id=worker.agent_id,
+        sandbox=sandbox, network_allowlist=allowlist,
+        execution_context={"auth_context_id": "AUTHCTX-D11"},
+    )
+    with engagement_scope(engagement_id) as conn:
         complete_task(conn, engagement_id=engagement_id, task_id=task_id,
                       result_summary=f"live scan {outcome.decision}",
                       actor=worker.agent_id)

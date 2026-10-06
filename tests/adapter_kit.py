@@ -603,14 +603,24 @@ def probe_dispatch(action: str) -> tuple[str | None, list[Mapping[str, Any]], Ex
 
     reached: str | None = None
     error: Exception | None = None
+    @contextlib.contextmanager
+    def _no_database(_engagement_id: str):
+        # Dispatch opens its own transactions (D60); the probe touches no database, so each one
+        # is a stand-in, and the capability the caller holds is taken as the current one.
+        yield object()
+
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch.object(dispatch, "record_audit", _record_audit))
         stack.enter_context(mock.patch.object(dispatch, "_set_state", lambda *a, **k: None))
+        stack.enter_context(mock.patch.object(dispatch, "engagement_scope", _no_database))
+        stack.enter_context(mock.patch.object(dispatch, "_close_early", lambda *a, **k: None))
+        stack.enter_context(
+            mock.patch.object(dispatch, "_fresh_capability", lambda conn, eid, cap: (cap, None)))
         for module in {id(m): m for m in registry.ADAPTERS.values()}.values():
             stack.enter_context(mock.patch.object(module, "build_plan", _reach(module)))
         try:
             function_api._dispatch_for_action(
-                conn=object(), engagement_id="ENG-D56-PROBE", proposal_id="PROP-D56-PROBE",
+                engagement_id="ENG-D56-PROBE", proposal_id="PROP-D56-PROBE",
                 capability=capability, target="probe#main", actor="d56-probe", sandbox=None,
                 network_allowlist=None, execution_context=None,
                 proxy_url="http://probe.invalid:1", ca_cert_pem=None, proxy_cert_spki=None,

@@ -12,6 +12,18 @@ engagements serialize and the orchestrator must treat `NetworkInUse` as "retry l
 in-process semaphores" of D58-13 should account for that, and the 15-container pool ceiling (X6) is unchanged.
 Everything below is otherwise as written at `ad2c8d5`.
 
+**Addendum (D60).** D58-5 is decided and built: **Option B**, `propose_action` split into stages that each
+commit — see `docs/D60_PIPELINE_STAGES_REPORT.md` (ACCEPTANCE 5.53). Effects on this document, read with
+that report: premise 5 of §0.2 is now false (a crash leaves a committed `dispatching` row and
+`reconcile_stale_dispatches` finds it); X1, X3 and X11 are closed, X2 is half-closed (the kill switch
+reaches the committed capability and is checked at every stage boundary; it still does not stop a running
+container); X6 is reduced to a stage's transaction, not removed (re-measured: 12 concurrent fine, 25
+started together fail 9, cleanly) — a dedicated audit pool or a concurrency cap is the first item of
+D58-13. D58-6, -7, -8, -9, -16 are now unblocked and none of them is done. Two facts the orchestrator must
+honour: it must pass an `idempotency_key` (derived from task and attempt) on every `propose_action`, and
+a proposal found at `dispatching` is the reconciler's, not the retry's. Everything else below is as
+written at `ad2c8d5`.
+
 Investigation and design only. No schema, migration, code, Rego, harness or service skeleton was
 written or changed for this document. Every claim below about the current system was checked against
 the tree at the time of writing (`d64b335`, post-D57 merge), and each is tagged with *how* it was

@@ -146,20 +146,22 @@ def collect_scan_evidence(*, engagement_id: str, scope_object_id: str,
             conn, engagement_id=engagement_id, task=task,
             created_by=planner.agent_id,
         )
-        outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id,
-            proposal=worker.propose(task=task, task_id=task_id),
-            reviewer=HonestFakeReviewer(risk_hint="low"), policy=policy,
-            agent_id=worker.agent_id, sandbox=sandbox,
-            network_allowlist=[ALLOWLIST],
-            budget=Budget(max_duration_seconds=120, max_targets=1),
-            execution_context={"auth_context_id": "AUTHCTX-D13-SETUP"},
+    # D60: the task is committed before the proposal that names it (see live_run.py).
+    outcome = function_api.propose_action(
+        engagement_id=engagement_id,
+        proposal=worker.propose(task=task, task_id=task_id),
+        reviewer=HonestFakeReviewer(risk_hint="low"), policy=policy,
+        agent_id=worker.agent_id, sandbox=sandbox,
+        network_allowlist=[ALLOWLIST],
+        budget=Budget(max_duration_seconds=120, max_targets=1),
+        execution_context={"auth_context_id": "AUTHCTX-D13-SETUP"},
+    )
+    if outcome.evidence_id is None:
+        raise SystemExit(
+            f"the setup scan did not produce evidence: {outcome.decision} "
+            f"{outcome.deny_reasons} {outcome.approval_reasons}"
         )
-        if outcome.evidence_id is None:
-            raise SystemExit(
-                f"the setup scan did not produce evidence: {outcome.decision} "
-                f"{outcome.deny_reasons} {outcome.approval_reasons}"
-            )
+    with engagement_scope(engagement_id) as conn:
         view = conn.execute(
             text("SELECT derived_view FROM evidence WHERE evidence_id = :e"),
             {"e": outcome.evidence_id},
@@ -236,7 +238,7 @@ def run_worker_once(*, worker, task, candidates, observations, engagement_id,
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=reviewer, policy=policy, agent_id=worker.agent_id,
             sandbox=sandbox, network_allowlist=[ALLOWLIST],
             budget=Budget(max_duration_seconds=60, max_targets=256),
@@ -286,7 +288,7 @@ def kernel_control(*, engagement_id: str, candidates, target_ip: str,
         with engagement_scope(engagement_id) as conn:
             policy = load_effective_policy(conn, engagement_id)
             outcome = function_api.propose_action(
-                conn, engagement_id=engagement_id, proposal=proposal,
+                engagement_id=engagement_id, proposal=proposal,
                 reviewer=reviewer, policy=policy, agent_id="synthetic-fooled-worker",
                 sandbox=sandbox, network_allowlist=[ALLOWLIST],
                 budget=Budget(max_duration_seconds=60, max_targets=256),

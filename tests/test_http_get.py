@@ -481,7 +481,6 @@ def test_opa_receives_false_for_both_side_effect_flags(engagement_id, registry,
     from agents.base_agent import ProposedAction
     from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
     from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-    from control_plane.state.db import engagement_scope
 
     scope_id = f"SCOPE-{engagement_id[-10:]}"
     registry.scope(scope_object_id=scope_id, type="cidr", value=ALLOWED_CIDR,
@@ -514,12 +513,11 @@ def test_opa_receives_false_for_both_side_effect_flags(engagement_id, registry,
         def run(self, **kwargs):
             raise SandboxUnavailable("dispatch is not what this test measures")
 
-    with engagement_scope(engagement_id) as conn:
-        api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
-            sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
-        )
+    api.propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
+        sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
+    )
 
     assert seen, "the policy engine was never reached"
     assert seen["action"]["action"] == "web.get"
@@ -560,7 +558,6 @@ def _web_get_decision(engagement_id, registry, *, data_class, register):
     from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
     from control_plane.api.function_api import propose_action
     from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-    from control_plane.state.db import engagement_scope
 
     scope_id = f"SCOPE-{engagement_id[-10:]}"
     # Explicit "web.get" rather than the "web.*" pattern §4.1.5 also allows.
@@ -599,12 +596,11 @@ def _web_get_decision(engagement_id, registry, *, data_class, register):
         def run(self, **kwargs):
             raise SandboxUnavailable("dispatch is not what this test measures")
 
-    with engagement_scope(engagement_id) as conn:
-        return propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
-            sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
-        )
+    return propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
+        sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
+    )
 
 
 def test_a_get_against_an_unclassified_host_needs_a_human(engagement_id, registry):

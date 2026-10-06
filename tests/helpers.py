@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 
 from sqlalchemy import Connection, text
 
@@ -133,3 +134,29 @@ def ensure_test_baseline() -> int | None:
         layer="baseline_global", version=uuid.uuid4().int % 2_000_000_000, document={},
         actor="test-harness")
     return _TEST_BASELINE_ID
+
+
+@contextmanager
+def committing_scope(engagement_id: str):
+    """``engagement_scope``, except every statement commits as it runs (D60).
+
+    ``propose_action`` and the ``dispatch_*`` functions open their own transactions, one per
+    stage, so the capability, the proposal row or the revocation a test sets up first has to be
+    *committed* for them to see it -- exactly as it is in production, where each stage commits
+    before the next begins. A test that builds its fixture inside one open transaction and then
+    dispatches would be testing a state no running system can be in.
+
+    The engagement is bound for the session rather than the transaction (there is no transaction),
+    and cleared on the way out so the pooled connection carries nothing into its next checkout.
+    """
+    from sqlalchemy import text
+
+    from control_plane.state.db import get_engine
+
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("SELECT set_config('cyberorch.engagement_id', :eid, false)"),
+                     {"eid": engagement_id})
+        try:
+            yield conn
+        finally:
+            conn.execute(text("SELECT set_config('cyberorch.engagement_id', '', false)"))
