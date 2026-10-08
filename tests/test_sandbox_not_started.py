@@ -237,9 +237,12 @@ ONE_ADDRESS = "10.211.7.5/32"       # a pool Docker cannot give a container an a
 
 def test_a_start_refused_by_the_daemon_is_typed_when_the_container_never_ran():
     """Real Docker, real refusal: the one-address network from the field."""
-    box = DockerSandbox(image="busybox:latest")
+    # The sandbox's own tool image: it is the one CI builds and the one every dispatch uses, so the
+    # only thing that can refuse this start is the network.
+    box = DockerSandbox()
     with pytest.raises(ContainerStartRefused) as refused:
-        box.run(command=["true"], network_allowlist=[ONE_ADDRESS], max_duration_seconds=5)
+        box.run(command=["nmap", "--version"], network_allowlist=[ONE_ADDRESS],
+                max_duration_seconds=5)
     assert isinstance(refused.value, NotStarted) and isinstance(refused.value, SandboxUnavailable)
     assert refused.value.reason == "container_start_refused"
     # the message is fixed text: nothing of the daemon's reply (network ids, names) reaches an audit
