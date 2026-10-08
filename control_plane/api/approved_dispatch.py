@@ -23,6 +23,16 @@ Steps 2 and 3 are **the D60 stages, not a copy of them**: this module builds a `
 it to ``function_api._drive``, whose ``_issue`` takes the conditional UPDATE and ``_dispatch``
 takes the next one. There is no second transaction handler to drift from the first.
 
+**Held against the world as it is now (D58-8, same round).** Issuing late closes the lease problem;
+it does not by itself answer "is this still the thing the human approved?". Before it issues,
+``dispatch_approved`` re-derives -- from the stored proposal, not from a cached verdict -- the
+canonical target, the authorization, the classification and the OPA decision, and compares them with
+the ``snapshot`` the approval recorded (``approvals.snapshot``, written at grant and fixed by a
+trigger, as is ``proposal_id``). Any difference refuses and closes the proposal. An approval
+narrows; it never makes an operation permitted that the present state forbids, and it never covers a
+change the approver did not see. The capability is issued with the *approval's* recorded
+constraints, and a proposal that now asks for anything else is refused.
+
 What is *not* here: the approved capability is credential-less, because an approval names no
 credential (D58 report §5). ``ad.collect`` therefore still cannot run on this path -- see
 :func:`dispatch_approved` and ACCEPTANCE 5.56. Choosing a credential for an approved proposal is
@@ -34,6 +44,7 @@ visible with :func:`list_approved_awaiting_dispatch`.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -41,11 +52,31 @@ from sqlalchemy import Connection, text
 
 from agents.base_agent import ProposedAction
 from control_plane.api import function_api as fa
-from control_plane.api.approvals import _APPROVED_BUDGET_SECONDS, approval_fields
-from control_plane.canonicalizer.target import normalize_target
+from control_plane.api.approvals import (
+    _APPROVED_BUDGET_SECONDS,
+    approval_fields,
+    approval_snapshot,
+)
+from control_plane.canonicalizer.authorization import resolve_authorization
+from control_plane.canonicalizer.metadata import resolve_metadata
+from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
 from control_plane.capability.broker import Budget
 from control_plane.orchestrator import stages
+from control_plane.policy.merge import EffectivePolicy
+from control_plane.registry.scope_registry import list_scope_objects
 from control_plane.state.db import engagement_scope
+
+# Why a post-approval re-validation refuses. Stable codes: they land in the stage detail, the audit
+# trail and the outcome.
+APPROVAL_NOT_FOR_PROPOSAL = "approval_not_for_this_proposal"
+APPROVAL_SNAPSHOT_MISSING = "approval_snapshot_missing"
+TARGET_CHANGED = "target_changed"
+ACTION_CHANGED = "action_changed"
+AUTHORIZATION_CHANGED = "authorization_changed"
+CLASSIFICATION_CHANGED = "classification_changed"
+POLICY_NOW_DENIES = "policy_now_denies"
+NEW_APPROVAL_REASONS = "new_approval_reasons"
+SCOPE_EXCEEDS_APPROVAL = "execution_scope_exceeds_approval"
 
 
 def list_approved_awaiting_dispatch(
@@ -87,10 +118,112 @@ def list_approved_awaiting_dispatch(
     return [dict(r) for r in rows]
 
 
+def _normalised(value: Any) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True, default=str))
+
+
+def _approval_row(engagement_id: str, approval_id: str | None) -> dict[str, Any] | None:
+    if not approval_id:
+        return None
+    with engagement_scope(engagement_id) as conn:
+        row = conn.execute(
+            text("SELECT approval_id, proposal_id, action_class, resource, constraints, "
+                 "snapshot FROM approvals WHERE approval_id = :a"),
+            {"a": approval_id},
+        ).mappings().one_or_none()
+    return dict(row) if row else None
+
+
+def approved_constraints(approval: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The capability constraints an approval covers: what it recorded, plus the host.
+
+    The ceiling for the capability issued from it. ``resource`` is ``<type>:<value>`` (§4.7) and
+    the host constraint is that value, which is how ``approval_fields`` split them at grant.
+    """
+    if approval is None:
+        return {}
+    constraints = dict(approval["constraints"] or {})
+    if approval["resource"]:
+        constraints["host"] = approval["resource"].split(":", 1)[1]
+    return _normalised(constraints)
+
+
+def _rederive(
+    *, engagement_id: str, proposal: Mapping[str, Any], approval: Mapping[str, Any] | None,
+    policy: EffectivePolicy,
+) -> tuple[str, ...]:
+    """The reasons the approval no longer covers the world, from a fresh canonicalize/resolve/OPA.
+
+    Empty means it still does. Reads only; calls OPA with no transaction open.
+    """
+    if approval is None or approval["proposal_id"] != proposal["proposal_id"]:
+        return (APPROVAL_NOT_FOR_PROPOSAL,)
+    if approval["action_class"] != proposal["action"]:
+        return (APPROVAL_NOT_FOR_PROPOSAL,)
+    approved = approval["snapshot"]
+    if not approved:
+        return (APPROVAL_SNAPSHOT_MISSING,)
+
+    reasons: list[str] = []
+    try:
+        target = normalize_target(dict(proposal["target"]))
+    except CanonicalizationError:
+        return (TARGET_CHANGED,)
+    with engagement_scope(engagement_id) as conn:
+        resolution = resolve_authorization(
+            conn, target=target, action=proposal["action"],
+            authorization=dict(proposal["authorization"]),
+        )
+        metadata = resolve_metadata(conn, target=target)
+        scope_objects = list_scope_objects(conn)
+    now = approval_snapshot(
+        {"action": proposal["action"], "decision_reasons": approved["approval_reasons"]},
+        target, resolution, metadata,
+    )
+    if now["target"] != approved["target"]:
+        reasons.append(TARGET_CHANGED)
+    if now["action"] != approved["action"]:
+        reasons.append(ACTION_CHANGED)
+    if now["authorization"] != approved["authorization"]:
+        reasons.append(AUTHORIZATION_CHANGED)
+    if now["classification"] != approved["classification"]:
+        reasons.append(CLASSIFICATION_CHANGED)
+
+    hints = proposal["reviewer_hints"] or {}
+    decision = fa.evaluate_policy(
+        proposal=ProposedAction(
+            action=proposal["action"], target=dict(proposal["target"]),
+            authorization=dict(proposal["authorization"]),
+            discovery=dict(proposal["discovery"]), writes_data=proposal["writes_data"],
+            changes_state=proposal["changes_state"],
+        ),
+        target=target, authorization=resolution, metadata=metadata, policy=policy,
+        scope_objects=scope_objects, budget=Budget(max_duration_seconds=_APPROVED_BUDGET_SECONDS),
+        risk_hint=hints.get("risk_hint"),
+        possible_sensitive_data_hint=tuple(hints.get("possible_sensitive_data_hint") or ()),
+    )
+    if decision.decision == fa.DENY:
+        reasons.append(POLICY_NOW_DENIES)
+    elif decision.decision == fa.HUMAN_APPROVAL:
+        # Still wants a human: only for the reasons the human was shown and approved.
+        unseen = sorted(set(decision.approval_reasons) - set(approved["approval_reasons"]))
+        if unseen:
+            reasons.append(NEW_APPROVAL_REASONS)
+
+    # The proposal may not now ask for more than was approved.
+    derived = _normalised(approval_fields(
+        {"target": proposal["target"], "action": proposal["action"]}, target,
+        valid_for_seconds=0)["capability_constraints"])
+    if derived != approved_constraints(approval):
+        reasons.append(SCOPE_EXCEEDS_APPROVAL)
+    return tuple(dict.fromkeys(reasons))
+
+
 def dispatch_approved(
     *,
     engagement_id: str,
     proposal_id: str,
+    policy: EffectivePolicy,
     actor: str = "orchestrator",
     sandbox=None,
     network_allowlist: Sequence[str] | None = None,
@@ -105,7 +238,10 @@ def dispatch_approved(
     it drives open their own short transactions. It does not choose *which* proposal or *when*;
     it is called for one.
 
-    * ``approved``                 -- issued and dispatched; the outcome is the run's.
+    * ``approved``                 -- re-validated against the present registries and policy
+      (``policy`` is the effective policy *now*, as the caller loads it), then issued and
+      dispatched; the outcome is the run's. A refusal at re-validation closes the proposal with
+      ``approval_revalidation_failed:<reasons>`` and the outcome is a DENY.
     * ``awaiting_approval``        -- refused (``not_approved``): a human has not said yes.
     * any later or terminal stage  -- reported from the committed rows, **not re-run**. Calling
       this twice dispatches once: the first call's ``approved -> capability_issued`` transition is
@@ -129,7 +265,7 @@ def dispatch_approved(
                 SELECT proposal_id, action, target, "authorization", discovery, task_id,
                        agent_id, resources, expected_data, writes_data, changes_state, reason,
                        requested_capability_ttl_seconds, pipeline_stage, stage_detail,
-                       decided_policy_version
+                       decided_policy_version, reviewer_hints
                 FROM action_proposals WHERE proposal_id = :p
             """),
             {"p": proposal_id},
@@ -171,12 +307,16 @@ def dispatch_approved(
                 decision=fa.HUMAN_APPROVAL, proposal_id=proposal_id,
                 failure="approval_missing",
             )
+        approval = _approval_row(engagement_id, approval_id)
         run.jit = fa._JitIssue(
             approval_id=approval_id,
-            # approval_fields is the derivation the grant recorded and the console previewed.
-            constraints=approval_fields(row, target, valid_for_seconds=0)[
-                "capability_constraints"],
+            # The approval's own record is the ceiling for what is issued.
+            constraints=approved_constraints(approval),
             expected_policy_version=row["decided_policy_version"],
+            revalidate=lambda: _rederive(
+                engagement_id=engagement_id, proposal=dict(row),
+                approval=approval, policy=policy,
+            ),
         )
     # Any other stage: _drive reports it from the rows and runs nothing.
     return fa._drive(run, proposal_id)

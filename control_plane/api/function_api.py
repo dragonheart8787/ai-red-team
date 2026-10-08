@@ -54,9 +54,10 @@ are recorded together and can be read back with
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote_plus
@@ -444,11 +445,15 @@ class _JitIssue:
     """
 
     approval_id: str
-    #: The constraints the approval record describes (``approvals.approval_fields``), so the
-    #: capability is the thing the operator was shown, not a second derivation.
+    #: The constraints the *approval* recorded -- the ceiling. The capability is issued with
+    #: exactly these, never with a fresh derivation from the proposal, so what runs cannot be
+    #: wider than what the approver was shown.
     constraints: Mapping[str, Any]
     #: The policy version the decision was made under; the broker refuses if it has moved.
     expected_policy_version: int | None
+    #: Re-derives the world and returns the reasons the approval no longer covers it (empty: it
+    #: does). Supplied by ``approved_dispatch``; run with no transaction held, because it calls OPA.
+    revalidate: Callable[[], tuple[str, ...]]
 
 
 @dataclass
@@ -479,6 +484,7 @@ class _Run:
     # Set only by ``dispatch_approved``: this drive is the post-approval one, so it may also take
     # the ``approved`` stage that ``propose_action`` leaves alone (D61).
     jit: _JitIssue | None = None
+    revalidated: bool = False
 
 
 #: Returned by a stage that lost the race for its own transition: someone else (a retry, a
@@ -656,11 +662,14 @@ def _drive(run: _Run, proposal_id: str) -> ActionOutcome:
         stage, _detail = _stage_of(run.engagement_id, proposal_id)
         if stage == stages.RECEIVED:
             out = _decide(run, proposal_id)
-        elif stage == stages.DECIDED or (stage == stages.APPROVED and run.jit is not None):
+        elif stage == stages.APPROVED and run.jit is not None and not run.revalidated:
             # APPROVED is driven only by ``dispatch_approved`` (run.jit set). A resumed
             # ``propose_action`` that finds a proposal there reports it and leaves it: the
             # dispatch of an approved proposal is its own explicit call, never a side effect of
-            # asking again.
+            # asking again. Before anything is issued the approval is held against the world as
+            # it is now.
+            out = _revalidate(run, proposal_id)
+        elif stage == stages.DECIDED or (stage == stages.APPROVED and run.jit is not None):
             out = _issue(run, proposal_id)
         elif stage == stages.CAPABILITY_ISSUED:
             out = _dispatch(run, proposal_id)
@@ -734,30 +743,15 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
     )
 
     # --- 5. OPA --------------------------------------------------------------
-    side_effects = side_effect_floor(
-        action=proposal.action,
-        writes_data=proposal.writes_data,
-        changes_state=proposal.changes_state,
-    )
-    policy_input = build_policy_input(
-        target=target, action=proposal.action, authorization=authorization,
-        metadata=metadata, policy=run.policy,
-        scope_objects=scope_objects,
+    decision = evaluate_policy(
+        proposal=proposal, target=target, authorization=authorization, metadata=metadata,
+        policy=run.policy, scope_objects=scope_objects, budget=run.requested_budget,
         # The reviewer's words enter here and only here. Both fields are read
         # by approval_reasons alone, so the worst a dishonest reviewer can do
         # is ask for a human.
         risk_hint=opinion.risk_hint,
         possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,
-        discovery=proposal.discovery,
-        # The Worker's claim, floored by what the action's tool actually does
-        # (D34). The floor only raises: lowering it would be the system overriding an agent's
-        # caution with its own optimism, the one direction I6c forbids. See
-        # ``registry.side_effect_floor`` for the argument in full.
-        writes_data=side_effects.writes_data,
-        changes_state=side_effects.changes_state,
-        capability_request=run.requested_budget.as_dict(),
     )
-    decision = evaluate(policy_input)
     run.decision = decision
 
     # --- the decision, committed ----------------------------------------------
@@ -781,6 +775,10 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
                 authorized_scope_object_id=authorization.scope_object_id,
                 classified_asset_id=metadata.asset_id,
                 policy_version=policy_version,
+                reviewer_hints={
+                    "risk_hint": opinion.risk_hint,
+                    "possible_sensitive_data_hint": list(opinion.possible_sensitive_data_hint),
+                },
             )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="policy.decided",
@@ -805,6 +803,76 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         _record_provenance(run, proposal_id)
         return ActionOutcome(decision=decision.decision, **_common(run, proposal_id))
     return None
+
+
+def _revalidate(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
+    """Stage 1.5, post-approval only: is the world still the one the approver approved? (D58-8)
+
+    ``run.jit.revalidate`` re-derives canonicalization, authorization, classification and the OPA
+    decision from the registries *now* and compares them with what the approval recorded. An
+    approval can only narrow what is allowed: it never makes an operation permitted that the
+    present state forbids, and a change the approver did not see invalidates it. A refusal closes
+    the proposal -- the operator re-proposes -- with the reasons in the stage detail and the audit
+    trail. Nothing is held while it runs: it asks OPA, and the D60 rule is that nothing does that
+    inside a transaction.
+    """
+    eid = run.engagement_id
+    reasons = run.jit.revalidate()
+    if not reasons:
+        run.revalidated = True
+        return None
+    try:
+        with engagement_scope(eid) as conn:
+            stages.take(
+                conn, proposal_id, expected=stages.APPROVED, new=stages.CLOSED,
+                detail="approval_revalidation_failed:" + ",".join(reasons),
+            )
+            record_audit(
+                engagement_id=eid, actor=run.actor, event_type="approval.revalidation_failed",
+                subject_type="action_proposal", subject_id=proposal_id, decision=DENY,
+                reasons=reasons, payload={"approval_id": run.jit.approval_id},
+            )
+    except stages.StageConflict:
+        return _RELOAD
+    _record_provenance(run, proposal_id)
+    return ActionOutcome(
+        decision=DENY, proposal_id=proposal_id, deny_reasons=tuple(reasons),
+        failure="approval_revalidation_failed",
+    )
+
+
+def evaluate_policy(
+    *, proposal: ProposedAction, target, authorization, metadata, policy: EffectivePolicy,
+    scope_objects, budget: Budget, risk_hint: str | None,
+    possible_sensitive_data_hint: Sequence[str],
+):
+    """The one place a proposal's inputs become an OPA decision.
+
+    Called by the decision stage and, again, by the re-validation ``dispatch_approved`` does before
+    it issues (D58-8): a second copy of this assembly would let the dispatch-time answer differ from
+    the decision-time one for reasons that have nothing to do with the world having changed.
+    """
+    side_effects = side_effect_floor(
+        action=proposal.action,
+        writes_data=proposal.writes_data,
+        changes_state=proposal.changes_state,
+    )
+    policy_input = build_policy_input(
+        target=target, action=proposal.action, authorization=authorization,
+        metadata=metadata, policy=policy,
+        scope_objects=scope_objects,
+        risk_hint=risk_hint,
+        possible_sensitive_data_hint=possible_sensitive_data_hint,
+        discovery=proposal.discovery,
+        # The Worker's claim, floored by what the action's tool actually does
+        # (D34). The floor only raises: lowering it would be the system overriding an agent's
+        # caution with its own optimism, the one direction I6c forbids. See
+        # ``registry.side_effect_floor`` for the argument in full.
+        writes_data=side_effects.writes_data,
+        changes_state=side_effects.changes_state,
+        capability_request=budget.as_dict(),
+    )
+    return evaluate(policy_input)
 
 
 def _issue(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
@@ -958,6 +1026,9 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
         reasons if decision == HUMAN_APPROVAL else ())
     if stage == stages.DISPATCHING:
         failure = "dispatch_in_progress_or_unknown_outcome"
+    elif detail.startswith("approval_revalidation_failed:"):
+        decision, deny, failure = DENY, tuple(detail.split(":", 1)[1].split(",")), \
+            "approval_revalidation_failed"
     elif detail.startswith("capability_refused:"):
         decision, deny, failure = DENY, tuple(detail.split(":", 1)[1].split(",")), \
             "capability_refused"
@@ -1343,7 +1414,7 @@ def _persist_proposal(
 def _record_decision(
     conn: Connection, proposal_id: str, decision, *,
     authorized_scope_object_id: str | None, classified_asset_id: str | None,
-    policy_version: int | None = None,
+    policy_version: int | None = None, reviewer_hints: Mapping[str, Any] | None = None,
 ) -> None:
     """The decision, its reasons, and the two facts the resolvers established.
 
@@ -1354,9 +1425,11 @@ def _record_decision(
     conn.execute(
         text("UPDATE action_proposals SET decision = :d, decision_reasons = :r, "
              "authorized_scope_object_id = :scope, classified_asset_id = :asset, "
-             "decided_policy_version = :pver, updated_at = now() WHERE proposal_id = :p"),
+             "decided_policy_version = :pver, reviewer_hints = CAST(:hints AS jsonb), "
+             "updated_at = now() WHERE proposal_id = :p"),
         {"p": proposal_id, "d": decision.decision,
          "r": list(decision.deny_reasons + decision.approval_reasons),
          "scope": authorized_scope_object_id, "asset": classified_asset_id,
-         "pver": policy_version},
+         "pver": policy_version,
+         "hints": json.dumps(reviewer_hints) if reviewer_hints is not None else None},
     )

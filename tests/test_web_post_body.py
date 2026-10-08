@@ -373,7 +373,7 @@ def test_the_approval_route_carries_and_describes_the_same_body(engagement_id, r
     from control_plane.api.approved_dispatch import dispatch_approved
 
     dispatched = dispatch_approved(
-        engagement_id=engagement_id, proposal_id=outcome.proposal_id,
+        engagement_id=engagement_id, proposal_id=outcome.proposal_id, policy=_policy(),
         sandbox=sandbox, network_allowlist=[ALLOWED_CIDR], proxy_url=PROXY,
     )
     assert dispatched.capability_id, dispatched.failure

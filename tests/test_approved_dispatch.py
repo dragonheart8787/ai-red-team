@@ -36,6 +36,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 import control_plane.orchestrator.dispatch as dispatch_module
 from agents.base_agent import ProposedAction
@@ -47,14 +48,21 @@ from control_plane.api.approvals import (
     grant_approval,
     list_pending_approvals,
 )
-from control_plane.api.approved_dispatch import dispatch_approved, list_approved_awaiting_dispatch
+from control_plane.api.approved_dispatch import (
+    AUTHORIZATION_CHANGED,
+    CLASSIFICATION_CHANGED,
+    NEW_APPROVAL_REASONS,
+    POLICY_NOW_DENIES,
+    SCOPE_EXCEEDS_APPROVAL,
+    dispatch_approved,
+    list_approved_awaiting_dispatch,
+)
 from control_plane.api.function_api import propose_action
 from control_plane.capability.broker import (
     APPROVAL_EXPIRED,
     ENGAGEMENT_NOT_ACTIVE,
     KILL_SWITCH,
     POLICY_CHANGED,
-    SCOPE_OBJECT_DEACTIVATED,
 )
 from control_plane.orchestrator import stages
 from control_plane.orchestrator.engagement import engage_kill_switch, pause_engagement
@@ -118,7 +126,7 @@ def approve(world, proposal_id, *, approver="alice", scope="this_proposal_only",
 
 def dispatch(world, proposal_id, sandbox=None, **kwargs):
     return dispatch_approved(
-        engagement_id=world["engagement_id"], proposal_id=proposal_id,
+        engagement_id=world["engagement_id"], proposal_id=proposal_id, policy=_policy(),
         sandbox=sandbox if sandbox is not None else FakeSandbox(), network_allowlist=[CIDR],
         **kwargs,
     )
@@ -256,7 +264,7 @@ def test_the_same_story_with_a_real_container(engagement_id, registry):
     approve(world, proposal_id)
 
     out = dispatch_approved(engagement_id=engagement_id, proposal_id=proposal_id,
-                            sandbox=None, network_allowlist=[cidr])
+                            policy=_policy(), sandbox=None, network_allowlist=[cidr])
 
     assert out.run_id and out.evidence_id, out.failure
     (run,) = rows(world, "SELECT status, exit_code FROM tool_runs")
@@ -333,6 +341,20 @@ def test_the_issue_to_dispatch_window_is_close_to_zero(world):
 # 3. Checked at the moment of use
 # ---------------------------------------------------------------------------
 
+def _revalidation_refused(world, proposal_id, sandbox, out, *reasons):
+    assert out.decision == "DENY" and out.failure == "approval_revalidation_failed", out
+    for reason in reasons:
+        assert reason in out.deny_reasons, out.deny_reasons
+    assert sandbox.calls == 0
+    s, detail = stage(world, proposal_id)
+    assert s == stages.CLOSED and detail.startswith("approval_revalidation_failed:")
+    snap = snapshot(world["engagement_id"])
+    assert snap["capabilities"] == 0 and snap["runs"] == [], "nothing may be issued or run"
+    assert_coherent(snap)
+    kinds = [e["event_type"] for e in _audit_kinds(world, proposal_id)]
+    assert "approval.revalidation_failed" in kinds and "capability.issued" not in kinds
+
+
 def _refused(world, proposal_id, sandbox, out, reason):
     assert out.decision == "DENY" and out.failure == "capability_refused", out
     assert reason in out.deny_reasons, out.deny_reasons
@@ -380,14 +402,16 @@ def test_an_approval_that_expired_while_waiting_does_not_back_the_dispatch(world
 
 
 def test_a_scope_object_withdrawn_after_the_approval_stops_the_dispatch(world):
+    """Caught by the re-derivation first (the registry no longer authorizes the target); the
+    broker's own liveness check behind it is the second line, tested in its own file."""
     proposal_id = escalate(world)
     approve(world, proposal_id)
     with registry_admin_scope(world["engagement_id"]) as conn:
         deactivate_scope_object(conn, engagement_id=world["engagement_id"],
                                 scope_object_id=world["scope_id"], actor="em")
     sandbox = FakeSandbox()
-    _refused(world, proposal_id, sandbox, dispatch(world, proposal_id, sandbox),
-             SCOPE_OBJECT_DEACTIVATED)
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out, AUTHORIZATION_CHANGED)
 
 
 def test_a_policy_published_after_the_decision_invalidates_the_approval(world):
@@ -717,7 +741,7 @@ def test_ad_collect_after_approval_is_still_refused_because_the_capability_has_n
     approve({"engagement_id": engagement_id}, outcome.proposal_id)
 
     out = dispatch_approved(
-        engagement_id=engagement_id, proposal_id=outcome.proposal_id,
+        engagement_id=engagement_id, proposal_id=outcome.proposal_id, policy=ad._policy(),
         network_allowlist=["10.0.0.0/8"],
     )
 
@@ -729,3 +753,239 @@ def test_ad_collect_after_approval_is_still_refused_because_the_capability_has_n
             text("SELECT credential_id, approval_id FROM capabilities WHERE capability_id = :c"),
             {"c": out.capability_id}).mappings().one()
     assert cap["credential_id"] is None and cap["approval_id"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 8. The approval is held against the world as it is at dispatch (D58-8, same round)
+# ---------------------------------------------------------------------------
+#
+# Issuing late (above) fixes the lease. It does not answer "is this still what the human approved?".
+# These tests change the registries between the approval and the dispatch -- so that a fresh
+# canonicalize -> resolve -> OPA gives a different answer than it gave when the approver looked --
+# and require the dispatch to refuse, instead of trusting that the approval once existed.
+
+def _policy_that_no_longer_allows_scans():
+    return merge_policy(
+        PolicyLayer(name="baseline_global", data_deny=frozenset({"PII", "customer_database"}),
+                    actions={}),
+        PolicyLayer(name="emergency_overlay"), PolicyLayer(name="customer"),
+        PolicyLayer(name="engagement"),
+    )
+
+
+def _classify(registry, *, data_class, host=HOST):
+    registry.metadata(
+        asset_id=f"ASSET-{uuid.uuid4().hex[:8]}", identity_type="ip", identity_value=host,
+        authority="AUTHORITATIVE", source="customer_declared",
+        resource_class=["host"], data_class=data_class,
+    )
+
+
+def test_the_approval_row_carries_the_proposal_and_what_the_approver_saw(world):
+    proposal_id = escalate(world)
+    approval = approve(world, proposal_id)
+    (row,) = rows(world, "SELECT proposal_id, action_class, resource, snapshot FROM approvals "
+                         "WHERE approval_id = :a", a=approval.approval_id)
+    assert row["proposal_id"] == proposal_id
+    snap = row["snapshot"]
+    assert snap["action"] == "network.scan" and snap["target"] == f"ip:{HOST}"
+    assert snap["authorization"] == {"authorized": True, "scope_object_id": world["scope_id"]}
+    assert snap["classification"]["known"] is False
+    assert "sensitive_data_hint" in snap["approval_reasons"]
+
+
+def test_classification_changed_to_something_denied_after_the_approval_is_refused(
+    world, registry
+):
+    """The target is classified PII between the approval and the dispatch. The approver never saw
+    that, and the policy now denies it."""
+    proposal_id = escalate(world)
+    approve(world, proposal_id)
+    _classify(registry, data_class=["PII"])
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out,
+                          CLASSIFICATION_CHANGED, POLICY_NOW_DENIES)
+
+
+def test_a_benign_reclassification_after_the_approval_is_also_refused(world, registry):
+    """Not only changes that make it worse. The approver approved a world in which this host was
+    unclassified; a different one is not covered, even if the policy would allow it."""
+    proposal_id = escalate(world)
+    approve(world, proposal_id)
+    _classify(registry, data_class=["marketing_site"])
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out, CLASSIFICATION_CHANGED)
+    assert POLICY_NOW_DENIES not in out.deny_reasons, "the policy itself had no objection"
+
+
+def test_a_policy_that_now_denies_the_action_refuses_it_though_the_approval_is_live(world):
+    """The policy is evaluated again at dispatch, from the policy the caller loads *now* -- not
+    read back from the decision. An approval never turns a DENY into an ALLOW."""
+    proposal_id = escalate(world)
+    approve(world, proposal_id)
+    sandbox = FakeSandbox()
+    out = dispatch_approved(
+        engagement_id=world["engagement_id"], proposal_id=proposal_id,
+        policy=_policy_that_no_longer_allows_scans(), sandbox=sandbox,
+        network_allowlist=[CIDR],
+    )
+    _revalidation_refused(world, proposal_id, sandbox, out, POLICY_NOW_DENIES)
+    (appr,) = rows(world, "SELECT revoked, valid_until > now() AS live FROM approvals")
+    assert appr["live"] and not appr["revoked"], "the approval itself was perfectly valid"
+
+
+def test_new_reasons_to_ask_a_human_are_not_covered_by_an_old_yes(world, monkeypatch):
+    """HUMAN_APPROVAL again is fine for the reasons the approver was shown; a reason that was not
+    there when they approved needs a new approval."""
+    proposal_id = escalate(world)
+    approve(world, proposal_id)
+
+    class _Ask:
+        decision = "HUMAN_APPROVAL"
+        deny_reasons = ()
+        approval_reasons = ("sensitive_data_hint", "a_reason_nobody_approved")
+
+    monkeypatch.setattr(approved_dispatch.fa, "evaluate_policy", lambda **kw: _Ask())
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out, NEW_APPROVAL_REASONS)
+
+
+def test_the_proposal_cannot_ask_for_more_than_was_approved(world):
+    """The capability is bounded by the approval's recorded constraints. A proposal whose
+    execution parameters grew after the approval is refused, not issued as asked."""
+    proposal_id = escalate(world, proposal=_proposal(world, ports="443"))
+    approve(world, proposal_id)
+    with engagement_scope(world["engagement_id"]) as conn:
+        conn.execute(
+            text("UPDATE action_proposals SET target = jsonb_set(target, '{ports}', "
+                 "'\"1-65535\"') WHERE proposal_id = :p"), {"p": proposal_id})
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out, SCOPE_EXCEEDS_APPROVAL)
+
+
+def test_an_approval_that_belongs_to_another_proposal_cannot_be_used(world):
+    """``approvals.proposal_id`` is what binds an approval to its proposal. Pointing proposal B at
+    proposal A's approval -- a live, valid one -- does not carry A's yes to B."""
+    a = escalate(world, proposal=_proposal(world, ports="22"))
+    b = escalate(world, proposal=_proposal(world, ports="23"))
+    approval_a = approve(world, a)
+    approve(world, b)
+    with engagement_scope(world["engagement_id"]) as conn:
+        conn.execute(text("UPDATE action_proposals SET stage_detail = :d WHERE proposal_id = :p"),
+                     {"d": approval_a.approval_id, "p": b})
+    sandbox = FakeSandbox()
+    out = dispatch(world, b, sandbox)
+    _revalidation_refused(world, b, sandbox, out, "approval_not_for_this_proposal")
+
+
+def test_an_approval_without_a_snapshot_is_not_trusted(world):
+    """A row from before the snapshot existed (or written around ``grant_approval``) has nothing
+    to compare the world to, so it covers nothing. (The trigger stops an existing row's snapshot
+    being blanked -- the application role cannot even disable it -- so the row is inserted bare.)"""
+    proposal_id = escalate(world)
+    bare = f"APPR-bare-{uuid.uuid4().hex[:8]}"
+    with engagement_scope(world["engagement_id"]) as conn:
+        conn.execute(text("""
+            INSERT INTO approvals (approval_id, engagement_id, proposal_id, action_class, resource,
+                constraints, valid_until, approved_by, approved_scope)
+            VALUES (:id, :e, :p, 'network.scan', :r,
+                    '{"ports": "443", "scan_type": "version"}', now() + interval '1 hour',
+                    'alice', 'this_proposal_only')
+        """), {"id": bare, "e": world["engagement_id"], "p": proposal_id, "r": f"ip:{HOST}"})
+        conn.execute(text("UPDATE action_proposals SET pipeline_stage = 'approved', "
+                          "stage_detail = :id WHERE proposal_id = :p"),
+                     {"id": bare, "p": proposal_id})
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    _revalidation_refused(world, proposal_id, sandbox, out, "approval_snapshot_missing")
+
+
+def test_positive_control_an_unchanged_world_dispatches_exactly_as_before(world):
+    """Nothing moved between the approval and the dispatch: the re-derivation runs, agrees, and
+    the dispatch is the one §1 already established -- same capability, same run, same evidence."""
+    calls = []
+    real = approved_dispatch.fa.evaluate_policy
+
+    def spy(**kwargs):
+        calls.append(kwargs["proposal"].action)
+        return real(**kwargs)
+
+    approved_dispatch.fa.evaluate_policy = spy
+    try:
+        proposal_id = escalate(world, proposal=_proposal(world, ports="443", scan_type="version"))
+        calls.clear()
+        approval = approve(world, proposal_id)
+        sandbox = FakeSandbox()
+        out = dispatch(world, proposal_id, sandbox)
+    finally:
+        approved_dispatch.fa.evaluate_policy = real
+
+    assert calls == ["network.scan"], "the policy must really have been re-run at dispatch"
+    assert out.failure is None and out.executed and out.evidence_id
+    assert sandbox.calls == 1
+    assert stage(world, proposal_id) == (stages.RECORDED, "succeeded")
+    (cap,) = rows(world, "SELECT constraints, approval_id FROM capabilities")
+    (appr,) = rows(world, "SELECT constraints, resource FROM approvals")
+    assert cap["approval_id"] == approval.approval_id
+    assert cap["constraints"] == {**appr["constraints"], "host": HOST}, (
+        "the capability is the approval's own record")
+    assert "approval.revalidation_failed" not in [
+        e["event_type"] for e in _audit_kinds(world, proposal_id)]
+
+
+def test_a_change_that_is_put_back_before_dispatch_still_has_a_new_classification_version(
+    world, registry
+):
+    """Control for the comparison being strict rather than clever: classifying and then
+    re-declaring the same thing is still a different classification record than the approver saw."""
+    proposal_id = escalate(world)
+    approve(world, proposal_id)
+    _classify(registry, data_class=["marketing_site"])
+    sandbox = FakeSandbox()
+    out = dispatch(world, proposal_id, sandbox)
+    assert out.failure == "approval_revalidation_failed" and sandbox.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. The approval record cannot be edited into something else
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("column,value", [
+    ("proposal_id", "'PROP-somebody-else'"),
+    ("action_class", "'web.get'"),
+    ("resource", "'ip:10.0.0.1'"),
+    ("constraints", "'{}'::jsonb"),
+    ("approved_scope", "'this_resource'"),
+    ("approved_by", "'mallory'"),
+    ("snapshot", "'{}'::jsonb"),
+])
+def test_what_the_approver_decided_cannot_be_changed_after_the_grant(world, column, value):
+    proposal_id = escalate(world)
+    approval = approve(world, proposal_id)
+    with pytest.raises(DBAPIError, match="fixed when it is granted"):
+        with engagement_scope(world["engagement_id"]) as conn:
+            conn.execute(text(f"UPDATE approvals SET {column} = {value} "
+                              "WHERE approval_id = :a"), {"a": approval.approval_id})
+    (row,) = rows(world, "SELECT proposal_id FROM approvals")
+    assert row["proposal_id"] == proposal_id
+
+
+def test_an_approval_can_only_move_toward_less_authority(world):
+    proposal_id = escalate(world)
+    approval = approve(world, proposal_id)
+    with engagement_scope(world["engagement_id"]) as conn:
+        conn.execute(text("UPDATE approvals SET valid_until = valid_until - interval '1 minute' "
+                          "WHERE approval_id = :a"), {"a": approval.approval_id})
+        conn.execute(text("UPDATE approvals SET revoked = TRUE WHERE approval_id = :a"),
+                     {"a": approval.approval_id})
+    for sql, message in [
+        ("UPDATE approvals SET valid_until = valid_until + interval '1 day'", "never extended"),
+        ("UPDATE approvals SET revoked = FALSE", "stays revoked"),
+    ]:
+        with pytest.raises(DBAPIError, match=message):
+            with engagement_scope(world["engagement_id"]) as conn:
+                conn.execute(text(sql))

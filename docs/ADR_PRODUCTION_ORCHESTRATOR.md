@@ -31,7 +31,7 @@ Effects on this document: X8 is half closed (an approved proposal is now dispatc
 ~0 (measured < 1 s); `approved` is a queryable stage, the interface the reconciler (D58-9) reads. Still open and
 unchanged: the ad.collect credential incompatibility of §5 (ACCEPTANCE 5.57 → D58-15); nothing in production calls
 `dispatch_approved` until the scheduler exists (D58-1..4); and the multi-dispatch renewal question of §3.3 is not
-touched — an approved capability is single-dispatch, as H-A proposes. Everything else below is as written at `ad2c8d5`.
+touched — an approved capability is single-dispatch, as H-A proposes. **Same round (also D58-8):** the approval-to-dispatch link — `dispatch_approved` re-derives the decision chain against the approval's recorded snapshot and refuses on any change the approver did not see (D61 report §2b). Everything else below is as written at `ad2c8d5`.
 
 **Addendum (D62).** D58-7 option (B) is built: the mislabel is fixed — a sandbox that provably did not start
 (Docker unreachable, image absent, network unobtainable, container not created) is `failed`/retryable, and the cached-client

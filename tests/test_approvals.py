@@ -88,7 +88,7 @@ def _approve_and_issue(engagement_id, proposal_id, *, approver="operator-x",
         grant_approval(conn, engagement_id=engagement_id, proposal_id=proposal_id,
                        approver=approver, approved_scope=approved_scope)
     out = dispatch_approved(engagement_id=engagement_id, proposal_id=proposal_id,
-                            sandbox=_NoSandbox(), network_allowlist=[CIDR])
+                            policy=_policy(), sandbox=_NoSandbox(), network_allowlist=[CIDR])
     assert out.capability_id is not None, out
     return out
 
@@ -345,7 +345,7 @@ def test_the_capability_comes_at_dispatch_and_cites_the_approval(escalated):
             conn, engagement_id=engagement_id, proposal_id=proposal_id,
             approver="alice", approved_scope="this_proposal_only")
     out = dispatch_approved(engagement_id=engagement_id, proposal_id=proposal_id,
-                            sandbox=_NoSandbox(), network_allowlist=[CIDR])
+                            policy=_policy(), sandbox=_NoSandbox(), network_allowlist=[CIDR])
     with engagement_scope(engagement_id) as conn:
         cap = conn.execute(
             text("SELECT approval_id, revoked FROM capabilities WHERE capability_id = :c"),

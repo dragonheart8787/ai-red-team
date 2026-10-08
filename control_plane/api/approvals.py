@@ -35,6 +35,8 @@ negotiable:
    D61 this module issued a 60-second capability at grant time and nothing ever
    dispatched it; and a lease anchored to the grant spent itself on the wait (D58).
    Denial issues nothing and closes the proposal (``approval_denied``).
+   The approval records what the approver *saw* (``approvals.snapshot``), and dispatch re-derives
+   the world and refuses on any difference (D58-8): an approval only narrows what is allowed.
 
 The lease interaction needed no new code: a HUMAN_APPROVAL proposal has no
 capability until it is dispatched, so no capability lease or heartbeat touches it
@@ -61,6 +63,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from control_plane.api.function_api import execution_constraints
 from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
+from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalTarget, normalize_target
 from control_plane.orchestrator import stages
 from control_plane.provenance import graph
@@ -144,7 +147,7 @@ def _load_resolvable(conn: Connection, proposal_id: str) -> dict[str, Any]:
     row = conn.execute(
         text("""
             SELECT proposal_id, action, target, "authorization", agent_id,
-                   decision, task_id, requested_capability_ttl_seconds
+                   decision, decision_reasons, task_id, requested_capability_ttl_seconds
             FROM action_proposals WHERE proposal_id = :pid
         """),
         {"pid": proposal_id},
@@ -228,6 +231,33 @@ def approval_fields(
     }
 
 
+def approval_snapshot(
+    row: Mapping[str, Any], target: CanonicalTarget, resolution, metadata,
+) -> dict[str, Any]:
+    """What an approver is shown when they approve -- the record dispatch compares the world to.
+
+    Written into ``approvals.snapshot`` at grant and re-derived by the *same function* at dispatch
+    (``approved_dispatch``), so the two cannot disagree for reasons that are not the world changing.
+    JSON-normalised (sorted keys, no tuples) so that equality means equality.
+
+    * the normalized target and the action -- what is to run, on what;
+    * the authorization the registry gave it (authorized or not, and by which scope object);
+    * the classification it resolves to (``MetadataResolution.as_dict``: authority, data classes,
+      asset, version, observations);
+    * the reasons OPA gave for asking a human -- what the approver is agreeing to override.
+    """
+    return json.loads(json.dumps({
+        "action": row["action"],
+        "target": target.normalized,
+        "authorization": {
+            "authorized": resolution.authorized,
+            "scope_object_id": resolution.scope_object_id,
+        },
+        "classification": metadata.as_dict(),
+        "approval_reasons": sorted(row["decision_reasons"] or ()),
+    }, sort_keys=True, default=str))
+
+
 def preview_approval(
     conn: Connection, *, proposal_id: str,
     valid_for_seconds: int = DEFAULT_APPROVAL_SECONDS,
@@ -308,6 +338,7 @@ def grant_approval(
 
     approval_id = f"APPR-{uuid.uuid4().hex[:10]}"
     fields = approval_fields(row, target, valid_for_seconds=valid_for_seconds)
+    snapshot = approval_snapshot(row, target, resolution, resolve_metadata(conn, target=target))
     resource = fields["resource"]
     constraints = fields["constraints"]
     valid_until = fields["valid_until"]
@@ -327,13 +358,15 @@ def grant_approval(
         text("""
             INSERT INTO approvals (approval_id, engagement_id, proposal_id,
                 action_class, resource, constraints, valid_until, approved_by,
-                approved_scope)
-            VALUES (:aid, :eid, :pid, :ac, :res, CAST(:con AS jsonb), :vu, :by, :scope)
+                approved_scope, snapshot)
+            VALUES (:aid, :eid, :pid, :ac, :res, CAST(:con AS jsonb), :vu, :by, :scope,
+                    CAST(:snap AS jsonb))
         """),
         {"aid": approval_id, "eid": engagement_id, "pid": proposal_id,
          "ac": row["action"], "res": resource,
          "con": json.dumps(constraints, sort_keys=True),
-         "vu": valid_until, "by": approver, "scope": approved_scope},
+         "vu": valid_until, "by": approver, "scope": approved_scope,
+         "snap": json.dumps(snapshot, sort_keys=True)},
     )
     # Constraint 3: the decision is audited — who, when, which scope, which
     # proposal — through the existing path.

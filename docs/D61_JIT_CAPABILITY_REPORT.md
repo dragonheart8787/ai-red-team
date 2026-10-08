@@ -96,6 +96,78 @@ proposal reports it and does not dispatch (the post-approval stage is driven onl
 by `dispatch_approved`). Calling `dispatch_approved` twice dispatches once: the second finds the stage
 moved on and reports the first's run. Two concurrent dispatchers run the tool once (conditional UPDATE).
 
+## 2b. Held against the world as it is now (D58-8 — the part the first pass of the design did not cover)
+
+> This section is **part of D58-8**, supplied in the same round as the JIT issuance, not a separate
+> deliverable. The first pass of the design moved *when* the capability is issued and re-ran the
+> broker's checks, but left the link between **the approval and what is dispatched** resting on
+> "the approval is alive and the proposal says its id" — i.e. on whether the approval still exists, not
+> on whether the world is still the one it was given for. That is a gap in the JIT design, found while
+> reviewing it, and closed here.
+
+**The hole.** The broker asks "is this approval valid, unexpired, unrevoked?" and "is the scope object
+live?". It does not ask whether the *target's classification* changed since the approver looked, whether
+the policy now says DENY, whether the approval is even *for this proposal* (`stage_detail` was trusted
+as the approval id), or whether the proposal now asks for more than was approved. An approval is a
+decision about a particular state of the world; honouring it after that state moved turns "a human said
+yes once" into a standing permission.
+
+**The rule.** An approval can only narrow what is allowed. It never makes permitted an operation that
+the present state forbids, and it never covers a change the approver did not see.
+
+**Mechanism (the concrete form of "re-run the chain", not a second design):**
+
+* `approvals.proposal_id` was already persisted by `grant_approval` (column since 0001); migration 0018
+  adds a trigger that makes it, and everything the approver decided (`action_class`, `resource`,
+  `constraints`, `approved_scope`, `approved_by`, `snapshot`, `created_at`), unchangeable after the
+  row is written. `valid_until` may only be brought earlier and `revoked` may only go false → true.
+  The application role cannot disable the trigger (tested: `must be owner of table`).
+* `approvals.snapshot` records **what the approver saw**: the normalized target, the action, the
+  authorization (authorized, by which scope object), the classification (`MetadataResolution.as_dict`:
+  authority, data classes, asset, version, observations), and the reasons OPA gave for asking a human.
+  One function (`approvals.approval_snapshot`) builds it at grant and again at dispatch.
+* `dispatch_approved(…, policy=…)` — `policy` is the effective policy **now**, loaded by the caller —
+  re-derives, from the stored proposal and the registries, **not** from a cached verdict:
+  canonicalize (`normalize_target`) → resolve authorization → resolve metadata → OPA
+  (`function_api.evaluate_policy`, the same assembly the decision stage uses, so the two cannot drift).
+  It then compares with the snapshot and refuses on: `target_changed`, `action_changed`,
+  `authorization_changed`, `classification_changed` (any difference, better or worse),
+  `policy_now_denies`, `new_approval_reasons` (OPA now asks a human for a reason the approver was not
+  shown — HUMAN_APPROVAL for the *same* reasons is fine), `approval_not_for_this_proposal`,
+  `approval_snapshot_missing`, and `execution_scope_exceeds_approval`.
+* The capability is issued with the **approval's own recorded constraints** (plus the host from
+  `resource`) — the ceiling — and a proposal whose derived constraints differ from them is refused.
+* The refusal is a stage like the others: `approved → closed` with detail
+  `approval_revalidation_failed:<reasons>`, audit `approval.revalidation_failed`, outcome DENY.
+  It runs in `function_api._drive` (`_revalidate`) with no transaction held while OPA is called; the
+  re-derivation function itself is supplied by `approved_dispatch`.
+* The reviewer is **not** called again: its hints are stored with the decision
+  (`action_proposals.reviewer_hints`) and re-used as OPA inputs. They are advisory and can only add
+  caution; a model call at dispatch would add nondeterminism, not safety.
+
+**Verification** (`tests/test_approved_dispatch.py` §8–9; all against the real registries and OPA):
+
+| Between approval and dispatch… | Result |
+|---|---|
+| the scope object is withdrawn | refused: `authorization_changed` |
+| the target is classified PII | refused: `classification_changed` + `policy_now_denies` |
+| the target is classified something harmless | refused: `classification_changed` only — the approver did not see that world |
+| the policy the caller loads no longer allows the action (approval still live) | refused: `policy_now_denies` |
+| OPA would now ask a human for an unseen reason | refused: `new_approval_reasons` |
+| the proposal's ports grow after approval | refused: `execution_scope_exceeds_approval` |
+| proposal B is pointed at proposal A's live approval | refused: `approval_not_for_this_proposal` |
+| the approval has no snapshot | refused: `approval_snapshot_missing` |
+| **nothing changes (positive control)** | dispatches exactly as §4.2: same capability = the approval's own constraints, run succeeded, evidence written, no `revalidation_failed` event; a spy confirms OPA really was re-run |
+| any UPDATE of the approval's recorded fields / extending it / un-revoking it | rejected by the trigger (7 + 2 cases) |
+
+Mutation-verified, each turning the suite red: no re-derivation at all (10 tests), classification not
+compared (4), approval/proposal binding unchecked (2), OPA verdict ignored (3), no constraint ceiling (2),
+trigger disabled (8).
+
+**Cost, stated.** The check is conservative: *any* change to the target's classification refuses, and (from
+§2) any policy publication refuses at the broker. Both mean a re-proposal where a finer rule would have let
+the approval stand; refusing is the safe error. `ad.collect` is unaffected by this section (§5).
+
 ## 3. Callers and what stayed the same
 
 * `control_plane/web/app.py` `post_approve` and `scripts/approvals.py approve` call the unchanged
@@ -218,10 +290,11 @@ right reason and rewrites it.
 ## 7. Files
 
 `db/migrations/versions/0017_approval_stages.py` (stages, `decided_policy_version`, back-fill) ·
+`db/migrations/versions/0018_approval_snapshot.py` (approval snapshot, reviewer hints, immutability trigger) ·
 `control_plane/orchestrator/stages.py` · `control_plane/state/models.py` · `control_plane/capability/broker.py`
 (`expected_policy_version`) · `control_plane/api/function_api.py` (`_decide`, `_issue`, `_drive`, `_JitIssue`) ·
 `control_plane/api/approved_dispatch.py` (new: `dispatch_approved`, `list_approved_awaiting_dispatch`) ·
 `control_plane/api/approvals.py` (`grant_approval`, `deny_approval`, `ApprovalOutcome`) ·
-`control_plane/web/app.py`, `scripts/approvals.py` · tests: `tests/test_approved_dispatch.py` (new, 23),
+`control_plane/web/app.py`, `scripts/approvals.py` · tests: `tests/test_approved_dispatch.py` (new, 41),
 `tests/test_approvals.py`, `tests/test_web_console.py`, `tests/test_web_post_body.py`,
 `tests/test_pipeline_stages.py` (coherence rules).
