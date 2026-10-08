@@ -33,9 +33,9 @@ unchanged: the ad.collect credential incompatibility of §5 (ACCEPTANCE 5.57 →
 `dispatch_approved` until the scheduler exists (D58-1..4); and the multi-dispatch renewal question of §3.3 is not
 touched — an approved capability is single-dispatch, as H-A proposes. **Same round (also D58-8):** the approval-to-dispatch link — `dispatch_approved` re-derives the decision chain against the approval's recorded snapshot and refuses on any change the approver did not see (D61 report §2b). Everything else below is as written at `ad2c8d5`.
 
-**Addendum (D62).** D58-7 option (B) is built: the mislabel is fixed — a sandbox that provably did not start
+**Addendum (D58-7).** D58-7 option (B) is built: the mislabel is fixed — a sandbox that provably did not start
 (Docker unreachable, image absent, network unobtainable, container not created) is `failed`/retryable, and the cached-client
-raw `ConnectionError` (X5) is typed — see `docs/D62_SANDBOX_NOT_STARTED_REPORT.md` (ACCEPTANCE 5.58). X4 and X5 are
+raw `ConnectionError` (X5) is typed — see `docs/D58_7_SANDBOX_NOT_STARTED_REPORT.md` (ACCEPTANCE 5.58). X4 and X5 are
 closed for the dispatch path. `unknown_outcome` keeps its meaning and its "never auto-retry"; the policy half of D58-7
 (retrying genuinely unknown side-effect-free actions) is not taken.
 

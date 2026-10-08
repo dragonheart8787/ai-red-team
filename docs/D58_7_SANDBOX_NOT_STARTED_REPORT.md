@@ -1,4 +1,4 @@
-# D62 — A sandbox that never started is "failed", not "unknown outcome" (D58-7)
+# D58-7 — A sandbox that never started is "failed", not "unknown outcome" (D58-7)
 
 **The defect (D58 §3.2 link 4, X4).** `dispatch` caught every `SandboxUnavailable` and recorded it as
 `unknown_outcome` — "the tool may or may not have run" (§8.8, I7). That is the right answer for a
