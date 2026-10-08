@@ -33,7 +33,7 @@ per-engagement proxy today (only harness scripts do). What *is* derivable from c
 or [target]` [R: `dispatch.py:583`]) — so no extra context is needed. `web.*` is refused without a
 proxy (`registry.requires_proxy` [R]); `ad.collect` is refused without a credential (ACCEPTANCE 5.57).
 **Proposal: v0 dispatches `network.*` only** (the e2e test's action), and *skips with a recorded
-reason* (`scheduler.skipped`, §5) any approved proposal whose action it cannot supply context for.
+reason* (`scheduler.skipped`, §6) any approved proposal whose action it cannot supply context for.
 `code.scan`/`code.secrets` need no extra context either and could be added, but I have not run them
 through a scheduler path and would add them only with their own test. ⚑ **(a) `network.*` only
 (recommended) / (b) also `code.*`.**
@@ -124,7 +124,7 @@ The ADR §2.4 "yes" rows cover `engagements`, `tasks`, `capabilities`, `tool_run
 | `scheduler_enrollment` | all | the allowlist |
 | `engagements` | `engagement_id`, `status`, `kill_switch_engaged` | defer on pause/kill; detect "enrolled but missing" |
 | `action_proposals` | `proposal_id`, `engagement_id`, `action`, `pipeline_stage`, `stage_updated_at` | find `approved`; ordering; skip unsupported actions; count `dispatching` at start |
-| `audit_log` | `audit_id`, `engagement_id`, `ts`, `event_type`, `subject_id`, `payload` — **plus a restrictive policy** `TO scheduler_reader USING (scope='engagement' AND event_type LIKE 'scheduler.%')` | the "previous disposition" of an engagement/proposal, derived from the scheduler's own earlier events (§5.3) so ticks hold no state |
+| `audit_log` | `audit_id`, `engagement_id`, `ts`, `event_type`, `subject_id`, `payload` — **plus a restrictive policy** `TO scheduler_reader USING (scope='engagement' AND event_type LIKE 'scheduler.%')` | the "previous disposition" of an engagement/proposal, derived from the scheduler's own earlier events (§6.1) so ticks hold no state |
 
   Not granted in v0 although the ADR marks them "yes": `tasks.*`, `capabilities.*`, `tool_runs.*`,
   `action_proposals.decision`, `decision_reasons`, `dispatch_state`, `stage_detail`.
