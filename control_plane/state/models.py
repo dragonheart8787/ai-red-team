@@ -142,6 +142,9 @@ action_proposals = Table(
     Column("authorized_scope_object_id", Text),
     Column("classified_asset_id", Text),
     Column("provenance_complete", Boolean, nullable=False),
+    # D58-8/D61 (migration 0017): the policy version in force when the decision was made; the
+    # just-in-time issue passes it to the broker so a policy change since then is refused.
+    Column("decided_policy_version", BigInteger),
     _ts("created_at"), _ts("updated_at"),
 )
 

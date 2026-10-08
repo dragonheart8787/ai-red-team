@@ -24,6 +24,15 @@ honour: it must pass an `idempotency_key` (derived from task and attempt) on eve
 a proposal found at `dispatching` is the reconciler's, not the retry's. Everything else below is as
 written at `ad2c8d5`.
 
+**Addendum (D61).** D58-8 is decided and built: **H-A for approved proposals** — `grant_approval` records the
+approval and issues nothing; `approved_dispatch.dispatch_approved` issues the capability at dispatch, re-running the
+broker's checks plus "policy unchanged since the decision" — see `docs/D61_JIT_CAPABILITY_REPORT.md` (ACCEPTANCE 5.56).
+Effects on this document: X8 is half closed (an approved proposal is now dispatched; the missing `credential_id` is 5.57), and W1 for approved proposals is
+~0 (measured < 1 s); `approved` is a queryable stage, the interface the reconciler (D58-9) reads. Still open and
+unchanged: the ad.collect credential incompatibility of §5 (ACCEPTANCE 5.57 → D58-15); nothing in production calls
+`dispatch_approved` until the scheduler exists (D58-1..4); and the multi-dispatch renewal question of §3.3 is not
+touched — an approved capability is single-dispatch, as H-A proposes. Everything else below is as written at `ad2c8d5`.
+
 Investigation and design only. No schema, migration, code, Rego, harness or service skeleton was
 written or changed for this document. Every claim below about the current system was checked against
 the tree at the time of writing (`d64b335`, post-D57 merge), and each is tagged with *how* it was

@@ -21,8 +21,10 @@ from control_plane.api.approvals import (
     grant_approval,
     list_pending_approvals,
 )
+from control_plane.api.approved_dispatch import dispatch_approved
 from control_plane.api.function_api import propose_action
 from control_plane.audit.query import events_for_subject
+from control_plane.orchestrator import stages
 from control_plane.orchestrator.dispatch import reconcile_stale_dispatches
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import deactivate_scope_object
@@ -67,6 +69,28 @@ def _escalated_proposal(conn, engagement_id, scope_id):
         reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
         policy=_policy(), agent_id="worker-1",
     )
+
+
+class _NoSandbox:
+    """Dispatch is not what these tests measure: the capability is. A refused sandbox leaves the
+    capability the JIT issue committed, which is what they read."""
+
+    def run(self, **kwargs):
+        from tool_gateway.sandbox import SandboxUnavailable
+
+        raise SandboxUnavailable("dispatch is not what this test measures")
+
+
+def _approve_and_issue(engagement_id, proposal_id, *, approver="operator-x",
+                       approved_scope="this_task"):
+    """Approve, then dispatch -- the capability exists only after the second step (D61)."""
+    with engagement_scope(engagement_id) as conn:
+        grant_approval(conn, engagement_id=engagement_id, proposal_id=proposal_id,
+                       approver=approver, approved_scope=approved_scope)
+    out = dispatch_approved(engagement_id=engagement_id, proposal_id=proposal_id,
+                            sandbox=_NoSandbox(), network_allowlist=[CIDR])
+    assert out.capability_id is not None, out
+    return out
 
 
 @pytest.fixture
@@ -132,10 +156,7 @@ def test_the_approval_record_matches_the_capability_it_authorized(
                                          ports="443", scan_type="version")
     assert outcome.decision == "HUMAN_APPROVAL"
 
-    with engagement_scope(engagement_id) as conn:
-        grant_approval(conn, engagement_id=engagement_id,
-                       proposal_id=outcome.proposal_id, approver="operator-x",
-                       approved_scope="this_task")
+    _approve_and_issue(engagement_id, outcome.proposal_id)
 
     with engagement_scope(engagement_id) as conn:
         approval = conn.execute(
@@ -192,8 +213,7 @@ def test_a_proposal_naming_no_parameters_still_records_what_was_granted(
             reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
             policy=_policy(), agent_id="worker-1",
         )
-        grant_approval(conn, engagement_id=engagement_id,
-                       proposal_id=outcome.proposal_id, approver="operator-x",
+    _approve_and_issue(engagement_id, outcome.proposal_id,
                        approved_scope="this_proposal_only")
 
     with engagement_scope(engagement_id) as conn:
@@ -224,9 +244,7 @@ def test_the_allow_path_and_the_approval_path_grant_the_same_constraints(
     with engagement_scope(engagement_id) as conn:
         escalated = _escalated_with_params(conn, engagement_id, scope_id,
                                            ports="443", scan_type="version")
-        grant_approval(conn, engagement_id=engagement_id,
-                       proposal_id=escalated.proposal_id, approver="operator-x",
-                       approved_scope="this_task")
+    _approve_and_issue(engagement_id, escalated.proposal_id)
 
     # The same proposal shape on a reviewer that raises no hint: a clean ALLOW.
     eid2, registry2 = engagement_factory()
@@ -240,12 +258,6 @@ def test_the_allow_path_and_the_approval_path_grant_the_same_constraints(
         authorization={"source": "engagement_scope", "scope_object_id": scope2},
         discovery={"source": "explicit_scope"},
     )
-
-    class _NoSandbox:
-        def run(self, **kwargs):
-            from tool_gateway.sandbox import SandboxUnavailable
-
-            raise SandboxUnavailable("dispatch is not what this test measures")
 
     with engagement_scope(eid2) as conn:
         auto = propose_action(
@@ -295,14 +307,15 @@ def test_listing_writes_nothing(escalated):
 # approve
 # ---------------------------------------------------------------------------
 
-def test_approve_writes_a_structured_object_and_issues_a_capability(escalated):
+def test_approve_writes_a_structured_object_and_issues_nothing(escalated):
+    """The grant records the fact. The capability comes later, at dispatch (D61)."""
     engagement_id, _, proposal_id = escalated
     with engagement_scope(engagement_id) as conn:
         outcome = grant_approval(
             conn, engagement_id=engagement_id, proposal_id=proposal_id,
             approver="alice", approved_scope="this_proposal_only",
         )
-        assert outcome.issued
+        assert outcome.stage == "approved"
         # §4.7 structured object, not a yes/no (constraint 2).
         appr = conn.execute(
             text("SELECT action_class, resource, valid_until, approved_by, "
@@ -314,17 +327,32 @@ def test_approve_writes_a_structured_object_and_issues_a_capability(escalated):
         assert appr["approved_scope"] == "this_proposal_only"
         assert appr["approved_by"] == "alice"
         assert appr["valid_until"] is not None
-        # Constraint 5: a real capability, issued by the broker, citing the approval.
-        cap = conn.execute(
-            text("SELECT approval_id, revoked FROM capabilities "
-                 "WHERE capability_id = :c"),
-            {"c": outcome.capability_id},
-        ).mappings().one()
-        assert cap["approval_id"] == outcome.approval_id
-        assert cap["revoked"] is False
+        # Constraint 5 (D61): no capability exists, and none was audited as issued.
+        assert conn.execute(text("SELECT count(*) FROM capabilities")).scalar_one() == 0
+        assert events_for_subject(conn, subject_id=proposal_id,
+                                  event_types=["capability.issued"]) == []
+        assert stages.stage_of(conn, proposal_id) == ("approved", outcome.approval_id)
     # No longer pending.
     with engagement_scope(engagement_id) as conn:
         assert list_pending_approvals(conn, engagement_id=engagement_id) == []
+
+
+def test_the_capability_comes_at_dispatch_and_cites_the_approval(escalated):
+    """Constraint 5: a real capability, issued by the broker at dispatch, citing the approval."""
+    engagement_id, _, proposal_id = escalated
+    with engagement_scope(engagement_id) as conn:
+        outcome = grant_approval(
+            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            approver="alice", approved_scope="this_proposal_only")
+    out = dispatch_approved(engagement_id=engagement_id, proposal_id=proposal_id,
+                            sandbox=_NoSandbox(), network_allowlist=[CIDR])
+    with engagement_scope(engagement_id) as conn:
+        cap = conn.execute(
+            text("SELECT approval_id, revoked FROM capabilities WHERE capability_id = :c"),
+            {"c": out.capability_id},
+        ).mappings().one()
+    assert cap["approval_id"] == outcome.approval_id
+    assert cap["revoked"] is False
 
 
 def test_approve_records_who_when_scope_and_proposal(escalated):
@@ -354,7 +382,7 @@ def test_every_approved_scope_is_accepted(escalated):
                 conn, engagement_id=engagement_id, proposal_id=pid,
                 approver="alice", approved_scope=scope)
             assert outcome.approved_scope == scope
-            assert outcome.issued
+            assert outcome.stage == "approved"
 
 
 def test_an_unknown_scope_is_refused_and_nothing_is_written(escalated):
@@ -422,6 +450,7 @@ def test_approval_refused_fail_closed_when_scope_no_longer_authorizes(escalated)
     with engagement_scope(engagement_id) as conn:
         assert conn.execute(text("SELECT count(*) FROM approvals")).scalar_one() == 0
         assert conn.execute(text("SELECT count(*) FROM capabilities")).scalar_one() == 0
+        assert stages.stage_of(conn, proposal_id) == ("awaiting_approval", None)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +469,9 @@ def test_deny_records_the_decision_and_issues_nothing(escalated):
                                     event_types=["approval.denied"])
     assert len(events) == 1 and events[0].actor == "alice"
     assert events[0].payload["reason"] == "outside the approved window"
+    with engagement_scope(engagement_id) as conn:
+        # D61: a denied proposal is finished -- closed, with no run, and says why.
+        assert stages.stage_of(conn, proposal_id) == ("closed", "approval_denied")
 
 
 def test_a_denied_proposal_cannot_then_be_approved(escalated):
@@ -479,5 +511,7 @@ def test_a_pending_approval_is_not_mistaken_for_a_stuck_dispatch(escalated):
         anomalies = events_for_subject(
             conn, subject_id=proposal_id, event_types=["dispatch.unknown_outcome"])
     assert proposal_id not in stale
+    with engagement_scope(engagement_id) as conn:
+        assert stages.stage_of(conn, proposal_id) == ("awaiting_approval", None)
     assert state_before == "queued" and state_after == "queued"
     assert anomalies == []  # no spurious anomaly raised

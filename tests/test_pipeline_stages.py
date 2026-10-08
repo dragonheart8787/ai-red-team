@@ -135,6 +135,11 @@ def snapshot(engagement_id: str) -> dict:
             "dispatch_state, provenance_complete FROM action_proposals ORDER BY created_at"
         )).mappings()]
         capabilities = conn.execute(text("SELECT count(*) FROM capabilities")).scalar_one()
+        # D61: which proposals a human approved, and which have a capability.
+        approved = {r[0] for r in conn.execute(text(
+            "SELECT proposal_id FROM approvals WHERE revoked IS FALSE")).all()}
+        with_capability = {r[0] for r in conn.execute(text(
+            "SELECT proposal_id FROM capabilities")).all()}
         runs = [r[0] for r in conn.execute(text("SELECT status FROM tool_runs")).all()]
         evidence = conn.execute(text("SELECT count(*) FROM evidence")).scalar_one()
         audit: dict[str, int] = {}
@@ -142,7 +147,8 @@ def snapshot(engagement_id: str) -> dict:
                 "SELECT event_type, count(*) FROM audit_log GROUP BY 1")).all():
             audit[event] = n
     return {"proposals": proposals, "capabilities": capabilities, "runs": runs,
-            "evidence": evidence, "audit": audit}
+            "evidence": evidence, "audit": audit, "approved": approved,
+            "with_capability": with_capability}
 
 
 def assert_coherent(snap: dict) -> None:
@@ -155,13 +161,28 @@ def assert_coherent(snap: dict) -> None:
         if stage != stages.RECEIVED:
             assert p["decision"] is not None, f"stage {stage} with no recorded decision: {p}"
         if stage in (stages.CAPABILITY_ISSUED, stages.DISPATCHING, stages.RECORDED):
-            assert p["decision"] == "ALLOW", p
+            # ALLOW, or (D61) a HUMAN_APPROVAL that a human then approved.
+            assert p["decision"] == "ALLOW" or (
+                p["decision"] == "HUMAN_APPROVAL" and p["proposal_id"] in snap["approved"]), p
+        if stage == stages.AWAITING_APPROVAL:
+            assert p["decision"] == "HUMAN_APPROVAL", p
+            assert p["proposal_id"] not in snap["approved"], "awaiting approval but approved"
+            assert p["proposal_id"] not in snap["with_capability"], p
+        if stage == stages.APPROVED:
+            # The grant's two writes commit together: the stage and the approval row.
+            assert p["decision"] == "HUMAN_APPROVAL", p
+            assert p["proposal_id"] in snap["approved"], "approved stage with no approval row"
+            assert p["detail"] and p["detail"].startswith("APPR-"), p
+            assert p["proposal_id"] not in snap["with_capability"], (
+                "an approved proposal has a capability before anything dispatched it")
         if stage == stages.DISPATCHING:
             assert p["dispatch_state"] == "running", p
     if snap["capabilities"]:
         assert snap["proposals"], "a capability with no proposal"
-        assert all(p["decision"] == "ALLOW" for p in snap["proposals"]), (
-            "a capability was issued for a proposal that was not allowed")
+        for pid in snap["with_capability"]:
+            p = next(p for p in snap["proposals"] if p["proposal_id"] == pid)
+            assert p["decision"] == "ALLOW" or pid in snap["approved"], (
+                "a capability was issued for a proposal that was neither allowed nor approved")
         assert all(p["stage"] != stages.RECEIVED for p in snap["proposals"]), (
             "a capability exists but its proposal's decision stage never committed")
     if snap["runs"]:

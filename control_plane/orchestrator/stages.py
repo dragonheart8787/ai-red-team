@@ -5,12 +5,25 @@ on its own, and this module is the one place that says what the stages are and h
 between them.
 
     received --> decided --> capability_issued --> dispatching --> recorded
-                   |               |                   |
-                   +-------------> closed <------------+      (closed: finished with no tool run)
+        |            |               |                   |
+        |            +-------------> closed <------------+   (closed: finished with no tool run)
+        |                              ^
+        +--> awaiting_approval --> approved --> capability_issued   (D61: the human path)
+                    |
+                    +--> closed   (denied: detail ``approval_denied``)
 
 * ``received``           the proposal row is committed; nothing has been decided.
-* ``decided``            the policy decision and its reasons are committed (ALLOW; a DENY or a
-                         HUMAN_APPROVAL goes straight to ``closed``).
+* ``decided``            the policy decision and its reasons are committed (ALLOW; a DENY goes
+                         straight to ``closed``).
+* ``awaiting_approval``  (D61) the decision was HUMAN_APPROVAL and a human has not answered. Not
+                         terminal: the *request* is still open, though no run will start until
+                         someone approves.
+* ``approved``           (D61) a human approved it -- the ``approvals`` row and this stage commit
+                         together. **Awaiting dispatch**: no capability exists yet. It is issued,
+                         and the tool dispatched, by ``dispatch_approved`` at the moment of use. A
+                         proposal that stays here is one nothing has dispatched, or whose dispatch
+                         attempt was refused before it could issue; ``stage_updated_at`` says since
+                         when (what D58-9's reconciler will age).
 * ``capability_issued``  the capability is committed.
 * ``dispatching``        the ``tool_runs`` row is committed as ``running`` and the container is
                          about to start, or is running. This is the stage a crash leaves behind;
@@ -41,12 +54,17 @@ from sqlalchemy import Connection, text
 
 RECEIVED = "received"
 DECIDED = "decided"
+AWAITING_APPROVAL = "awaiting_approval"
+APPROVED = "approved"
 CAPABILITY_ISSUED = "capability_issued"
 DISPATCHING = "dispatching"
 RECORDED = "recorded"
 CLOSED = "closed"
 
-STAGES = (RECEIVED, DECIDED, CAPABILITY_ISSUED, DISPATCHING, RECORDED, CLOSED)
+STAGES = (
+    RECEIVED, DECIDED, AWAITING_APPROVAL, APPROVED, CAPABILITY_ISSUED, DISPATCHING, RECORDED,
+    CLOSED,
+)
 
 #: Stages in which nothing further will happen to a proposal.
 TERMINAL = (RECORDED, CLOSED)
@@ -55,6 +73,11 @@ TERMINAL = (RECORDED, CLOSED)
 #: proposal that a hand-written caller never moved past ``received`` may still be dispatched, but
 #: not one that has already crossed the boundary.
 BEFORE_DISPATCH = (RECEIVED, DECIDED, CAPABILITY_ISSUED)
+
+#: Stages a person is the next mover from, not the pipeline. Neither is stuck in the crash sense: a
+#: proposal here is waiting for a human (``awaiting_approval``) or for a dispatcher
+#: (``approved``), and both are listable by stage.
+WAITING = (AWAITING_APPROVAL, APPROVED)
 
 
 class StageConflict(RuntimeError):

@@ -146,10 +146,10 @@ def test_approving_through_the_console_matches_approving_through_the_cli(
     )
 
 
-def test_the_console_approval_leaves_the_queue_and_issues_a_capability(
+def test_the_console_approval_leaves_the_queue_and_issues_nothing_yet(
     client, escalated
 ):
-    """The visible outcome: gone from the queue, capability minted by the broker."""
+    """The visible outcome: gone from the queue, awaiting dispatch -- no capability (D61)."""
     eid, _, pid = escalated
     assert client.get(f"/api/engagements/{eid}/approvals").json()
 
@@ -158,8 +158,10 @@ def test_the_console_approval_leaves_the_queue_and_issues_a_capability(
         json={"approver": "operator-x", "approved_scope": "this_proposal_only"},
     ).json()
 
-    assert body["issued"] is True
-    assert body["capability_id"]
+    assert body["stage"] == "approved"
+    assert "capability_id" not in body and "issued" not in body
+    with engagement_scope(eid) as conn:
+        assert conn.execute(text("SELECT count(*) FROM capabilities")).scalar_one() == 0
     assert body["approved_scope"] == "this_proposal_only"
     assert client.get(f"/api/engagements/{eid}/approvals").json() == []
 

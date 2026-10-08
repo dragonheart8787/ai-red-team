@@ -69,7 +69,12 @@ from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
 from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
-from control_plane.capability.broker import Budget, get_capability, issue_capability
+from control_plane.capability.broker import (
+    Budget,
+    current_policy_version,
+    get_capability,
+    issue_capability,
+)
 from control_plane.evidence.redaction import detect_secret_formats
 from control_plane.orchestrator import stages
 from control_plane.orchestrator.dispatch import (
@@ -430,6 +435,22 @@ def refuse_proposed_body(proposal: ProposedAction) -> tuple[str, str] | None:
 
 
 
+@dataclass(frozen=True)
+class _JitIssue:
+    """What the just-in-time issue of an *approved* proposal carries (D61).
+
+    The ALLOW path issues from the proposal it was handed; an approved proposal is issued from
+    what the human approved, read back from committed rows by ``dispatch_approved``.
+    """
+
+    approval_id: str
+    #: The constraints the approval record describes (``approvals.approval_fields``), so the
+    #: capability is the thing the operator was shown, not a second derivation.
+    constraints: Mapping[str, Any]
+    #: The policy version the decision was made under; the broker refuses if it has moved.
+    expected_policy_version: int | None
+
+
 @dataclass
 class _Run:
     """One ``propose_action`` call: what it was given, and what its stages have learned."""
@@ -455,6 +476,9 @@ class _Run:
     opinion: ReviewerOpinion | None = None
     metadata: Any = None
     decision: Any = None
+    # Set only by ``dispatch_approved``: this drive is the post-approval one, so it may also take
+    # the ``approved`` stage that ``propose_action`` leaves alone (D61).
+    jit: _JitIssue | None = None
 
 
 #: Returned by a stage that lost the race for its own transition: someone else (a retry, a
@@ -632,13 +656,18 @@ def _drive(run: _Run, proposal_id: str) -> ActionOutcome:
         stage, _detail = _stage_of(run.engagement_id, proposal_id)
         if stage == stages.RECEIVED:
             out = _decide(run, proposal_id)
-        elif stage == stages.DECIDED:
+        elif stage == stages.DECIDED or (stage == stages.APPROVED and run.jit is not None):
+            # APPROVED is driven only by ``dispatch_approved`` (run.jit set). A resumed
+            # ``propose_action`` that finds a proposal there reports it and leaves it: the
+            # dispatch of an approved proposal is its own explicit call, never a side effect of
+            # asking again.
             out = _issue(run, proposal_id)
         elif stage == stages.CAPABILITY_ISSUED:
             out = _dispatch(run, proposal_id)
         else:
-            # dispatching / recorded / closed: nothing left for this call to do. Reached by a
-            # resumed proposal; a fresh one returns from the stage that finished it.
+            # awaiting_approval / approved / dispatching / recorded / closed: nothing left for
+            # this call to do. Reached by a resumed proposal; a fresh one returns from the stage
+            # that finished it.
             return _outcome_from_rows(run, proposal_id)
         if out is not None and out is not _RELOAD:
             return out
@@ -672,6 +701,10 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         # --- 3. Metadata Resolver ---
         metadata = resolve_metadata(conn, target=target)
         scope_objects = list_scope_objects(conn)
+        # The policy in force *before* the reviewer and OPA run, so a policy published while they
+        # ran makes the recorded version older than the world, never newer (D61: an approval
+        # issued later is checked against it).
+        policy_version = current_policy_version(conn, eid)
     run.metadata = metadata
 
     # --- 4. Policy Reviewer --------------------------------------------------
@@ -729,19 +762,25 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
 
     # --- the decision, committed ----------------------------------------------
     allowed = decision.decision == ALLOW
+    # A HUMAN_APPROVAL is not the end of the request, only of this call: the proposal waits for a
+    # person (D61), so it stays open at ``awaiting_approval`` rather than closing.
+    if allowed:
+        new_stage, detail = stages.DECIDED, None
+    elif decision.decision == HUMAN_APPROVAL:
+        new_stage, detail = stages.AWAITING_APPROVAL, None
+    else:
+        new_stage, detail = stages.CLOSED, f"decision_{decision.decision}"
     try:
         with engagement_scope(eid) as conn:
             # First statement: win the transition, or do nothing at all. The audit record below
             # is written only by the winner.
-            stages.take(
-                conn, proposal_id, expected=stages.RECEIVED,
-                new=stages.DECIDED if allowed else stages.CLOSED,
-                detail=None if allowed else f"decision_{decision.decision}",
-            )
+            stages.take(conn, proposal_id, expected=stages.RECEIVED, new=new_stage,
+                        detail=detail)
             _record_decision(
                 conn, proposal_id, decision,
                 authorized_scope_object_id=authorization.scope_object_id,
                 classified_asset_id=metadata.asset_id,
+                policy_version=policy_version,
             )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="policy.decided",
@@ -761,19 +800,27 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
     if not allowed:
         # The function returns here. The Capability Broker and the Tool Gateway
         # are not called — not called and refused, not called with an empty
-        # budget. Nothing downstream of this line runs.
+        # budget. Nothing downstream of this line runs. (A HUMAN_APPROVAL is not terminal, so
+        # ``record_provenance`` writes nothing for it yet; it does once the proposal finishes.)
         _record_provenance(run, proposal_id)
         return ActionOutcome(decision=decision.decision, **_common(run, proposal_id))
     return None
 
 
 def _issue(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
-    """Stage 2: the broker's decision, committed on its own (independent of dispatch)."""
-    proposal, eid = run.proposal, run.engagement_id
+    """Stage 2: the broker's decision, committed on its own (independent of dispatch).
+
+    The one issuing stage for both ways a proposal gets here: ``decided`` (ALLOW) and, for
+    ``dispatch_approved``, ``approved`` (a human said yes, D61). Same transaction shape, same
+    conditional UPDATE, same refusal handling -- the post-approval path has no transaction
+    handling of its own.
+    """
+    proposal, eid, jit = run.proposal, run.engagement_id, run.jit
     capability_id = f"CAP-{uuid.uuid4().hex[:10]}"
     try:
         with engagement_scope(eid) as conn:
-            stages.take(conn, proposal_id, expected=stages.DECIDED,
+            stages.take(conn, proposal_id,
+                        expected=stages.APPROVED if jit else stages.DECIDED,
                         new=stages.CAPABILITY_ISSUED)
             scope_object_id = conn.execute(
                 text("SELECT authorized_scope_object_id FROM action_proposals "
@@ -786,7 +833,7 @@ def _issue(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
             issued = issue_capability(
                 conn, engagement_id=eid, capability_id=capability_id,
                 agent_id=run.agent_id, action=proposal.action, actor=run.actor,
-                constraints=execution_constraints(
+                constraints=jit.constraints if jit else execution_constraints(
                     proposal.target, run.target.logical_identity.value
                 ),
                 budget=run.requested_budget,
@@ -800,6 +847,10 @@ def _issue(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
                 # granted, and only the second is a fact about this system.
                 scope_object_id=scope_object_id,
                 credential_id=run.credential_id,
+                # D61: cite the approval, and hold the policy to the version the human approved
+                # under. Both are checked *now*, by the broker, at the moment of use.
+                approval_id=jit.approval_id if jit else None,
+                expected_policy_version=jit.expected_policy_version if jit else None,
             )
             if not issued.issued:
                 stages.take(
@@ -1292,6 +1343,7 @@ def _persist_proposal(
 def _record_decision(
     conn: Connection, proposal_id: str, decision, *,
     authorized_scope_object_id: str | None, classified_asset_id: str | None,
+    policy_version: int | None = None,
 ) -> None:
     """The decision, its reasons, and the two facts the resolvers established.
 
@@ -1302,8 +1354,9 @@ def _record_decision(
     conn.execute(
         text("UPDATE action_proposals SET decision = :d, decision_reasons = :r, "
              "authorized_scope_object_id = :scope, classified_asset_id = :asset, "
-             "updated_at = now() WHERE proposal_id = :p"),
+             "decided_policy_version = :pver, updated_at = now() WHERE proposal_id = :p"),
         {"p": proposal_id, "d": decision.decision,
          "r": list(decision.deny_reasons + decision.approval_reasons),
-         "scope": authorized_scope_object_id, "asset": classified_asset_id},
+         "scope": authorized_scope_object_id, "asset": classified_asset_id,
+         "pver": policy_version},
     )

@@ -366,12 +366,19 @@ def test_the_approval_route_carries_and_describes_the_same_body(engagement_id, r
 
     # ...and the capability granted from it carries the very same one.
     with engagement_scope(engagement_id) as conn:
-        granted = approvals.grant_approval(
+        approvals.grant_approval(
             conn, engagement_id=engagement_id, proposal_id=outcome.proposal_id,
             approver="alice", approved_scope="this_proposal_only")
-    assert granted.issued, granted.reasons
+    # D61: the grant issues nothing; the capability is issued when the tool is dispatched.
+    from control_plane.api.approved_dispatch import dispatch_approved
+
+    dispatched = dispatch_approved(
+        engagement_id=engagement_id, proposal_id=outcome.proposal_id,
+        sandbox=sandbox, network_allowlist=[ALLOWED_CIDR], proxy_url=PROXY,
+    )
+    assert dispatched.capability_id, dispatched.failure
     (cap,) = _rows(engagement_id, "SELECT constraints FROM capabilities "
-                                  "WHERE capability_id = :c", c=granted.capability_id)
+                                  "WHERE capability_id = :c", c=dispatched.capability_id)
     assert cap["constraints"]["body"] == FORM_BODY
     assert cap["constraints"]["content_type"] == "application/x-www-form-urlencoded"
     assert preview["constraints"]["body"] == cap["constraints"]["body"]
