@@ -218,3 +218,107 @@ def test_an_untyped_sandbox_failure_is_still_unknown_outcome(world):
     assert "tool_run.unknown_outcome" in [e[0] for e in events]
     assert (proposal["pipeline_stage"], proposal["stage_detail"]) == (
         "recorded", "unknown_outcome")
+
+
+# ---------------------------------------------------------------------------
+# 6. The exit D58-7 first missed: container.start() refused by the daemon
+# ---------------------------------------------------------------------------
+#
+# Found while designing the scheduler: a network.scan on a single IP with no allowlist builds a
+# one-address Docker network; ``containers.create`` succeeds and ``container.start()`` then fails
+# with "no available IPv4 addresses". That is an ``APIError`` out of ``start()`` -- after the
+# position D58-7 typed, before any process existed -- and it escaped dispatch raw, leaving the
+# proposal at ``dispatching`` for a run that provably never executed.
+
+from tool_gateway.sandbox import ContainerStartRefused  # noqa: E402
+
+ONE_ADDRESS = "10.211.7.5/32"       # a pool Docker cannot give a container an address from
+
+
+def test_a_start_refused_by_the_daemon_is_typed_when_the_container_never_ran():
+    """Real Docker, real refusal: the one-address network from the field."""
+    box = DockerSandbox(image="busybox:latest")
+    with pytest.raises(ContainerStartRefused) as refused:
+        box.run(command=["true"], network_allowlist=[ONE_ADDRESS], max_duration_seconds=5)
+    assert isinstance(refused.value, NotStarted) and isinstance(refused.value, SandboxUnavailable)
+    assert refused.value.reason == "container_start_refused"
+    # the message is fixed text: nothing of the daemon's reply (network ids, names) reaches an audit
+    assert "10.211.7.5" not in str(refused.value) and "cyberorch-allow" not in str(refused.value)
+
+
+def test_a_refused_start_through_propose_action_is_failed_and_closed_not_stuck_dispatching(
+    world, caplog,
+):
+    """The proposal used to stay at ``dispatching`` with a ``running`` row and the exception
+    escaped propose_action. Now it is a known outcome. The real tool image is used so that the
+    refusal can only be the network one (a wrong image would also be refused at start, for an
+    unrelated reason), and the daemon's own explanation -- logged for the operator, never put in
+    the audit trail -- is asserted to say so."""
+    proposal = ProposedAction(
+        action="network.scan",
+        target={"logical_identity": {"type": "ip", "value": "10.84.0.5"}},
+        authorization={"source": "engagement_scope", "scope_object_id": world["scope_id"]},
+        discovery={"source": "explicit_scope"},
+    )
+    with caplog.at_level("WARNING", logger="cyberorch.sandbox"):
+        outcome = propose_action(
+            engagement_id=world["engagement_id"], proposal=proposal,
+            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="w",
+            sandbox=DockerSandbox(), network_allowlist=["10.84.0.5/32"],
+        )
+    assert any("failed to set up container networking" in r.getMessage() for r in caplog.records)
+    assert outcome.failure == "container_start_refused" and outcome.run_id is None
+    proposal_row, runs, events, evidence = recorded(world)
+    assert proposal_row["dispatch_state"] == "failed", proposal_row
+    assert (proposal_row["pipeline_stage"], proposal_row["stage_detail"]) == (
+        "closed", "container_start_refused")
+    assert runs == ["failed"] and evidence == 0
+    assert "tool_run.unknown_outcome" not in [e[0] for e in events]
+    refused = next(e for e in events if e[0] == "tool_run.refused")
+    assert refused[1] == ["sandbox_not_started", "container_start_refused"]
+    with engagement_scope(world["engagement_id"]) as conn:
+        assert reconcile_stale_dispatches(
+            conn, engagement_id=world["engagement_id"], older_than_seconds=0,
+            actor="sweeper") == [], "nothing is left for the reconciler"
+
+
+class _FakeContainer:
+    """Just enough container for DockerSandbox._start_container."""
+
+    short_id = "fake"
+
+    def __init__(self, state, *, reload_error=None):
+        self.attrs = {"State": state}
+        self._reload_error = reload_error
+
+    def start(self):
+        raise docker.errors.APIError("daemon said no", explanation="start failed")
+
+    def reload(self):
+        if self._reload_error:
+            raise self._reload_error
+
+
+NEVER = {"Status": "created", "Running": False, "Pid": 0, "StartedAt": "0001-01-01T00:00:00Z"}
+
+
+def test_a_refusal_is_typed_only_on_proof_the_container_never_ran():
+    with pytest.raises(ContainerStartRefused):
+        DockerSandbox._start_container(_FakeContainer(NEVER))
+
+    for state in (
+        {**NEVER, "Status": "running", "Running": True, "Pid": 4242,
+         "StartedAt": "2026-10-08T03:00:00Z"},                       # it did run
+        {**NEVER, "Status": "exited", "StartedAt": "2026-10-08T03:00:00Z"},   # ran and ended
+        {**NEVER, "Pid": 77},                                         # a process existed
+    ):
+        with pytest.raises(docker.errors.APIError):
+            DockerSandbox._start_container(_FakeContainer(state))
+
+
+def test_a_refusal_whose_inspection_fails_stays_unplaced():
+    """If Docker cannot be asked what happened, nothing is proven: the original error propagates
+    (the proposal stays ``dispatching``, the reconciler's) rather than "not started"."""
+    box = _FakeContainer(NEVER, reload_error=docker.errors.DockerException("daemon went away"))
+    with pytest.raises(docker.errors.APIError):
+        DockerSandbox._start_container(box)

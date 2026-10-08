@@ -117,10 +117,10 @@ from typing import Any
 
 try:  # pragma: no cover - import guard
     import docker
-    from docker.errors import DockerException, ImageNotFound, NotFound
+    from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 except ImportError:  # pragma: no cover
     docker = None
-    DockerException = ImageNotFound = NotFound = Exception
+    APIError = DockerException = ImageNotFound = NotFound = Exception
 
 try:  # pragma: no cover - import guard
     # The docker SDK does not wrap a dropped connection: against a client that was connected and
@@ -231,6 +231,20 @@ class ImageNotPresent(NotStarted):
     """The tool image is not on this host; nothing was created from it."""
 
     reason = "tool_image_missing"
+
+
+class ContainerStartRefused(NotStarted):
+    """The daemon answered ``start()`` with an error and the container provably never ran (D58-7).
+
+    The exit D58-7 first missed: it typed everything up to ``containers.create`` and left
+    ``start()`` alone, but Docker can create a container and then fail to *start* it for a
+    reason that happens before any process exists -- the case that surfaced was the network
+    setup ("no available IPv4 addresses" on a one-address pool). The daemon's reply is an
+    ``APIError``; the container is then ``created`` with no PID and a zero ``StartedAt``. Raised
+    only when that is what an inspection shows -- see :meth:`DockerSandbox._start_container`.
+    """
+
+    reason = "container_start_refused"
 
 
 class NetworkNotAvailable(NotStarted):
@@ -400,6 +414,39 @@ class DockerSandbox:
         """Deterministic name for the network backing one allowlist."""
         digest = hashlib.sha256("|".join(sorted(allowlist)).encode()).hexdigest()[:12]
         return f"cyberorch-allow-{digest}"
+
+    @staticmethod
+    def _start_container(container) -> None:
+        """``container.start()``, with a daemon refusal typed *only* when the container never ran.
+
+        ``start()`` is where "nothing started" stops being provable by position: a connection lost
+        here may or may not have launched the process (that stays untyped, ``UNKNOWN_OUTCOME``).
+        An ``APIError`` is different -- the daemon answered, with an error -- and Docker's own
+        record then says whether anything ran: ``Status == 'created'``, no PID, ``StartedAt`` still
+        the zero time. Only that combination is :class:`ContainerStartRefused`; an inspection that
+        fails, or shows anything else, re-raises the original error and the run stays unplaced.
+        """
+        try:
+            container.start()
+        except APIError as exc:
+            try:
+                container.reload()
+                state = container.attrs.get("State", {})
+            except (DockerException, _RequestsConnectionError):
+                raise exc from None
+            never_ran = (
+                state.get("Status") == "created"
+                and not state.get("Running")
+                and not state.get("Pid")
+                and str(state.get("StartedAt", "")).startswith("0001-01-01")
+            )
+            if not never_ran:
+                raise
+            logger.warning("docker refused to start container %s: %s",
+                           getattr(container, "short_id", "?"), exc.explanation or exc)
+            raise ContainerStartRefused(
+                "docker refused to start the container; nothing of this run executed"
+            ) from exc
 
     def ensure_network(self, allowlist: Sequence[str]):
         """Get or create the internal network for this allowlist.
@@ -885,7 +932,7 @@ class DockerSandbox:
                     params={"stdin": 1, "stream": 1}
                 )
 
-            container.start()
+            self._start_container(container)
 
             if payload_socket is not None:
                 raw = payload_socket._sock  # noqa: SLF001 - the SDK exposes no other handle

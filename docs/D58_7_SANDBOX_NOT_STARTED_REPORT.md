@@ -62,3 +62,27 @@ and the ordering guard red.
 * `start_egress_proxy` and `probe_egress` raise plain `SandboxUnavailable`; they are not on the
   dispatch path.
 * No retry or backoff: a `failed` proposal is retried by whoever schedules (D58-1..4), as for D59.
+
+## Follow-up: the exit D58-7 missed — `container.start()` refused by the daemon
+
+Found while designing the scheduler (D62). A `network.scan` on a single IP with no allowlist builds a one-address
+Docker network (`/32`); `containers.create` succeeds, and **`container.start()` raises `APIError` 500 "failed to
+set up container networking: no available IPv4 addresses"**. D58-7 had typed everything up to `create` and left
+`start()` alone, so the error escaped `propose_action`/`dispatch_approved` raw and left the proposal at
+`dispatching` — for a run that provably never executed.
+
+*Where exactly:* `DockerSandbox.run`, the `container.start()` call (after the container exists, before any
+process). *Proof it never ran* (inspected after the failure): `Status: created`, `Running: false`, `Pid: 0`,
+`StartedAt: 0001-01-01…`.
+
+*Fix:* `DockerSandbox._start_container` — an `APIError` from `start()` becomes `ContainerStartRefused` (a
+`NotStarted`, code `container_start_refused`, fixed message) **only if** a following inspection shows exactly that
+state; an inspection that fails, or any other state, re-raises the original error and the run stays unplaced. A
+dropped connection during `start()` is deliberately not covered. Recorded `failed`, stage `closed`/
+`container_start_refused`, audit `tool_run.refused (sandbox_not_started, container_start_refused)`.
+
+*Tests* (`tests/test_sandbox_not_started.py`, +4): real Docker refusal typed; through `propose_action` the proposal
+is `failed`/`closed` (the daemon's explanation asserted in the operator log, absent from the audit message),
+nothing for the reconciler; the guard types only on proof (running / exited / has-a-PID states re-raise); a failed
+inspection re-raises. Mutation-verified: `start()` untyped again → the two real-Docker tests red; proof dropped →
+the guard test red; failed inspection typed → the inspection test red.
