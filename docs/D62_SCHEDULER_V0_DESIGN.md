@@ -1,5 +1,8 @@
 # D62 — Scheduler v0 (D58-1/2/3/4): design note, checkpoint 1
 
+> **Revision 2 (after review).** Changes A, B, C and the `action` finding supersede the text they touch;
+> they are collected in **§11** and the affected tables (§3.1, §6, §10) have been edited to match.
+
 Status: **proposed — nothing here is built.** Items marked ⚑ need your decision before
 implementation. Everything below was checked against the tree at `HEAD` (D58-8 closeout, CI 145
 green) and each factual claim says how: **[R]** read in the source, **[E]** executed.
@@ -32,11 +35,25 @@ per-engagement proxy today (only harness scripts do). What *is* derivable from c
 `network.*`, `dispatch_scan` defaults the allowlist to the target itself (`allowlist = network_allowlist
 or [target]` [R: `dispatch.py:583`]) — so no extra context is needed. `web.*` is refused without a
 proxy (`registry.requires_proxy` [R]); `ad.collect` is refused without a credential (ACCEPTANCE 5.57).
-**Proposal: v0 dispatches `network.*` only** (the e2e test's action), and *skips with a recorded
-reason* (`scheduler.skipped`, §6) any approved proposal whose action it cannot supply context for.
-`code.scan`/`code.secrets` need no extra context either and could be added, but I have not run them
-through a scheduler path and would add them only with their own test. ⚑ **(a) `network.*` only
-(recommended) / (b) also `code.*`.**
+**Revised (B): v0 dispatches exactly `network.scan`, `network.recon`, `code.scan`, `code.secrets`** —
+explicit names, no wildcard (a wildcard would widen v0 silently when a `network.xxx` is added). Everything
+else is `skipped` with a recorded reason. `code.*` was left out of my first proposal for one reason only:
+*I had not run it through a scheduler path*. It is **not** a `dispatch_approved` limitation — verified by
+executing it: an approved `code.scan` reaches `dispatch_code_scan` (`_dispatch_for_action` routes by the
+adapter's `NEEDS_DISPATCH`, the same as the ALLOW path). Its real limit is the one in ACCEPTANCE 5.57: an
+approval names no credential, so a **private** repository fails to fetch (`repo_fetch_failed`) and the
+proposal closes; only credential-less (public) repositories can succeed. Recorded as a candidate beside 5.57.
+
+**New finding that changes the execution step (⚑ D-9).** I earlier claimed `network.*` needs no extra
+runtime context because `dispatch_scan` defaults the allowlist to the target. **Executed, that is wrong for
+an IP target:** with a real `DockerSandbox`, `network.scan` on `10.72.0.5` and no `network_allowlist` builds
+a `/32` Docker network, and `container.start()` fails with *"no available IPv4 addresses on this network"*;
+the raw `APIError` escapes `dispatch_approved` and leaves the proposal at `dispatching`. (CIDR targets are
+fine; the earlier tests always passed an explicit allowlist.) So the **execution step must supply
+`network_allowlist`**: the value of the proposal's authorized scope object when its type is `cidr`
+(`action_proposals.authorized_scope_object_id` → `scope_registry`, read by `execute.py` on the `cyberorch_app`
+connection, never by `decide.py`). A scope that is not a CIDR → `skipped` (`runtime_context_unavailable`).
+⚑ **confirm: allowlist = the authorized CIDR scope's value.**
 
 ## 2. D58-1/A — the enrollment record
 
@@ -117,17 +134,20 @@ enrollment read and to columns by the grants*.
 The ADR §2.4 "yes" rows cover `engagements`, `tasks`, `capabilities`, `tool_runs`,
 `action_proposals`. **What v0 actually reads** is much smaller. Two choices:
 
-* **(i) recommended — grant exactly what v0 reads**, each later feature adds its own migration:
+* **(i) recommended — grant exactly what v0 reads** (revised: A and the `action` finding):
 
-| Table | Columns | Why v0 reads it |
+| Object | Columns | Why v0 reads it |
 |---|---|---|
-| `scheduler_enrollment` | all | the allowlist |
-| `engagements` | `engagement_id`, `status`, `kill_switch_engaged` | defer on pause/kill; detect "enrolled but missing" |
-| `action_proposals` | `proposal_id`, `engagement_id`, `action`, `pipeline_stage`, `stage_updated_at` | find `approved`; ordering; skip unsupported actions; count `dispatching` at start |
-| `audit_log` | `audit_id`, `engagement_id`, `ts`, `event_type`, `subject_id`, `payload` — **plus a restrictive policy** `TO scheduler_reader USING (scope='engagement' AND event_type LIKE 'scheduler.%')` | the "previous disposition" of an engagement/proposal, derived from the scheduler's own earlier events (§6.1) so ticks hold no state |
+| `scheduler_enrollment` | all (6) | the allowlist |
+| `engagements` | `engagement_id`, `status`, `kill_switch_engaged` | defer on pause/kill; detect "missing" |
+| **view `scheduler_proposals`** (definer view; reader has **no** grant on `action_proposals`) | `proposal_id`, `engagement_id`, `pipeline_stage`, `stage_updated_at`, `action_class` | find `approved`; ordering; count stuck stages |
+| `scheduler_state` | `engagement_id`, `proposal_id`, `kind`, `disposition`, `reason_code`, `since` | previous disposition (§6.1) — replaces the `audit_log` grant |
+| **`audit_log`** | **none** | — |
 
-  Not granted in v0 although the ADR marks them "yes": `tasks.*`, `capabilities.*`, `tool_runs.*`,
-  `action_proposals.decision`, `decision_reasons`, `dispatch_state`, `stage_detail`.
+  `action_class` is `CASE WHEN action IN (<the registered action names>) THEN action ELSE 'other' END`:
+  a closed vocabulary enforced by the database (see §11, finding on `action`).
+  Not granted in v0 although the ADR marks them "yes": `tasks.*`, `capabilities.*`, `tool_runs.*`, and on
+  `action_proposals`: `action` itself, `decision`, `decision_reasons`, `dispatch_state`, `stage_detail`.
 * **(ii)** grant the whole ADR "yes" list now, so later phases need no migration. Wider than v0 uses;
   contrary to "don't widen ahead of need".
 
@@ -240,38 +260,58 @@ Closed list, **exactly what v0 emits** (any other `scheduler.*` is a bug and the
 | `scheduler.dispatched` | engagement | written **before** the call to `dispatch_approved`: the decision to dispatch | `proposal_id`, `reason_code` = `approved_and_idle` |
 | `scheduler.deferred` | engagement | edge: first tick on which an engagement with ≥1 approved proposal cannot be served | `reason_code` ∈ {`engagement_paused`, `engagement_killed`, `engagement_not_active`}, `waiting_count` |
 | `scheduler.resumed` | engagement | edge: the engagement is servable again after a `deferred` | `deferred_seconds`, `waiting_count` |
-| `scheduler.skipped` | engagement | once per proposal whose action v0 does not dispatch | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`} |
+| `scheduler.skipped` | engagement | once per proposal v0 does not dispatch (recorded in `scheduler_state`) | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`, `runtime_context_unavailable`} |
 
 ¹ best-effort: if the audit cannot be written, `stopped` cannot be either; a `started` with no matching
 `stopped` is how an unclean death reads.
 
-`scheduler.dispatched` has the name you asked for but its meaning is "handed to `dispatch_approved`":
-it is written first so that *audit failure ⇒ no action* (§7). If the process dies between the record and
-the call, the restart dispatches the still-`approved` proposal and writes a second `dispatched` — two
-decisions, one run (the stage UPDATE guarantees the run). Outcomes are **not** repeated by the
-scheduler: `capability.issued`, `tool_run.*`, `approval.revalidation_failed` and the stage already say
-what happened. The pipeline events carry the same `proposal_id` as subject, so `reconstruct_decision`
-reads the scheduler's decision as part of the chain (the event types are added to
-`audit/query.py`'s table).
+**What `scheduler.dispatched` means (C).** It means **"the scheduler decided to attempt a dispatch"** — it
+does **not** assert that anything ran. The outcome is whatever the pipeline events say
+(`capability.issued`, `tool_run.started`, …, or `approval.revalidation_failed`); a `dispatched` with none of
+them behind it is a decision that was interrupted or refused, not an execution. It is written first so that
+*audit failure ⇒ no action* (§7). If the process dies between the record and the call, the restart finds the
+proposal still `approved` and writes a second `dispatched` — two decisions, one run (the stage UPDATE
+guarantees the run). To make that case visible at startup, the service records a `dispatch_decided` row in
+`scheduler_state` after the audit event and before the call (§8). Outcomes are not repeated by the scheduler.
+The pipeline events carry the same `proposal_id` as subject, so `reconstruct_decision` reads the scheduler's
+decision as part of the chain (the event types are added to `audit/query.py`'s table).
 
-### 6.1 Edge-triggered without memory (⚑ D-7)
+### 6.1 Edge-triggered without memory (⚑ D-7, revised by A)
 
-"Stateless between ticks" and "edge-triggered" conflict unless the previous disposition is *derived*.
-It is derived from the scheduler's own earlier audit events, read through `scheduler_reader` (the
-restricted `audit_log` grant, §3.1):
+"Stateless between ticks" and "edge-triggered" conflict unless the previous disposition is persisted. It is
+persisted in a **small table of closed vocabulary**, not read back out of the audit log:
 
-* engagement disposition = the latest `scheduler.deferred`/`scheduler.resumed` for that engagement;
-* "already skipped" = a `scheduler.skipped` whose `subject_id` is that proposal.
+```
+scheduler_state(
+  engagement_id  text NOT NULL REFERENCES engagements(engagement_id),
+  proposal_id    text REFERENCES action_proposals(proposal_id),      -- NULL = engagement-level row
+  kind           text NOT NULL CHECK (kind IN ('engagement','proposal')),
+  disposition    text NOT NULL CHECK (disposition IN ('served','deferred','skipped','dispatch_decided')),
+  reason_code    text CHECK (reason_code IN ('engagement_paused','engagement_killed','engagement_not_active',
+                    'action_not_supported_v0','runtime_context_unavailable','approved_and_idle')),
+  since          timestamptz NOT NULL DEFAULT now(),
+  -- the pairs that may exist, nothing else:
+  CHECK ((kind='engagement' AND proposal_id IS NULL AND disposition IN ('served','deferred'))
+      OR (kind='proposal'   AND proposal_id IS NOT NULL AND disposition IN ('skipped','dispatch_decided'))),
+  UNIQUE (engagement_id, COALESCE(proposal_id, '')) )
+```
 
-A restart therefore does not re-emit, and no process memory is involved. **Coalesce count:** a per-tick
-counter would be state (or a write per tick). Proposal: `resumed` carries **`deferred_seconds`** (from the
-`deferred` event's `ts`) instead of "N ticks". Alternative: an in-memory tick counter, accurate only
-within one process lifetime. ⚑ **seconds (recommended) / in-memory ticks.**
+Every column is an id, a timestamp or a `CHECK`-closed code — **no column can hold free text**, which is the
+property the `audit_log.payload` grant could not give. **Who writes it:** a **third new role,
+`scheduler_state_writer`** — `SELECT, INSERT, UPDATE` on this one table and nothing else; not
+`cyberorch_app`, not `scheduler_reader`, not `scheduler_admin`. Both it and the reader are bound to one
+engagement per transaction by the ordinary `engagement_isolation` policy, so the writer cannot write
+another engagement's row. Cost, stated: the process now holds three database credentials (reader, state
+writer, app) — each does one thing, and the AST test (§4) keeps `decide.py` away from the last two.
 
-`deferred` is emitted only when something is *waiting* (an engagement paused with nothing approved
-delays nothing). A `killed` engagement stays deferred for good and its approved proposals stay
-`approved`: v0 neither closes nor re-routes them (that is the reconciler's, D58-9, and
-`awaiting-dispatch --older-than` already finds them).
+Per tick, for each enrolled engagement, `decide.py` reads the state row(s) and the live facts and emits
+transitions; `service.py` applies each as **audit event first, then state row** (the audit-before-act rule).
+A crash between the two re-emits the event after restart — a duplicate `deferred`, never a lost one.
+Restarts do not re-emit otherwise (the row survives). **Coalesce:** `resumed` carries `deferred_seconds`
+(`now - since` from the row) — no per-tick counter, no extra write per tick.
+
+`deferred` is emitted only when something is *waiting*. A `killed` engagement stays deferred for good and its
+approved proposals stay `approved` (reconciler's, D58-9; `awaiting-dispatch --older-than` finds them).
 
 ## 7. v0 failure handling — and the no-repeat argument ⚑ D-8
 
@@ -304,30 +344,47 @@ stop the service:
   stage and **treats "still approved" as an anomaly and stops**, rather than skipping it silently or
   looping.
 
+**Raw errors after `start()` (found by probe).** A `container.start()` failure raises a raw docker
+`APIError` out of `dispatch_approved` and leaves the proposal at `dispatching`. For the scheduler that is
+"any other exception": best-effort `stopped(unexpected_error)`, stop (exit 1). The proposal is not at
+`approved`, so it is not retried; it is the reconciler's. (Retyping that error is D58-6.)
+
 **Two consequences you should see, both from fail-closed choices already made:**
 1. A refusal *closes* the proposal (the operator re-proposes and re-approves). A lapsed approval
    (expiry cannot be undone) is the right thing to close; **but a Docker outage between my pre-check
    and the dispatch also closes it** (`docker_unreachable`, retryable *in principle* by D58-7, but a
    closed proposal is not re-selected). The pre-check narrows the window to milliseconds; closing it
    fully needs "reopen on a retryable failure", which is D58-6's ladder. Recorded as a known v0 gap.
+   *Labelled as infrastructure, not policy:* the close reason is the sandbox's own code in `stage_detail`
+   (`docker_unreachable`, `tool_image_missing`, `network_unavailable`…) and the audit event is
+   `tool_run.refused` with reasons `(sandbox_not_started, <code>)` — distinguishable from
+   `capability_refused:…` and `approval_revalidation_failed:…` (policy/approval).
+   *Why it is not put back to `approved`:* (i) there is no `closed → approved` transition — stages only move
+   forward by conditional UPDATE, and one that moves back must itself be an audited, guarded act; (ii) the
+   run row and a consumed capability already exist, and the approval may have lapsed meanwhile, so a re-run
+   needs a fresh capability and a fresh validity check; (iii) the only safe trigger is the typed `NotStarted`
+   proof, and getting that wrong for an `unknown_outcome` would run a tool that already ran (I7). That
+   machinery is the D58-6 ladder; v0 does not guess at it.
 2. Engagement status is re-read immediately before each dispatch (not only at tick start), to keep the
    "paused/killed → deferred, not closed" window to one query.
 
-## 8. Startup observation (your item 7)
+## 8. Startup observation (your item 7, extended by C)
 
-After the lock and before the first tick, `scheduler.started` carries `dispatching: {engagement_id:
-count}` — proposals at `pipeline_stage = 'dispatching'` in each enrolled engagement — plus
-`approved_waiting` and `missing`. Observation only: nothing is changed, closed, retried or reconciled.
-(`dispatching` is the stage a crash leaves behind; `reconcile_stale_dispatches` is the existing tool and
+After the lock and before the first tick, `scheduler.started` carries, per enrolled engagement and as counts
+only: `dispatching` (stage `dispatching`), `capability_issued` (issued, never dispatched), `approved_waiting`
+(stage `approved`) and **`approved_redispatch`** — the subset of `approved` that has a `dispatch_decided` row,
+i.e. a decision to dispatch was recorded and no pipeline stage followed (the crash-between case), plus
+`missing`. Observation only: nothing is changed, closed, retried or reconciled. (`reconcile_stale_dispatches`
 stays manual.)
 
 ## 9. Implementation plan (checkpoint 2), for planning only
 
-* `db/roles.sql` + `scripts/init_db.sh`: `scheduler_reader`, `scheduler_admin` (passwords, `.env` lines,
+* `db/roles.sql` + `scripts/init_db.sh`: `scheduler_reader`, `scheduler_admin`, `scheduler_state_writer` (passwords, `.env` lines,
   URLs). CI runs `./scripts/init_db.sh` from a clean database, so provisioning there needs no workflow
   change [R: `test.yml`].
-* Migration `0019`: `scheduler_enrollment` (+ trigger, RLS per role), column grants, the restrictive
-  `audit_log` policy for the reader, `GRANT EXECUTE … cyberorch_current_engagement()`.
+* Migration `0019`: `scheduler_enrollment` (+ trigger, RLS per role), `scheduler_state` (+ `engagement_isolation`),
+  the `scheduler_proposals` view, column grants, `GRANT EXECUTE … cyberorch_current_engagement()`. No `audit_log`
+  grant of any kind.
 * `state/db.py`: `scheduler_reader_scope(engagement_id)`, `scheduler_admin_scope()`, the URL functions.
 * `control_plane/scheduler/{decide,execute,emit,lock,service}.py`, `scripts/run_scheduler.py`,
   `scripts/manage_scheduler_enrollment.py`.
@@ -335,16 +392,38 @@ stays manual.)
   anomaly; mutations: lock removed, enrollment check removed, reader granted one content column,
   payload whitelist relaxed.
 
-## 10. Decisions I need from you
+## 10. Decisions (status after review)
 
-| # | Question | Recommended |
+| # | Decision | Status |
 |---|---|---|
-| D-0 | v0 action coverage | `network.*` only; others `skipped` and visible |
-| D-1 | enrollment storage/writer | global table + new `scheduler_admin` role + CLI |
-| D-2 | reader columns | exactly what v0 reads (§3.1 table), not the whole ADR "yes" list |
-| D-3 | `approvals` columns | none in v0 (your four columns if you want the pre-filter) |
-| D-4 | `credential_id` | no grant in v0; a `security_invoker` view when needed |
-| D-5 | `decision_reasons` | closed by construction, not enforced; not granted; vocabulary test when it is |
-| D-6 | audit vocabulary | the closed list in §6 (incl. `skipped`, `deferred`, `resumed`) |
-| D-7 | edge state & coalesce | derived from own audit events (`audit_log` read grant with restrictive policy); `deferred_seconds`, not tick counts |
-| D-8 | failure table & "still approved ⇒ stop" | as §7, with the Docker-close gap recorded as a known v0 limitation |
+| D-0 | v0 actions: `network.scan`, `network.recon`, `code.scan`, `code.secrets` (explicit names); others `skipped` | revised (B); private-repo limit recorded |
+| D-1 | `scheduler_enrollment` + `scheduler_admin` + operator CLI (typed confirmation on a TTY, refuses without one, `--yes` only for scripted provisioning — same as `manage_global_policy.py`) | approved |
+| D-2 | reader: smallest grant (§3.1), **no `audit_log`, no `action_proposals` base table** | approved, revised (A) |
+| D-3 | `approvals`: none | approved |
+| D-4 | `credential_id`: none in v0; `security_invoker` view when needed | approved |
+| D-5 | `decision_reasons`: not granted; **candidate: D58-12 needs it to tell `policy_engine_unavailable` apart — add a CHECK or vocabulary test first** | approved + candidate |
+| D-6 | audit vocabulary (§6); `dispatched` = "decided to attempt" | approved, wording fixed (C) |
+| D-7 | previous disposition in `scheduler_state` (closed vocabulary); writer = new `scheduler_state_writer` | revised (A) — **needs your confirmation** |
+| D-8 | failure table; known Docker-close gap; infra labelling and why-not-`approved` added | approved |
+| D-9 | execution step supplies `network_allowlist` = authorized CIDR scope value | **new — needs your confirmation** |
+
+## 11. Revisions after review
+
+* **A.** `audit_log.payload` is not granted; in fact nothing on `audit_log` is. Previous disposition lives in
+  `scheduler_state` (§6.1), a table whose every column is an id, a timestamp or a CHECK-closed code, written
+  by a dedicated `scheduler_state_writer`. This survives restarts, so a restart does not re-emit `deferred`.
+* **B.** See §1: `code.*` was excluded only for lack of a scheduler-path test, not by any `dispatch_approved`
+  limit (executed: it routes to `dispatch_code_scan`). Explicit action names, no wildcard.
+* **C.** See §6 and §8.
+* **Finding on `action` (your supplementary item).** *Verified by executing it:* `action_proposals.action` is
+  **free text**. `_persist_proposal` stores whatever the agent sent before any registry or policy check (a
+  237-character string beginning `zz.IGNORE-PREVIOUS; goal: …` was stored verbatim and then DENYed); the
+  column is `TEXT` with no CHECK. So `action` is **not** a closed vocabulary, and granting it would hand
+  agent-controlled text to the scheduler. Hence the view `scheduler_proposals`: the database itself maps any
+  unregistered name to `'other'`. *Verified by executing:* a definer view over `action_proposals` still obeys
+  the engagement GUC (0 rows with no GUC, 1 with its own, 0 with another). **Structural test:** the view's
+  name list must equal `set(tool_gateway.registry.ADAPTERS)` exactly (a new adapter without a migration to
+  the view fails the test; mutation: add a name to the view only), and no scheduler module may read
+  `action` from any other source.
+* **`stage_detail`.** Not granted. Wording fixed per review: *no known path writes free text into it* (I read
+  every write site; I did not compare against real historical data).
