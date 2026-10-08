@@ -46,14 +46,54 @@ proposal closes; only credential-less (public) repositories can succeed. Recorde
 
 **New finding that changes the execution step (⚑ D-9).** I earlier claimed `network.*` needs no extra
 runtime context because `dispatch_scan` defaults the allowlist to the target. **Executed, that is wrong for
-an IP target:** with a real `DockerSandbox`, `network.scan` on `10.72.0.5` and no `network_allowlist` builds
-a `/32` Docker network, and `container.start()` fails with *"no available IPv4 addresses on this network"*;
-the raw `APIError` escapes `dispatch_approved` and leaves the proposal at `dispatching`. (CIDR targets are
-fine; the earlier tests always passed an explicit allowlist.) So the **execution step must supply
-`network_allowlist`**: the value of the proposal's authorized scope object when its type is `cidr`
+an IP target:** a `/32` allowlist builds a one-address Docker network and `container.start()` fails with
+*"no available IPv4 addresses"* (the raw error that then escapes — see §7 and the D58-7 follow-up). The
+execution step therefore **derives `network_allowlist`** from the proposal's authorized scope object
 (`action_proposals.authorized_scope_object_id` → `scope_registry`, read by `execute.py` on the `cyberorch_app`
-connection, never by `decide.py`). A scope that is not a CIDR → `skipped` (`runtime_context_unavailable`).
-⚑ **confirm: allowlist = the authorized CIDR scope's value.**
+connection, never by `decide.py`).
+
+*What Docker accepts (measured, real daemon, internal bridge):* a `/32` fits **0** containers, `/31` **1**,
+`/30` **1**, `/29` **5**, `/28` **≥ 8**. Docker reserves the network address, the gateway (first host) and the
+broadcast address, and the target must be a container attached to this network, so the scanner plus the
+target need **at least a `/29`**.
+
+| Authorizing scope type | `network_allowlist` | Otherwise skip with |
+|---|---|---|
+| `cidr` (IPv4), prefix ≤ /29 | the scope's value | `scope_narrower_than_sandbox_minimum` (/30, /31, /32) |
+| `ip` (IPv4) | smallest aligned block from /29 up to the cap (proposed **/27**) in which the address is not the block's network, gateway (first host) or broadcast address | `no_usable_block_for_address` |
+| `fqdn`, `url`, `ad_domain`, `repo` for a `network.*` action | none derivable | `scope_type_has_no_network_range` |
+| any IPv6 scope | not supported in v0 (not tested) | `ipv6_not_supported_v0` |
+| `code.*` (any scope) | not needed (no network) | — |
+
+Then, for any `network.*` proposal whose **target is a single IP**: if that address is the **network, first-host
+(gateway) or broadcast address of the chosen block** it is skipped with `target_is_reserved_address` — it would
+fail with "Address already in use" at container creation (measured: a target pinned at `.1` or `.7` of a `/29`
+fails; `.5` works, target and scanner both). A CIDR *target* is not checked (a range naturally contains them).
+This applies to a CIDR scope too (a target of `.1` or `.255` in a `/24`).
+
+*Measured coverage of the single-IP derivation* (fraction of the 256 last-octet values that get a usable block,
+by block cap): /29 62.5% · /28 81.2% · **/27 90.6%** · /26 95.3% · /25 97.7% · /24 98.8%. The 3/256 = 1.2% that
+never do are last octets `.0`, `.1`, `.255` (reserved in every aligned block); an explicit gateway in
+`DockerSandbox.ensure_network` would rescue them — a `tool_gateway` change, not v0.
+
+*What this is worth in practice* (every `network.*`-enabled scope registration in `tests/`, `scripts/`,
+`agents/`, parsed with `ast` and every constant resolved): **41 `cidr` registration sites**, **4 `fqdn`**, **0 `ip`**. I first resolved only 19 of the 41 by regex and
+reported the rest as "named constants"; resolving them properly (module constants, the import from
+`tests/scenarios/conftest.py`, the loop variable) gives: **38 sites are `/24`** (34 literal, 3 through
+`ALLOWED_CIDR = "10.79.0.0/24"`, 1 loop over `SCOPE_CIDRS = {"10.90.0.0/24", "10.91.0.0/24"}`), **1 site is
+`/25`**, 1 site is a parametrized lookalike-containment unit test (`tests/test_resolvers.py`: /24 ×2, /25, /26,
+/28 and one **/32**), and 1 is a deliberately invalid `'not-a-network'` string in a negative test. The resolver
+unit test only exercises containment and never dispatches. So the only CIDR scope narrower than a `/29` in the
+repository is that one `/32` in a unit test; **every CIDR scope that is used to run a tool is `/24` or `/25` and is
+used as-is.** The `fqdn` scopes are skipped. `ip`-type scopes are derived as above but nothing in the repository
+exercises one yet.
+
+*Cost, stated:* for an `ip` scope the allowlist (and so the Docker network, `tool_runs.network_allowlist`, the
+fingerprint and D59's same-range serialization) is a block **wider than the one authorized address**; the
+command still names only the target and an internal bridge reaches only containers someone attached, but it is a
+widening and is recorded as one. The clean fix — keep the authorized `/32` as the allowlist and let the sandbox
+choose its own pool — is a `tool_gateway` change for a separate deliverable.
+⚑ **confirm: derivation table, cap /27, and the widening for `ip` scopes.**
 
 ## 2. D58-1/A — the enrollment record
 
@@ -260,7 +300,7 @@ Closed list, **exactly what v0 emits** (any other `scheduler.*` is a bug and the
 | `scheduler.dispatched` | engagement | written **before** the call to `dispatch_approved`: the decision to dispatch | `proposal_id`, `reason_code` = `approved_and_idle` |
 | `scheduler.deferred` | engagement | edge: first tick on which an engagement with ≥1 approved proposal cannot be served | `reason_code` ∈ {`engagement_paused`, `engagement_killed`, `engagement_not_active`}, `waiting_count` |
 | `scheduler.resumed` | engagement | edge: the engagement is servable again after a `deferred` | `deferred_seconds`, `waiting_count` |
-| `scheduler.skipped` | engagement | once per proposal v0 does not dispatch (recorded in `scheduler_state`) | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`, `runtime_context_unavailable`} |
+| `scheduler.skipped` | engagement | once per proposal v0 does not dispatch (recorded in `scheduler_state`) | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`, `scope_type_has_no_network_range`, `scope_narrower_than_sandbox_minimum`, `no_usable_block_for_address`, `target_is_reserved_address`, `ipv6_not_supported_v0`} |
 
 ¹ best-effort: if the audit cannot be written, `stopped` cannot be either; a `started` with no matching
 `stopped` is how an unclean death reads.
@@ -288,7 +328,9 @@ scheduler_state(
   kind           text NOT NULL CHECK (kind IN ('engagement','proposal')),
   disposition    text NOT NULL CHECK (disposition IN ('served','deferred','skipped','dispatch_decided')),
   reason_code    text CHECK (reason_code IN ('engagement_paused','engagement_killed','engagement_not_active',
-                    'action_not_supported_v0','runtime_context_unavailable','approved_and_idle')),
+                    'action_not_supported_v0','scope_type_has_no_network_range',
+                    'scope_narrower_than_sandbox_minimum','no_usable_block_for_address',
+                    'target_is_reserved_address','ipv6_not_supported_v0','approved_and_idle')),
   since          timestamptz NOT NULL DEFAULT now(),
   -- the pairs that may exist, nothing else:
   CHECK ((kind='engagement' AND proposal_id IS NULL AND disposition IN ('served','deferred'))
@@ -309,6 +351,15 @@ transitions; `service.py` applies each as **audit event first, then state row** 
 A crash between the two re-emits the event after restart — a duplicate `deferred`, never a lost one.
 Restarts do not re-emit otherwise (the row survives). **Coalesce:** `resumed` carries `deferred_seconds`
 (`now - since` from the row) — no per-tick counter, no extra write per tick.
+
+**Skipped proposals stay visible.** A skipped proposal is not closed: it stays `approved` until its approval
+lapses (and after that, listed as lapsed), because closing it is a decision the operator or the reconciler
+makes, not the scheduler. `scripts/approvals.py awaiting-dispatch` therefore lists each of them with its
+**`skip_reason`** and `skipped_since`: the CLI reads the queue as today (`cyberorch_app`, engagement scope) and
+joins `scheduler_state` rows (`kind='proposal'`, `disposition='skipped'`) read over the `scheduler_reader`
+connection — no grant on `scheduler_state` is added to `cyberorch_app`. The event `scheduler.skipped` carries the
+same code; the code is the operator's only explanation (the reason is derived from scope content the reader
+cannot see, so it cannot be recomputed from the reader side).
 
 `deferred` is emitted only when something is *waiting*. A `killed` engagement stays deferred for good and its
 approved proposals stay `approved` (reconciler's, D58-9; `awaiting-dispatch --older-than` finds them).
@@ -344,10 +395,16 @@ stop the service:
   stage and **treats "still approved" as an anomaly and stops**, rather than skipping it silently or
   looping.
 
-**Raw errors after `start()` (found by probe).** A `container.start()` failure raises a raw docker
-`APIError` out of `dispatch_approved` and leaves the proposal at `dispatching`. For the scheduler that is
-"any other exception": best-effort `stopped(unexpected_error)`, stop (exit 1). The proposal is not at
-`approved`, so it is not retried; it is the reconciler's. (Retyping that error is D58-6.)
+**Raw errors from `start()` (found by probe, then traced).** The probe showed a raw docker `APIError`
+escaping `dispatch_approved` with the proposal left at `dispatching`. Traced to its position: it is raised by
+`container.start()` in `DockerSandbox.run` — **after** `containers.create` (the only call D58-7 had wrapped) and
+**before any process existed** (inspected: `Status: created`, `Pid: 0`, `StartedAt` the zero time). That is an exit
+D58-7 missed, not a scheduler matter; it is fixed and tested on its own (`ContainerStartRefused`, a `NotStarted`,
+recorded `failed` / stage `closed` / `container_start_refused`; own commit, §11). It is typed **only** when the
+daemon answered with an error *and* an inspection shows the container never ran; a lost connection or an
+inspection that fails stays untyped. For the scheduler, any *other* exception from `start()` onwards is still "any
+other exception": best-effort `stopped(unexpected_error)`, stop (exit 1); the proposal is at `dispatching`, not
+`approved`, so it is not retried and is the reconciler's.
 
 **Two consequences you should see, both from fail-closed choices already made:**
 1. A refusal *closes* the proposal (the operator re-proposes and re-approves). A lapsed approval
@@ -405,7 +462,7 @@ stays manual.)
 | D-6 | audit vocabulary (§6); `dispatched` = "decided to attempt" | approved, wording fixed (C) |
 | D-7 | previous disposition in `scheduler_state` (closed vocabulary); writer = new `scheduler_state_writer` | revised (A) — **needs your confirmation** |
 | D-8 | failure table; known Docker-close gap; infra labelling and why-not-`approved` added | approved |
-| D-9 | execution step supplies `network_allowlist` = authorized CIDR scope value | **new — needs your confirmation** |
+| D-9 | execution step derives `network_allowlist` from the authorized scope (§1 table: cidr as-is if ≥ /29; ip → smallest usable block up to /27); concrete skip codes; reserved-address skip | **needs your confirmation** (cap /27; the widening for `ip` scopes) |
 
 ## 11. Revisions after review
 
@@ -427,3 +484,7 @@ stays manual.)
   `action` from any other source.
 * **`stage_detail`.** Not granted. Wording fixed per review: *no known path writes free text into it* (I read
   every write site; I did not compare against real historical data).
+* **Round 3 (skip codes, reserved addresses, the raw error, the numbers).** Skip reasons are now six concrete codes
+  (§1, §6, §6.1) and `awaiting-dispatch` lists them (§6.1). A single-IP target that is the network, gateway or
+  broadcast address of its block is skipped (§1). The raw `APIError` is located and fixed in D58-7's follow-up
+  (§7). The CIDR numbers are re-derived with every constant resolved (§1).
