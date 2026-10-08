@@ -472,11 +472,41 @@ def test_unknown_outcome_is_audited_as_needing_a_human(engagement_id):
     assert row["payload"]["requires_human_review"] is True
 
 
-def test_an_unavailable_sandbox_yields_unknown_outcome(engagement_id, scan_target):
+class _CannotPlaceTheFailure:
+    def run(self, **kwargs):
+        raise SandboxUnavailable("failed at a point nobody can place")
+
+
+def test_an_unavailable_sandbox_that_cannot_say_where_it_failed_yields_unknown_outcome(
+    engagement_id, scan_target
+):
     """The tool may have started before the sandbox call failed.
 
-    Nothing distinguishes "never launched" from "launched and then lost" at
-    this layer, so the honest state is unknown.
+    A bare ``SandboxUnavailable`` makes no claim about *when* it failed, so the honest state is
+    unknown. (Until D58-7 this test used a missing image, which *is* provably pre-start and is
+    recorded as failed -- see ``test_a_missing_tool_image_is_failed_not_unknown_outcome``.)
+    """
+    with engagement_scope(engagement_id) as conn:
+        proposal_id = _proposal(conn, engagement_id)
+        capability = _capability(conn, engagement_id)
+        outcome = dispatch_scan(
+            engagement_id=engagement_id, proposal_id=proposal_id,
+            capability=capability, target=scan_target, actor="orchestrator",
+            sandbox=_CannotPlaceTheFailure(), network_allowlist=[ALLOWED_CIDR],
+        )
+        assert outcome.state == UNKNOWN_OUTCOME
+        assert _state(conn, proposal_id) == UNKNOWN_OUTCOME
+        assert conn.execute(
+            text("SELECT status FROM tool_runs WHERE run_id = :r"),
+            {"r": outcome.run_id},
+        ).scalar_one() == UNKNOWN_OUTCOME
+
+
+def test_a_missing_tool_image_is_failed_not_unknown_outcome(engagement_id, scan_target):
+    """D58-7: nothing was created from an image that is not there, so the outcome is *known*.
+
+    This used to be recorded as ``unknown_outcome`` -- the mislabel the test above's predecessor
+    pinned -- which parks the proposal for a human over something that can simply be retried.
     """
     broken = DockerSandbox(image="cyberorch/does-not-exist:none")
     with engagement_scope(engagement_id) as conn:
@@ -487,12 +517,9 @@ def test_an_unavailable_sandbox_yields_unknown_outcome(engagement_id, scan_targe
             capability=capability, target=scan_target, actor="orchestrator",
             sandbox=broken, network_allowlist=[ALLOWED_CIDR],
         )
-        assert outcome.state == UNKNOWN_OUTCOME
-        assert _state(conn, proposal_id) == UNKNOWN_OUTCOME
-        assert conn.execute(
-            text("SELECT status FROM tool_runs WHERE run_id = :r"),
-            {"r": outcome.run_id},
-        ).scalar_one() == UNKNOWN_OUTCOME
+        assert outcome.state == "failed" and outcome.run_id is None
+        assert outcome.reason == "tool_image_missing"
+        assert _state(conn, proposal_id) == "failed"
 
 
 def test_a_capability_the_adapter_cannot_read_is_refused_not_raised(engagement_id):

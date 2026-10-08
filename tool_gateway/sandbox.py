@@ -101,6 +101,7 @@ If it is implemented, three things are not negotiable:
 from __future__ import annotations
 
 import calendar
+import contextlib
 import hashlib
 import ipaddress
 import json
@@ -120,6 +121,13 @@ try:  # pragma: no cover - import guard
 except ImportError:  # pragma: no cover
     docker = None
     DockerException = ImageNotFound = NotFound = Exception
+
+try:  # pragma: no cover - import guard
+    # The docker SDK does not wrap a dropped connection: against a client that was connected and
+    # whose daemon has since died, a call raises this, not a ``DockerException`` (D58 E6).
+    from requests.exceptions import ConnectionError as _RequestsConnectionError
+except ImportError:  # pragma: no cover
+    _RequestsConnectionError = ConnectionError
 
 logger = logging.getLogger("cyberorch.sandbox")
 
@@ -196,14 +204,40 @@ class SandboxUnavailable(RuntimeError):
     """
 
 
-class NetworkNotAvailable(SandboxUnavailable):
+class NotStarted(SandboxUnavailable):
+    """The sandbox failed *before any container of this run was started* (D58-7).
+
+    A subclass so every existing ``except SandboxUnavailable`` still catches it, and a separate
+    type because callers must be able to tell it apart: nothing of the run executed, so the outcome
+    is **known** (failed, not run) and the action can be tried again -- unlike a failure at or after
+    ``start()``, where the tool may or may not have run (``UNKNOWN_OUTCOME``, §8.8). A plain
+    :class:`SandboxUnavailable` makes no such claim and is still recorded as unknown.
+
+    Raised only at points where that is provable: the daemon cannot be reached, the tool image is
+    absent, the confined network cannot be had, or the container could not be *created*. Never from
+    ``start()`` onwards. ``reason`` is a stable code; the message never names another engagement.
+    """
+
+    reason = "sandbox_not_started"
+
+
+class DaemonUnreachable(NotStarted):
+    """Docker could not be reached, so no container for this run could exist."""
+
+    reason = "docker_unreachable"
+
+
+class ImageNotPresent(NotStarted):
+    """The tool image is not on this host; nothing was created from it."""
+
+    reason = "tool_image_missing"
+
+
+class NetworkNotAvailable(NotStarted):
     """The sandbox refused *before any container existed* because of the network.
 
-    A subclass so every existing ``except SandboxUnavailable`` still catches it,
-    and a separate type because callers must be able to tell it apart: nothing
-    started, so unlike a failure at or after ``start()`` the outcome is known and
-    the action can be retried later. ``reason`` is a stable code; the message
-    never names another engagement.
+    Nothing started, so unlike a failure at or after ``start()`` the outcome is known and the
+    action can be retried later.
     """
 
     reason = "network_unavailable"
@@ -320,6 +354,25 @@ class ProxyEndpoint:
     tls: bool = False
 
 
+@contextlib.contextmanager
+def _daemon_errors_are_not_started():
+    """Translate a daemon/connection failure in the pre-start phase into :class:`DaemonUnreachable`.
+
+    Wrapped around exactly the calls that precede the container's existence (client, image check,
+    network, ``containers.create``). Typed errors raised inside -- :class:`ImageNotPresent`,
+    :class:`NetworkNotAvailable` -- pass through unchanged; ``ImageNotFound``/``NotFound`` that a
+    caller handles itself never reach here. Deliberately *not* wrapped around ``start()`` or what
+    follows: a connection lost there leaves a run that may have executed, which is not
+    "not started".
+    """
+    try:
+        yield
+    except NotStarted:
+        raise
+    except (DockerException, _RequestsConnectionError) as exc:
+        raise DaemonUnreachable(f"docker is not reachable: {exc}") from exc
+
+
 @dataclass
 class DockerSandbox:
     """Runs one command in a network-confined container."""
@@ -333,12 +386,14 @@ class DockerSandbox:
         if self._client is not None:
             return self._client
         if docker is None:
-            raise SandboxUnavailable("the docker SDK is not installed")
+            raise DaemonUnreachable("the docker SDK is not installed")
         try:
-            self._client = docker.from_env()
-            self._client.ping()
-        except DockerException as exc:
-            raise SandboxUnavailable(f"docker is not reachable: {exc}") from exc
+            client = docker.from_env()
+            client.ping()
+        except (DockerException, _RequestsConnectionError) as exc:
+            self._client = None
+            raise DaemonUnreachable(f"docker is not reachable: {exc}") from exc
+        self._client = client
         return self._client
 
     def network_name(self, allowlist: Sequence[str]) -> str:
@@ -384,7 +439,7 @@ class DockerSandbox:
                     f"the range {list(allowlist)} overlaps an existing network and "
                     "cannot be given its own"
                 ) from exc
-            raise SandboxUnavailable(
+            raise NetworkNotAvailable(
                 f"could not create the confined network for {allowlist}: {exc}"
             ) from exc
 
@@ -699,7 +754,7 @@ class DockerSandbox:
         try:
             self.client().images.get(self.image)
         except ImageNotFound as exc:
-            raise SandboxUnavailable(
+            raise ImageNotPresent(
                 f"image {self.image!r} is not present. Build it with "
                 "tool_gateway/images/build_nmap_image.sh"
             ) from exc
@@ -774,12 +829,15 @@ class DockerSandbox:
         else).
         """
         allowlist = validate_allowlist(network_allowlist)
-        self.ensure_image()
-        client = self.client()
-
         run_id = run_id or uuid.uuid4().hex[:12]
         owner = engagement_id or NO_OWNER
-        network = None if no_network else self.ensure_network(allowlist)
+        # Everything up to the container's creation is "not started" if it fails (D58-7), whatever
+        # shape the failure takes -- including the raw connection error a cached client raises once
+        # its daemon has died, which the SDK does not wrap (D58 E6).
+        with _daemon_errors_are_not_started():
+            self.ensure_image()
+            client = self.client()
+            network = None if no_network else self.ensure_network(allowlist)
         container = None
         started = time.monotonic()
         ca_file: str | None = None
@@ -793,26 +851,27 @@ class DockerSandbox:
             volumes[host_path] = {"bind": container_path, "mode": "ro"}
 
         try:
-            container = client.containers.create(
-                image=self.image,
-                command=list(command),
-                network="none" if network is None else network.name,
-                volumes=volumes,
-                # Writable tmpfs over a read-only root, for a tool that must
-                # write somewhere (the browser). Empty for nmap/curl.
-                tmpfs=dict(tmpfs) if tmpfs else None,
-                # Only opened when there is something to write. A container
-                # with an open stdin nobody closes is a container waiting.
-                stdin_open=stdin is not None,
-                # The tool must not be able to widen its own confinement.
-                cap_drop=["ALL"],
-                privileged=False,
-                security_opt=["no-new-privileges:true"],
-                read_only=True,
-                mem_limit=self.memory_limit,
-                pids_limit=self.pids_limit,
-                labels={"cyberorch.run_id": run_id, OWNER_LABEL: owner},
-            )
+            with _daemon_errors_are_not_started():
+                container = client.containers.create(
+                    image=self.image,
+                    command=list(command),
+                    network="none" if network is None else network.name,
+                    volumes=volumes,
+                    # Writable tmpfs over a read-only root, for a tool that must
+                    # write somewhere (the browser). Empty for nmap/curl.
+                    tmpfs=dict(tmpfs) if tmpfs else None,
+                    # Only opened when there is something to write. A container
+                    # with an open stdin nobody closes is a container waiting.
+                    stdin_open=stdin is not None,
+                    # The tool must not be able to widen its own confinement.
+                    cap_drop=["ALL"],
+                    privileged=False,
+                    security_opt=["no-new-privileges:true"],
+                    read_only=True,
+                    mem_limit=self.memory_limit,
+                    pids_limit=self.pids_limit,
+                    labels={"cyberorch.run_id": run_id, OWNER_LABEL: owner},
+                )
             if network is not None:
                 # Before start: a refused run has executed nothing.
                 self._assert_exclusive(container, [network.name], owner)

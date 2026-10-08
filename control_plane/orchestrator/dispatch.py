@@ -63,6 +63,7 @@ from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
     NetworkNotAvailable,
+    NotStarted,
     SandboxResult,
     SandboxUnavailable,
 )
@@ -238,12 +239,18 @@ def _build_plan_params(adapter) -> frozenset[str]:
 #: proposal for a human over something the system can simply retry.
 NETWORK_UNAVAILABLE = "network_unavailable"
 
+#: The sandbox failed before any container of this run existed, for a reason that is not the
+#: network: Docker unreachable, the tool image absent, the container could not be created (D58-7).
+#: Same standing as ``NETWORK_UNAVAILABLE`` and for the same reason -- the outcome is *known*, so it
+#: is ``failed`` (retryable), never ``unknown_outcome``.
+SANDBOX_NOT_STARTED = "sandbox_not_started"
 
-def _network_refused(
+
+def _refused_before_start(
     conn: Connection, *, engagement_id: str, actor: str, run_id: str,
-    proposal_id: str, exc: NetworkNotAvailable,
+    proposal_id: str, exc: NotStarted,
 ) -> DispatchOutcome:
-    """Record a run the sandbox declined to start for a network reason (D59).
+    """Record a run the sandbox declined to start, before any container existed (D59, D58-7).
 
     The audit payload carries the sandbox's message and the stable code, which
     by construction name no other engagement; who holds the network is in the
@@ -254,7 +261,9 @@ def _network_refused(
     record_audit(
         engagement_id=engagement_id, actor=actor,
         event_type="tool_run.refused", subject_type="tool_run", subject_id=run_id,
-        decision=DENY_DECISION, reasons=(NETWORK_UNAVAILABLE, exc.reason),
+        decision=DENY_DECISION,
+        reasons=(NETWORK_UNAVAILABLE if isinstance(exc, NetworkNotAvailable)
+                 else SANDBOX_NOT_STARTED, exc.reason),
         payload={"error": str(exc)},
     )
     # run_id is not returned: nothing executed, so propose_action must not draw
@@ -344,9 +353,9 @@ def _execute(
     """
     try:
         return sandbox_run()
-    except NetworkNotAvailable as exc:
+    except NotStarted as exc:
         with engagement_scope(engagement_id) as conn:
-            outcome = _network_refused(
+            outcome = _refused_before_start(
                 conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
                 proposal_id=proposal_id, exc=exc,
             )

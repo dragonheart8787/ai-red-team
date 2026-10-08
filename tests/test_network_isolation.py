@@ -442,10 +442,10 @@ def test_code_scans_join_no_network():
     assert isinstance(flag, ast.Constant) and flag.value is True
 
 
-def test_the_sandbox_unavailable_handler_is_preceded_by_the_network_one():
-    """``NetworkNotAvailable`` is a ``SandboxUnavailable``. A handler for the base
-    placed first would catch it and record 'unknown outcome' for a run that never
-    started -- the mislabel D59 exists to avoid for this case. Since D60 the handlers
+def test_the_sandbox_unavailable_handler_is_preceded_by_the_not_started_one():
+    """``NotStarted`` (``NetworkNotAvailable`` is one of its kinds) is a ``SandboxUnavailable``.
+    A handler for the base placed first would catch it and record 'unknown outcome' for a run
+    that never started -- the mislabel D59 exists to avoid for this case. Since D60 the handlers
     live in one place, ``_execute``, which all three dispatch functions go through."""
     tree = _dispatch_tree()
     tries = [n for n in ast.walk(tree) if isinstance(n, ast.Try)
@@ -453,7 +453,8 @@ def test_the_sandbox_unavailable_handler_is_preceded_by_the_network_one():
                      for h in n.handlers)]
     assert len(tries) == 1
     names = [h.type.id for h in tries[0].handlers if isinstance(h.type, ast.Name)]
-    assert names.index("NetworkNotAvailable") < names.index("SandboxUnavailable")
+    # D58-7: the handler is for the whole "not started" family (the network is one member)
+    assert names.index("NotStarted") < names.index("SandboxUnavailable")
     public = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
               and n.name in ("dispatch_scan", "dispatch_collection", "dispatch_code_scan")}
     assert len(public) == 3
