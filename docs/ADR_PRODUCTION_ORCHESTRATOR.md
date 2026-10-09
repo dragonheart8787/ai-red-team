@@ -1126,3 +1126,10 @@ lived in the session scratchpad.
 | E10 | `SECURITY DEFINER` and RLS | In a rolled-back transaction as `migration_owner` (table owner, `FORCE RLS`), a `pg_temp` `SECURITY DEFINER` function `SELECT count(*) FROM engagements`, called with no GUC and with a nonexistent engagement GUC. | `0` and `0` (§2.1) |
 | E11 | Roles / grants / policies | `pg_roles`, `pg_policy`, `pg_class.relforcerowsecurity`, `information_schema.{column_privileges,role_table_grants}`. | §2.1, §2.3 |
 | E12 | Orphaned credential file | `ls -l /tmp \| grep cyberorch` (content deliberately not read). | `-rw-r--r-- 31 B Sep 29` `cyberorch-cred-*` (§5.2) |
+
+## Addendum (D62) — what was decided and built
+
+Option A (enrollment record) and the narrow read role were built as scheduler v0; see
+`docs/D62_SCHEDULER_V0_DESIGN.md` (decisions D-0…D-9) and `docs/D62_SCHEDULER_V0_REPORT.md`. Not built: the
+failure ladder (D58-6), reconciler (D58-9), planning (D58-12), credential selection, quotas.
+

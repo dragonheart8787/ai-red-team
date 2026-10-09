@@ -76,17 +76,27 @@ by block cap): /29 62.5% · /28 81.2% · **/27 90.6%** · /26 95.3% · /25 97.7%
 never do are last octets `.0`, `.1`, `.255` (reserved in every aligned block); an explicit gateway in
 `DockerSandbox.ensure_network` would rescue them — a `tool_gateway` change, not v0.
 
-*What this is worth in practice* (every `network.*`-enabled scope registration in `tests/`, `scripts/`,
-`agents/`, parsed with `ast` and every constant resolved): **41 `cidr` registration sites**, **4 `fqdn`**, **0 `ip`**. I first resolved only 19 of the 41 by regex and
-reported the rest as "named constants"; resolving them properly (module constants, the import from
-`tests/scenarios/conftest.py`, the loop variable) gives: **38 sites are `/24`** (34 literal, 3 through
-`ALLOWED_CIDR = "10.79.0.0/24"`, 1 loop over `SCOPE_CIDRS = {"10.90.0.0/24", "10.91.0.0/24"}`), **1 site is
-`/25`**, 1 site is a parametrized lookalike-containment unit test (`tests/test_resolvers.py`: /24 ×2, /25, /26,
-/28 and one **/32**), and 1 is a deliberately invalid `'not-a-network'` string in a negative test. The resolver
-unit test only exercises containment and never dispatches. So the only CIDR scope narrower than a `/29` in the
-repository is that one `/32` in a unit test; **every CIDR scope that is used to run a tool is `/24` or `/25` and is
-used as-is.** The `fqdn` scopes are skipped. `ip`-type scopes are derived as above but nothing in the repository
-exercises one yet.
+*What this is worth in practice — the evidence, not only the conclusion.* Method: every call in `tests/`,
+`scripts/`, `agents/` that registers a scope object enabled for `network.*`, found with `ast` (not a regex),
+and its `value` argument resolved through the syntax tree — a literal, a module constant, a name imported from
+another module, or a loop variable over a literal collection. I first resolved only 19 of the 41 `cidr` sites by
+regex and called the other 22 "named constants"; that was not evidence, so they were resolved properly. Result:
+
+| `cidr` registration sites | count | how the value is spelled | does it dispatch a tool? |
+|---|---|---|---|
+| `/24` | **38** | 34 string literals; 3 through the constant `ALLOWED_CIDR = "10.79.0.0/24"`; 1 loop over `SCOPE_CIDRS = {"10.90.0.0/24", "10.91.0.0/24"}` | yes — used as-is |
+| `/25` | **1** | literal | yes — used as-is |
+| a parametrized unit test (`tests/test_resolvers.py`) | 1 | a table of lookalikes: `/24` ×2, `/25`, `/26`, `/28` and one `/32` | no — only checks containment, never dispatches |
+| `'not-a-network'` | 1 | a deliberately invalid string in a negative test | no — the registration is expected to fail |
+| **total** | **41** | | |
+
+Other scope types in the same sweep: **4 `fqdn`** (skipped: `scope_type_has_no_network_range`), **0 `ip`**.
+So the only `cidr` scope narrower than a `/29` anywhere in the repository is the one `/32` in a unit test that
+never dispatches; **every `cidr` scope that is used to run a tool is a `/24` (38) or the one `/25`, and is
+used as-is.** `ip` scopes are derived as above, but nothing in the repository registered one for a tool run
+before this deliverable; the new tests in `tests/test_scheduler_skips.py` and `tests/test_scheduler_allowlist.py`
+are now the only things that exercise one (they add `/30`, `/31`, `/32`, `/29` and `ip` registrations on purpose,
+so a later re-count of the tree will be higher than 41; the table above is the count *before* D62's tests).
 
 *Cost, stated:* for an `ip` scope the allowlist (and so the Docker network, `tool_runs.network_allowlist`, the
 fingerprint and D59's same-range serialization) is a block **wider than the one authorized address**; the

@@ -76,6 +76,12 @@ STAGE_OF_EVENT = {
     "metadata.registered": "registry",
     "metadata.reclassified": "registry",
     "metadata.deactivated": "registry",
+    # D62: the scheduler's decisions about a proposal join its chain; the engagement-level ones sit
+    # with the engagement's own lifecycle. (Service-level events are global and belong to no chain.)
+    "scheduler.dispatched": "decision",
+    "scheduler.skipped": "decision",
+    "scheduler.deferred": "engagement",
+    "scheduler.resumed": "engagement",
 }
 
 STAGE_ORDER = [

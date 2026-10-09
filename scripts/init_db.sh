@@ -12,6 +12,9 @@
 #                    credential_material and credentials, nothing else
 #   global_policy_admin the only writer of global policy layers (5.37, D54) —
 #                    an operator's CLI role, never a service's
+#   scheduler_reader / scheduler_admin / scheduler_state_writer  the scheduler's
+#                    three narrow roles (D62): read its decision inputs, write the
+#                    enrollment list (operator CLI), write its closed-vocabulary state
 #
 # Passwords are never hardcoded here. They are taken from the environment, or
 # from a gitignored .env, or generated randomly on first run and written to
@@ -62,6 +65,9 @@ gen_vault_key() {
 : "${UI_READER_PASSWORD:=$(gen_password)}"
 : "${CREDENTIAL_ADMIN_PASSWORD:=$(gen_password)}"
 : "${GLOBAL_POLICY_ADMIN_PASSWORD:=$(gen_password)}"
+: "${SCHEDULER_READER_PASSWORD:=$(gen_password)}"
+: "${SCHEDULER_ADMIN_PASSWORD:=$(gen_password)}"
+: "${SCHEDULER_STATE_WRITER_PASSWORD:=$(gen_password)}"
 : "${VAULT_MASTER_KEY:=$(gen_vault_key)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
@@ -99,6 +105,9 @@ super_psql \
     -v "ui_reader_password=$UI_READER_PASSWORD" \
     -v "credential_admin_password=$CREDENTIAL_ADMIN_PASSWORD" \
     -v "global_policy_admin_password=$GLOBAL_POLICY_ADMIN_PASSWORD" \
+    -v "scheduler_reader_password=$SCHEDULER_READER_PASSWORD" \
+    -v "scheduler_admin_password=$SCHEDULER_ADMIN_PASSWORD" \
+    -v "scheduler_state_writer_password=$SCHEDULER_STATE_WRITER_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -123,6 +132,9 @@ GLOBAL_AUDITOR_PASSWORD=${GLOBAL_AUDITOR_PASSWORD}
 UI_READER_PASSWORD=${UI_READER_PASSWORD}
 CREDENTIAL_ADMIN_PASSWORD=${CREDENTIAL_ADMIN_PASSWORD}
 GLOBAL_POLICY_ADMIN_PASSWORD=${GLOBAL_POLICY_ADMIN_PASSWORD}
+SCHEDULER_READER_PASSWORD=${SCHEDULER_READER_PASSWORD}
+SCHEDULER_ADMIN_PASSWORD=${SCHEDULER_ADMIN_PASSWORD}
+SCHEDULER_STATE_WRITER_PASSWORD=${SCHEDULER_STATE_WRITER_PASSWORD}
 VAULT_MASTER_KEY=${VAULT_MASTER_KEY}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
@@ -131,6 +143,9 @@ GLOBAL_AUDITOR_DATABASE_URL=postgresql+psycopg://global_auditor:${GLOBAL_AUDITOR
 UI_READER_DATABASE_URL=postgresql+psycopg://ui_reader:${UI_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 CREDENTIAL_ADMIN_DATABASE_URL=postgresql+psycopg://credential_admin:${CREDENTIAL_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 GLOBAL_POLICY_ADMIN_DATABASE_URL=postgresql+psycopg://global_policy_admin:${GLOBAL_POLICY_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+SCHEDULER_READER_DATABASE_URL=postgresql+psycopg://scheduler_reader:${SCHEDULER_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+SCHEDULER_ADMIN_DATABASE_URL=postgresql+psycopg://scheduler_admin:${SCHEDULER_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+SCHEDULER_STATE_WRITER_DATABASE_URL=postgresql+psycopg://scheduler_state_writer:${SCHEDULER_STATE_WRITER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 

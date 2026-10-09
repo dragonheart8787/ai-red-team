@@ -98,14 +98,29 @@ def cmd_awaiting_dispatch(args) -> int:
     with engagement_scope(args.engagement) as conn:
         rows = list_approved_awaiting_dispatch(
             conn, engagement_id=args.engagement, older_than_seconds=args.older_than)
+    # The scheduler's reason for a proposal it did not dispatch (D62). Read as scheduler_reader --
+    # the pipeline role has no grant on that table -- and only if that connection is configured.
+    try:
+        from control_plane.scheduler.skips import skip_reasons
+
+        skips = skip_reasons(args.engagement)
+        skips_note = None
+    except RuntimeError:
+        skips, skips_note = {}, "(scheduler reader not configured: skip reasons not shown)"
+    for r in rows:
+        reason, since = skips.get(r["proposal_id"], (None, None))
+        r["skip_reason"], r["skipped_since"] = reason, since
     if args.json:
         print(json.dumps(rows, indent=2, sort_keys=True, default=str))
         return 0
     print(f"{len(rows)} approved proposal(s) awaiting dispatch:\n")
+    if skips_note:
+        print(f"  {skips_note}\n")
     for r in rows:
         live = "" if r["approval_live"] else "  [approval no longer live]"
+        why = f"  [SKIPPED by the scheduler: {r['skip_reason']}]" if r["skip_reason"] else ""
         print(f"  {r['proposal_id']}  {r['action']} on {r['target']}  approved by "
-              f"{r['approved_by']} {int(r['waiting_seconds'])}s ago{live}")
+              f"{r['approved_by']} {int(r['waiting_seconds'])}s ago{live}{why}")
     if not rows:
         print("  (none)")
     return 0
