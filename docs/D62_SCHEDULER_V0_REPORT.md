@@ -31,7 +31,7 @@ test_a_paused_or_killed_engagement_is_deferred_once_not_per_tick[kill-engagement
 test_a_resumed_engagement_is_dispatched_and_the_resumption_is_recorded_once              PASSED
 ```
 
-Full suite: **1691 passed** (13 m 54 s, serial). The scheduler's own files: 168 tests.
+Full suite: **1691 passed** (13 m 54 s, serial). The scheduler's own files: 168 tests (182 after §8).
 
 ## 3. Roles and grants (complete list; `tests/test_scheduler_roles.py::GRANTS` enumerates every table and view)
 
@@ -68,7 +68,8 @@ All three: LOGIN, NOSUPERUSER, NOBYPASSRLS. `cyberorch_app` has **no** grant on 
 | M11 | no Docker pre-check | red (`docker_lost` exit 5) |
 | M12 | no lock check in `tick` | red (lock-lost tests) |
 | M13 | `scheduler_state` CHECK without `IS NOT NULL` | 2 red (see §5) |
-| M14 | a seventh skip code in the CHECK | 1 red (vocabulary equality) |
+| M14 | a sixth skip code in the CHECK | 1 red (vocabulary equality) |
+| M15 | `ip` scopes widened to a block again (§8) | 24 red (the `ip` skip tests, incl. real Docker, and the derivation unit tests) |
 
 ## 5. Findings during implementation
 
@@ -78,9 +79,9 @@ All three: LOGIN, NOSUPERUSER, NOBYPASSRLS. `cyberorch_app` has **no** grant on 
 * A skipped proposal stays `approved` and is picked every tick. The exit-7 rule ("still approved after
   `dispatch_approved`") applies only to a proposal actually handed over; a skip `continue`s before it. The
   skip is recorded once (state row + `scheduler.skipped`); `TickReport.skipped` lists only new skips.
-* Skip reasons are a six-code closed vocabulary in the database (`CHECK`) and in `vocab.SKIP_REASONS`; a test
-  compares the literals in the constraints to the code, and tests that all six are accepted and that
-  everything else (incl. NULL, defer codes, case/space variants) is refused.
+* Skip reasons are a five-code closed vocabulary (six before §8) in the database (`CHECK`) and in `vocab.SKIP_REASONS`; a test
+  compares the literals in the constraints to the code, and tests that all five are accepted and that
+  everything else (incl. NULL, defer codes, case/space variants, the retired code) is refused.
 * **Reserved addresses, on a real daemon:** a container pinned at the network, gateway or broadcast address of
   an internal bridge fails with "Address already in use"; a normal host starts
   (`test_docker_really_has_no_container_at_…`). A proposal targeting such an address is skipped
@@ -90,16 +91,34 @@ All three: LOGIN, NOSUPERUSER, NOBYPASSRLS. `cyberorch_app` has **no** grant on 
 
 ## 6. Assumptions I made and you have not explicitly confirmed
 
-* D-9: the `/27` cap for widening an `ip` scope, the widening itself, and the derivation table.
-* D-7: the third role `scheduler_state_writer`.
-Both are implemented as in the design note; reverting either is a migration and a table row in the tests.
+* D-7: the third role `scheduler_state_writer` (implemented as in the design note).
+* D-9 was first implemented with an `ip`-scope widening (a /29–/27 block); you decided against it, and it was
+  removed (see §8). No assumption about it remains.
 
 ## 7. Open / candidates
 
 * `decision_reasons` has no vocabulary check; D58-12 will need one.
 * `code.*` on private repos has the same credential-less limit as ACCEPTANCE 5.57.
-* An `ip` scope's allowlist is a wider block than the authorized address (recorded as a widening); the clean
-  fix is a `tool_gateway` change.
+* **First deliverable after v0: separate the single-IP authorization from the Docker network range**
+  (`tool_gateway`, `DockerSandbox.ensure_network`). Today an `ip` scope cannot run at all (one address fits no
+  container, and widening the network would exceed the authorization), so it is skipped
+  (`scope_narrower_than_sandbox_minimum`). The sandbox must be able to keep the authorized `/32` as what is
+  checked and recorded, and choose its own pool for the network it creates.
 * Docker going away between the pre-check and `dispatch_approved` closes the proposal (needs D58-6's reopen).
 * Raw errors after `start()` other than "never ran" remain unplaced.
 * The v0 service does not reconnect or restart itself; a supervisor must not restart it blindly.
+
+## 8. Revision: `ip` scopes are skipped, not widened
+
+* `allowlist.py` no longer derives a block: an `ip`-type scope is always skipped as
+  `scope_narrower_than_sandbox_minimum` (any address, either family); `block_for_address` and the /27 cap are
+  deleted. A `cidr` scope is still its own allowlist when it is a /29 or wider.
+* `no_usable_block_for_address` is gone from `vocab.SKIP_REASONS` (five codes now). Migration 0019 (already
+  pushed) is untouched; **0020** replaces the two `scheduler_state` CHECKs with the five-code versions. It first
+  rewrites rows still holding the retired code to `scope_narrower_than_sandbox_minimum` (the code the scheduler
+  now gives them) — with `FORCE ROW LEVEL SECURITY` switched off for that one statement, since the table's owner
+  is otherwise blind to the rows. Checked locally: a seeded row with the old code was rewritten, upgrade and
+  downgrade both work. A test requires the database to refuse the retired code.
+* Tests: the "`.9` is widened to a /28" and "real-Docker `ip` scope dispatches" tests now assert a skip — no
+  capability, no run, no container and no network created (the daemon's lists are unchanged), and
+  `scheduler.skipped` recorded once over many ticks. Mutation **M15** (put the derivation back) turns 24 tests red.

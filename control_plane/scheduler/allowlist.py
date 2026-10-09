@@ -17,8 +17,6 @@ from dataclasses import dataclass
 
 from control_plane.scheduler import vocab
 
-#: Smallest prefix length (largest block) an ``ip`` scope may be widened to. See design note §1.
-MAX_BLOCK_PREFIX = 27
 #: Largest prefix length (smallest block) Docker can use for a scanner and a target.
 MIN_BLOCK_PREFIX = 29
 
@@ -36,16 +34,6 @@ def _reserved(address, block) -> bool:
     return address in (block.network_address, block.network_address + 1, block.broadcast_address)
 
 
-def block_for_address(address: str, *, cap: int = MAX_BLOCK_PREFIX):
-    """Smallest aligned IPv4 block, /29 up to ``/cap``, where ``address`` is usable; else None."""
-    ip = ipaddress.ip_address(address)
-    for prefix in range(MIN_BLOCK_PREFIX, cap - 1, -1):
-        block = ipaddress.ip_network(f"{address}/{prefix}", strict=False)
-        if not _reserved(ip, block):
-            return block
-    return None
-
-
 def derive_network_allowlist(
     *, action: str, scope_type: str, scope_value: str, target_type: str, target_value: str,
 ) -> Derived:
@@ -55,7 +43,12 @@ def derive_network_allowlist(
     if action not in vocab.NETWORK_ACTIONS:
         return Derived(skip=vocab.ACTION_NOT_SUPPORTED)
 
-    if scope_type not in ("cidr", "ip"):
+    if scope_type == "ip":
+        # One address cannot hold a scanner and a target. Widening it to a block would grant more
+        # than was authorized (design note, D-9), so it is not run: a single-IP authorization needs
+        # the sandbox to separate "what is authorized" from "the Docker network range".
+        return Derived(skip=vocab.SCOPE_TOO_NARROW)
+    if scope_type != "cidr":
         return Derived(skip=vocab.SCOPE_TYPE_NO_RANGE)
     try:
         scope = ipaddress.ip_network(scope_value, strict=False)
@@ -64,14 +57,9 @@ def derive_network_allowlist(
     if scope.version != 4:
         return Derived(skip=vocab.IPV6_UNSUPPORTED)
 
-    if scope_type == "cidr":
-        if scope.prefixlen > MIN_BLOCK_PREFIX:
-            return Derived(skip=vocab.SCOPE_TOO_NARROW)
-        block = scope
-    else:
-        block = block_for_address(str(scope.network_address))
-        if block is None:
-            return Derived(skip=vocab.NO_USABLE_BLOCK)
+    if scope.prefixlen > MIN_BLOCK_PREFIX:
+        return Derived(skip=vocab.SCOPE_TOO_NARROW)
+    block = scope
 
     if target_type == "ip":
         try:

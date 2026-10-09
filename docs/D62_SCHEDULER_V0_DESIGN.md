@@ -60,21 +60,25 @@ target need **at least a `/29`**.
 | Authorizing scope type | `network_allowlist` | Otherwise skip with |
 |---|---|---|
 | `cidr` (IPv4), prefix ≤ /29 | the scope's value | `scope_narrower_than_sandbox_minimum` (/30, /31, /32) |
-| `ip` (IPv4) | smallest aligned block from /29 up to the cap (proposed **/27**) in which the address is not the block's network, gateway (first host) or broadcast address | `no_usable_block_for_address` |
+| `ip` (any family) | none: **never run**, and never widened to a block | `scope_narrower_than_sandbox_minimum` |
 | `fqdn`, `url`, `ad_domain`, `repo` for a `network.*` action | none derivable | `scope_type_has_no_network_range` |
-| any IPv6 scope | not supported in v0 (not tested) | `ipv6_not_supported_v0` |
+| IPv6 `cidr` scope, or an IPv6 target | not supported in v0 (not tested) | `ipv6_not_supported_v0` |
 | `code.*` (any scope) | not needed (no network) | — |
 
 Then, for any `network.*` proposal whose **target is a single IP**: if that address is the **network, first-host
-(gateway) or broadcast address of the chosen block** it is skipped with `target_is_reserved_address` — it would
+(gateway) or broadcast address of the scope's block** it is skipped with `target_is_reserved_address` — it would
 fail with "Address already in use" at container creation (measured: a target pinned at `.1` or `.7` of a `/29`
 fails; `.5` works, target and scanner both). A CIDR *target* is not checked (a range naturally contains them).
-This applies to a CIDR scope too (a target of `.1` or `.255` in a `/24`).
+This is checked against the `cidr` scope (a target of `.1` or `.255` in a `/24`); verified on a real daemon.
 
-*Measured coverage of the single-IP derivation* (fraction of the 256 last-octet values that get a usable block,
-by block cap): /29 62.5% · /28 81.2% · **/27 90.6%** · /26 95.3% · /25 97.7% · /24 98.8%. The 3/256 = 1.2% that
-never do are last octets `.0`, `.1`, `.255` (reserved in every aligned block); an explicit gateway in
-`DockerSandbox.ensure_network` would rescue them — a `tool_gateway` change, not v0.
+*Why an `ip` scope is not run (final decision).* One authorized address cannot hold a scanner and a target
+(a `/32` fits 0 containers; a `/29` is the smallest network that fits both). Making it runnable would mean giving
+the Docker network — and with it `tool_runs.network_allowlist`, the fingerprint and D59's same-range
+serialization — a block **wider than the one authorized address**. That is more than was authorized, so the
+scheduler does not do it: an `ip` scope is skipped with `scope_narrower_than_sandbox_minimum`, and nothing in the
+scheduler computes a block. Running a single-IP authorization needs the sandbox to separate "what is authorized"
+from "the Docker network range"; that is a `tool_gateway` change, recorded as the first candidate after v0
+(report §7).
 
 *What this is worth in practice — the evidence, not only the conclusion.* Method: every call in `tests/`,
 `scripts/`, `agents/` that registers a scope object enabled for `network.*`, found with `ast` (not a regex),
@@ -93,17 +97,10 @@ regex and called the other 22 "named constants"; that was not evidence, so they 
 Other scope types in the same sweep: **4 `fqdn`** (skipped: `scope_type_has_no_network_range`), **0 `ip`**.
 So the only `cidr` scope narrower than a `/29` anywhere in the repository is the one `/32` in a unit test that
 never dispatches; **every `cidr` scope that is used to run a tool is a `/24` (38) or the one `/25`, and is
-used as-is.** `ip` scopes are derived as above, but nothing in the repository registered one for a tool run
-before this deliverable; the new tests in `tests/test_scheduler_skips.py` and `tests/test_scheduler_allowlist.py`
-are now the only things that exercise one (they add `/30`, `/31`, `/32`, `/29` and `ip` registrations on purpose,
-so a later re-count of the tree will be higher than 41; the table above is the count *before* D62's tests).
-
-*Cost, stated:* for an `ip` scope the allowlist (and so the Docker network, `tool_runs.network_allowlist`, the
-fingerprint and D59's same-range serialization) is a block **wider than the one authorized address**; the
-command still names only the target and an internal bridge reaches only containers someone attached, but it is a
-widening and is recorded as one. The clean fix — keep the authorized `/32` as the allowlist and let the sandbox
-choose its own pool — is a `tool_gateway` change for a separate deliverable.
-⚑ **confirm: derivation table, cap /27, and the widening for `ip` scopes.**
+used as-is.** An `ip` scope is skipped (above), and
+nothing in the repository registered one for a tool run before this deliverable. The D62 tests add `/30`, `/31`,
+`/32`, `/29` and `ip` registrations on purpose, so a later re-count of the tree will be higher than 41; the table
+above is the count *before* D62's tests.
 
 ## 2. D58-1/A — the enrollment record
 
@@ -310,7 +307,7 @@ Closed list, **exactly what v0 emits** (any other `scheduler.*` is a bug and the
 | `scheduler.dispatched` | engagement | written **before** the call to `dispatch_approved`: the decision to dispatch | `proposal_id`, `reason_code` = `approved_and_idle` |
 | `scheduler.deferred` | engagement | edge: first tick on which an engagement with ≥1 approved proposal cannot be served | `reason_code` ∈ {`engagement_paused`, `engagement_killed`, `engagement_not_active`}, `waiting_count` |
 | `scheduler.resumed` | engagement | edge: the engagement is servable again after a `deferred` | `deferred_seconds`, `waiting_count` |
-| `scheduler.skipped` | engagement | once per proposal v0 does not dispatch (recorded in `scheduler_state`) | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`, `scope_type_has_no_network_range`, `scope_narrower_than_sandbox_minimum`, `no_usable_block_for_address`, `target_is_reserved_address`, `ipv6_not_supported_v0`} |
+| `scheduler.skipped` | engagement | once per proposal v0 does not dispatch (recorded in `scheduler_state`) | `proposal_id`, `reason_code` ∈ {`action_not_supported_v0`, `scope_type_has_no_network_range`, `scope_narrower_than_sandbox_minimum`, `target_is_reserved_address`, `ipv6_not_supported_v0`} |
 
 ¹ best-effort: if the audit cannot be written, `stopped` cannot be either; a `started` with no matching
 `stopped` is how an unclean death reads.
@@ -339,7 +336,7 @@ scheduler_state(
   disposition    text NOT NULL CHECK (disposition IN ('served','deferred','skipped','dispatch_decided')),
   reason_code    text CHECK (reason_code IN ('engagement_paused','engagement_killed','engagement_not_active',
                     'action_not_supported_v0','scope_type_has_no_network_range',
-                    'scope_narrower_than_sandbox_minimum','no_usable_block_for_address',
+                    'scope_narrower_than_sandbox_minimum',
                     'target_is_reserved_address','ipv6_not_supported_v0','approved_and_idle')),
   since          timestamptz NOT NULL DEFAULT now(),
   -- the pairs that may exist, nothing else:
@@ -472,7 +469,7 @@ stays manual.)
 | D-6 | audit vocabulary (§6); `dispatched` = "decided to attempt" | approved, wording fixed (C) |
 | D-7 | previous disposition in `scheduler_state` (closed vocabulary); writer = new `scheduler_state_writer` | revised (A) — **needs your confirmation** |
 | D-8 | failure table; known Docker-close gap; infra labelling and why-not-`approved` added | approved |
-| D-9 | execution step derives `network_allowlist` from the authorized scope (§1 table: cidr as-is if ≥ /29; ip → smallest usable block up to /27); concrete skip codes; reserved-address skip | **needs your confirmation** (cap /27; the widening for `ip` scopes) |
+| D-9 | execution step derives `network_allowlist` from the authorized scope: a `cidr` scope as-is if it is a /29 or wider; **an `ip` scope is never run and never widened** (`scope_narrower_than_sandbox_minimum`); other scope types and IPv6 skip with their own codes; a single-IP target on the network, gateway or broadcast address of the scope is skipped (`target_is_reserved_address`). Five skip codes, closed in the database (0019, narrowed by 0020) | **final** (no block derivation, no /27 cap) |
 
 ## 11. Revisions after review
 
@@ -494,7 +491,10 @@ stays manual.)
   `action` from any other source.
 * **`stage_detail`.** Not granted. Wording fixed per review: *no known path writes free text into it* (I read
   every write site; I did not compare against real historical data).
-* **Round 3 (skip codes, reserved addresses, the raw error, the numbers).** Skip reasons are now six concrete codes
+* **Round 3 (skip codes, reserved addresses, the raw error, the numbers).** Skip reasons are concrete codes
   (§1, §6, §6.1) and `awaiting-dispatch` lists them (§6.1). A single-IP target that is the network, gateway or
   broadcast address of its block is skipped (§1). The raw `APIError` is located and fixed in D58-7's follow-up
   (§7). The CIDR numbers are re-derived with every constant resolved (§1).
+* **Round 4 (final: `ip` scopes are skipped).** The block derivation for single-IP scopes and the
+  code `no_usable_block_for_address` are removed from the code, the vocabulary and the database (migration 0020
+  narrows the two CHECKs; 0019 is untouched). The skip vocabulary is five codes. See §1 and D-9.

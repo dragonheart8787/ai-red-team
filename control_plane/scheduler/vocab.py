@@ -29,11 +29,10 @@ DEFER_REASONS = ("engagement_paused", "engagement_killed", "engagement_not_activ
 ACTION_NOT_SUPPORTED = "action_not_supported_v0"
 SCOPE_TYPE_NO_RANGE = "scope_type_has_no_network_range"
 SCOPE_TOO_NARROW = "scope_narrower_than_sandbox_minimum"
-NO_USABLE_BLOCK = "no_usable_block_for_address"
 TARGET_RESERVED = "target_is_reserved_address"
 IPV6_UNSUPPORTED = "ipv6_not_supported_v0"
-SKIP_REASONS = (ACTION_NOT_SUPPORTED, SCOPE_TYPE_NO_RANGE, SCOPE_TOO_NARROW, NO_USABLE_BLOCK,
-                TARGET_RESERVED, IPV6_UNSUPPORTED)
+SKIP_REASONS = (ACTION_NOT_SUPPORTED, SCOPE_TYPE_NO_RANGE, SCOPE_TOO_NARROW, TARGET_RESERVED,
+                IPV6_UNSUPPORTED)
 
 STOP_SIGNAL = "signal"
 STOP_LOCK_LOST = "lock_lost"

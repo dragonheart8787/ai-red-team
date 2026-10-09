@@ -8,11 +8,11 @@ it -- so it is picked up again on every tick. That has two consequences these te
 * a skip is recorded **once** (an audit event and a state row), not once per tick.
 
 Then one test per way a network proposal can be un-runnable (design note §1): a ``cidr`` scope
-narrower than the /29 Docker needs for a scanner plus a target; an ``ip`` scope (widened to a block,
-or -- when no block can hold the address -- skipped); and a target that is the network, gateway or
-broadcast address of its block. The last is checked against a **real Docker daemon**: the premise
-("no container can have that address") is demonstrated there, and the scheduler is shown to leave
-the proposal alone without creating a run, a capability or a container.
+narrower than the /29 Docker needs for a scanner plus a target; an ``ip`` scope (always skipped,
+never widened); and a target that is the network, gateway or broadcast address of its block. The
+last two are checked against a **real Docker daemon**: the premise ("no container can have that
+address") is demonstrated there, and the scheduler is shown to leave the proposal alone without
+creating a run, a capability, a container or a network.
 """
 
 from __future__ import annotations
@@ -157,51 +157,52 @@ def test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not(
 
 
 # ---------------------------------------------------------------------------------------------
-# tier 2 -- an ip scope
+# tier 2 -- an ip scope (never dispatched)
 # ---------------------------------------------------------------------------------------------
 
-def test_an_ip_scope_is_widened_to_the_smallest_block_that_can_hold_it_and_dispatched(enrolled):
-    """10.96.67.9 is the first host of 10.96.67.8/29 (the gateway), so the block is the /28."""
+@pytest.mark.parametrize("address", ["10.96.67.9", "10.96.67.0", "10.96.67.20", "10.96.67.31"])
+def test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened(enrolled, address):
+    """One authorized address cannot hold a scanner and a target, and widening it would run the
+    tool against more than was authorized: an ``ip`` scope is not dispatched."""
     eid, registry = enrolled
-    scope_id = sup.register_scope(registry, type="ip", value="10.96.67.9")
-    pid = sup.approved_proposal(eid, scope_id, host="10.96.67.9")
+    scope_id = sup.register_scope(registry, type="ip", value=address)
+    pid = sup.approved_proposal(eid, scope_id, host=address)
     sandbox = RecordingSandbox()
 
-    with sup.running(sandbox) as sched:
-        report = sched.tick()
+    sched = Scheduler(sandbox=sandbox, watchdog_interval=0.2)
+    assert sched.run(interval=0, max_ticks=6) == vocab.EXIT_OK       # skipped, not a stop
 
-    assert report.dispatched == [pid]
-    assert sandbox.allowlists == [["10.96.67.0/28"]]
-    assert _stage(eid, pid) == (stages.RECORDED, "succeeded")
-
-
-def test_an_ip_scope_no_block_can_hold_is_skipped_with_its_own_code(enrolled):
-    """10.96.67.0 is the network address of every aligned /29, /28 and /27 that contains it."""
-    eid, registry = enrolled
-    scope_id = sup.register_scope(registry, type="ip", value="10.96.67.0")
-    pid = sup.approved_proposal(eid, scope_id, host="10.96.67.0")
-    sandbox = RecordingSandbox()
-
-    with sup.running(sandbox) as sched:
-        report = sched.tick()
-
-    assert report.skipped == [pid] and sandbox.calls == 0
-    assert tuple(_state(eid, pid)) == (vocab.SKIPPED_STATE, vocab.NO_USABLE_BLOCK)
+    assert sandbox.calls == 0 and sandbox.allowlists == []
+    assert _stage(eid, pid)[0] == stages.APPROVED
+    assert tuple(_state(eid, pid)) == (vocab.SKIPPED_STATE, vocab.SCOPE_TOO_NARROW)
+    (event,) = sup.audit(eid, "scheduler.skipped")                    # once, not once per tick
+    assert event["payload"] == {"proposal_id": pid, "reason_code": vocab.SCOPE_TOO_NARROW}
+    assert sup.rows(eid, "SELECT 1 FROM capabilities") == []
 
 
-def test_an_ip_scope_is_dispatched_by_a_real_container_inside_the_derived_block(enrolled):
-    """The derived block is not just well-formed: Docker accepts it and the scan runs in it."""
+def test_an_ip_scope_with_a_real_docker_daemon_starts_nothing(enrolled):
+    """Same, against the scheduler's own DockerSandbox: no capability, no run, no container, no
+    network -- and the daemon's container and network lists are exactly what they were."""
     eid, registry = enrolled
     scope_id = sup.register_scope(registry, type="ip", value="10.96.67.20")
     pid = sup.approved_proposal(eid, scope_id, host="10.96.67.20")
+    client = _docker()
+    containers = {c.id for c in client.containers.list(all=True)}
+    networks = {n.id for n in client.networks.list()}
 
-    with sup.running() as sched:                         # the scheduler's own DockerSandbox
-        report = sched.tick()
+    with sup.running() as sched:
+        first = sched.tick()
+        later = [sched.tick() for _ in range(4)]
 
-    assert report.dispatched == [pid]
-    (run,) = sup.rows(eid, "SELECT status, exit_code FROM tool_runs")
-    assert (run["status"], run["exit_code"]) == ("succeeded", 0)
-    assert _stage(eid, pid) == (stages.RECORDED, "succeeded")
+    assert first.skipped == [pid] and first.dispatched == []
+    assert all(r.skipped == [] and r.dispatched == [] for r in later)
+    assert _stage(eid, pid)[0] == stages.APPROVED
+    assert tuple(_state(eid, pid)) == (vocab.SKIPPED_STATE, vocab.SCOPE_TOO_NARROW)
+    assert len(sup.audit(eid, "scheduler.skipped")) == 1
+    assert sup.rows(eid, "SELECT 1 FROM capabilities") == []
+    assert sup.rows(eid, "SELECT 1 FROM tool_runs") == []
+    assert {c.id for c in client.containers.list(all=True)} == containers
+    assert {n.id for n in client.networks.list()} == networks
 
 
 # ---------------------------------------------------------------------------------------------

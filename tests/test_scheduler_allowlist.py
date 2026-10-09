@@ -52,22 +52,21 @@ def test_a_cidr_narrower_than_a_slash_29_is_skipped(cidr, expected):
     assert (got.allowlist is None) == (expected is not None)
 
 
-@pytest.mark.parametrize("address,block", [
-    ("10.1.0.4", "10.1.0.0/29"),         # a usable host of its /29
-    ("10.1.0.9", "10.1.0.0/28"),         # the first host of 10.1.0.8/29 is that block's gateway
-    ("10.1.0.16", "10.1.0.0/27"),        # network address of the /29 and /28 at .16; a host of /27
-])
-def test_an_ip_scope_is_widened_to_the_smallest_block_that_can_hold_it(address, block):
-    got = derive(scope=("ip", address), target=("ip", address))
-    assert got == allowlist.Derived(allowlist=(block,))
+@pytest.mark.parametrize("address", ["10.1.0.0", "10.1.0.4", "10.1.0.9", "10.1.0.16", "10.1.0.31",
+                                     "2001:db8::9"])
+@pytest.mark.parametrize("target", ["10.1.0.4", "10.1.0.255", "2001:db8::9"])
+def test_an_ip_scope_is_always_skipped_never_widened(address, target):
+    got = derive(scope=("ip", address), target=("ip", target))
+    assert got == allowlist.Derived(skip=vocab.SCOPE_TOO_NARROW)
 
 
-@pytest.mark.parametrize("address", ["10.1.0.0", "10.1.0.31", "10.1.0.32"])
-def test_an_ip_scope_no_block_can_hold_has_its_own_code(address):
-    """.0 and .32 are the network address of every aligned /29, /28 and /27 that contains them;
-    .31 is the broadcast address of all three."""
-    got = derive(scope=("ip", address), target=("ip", address))
-    assert got.skip == vocab.NO_USABLE_BLOCK and got.allowlist is None
+def test_nothing_derives_a_block_wider_than_the_authorized_scope():
+    """The allowlist is the scope itself or nothing; the derivation has no way to enlarge it."""
+    assert not hasattr(allowlist, "block_for_address")
+    assert not hasattr(allowlist, "MAX_BLOCK_PREFIX")
+    for value in ("10.1.0.0/24", "10.1.0.8/29", "10.1.0.64/26"):
+        assert derive(scope=("cidr", value), target=("ip", "10.1.0.70")).allowlist in (
+            (value,), None)
 
 
 @pytest.mark.parametrize("scope,target,code", [
@@ -75,7 +74,6 @@ def test_an_ip_scope_no_block_can_hold_has_its_own_code(address):
     (("url", "http://10.1.0.9/"), ("ip", "10.1.0.9"), vocab.SCOPE_TYPE_NO_RANGE),
     (("cidr", "not-a-network"), ("ip", "10.1.0.9"), vocab.SCOPE_TYPE_NO_RANGE),
     (("cidr", "2001:db8::/64"), ("ip", "2001:db8::9"), vocab.IPV6_UNSUPPORTED),
-    (("ip", "2001:db8::9"), ("ip", "2001:db8::9"), vocab.IPV6_UNSUPPORTED),
     (("cidr", "10.1.0.0/24"), ("ip", "2001:db8::9"), vocab.IPV6_UNSUPPORTED),
 ])
 def test_the_remaining_skip_codes_are_reachable(scope, target, code):
@@ -95,7 +93,7 @@ def test_the_first_and_last_usable_host_are_not(target):
 def test_every_skip_code_the_derivation_can_return_is_in_the_closed_vocabulary():
     seen = set()
     for scope, target in [
-        (("cidr", "10.1.0.0/30"), ("ip", "10.1.0.2")), (("ip", "10.1.0.0"), ("ip", "10.1.0.0")),
+        (("cidr", "10.1.0.0/30"), ("ip", "10.1.0.2")), (("ip", "10.1.0.9"), ("ip", "10.1.0.9")),
         (("fqdn", "x"), ("ip", "10.1.0.2")), (("cidr", "2001:db8::/64"), ("ip", "2001:db8::2")),
         (("cidr", "10.1.0.0/24"), ("ip", "10.1.0.1")),
     ]:

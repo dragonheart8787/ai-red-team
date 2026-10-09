@@ -301,11 +301,12 @@ def test_every_skip_code_is_accepted(two_engagements, code):
 @pytest.mark.parametrize("code", [
     "because_i_said_so", "", "SCOPE_NARROWER_THAN_SANDBOX_MINIMUM", "scope_narrower",
     "10.96.70.9", "scope_narrower_than_sandbox_minimum ",
+    "no_usable_block_for_address",                         # retired at 0020: widening was removed
     None,                                                  # a skip without a reason
     *vocab.DEFER_REASONS,                                  # a valid code, but not a *skip* code
     vocab.APPROVED_AND_IDLE,
 ])
-def test_a_skip_reason_outside_the_six_codes_is_refused_by_the_database(two_engagements, code):
+def test_a_skip_reason_outside_the_five_codes_is_refused_by_the_database(two_engagements, code):
     (a, pa), _ = list(two_engagements.items())
     with pytest.raises(IntegrityError):
         _write(a, pa, vocab.SKIPPED_STATE, code)
@@ -334,12 +335,12 @@ def test_the_vocabulary_in_the_constraints_is_the_vocabulary_in_the_code(db_avai
     expected = ({"engagement", "proposal", vocab.APPROVED_AND_IDLE}
                 | set(vocab.DISPOSITIONS) | set(vocab.DEFER_REASONS) | set(vocab.SKIP_REASONS))
     assert literals == expected
-    # and the clause that ties a *skip* to its reason lists exactly the six, not more
+    # and the clause that ties a *skip* to its reason lists exactly the five, not more
     (skip_clause,) = re.findall(
         r"disposition = 'skipped'::text\) AND \(reason_code IS NOT NULL\) "
         r"AND \(reason_code = ANY \(ARRAY\[(.*?)\]\)", " ".join(definitions))
     assert set(re.findall(r"'([^']*)'", skip_clause)) == set(vocab.SKIP_REASONS)
-    assert len(vocab.SKIP_REASONS) == 6
+    assert len(vocab.SKIP_REASONS) == 5
 
 
 # ---------------------------------------------------------------------------------------------
