@@ -164,9 +164,29 @@ Mutation-verified, each turning the suite red: no re-derivation at all (10 tests
 compared (4), approval/proposal binding unchecked (2), OPA verdict ignored (3), no constraint ceiling (2),
 trigger disabled (8).
 
-**Cost, stated.** The check is conservative: *any* change to the target's classification refuses, and (from
-§2) any policy publication refuses at the broker. Both mean a re-proposal where a finer rule would have let
-the approval stand; refusing is the safe error. `ad.collect` is unaffected by this section (§5).
+**Two refusal layers, stated once (the wording was inconsistent between this section and the limits; unified at
+the D63 audit).**
+
+| Layer | Looks at | Refuses when |
+|---|---|---|
+| 1. the re-derivation (`_revalidate`) | **outcomes**, against the approval's snapshot | the target, action or authorization differ; the classification differs in **any** way (better or worse); OPA, run now with the policy the caller loaded, **denies**, or asks a human for a reason the approver was not shown; the approval is for another proposal or has no snapshot; the proposal asks for more than was approved |
+| 2. the broker, at the issue | **a version number** | **any** policy layer was published for the engagement since the decision (`policy_version_changed`) — whether or not it changes the outcome, including one that only widens |
+
+So the net rule is *any policy publication refuses* (layer 2), and layer 1 covers what a publication does not:
+changes in the registries (the target's classification, the scope object's standing) and a proposal that
+grew. Layer 1 alone would let an unrelated publication through; layer 2 alone would not notice a
+reclassification. Both are conservative on purpose: a re-proposal where a finer rule would have let the approval
+stand; refusing is the safe error. `ad.collect` is unaffected by this section (§5).
+
+**What is not re-verified between the re-derivation and the issue.** The re-derivation runs with no
+transaction held (OPA is called in it); the issue is the next stage's transaction, one hand-off later (measured
+< 1 s). In that window the broker re-checks: engagement active, kill switch, approval valid / unexpired /
+unrevoked, the scope object standing and still allowing the action, and the policy version. It does **not**
+repeat: the target's normalization and classification (a reclassification landing in the window is not seen —
+the approval is spent on the old world), the authorization resolution beyond the scope object's standing, the
+OPA verdict itself (a policy *publication* in the window is caught by the version check; a registry change is
+not), the snapshot comparison, and the constraint ceiling. Accepted, because the window is one stage hand-off
+and the capability that results is short-lived and single-dispatch; recorded in ACCEPTANCE 5.56.
 
 ## 3. Callers and what stayed the same
 
@@ -269,9 +289,10 @@ right reason and rewrites it.
 
 ## 6. What this does not do, and what is left
 
-* **No caller exists in production.** `dispatch_approved` is called by nothing but tests; the orchestrator
-  (D58-1..4) will call it. Until then an approved proposal waits at `approved`, now visibly (§1) rather than
-  as a dead capability.
+* **Callers.** At D61 `dispatch_approved` was called by nothing but tests. Since D62 the scheduler
+  (`control_plane/scheduler/execute.py`, ACCEPTANCE 5.59) is its first and only production caller: it loads the
+  effective policy at the moment of dispatch and hands it in. An approved proposal in an engagement that is not
+  enrolled in the scheduler still waits at `approved`, visibly (§1).
 * **A crash between the issue and the dispatch** leaves `capability_issued` with a short-lived capability. A
   resumed `dispatch_approved` finds that stage and dispatches the capability it has; an expired one is refused
   (`capability_not_live`, the same refusal §4.1's reproduction shows) rather than re-issued. Safe, wasteful; the approval has been spent on a
@@ -279,9 +300,9 @@ right reason and rewrites it.
   reissue on resume — is the reconciler's (D58-9). Not built.
 * **No reconciler, scheduler or failure ladder** (D58-9, D58-1..4, D58-6): the state is *recognisable*, and
   nothing acts on it.
-* **The policy-version check is conservative** (§2): any policy layer published for the engagement after the
-  decision refuses the dispatch, including ones that only widen. A finer rule ("widening is harmless") is a
-  policy decision, left as the broker already treats it for heartbeats.
+* **The policy-version check is conservative** (§2, "Two refusal layers"): any policy layer published for the
+  engagement after the decision refuses the dispatch at the broker, including ones that only widen. A finer
+  rule ("widening is harmless") is a policy decision, left as the broker already treats it for heartbeats.
 * **`approved_scope` (`this_task`, `this_resource`) still only records the operator's intent.** Nothing yet
   lets one approval cover a second proposal; each approved proposal is dispatched individually.
 * Standing from D60 and untouched: the kill switch does not stop a running container (D44-7 / D58-16);

@@ -1,3 +1,7 @@
+# BEFORE THE NEXT RUN (ACCEPTANCE 5.54): this script was edited for D59 (it starts its egress proxy
+# for the main engagement) and D60 (propose_action no longer takes a connection) and has NOT been
+# executed since. The first step of the next run, before reading anything else in its output, is
+# the comparison listed in ACCEPTANCE 5.54 against docs/D40_THREE_ROLE_INTEGRATION_REPORT.md.
 # BEFORE THE NEXT RUN (ACCEPTANCE 5.50): confirm that after setup_engagement the web host
 # resolves as known + AUTHORITATIVE and that a web.render proposal for it is not escalated
 # with unknown_classification_for_action_class. web.render joined requires_known_classification

@@ -1,7 +1,34 @@
 # ADR: Production Orchestrator — Phase 1 investigation (D58)
 
-Status: **proposed — investigation and design only; nothing here is decided.** Eighteen decision
-points are collected in §8, each marked ⚑ where it needs your call. §8.2 lists which ones block which.
+Status: **partly built — read the index below before anything else.** This document began as an investigation
+(`ad2c8d5`: nothing decided, eighteen decision points in §8). Since then eight of the decision points were
+decided and built, in the deliverables named below; **the document as a whole is not implemented**, and the
+body of it is still the text written at `ad2c8d5` (the addenda say what changed). Final state, as of the D63
+merge audit:
+
+| Decision point | State | Where |
+|---|---|---|
+| D58-1 discovery / read model | **built** (D62): explicit enrolment (Option A) plus a narrow database role for the read side | `D62_SCHEDULER_V0_DESIGN.md`, ACCEPTANCE 5.59 |
+| D58-2 topology | **built** (D62): one resident process, singleton advisory lock (Option A) | same |
+| D58-3 metadata/content line | **built** (D62): the reader sees the columns tabled in the design note, `action` only as a closed class | same |
+| D58-4 audit of scheduler decisions | **built** (D62): Option B, edge-triggered, closed vocabulary | same |
+| D58-5 transaction shape | **built** (D60): Option B, stages that each commit | `D60_PIPELINE_STAGES_REPORT.md`, 5.53 |
+| D58-6 failure containment (the ladder) | **NOT built.** v0 stops the whole service on any fault it cannot account for (a temporary simplification) | — |
+| D58-6b what an L2 hold is | **NOT built** | — |
+| D58-7 `UNKNOWN_OUTCOME` | **built, option B** (the mislabel fixed; "never auto-retry" kept; the retry half is not taken) | `D58_7_SANDBOX_NOT_STARTED_REPORT.md`, 5.58 |
+| D58-8 lease / approved-proposal dispatch | **built** (D61, H-A) with the approval re-derivation | `D61_JIT_CAPABILITY_REPORT.md`, 5.56 |
+| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2) | — |
+| D58-10 recording the defects X1–X16 | **partly**: recorded as they were closed (5.52, 5.53, 5.56–5.58); X6 (residual), X7, X9, X10, X13, X14, X15, X16 are *not* separate ACCEPTANCE rows | — |
+| D58-11 priority basis | not needed yet (serial scheduler) | — |
+| D58-12 planning / closed-directions ledger | **NOT built** | — |
+| D58-13 resource quotas | **NOT built** (the scheduler is serial: concurrency 1) | — |
+| D58-14 network isolation | **built** (D59) | `D59_NETWORK_ISOLATION_REPORT.md`, 5.52 |
+| D58-15 who selects `credential_id` | **NOT built**; an approved `ad.collect` still cannot run | 5.57 |
+| D58-16 unattended credentialed dispatch / kill | **NOT built** (the kill switch does not stop a running container) | — |
+| D58-17 secret residency / orphans | **NOT built** | — |
+
+Built: D58-1, -2, -3, -4, -5, -7, -8, -14. Not built: -6, -6b, -9, -12, -13, -15, -16, -17 (and -10 in part).
+Labels: commit `adc4632` is titled "D62" but is D58-7; the scheduler is D62 (the D58-7 report was relabelled).
 
 **Addendum (D59).** X12 / D58-14 (cross-engagement network reachability) was taken out of this document and
 fixed on its own, in `docs/D59_NETWORK_ISOLATION_REPORT.md` (ACCEPTANCE 5.52). Two corrections to what is
@@ -29,8 +56,8 @@ approval and issues nothing; `approved_dispatch.dispatch_approved` issues the ca
 broker's checks plus "policy unchanged since the decision" — see `docs/D61_JIT_CAPABILITY_REPORT.md` (ACCEPTANCE 5.56).
 Effects on this document: X8 is half closed (an approved proposal is now dispatched; the missing `credential_id` is 5.57), and W1 for approved proposals is
 ~0 (measured < 1 s); `approved` is a queryable stage, the interface the reconciler (D58-9) reads. Still open and
-unchanged: the ad.collect credential incompatibility of §5 (ACCEPTANCE 5.57 → D58-15); nothing in production calls
-`dispatch_approved` until the scheduler exists (D58-1..4); and the multi-dispatch renewal question of §3.3 is not
+unchanged: the ad.collect credential incompatibility of §5 (ACCEPTANCE 5.57 → D58-15); `dispatch_approved` had no production
+caller until the scheduler (D62, D58-1..4) became its first; and the multi-dispatch renewal question of §3.3 is not
 touched — an approved capability is single-dispatch, as H-A proposes. **Same round (also D58-8):** the approval-to-dispatch link — `dispatch_approved` re-derives the decision chain against the approval's recorded snapshot and refuses on any change the approver did not see (D61 report §2b). Everything else below is as written at `ad2c8d5`.
 
 **Addendum (D58-7).** D58-7 option (B) is built: the mislabel is fixed — a sandbox that provably did not start

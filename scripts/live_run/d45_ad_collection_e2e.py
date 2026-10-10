@@ -1,3 +1,8 @@
+# BEFORE THE NEXT RUN (ACCEPTANCE 5.55): this script has NOT been run since D60. Part four
+# (part_four_revocation) asserts D45's finding that a mid-flight revoke "found nothing to revoke";
+# under D60 the capability is committed before the container starts, so that check now FAILS,
+# correctly, and is to be rewritten to the new behaviour, not made to pass. First confirm parts
+# 1-3 (credentialed collection, Security Graph write, audit trail) behave exactly as before D60.
 """D45 — AD Collection end-to-end verification: real dispatch, not fixtures.
 
 D42 (ad_domain scope authorization) and D44 (credential Vault mount_for_run)
