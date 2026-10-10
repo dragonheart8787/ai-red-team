@@ -34,7 +34,10 @@ from control_plane.orchestrator.dispatch import (
     SUCCEEDED,
     dispatch_scan,
 )
-from control_plane.state.db import engagement_scope
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.sandbox import SandboxResult
 
 TARGET_IP = "10.78.0.10"
@@ -55,7 +58,8 @@ class StubSandbox:
         self.runs: list[dict] = []
 
     def run(self, *, command, network_allowlist, max_duration_seconds,
-            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None):
+            run_id=None, stdin=None, ca_cert_pem=None, tmpfs=None,
+            engagement_id=None, no_network=False):
         self.runs.append({
             "command": list(command), "allowlist": list(network_allowlist),
             "stdin": stdin, "ca_cert_pem": ca_cert_pem, "tmpfs": tmpfs,
@@ -120,7 +124,7 @@ def _requests_used(conn, capability_id: str) -> int:
 
 def _dispatch(conn, engagement_id, capability, *, sandbox, proxy_url=PROXY_URL):
     return dispatch_scan(
-        conn, engagement_id=engagement_id,
+        engagement_id=engagement_id,
         proposal_id=_proposal(conn, engagement_id, action=capability.action),
         capability=capability, target=TARGET_IP, actor="orchestrator",
         sandbox=sandbox, network_allowlist=["10.81.0.0/24"],
@@ -204,7 +208,7 @@ def test_an_nmap_run_does_not_spend_an_http_request(engagement_id):
             constraints={"ports": "8080", "scan_type": "connect"},
         )
         outcome = dispatch_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, action="network.scan"),
             capability=capability, target=TARGET_IP, actor="orchestrator",
             sandbox=StubSandbox(), network_allowlist=[ALLOWED_CIDR],

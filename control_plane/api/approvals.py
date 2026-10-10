@@ -26,34 +26,49 @@ negotiable:
 4. **Fail-closed.** A proposal that cannot be re-authorized, or any error, leaves
    the proposal pending and issues nothing. Approval and denial are only ever
    explicit operator actions; nothing here decides by default.
-5. **It does not mint capabilities.** Granting creates the Approval object and
-   then issues through the *existing* Capability Broker, citing ``approval_id``;
-   the broker re-checks everything it always does. Denial issues nothing.
+5. **It does not mint capabilities (D61).** Granting records one fact -- a human
+   approved this proposal -- as the Approval object and the proposal's move to the
+   ``approved`` stage, in one transaction. It issues nothing. The capability is
+   issued, through the *existing* Capability Broker citing ``approval_id``, at the
+   moment the tool is dispatched (``approved_dispatch.dispatch_approved``), where
+   the broker re-checks everything it always does against the world *then*. Until
+   D61 this module issued a 60-second capability at grant time and nothing ever
+   dispatched it; and a lease anchored to the grant spent itself on the wait (D58).
+   Denial issues nothing and closes the proposal (``approval_denied``).
+   The approval records what the approver *saw* (``approvals.snapshot``), and dispatch re-derives
+   the world and refuses on any difference (D58-8): an approval only narrows what is allowed.
 
-The lease interaction (constraint 5 of the brief) needed no new code: a
-HUMAN_APPROVAL proposal never got a capability (``propose_action`` returns before
-the broker), so no capability lease or heartbeat touches it, and its
-``dispatch_state`` stays ``'queued'`` — not in ``reconcile_stale_dispatches``'s
-``IN_FLIGHT`` set — so the stale-dispatch sweep skips it too. A test pins that
-"legitimately waiting for a human" is not mistaken for "stuck".
+The lease interaction needed no new code: a HUMAN_APPROVAL proposal has no
+capability until it is dispatched, so no capability lease or heartbeat touches it
+while it waits, and its ``dispatch_state`` stays ``'queued'`` — not in
+``reconcile_stale_dispatches``'s ``IN_FLIGHT`` set — so the stale-dispatch sweep
+skips it too. A test pins that "legitimately waiting for a human" is not mistaken
+for "stuck". What *is* waiting is queryable by stage: ``awaiting_approval`` (no
+human yet) and ``approved`` (``list_approved_awaiting_dispatch``).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from control_plane.api.function_api import execution_constraints
 from control_plane.audit.logger import record_audit
 from control_plane.canonicalizer.authorization import resolve_authorization
+from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalTarget, normalize_target
-from control_plane.capability.broker import Budget, issue_capability
+from control_plane.orchestrator import stages
+from control_plane.provenance import graph
+
+logger = logging.getLogger("cyberorch.approvals")
 
 HUMAN_APPROVAL = "HUMAN_APPROVAL"
 
@@ -68,6 +83,7 @@ DEFAULT_APPROVAL_SECONDS = 3600
 
 #: Matches ``propose_action``'s own default, so an approved proposal is issued
 #: with the budget OPA evaluated at proposal time rather than a different one.
+#: Used by ``approved_dispatch.dispatch_approved``, which issues it.
 _APPROVED_BUDGET_SECONDS = 120
 
 
@@ -77,14 +93,16 @@ class ApprovalError(RuntimeError):
 
 @dataclass(frozen=True)
 class ApprovalOutcome:
-    """The result of granting an approval."""
+    """The result of granting an approval.
+
+    ``stage`` is where the proposal now is -- ``approved``, i.e. awaiting dispatch. There is no
+    capability to report: none exists until ``dispatch_approved`` issues one (D61).
+    """
 
     approval_id: str
     proposal_id: str
     approved_scope: str
-    issued: bool
-    capability_id: str | None = None
-    reasons: tuple[str, ...] = field(default_factory=tuple)
+    stage: str = stages.APPROVED
 
 
 def list_pending_approvals(
@@ -129,7 +147,7 @@ def _load_resolvable(conn: Connection, proposal_id: str) -> dict[str, Any]:
     row = conn.execute(
         text("""
             SELECT proposal_id, action, target, "authorization", agent_id,
-                   decision, task_id, requested_capability_ttl_seconds
+                   decision, decision_reasons, task_id, requested_capability_ttl_seconds
             FROM action_proposals WHERE proposal_id = :pid
         """),
         {"pid": proposal_id},
@@ -213,6 +231,33 @@ def approval_fields(
     }
 
 
+def approval_snapshot(
+    row: Mapping[str, Any], target: CanonicalTarget, resolution, metadata,
+) -> dict[str, Any]:
+    """What an approver is shown when they approve -- the record dispatch compares the world to.
+
+    Written into ``approvals.snapshot`` at grant and re-derived by the *same function* at dispatch
+    (``approved_dispatch``), so the two cannot disagree for reasons that are not the world changing.
+    JSON-normalised (sorted keys, no tuples) so that equality means equality.
+
+    * the normalized target and the action -- what is to run, on what;
+    * the authorization the registry gave it (authorized or not, and by which scope object);
+    * the classification it resolves to (``MetadataResolution.as_dict``: authority, data classes,
+      asset, version, observations);
+    * the reasons OPA gave for asking a human -- what the approver is agreeing to override.
+    """
+    return json.loads(json.dumps({
+        "action": row["action"],
+        "target": target.normalized,
+        "authorization": {
+            "authorized": resolution.authorized,
+            "scope_object_id": resolution.scope_object_id,
+        },
+        "classification": metadata.as_dict(),
+        "approval_reasons": sorted(row["decision_reasons"] or ()),
+    }, sort_keys=True, default=str))
+
+
 def preview_approval(
     conn: Connection, *, proposal_id: str,
     valid_for_seconds: int = DEFAULT_APPROVAL_SECONDS,
@@ -257,13 +302,15 @@ def grant_approval(
     conn: Connection, *, engagement_id: str, proposal_id: str, approver: str,
     approved_scope: str, valid_for_seconds: int = DEFAULT_APPROVAL_SECONDS,
 ) -> ApprovalOutcome:
-    """Approve an escalated proposal: write the §4.7 object, then issue (§4.7, D24).
+    """Approve an escalated proposal: write the §4.7 object and record the fact (§4.7, D24, D61).
 
-    The Approval object is created and the capability is issued through the
-    *existing* Capability Broker citing ``approval_id`` (constraint 5) — the
-    broker re-checks the engagement, the approval's own validity and the scope
-    object before it issues. Before any of that, the authorization is re-resolved
-    from the registry; if the scope no longer covers this target (retired,
+    The Approval object is created and the proposal moves ``awaiting_approval -> approved`` in
+    the same transaction (the conditional UPDATE is the first statement, so two approvers cannot
+    both win). **No capability is issued** (constraint 5): ``dispatch_approved`` issues it, through
+    the Capability Broker citing ``approval_id``, when the tool is actually dispatched -- the
+    broker then re-checks the engagement, the approval's validity, the scope object and the policy
+    version against the world at that moment. Before any of that, the authorization is
+    re-resolved from the registry; if the scope no longer covers this target (retired,
     withdrawn) the approval is refused and nothing is written (constraint 4).
     """
     if approved_scope not in APPROVED_SCOPES:
@@ -291,21 +338,35 @@ def grant_approval(
 
     approval_id = f"APPR-{uuid.uuid4().hex[:10]}"
     fields = approval_fields(row, target, valid_for_seconds=valid_for_seconds)
+    snapshot = approval_snapshot(row, target, resolution, resolve_metadata(conn, target=target))
     resource = fields["resource"]
     constraints = fields["constraints"]
     valid_until = fields["valid_until"]
 
+    # The stage and the approval row commit together. The transition goes first: it takes the row
+    # lock, so a concurrent approval or denial waits and then finds the stage moved. The approval
+    # id is the stage detail -- how ``dispatch_approved`` finds the approval it is acting on.
+    try:
+        stages.take(conn, proposal_id, expected=stages.AWAITING_APPROVAL,
+                    new=stages.APPROVED, detail=approval_id)
+    except stages.StageConflict as exc:
+        raise ApprovalError(
+            f"proposal {proposal_id!r} is no longer awaiting approval (another decision "
+            "got there first)"
+        ) from exc
     conn.execute(
         text("""
             INSERT INTO approvals (approval_id, engagement_id, proposal_id,
                 action_class, resource, constraints, valid_until, approved_by,
-                approved_scope)
-            VALUES (:aid, :eid, :pid, :ac, :res, CAST(:con AS jsonb), :vu, :by, :scope)
+                approved_scope, snapshot)
+            VALUES (:aid, :eid, :pid, :ac, :res, CAST(:con AS jsonb), :vu, :by, :scope,
+                    CAST(:snap AS jsonb))
         """),
         {"aid": approval_id, "eid": engagement_id, "pid": proposal_id,
          "ac": row["action"], "res": resource,
          "con": json.dumps(constraints, sort_keys=True),
-         "vu": valid_until, "by": approver, "scope": approved_scope},
+         "vu": valid_until, "by": approver, "scope": approved_scope,
+         "snap": json.dumps(snapshot, sort_keys=True)},
     )
     # Constraint 3: the decision is audited — who, when, which scope, which
     # proposal — through the existing path.
@@ -318,25 +379,9 @@ def grant_approval(
                  "action_class": row["action"], "resource": resource},
     )
 
-    # Constraint 5: issue through the broker, which records its own
-    # capability.issued / capability.refused.
-    capability_id = f"CAP-{uuid.uuid4().hex[:10]}"
-    issued = issue_capability(
-        conn, engagement_id=engagement_id, capability_id=capability_id,
-        agent_id=row["agent_id"], action=row["action"], actor=approver,
-        # The same object the approval row above recorded (D30). Not a second
-        # derivation that happens to agree today.
-        constraints=fields["capability_constraints"],
-        budget=Budget(max_duration_seconds=_APPROVED_BUDGET_SECONDS),
-        ttl_seconds=row["requested_capability_ttl_seconds"] or 60,
-        approval_id=approval_id, proposal_id=proposal_id,
-        scope_object_id=authorization.get("scope_object_id"),
-    )
     return ApprovalOutcome(
         approval_id=approval_id, proposal_id=proposal_id,
-        approved_scope=approved_scope, issued=issued.issued,
-        capability_id=capability_id if issued.issued else None,
-        reasons=tuple(issued.reasons),
+        approved_scope=approved_scope,
     )
 
 
@@ -348,11 +393,20 @@ def deny_approval(
 
     The proposal keeps its OPA decision (``HUMAN_APPROVAL`` — the fact that OPA
     escalated it stays true); the human denial is recorded as its own event, and
-    that event is what removes it from the pending queue. Nothing is issued.
+    that event is what removes it from the pending queue. The proposal closes
+    (``approval_denied``) -- it is finished, with no run. Nothing is issued.
     """
     if not denier:
         raise ApprovalError("a denial must name who made it (§4.4)")
     _load_resolvable(conn, proposal_id)
+    try:
+        stages.take(conn, proposal_id, expected=stages.AWAITING_APPROVAL,
+                    new=stages.CLOSED, detail="approval_denied")
+    except stages.StageConflict as exc:
+        raise ApprovalError(
+            f"proposal {proposal_id!r} is no longer awaiting approval (another decision "
+            "got there first)"
+        ) from exc
     record_audit(
         engagement_id=engagement_id, actor=denier,
         event_type="approval.denied", subject_type="action_proposal",
@@ -361,3 +415,12 @@ def deny_approval(
         payload={"proposal_id": proposal_id, "reason": reason,
                  "note": "human declined the escalation; no capability issued"},
     )
+    # The proposal is finished, so its provenance (what authorized it, what it was classified as)
+    # can be derived now, as for any other terminal proposal (D60). A savepoint keeps a failure
+    # here from taking the denial with it: it can be run again.
+    try:
+        with conn.begin_nested():
+            graph.record_provenance(conn, engagement_id=engagement_id, proposal_id=proposal_id)
+    except SQLAlchemyError:
+        logger.error("provenance for denied %s was not recorded; "
+                     "graph.record_provenance can be run again", proposal_id)

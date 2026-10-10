@@ -29,8 +29,12 @@ from control_plane.api.approvals import grant_approval, list_pending_approvals
 from control_plane.api.function_api import propose_action
 from control_plane.audit.query import events_for_subject
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-from control_plane.state.db import engagement_scope, ui_reader_scope
+from control_plane.state.db import ui_reader_scope
 from control_plane.web.app import app
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 
 CIDR = "10.79.0.0/24"
 HOST = "10.79.0.2"
@@ -67,12 +71,11 @@ def _escalate(engagement_id, registry):
         authorization={"source": "engagement_scope", "scope_object_id": scope_id},
         discovery={"source": "explicit_scope"},
     )
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
-            policy=_policy(), agent_id="worker-1",
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(sensitive_hint=("pii",)),
+        policy=_policy(), agent_id="worker-1",
+    )
     assert outcome.decision == "HUMAN_APPROVAL"
     return scope_id, outcome.proposal_id
 
@@ -143,10 +146,10 @@ def test_approving_through_the_console_matches_approving_through_the_cli(
     )
 
 
-def test_the_console_approval_leaves_the_queue_and_issues_a_capability(
+def test_the_console_approval_leaves_the_queue_and_issues_nothing_yet(
     client, escalated
 ):
-    """The visible outcome: gone from the queue, capability minted by the broker."""
+    """The visible outcome: gone from the queue, awaiting dispatch -- no capability (D61)."""
     eid, _, pid = escalated
     assert client.get(f"/api/engagements/{eid}/approvals").json()
 
@@ -155,8 +158,10 @@ def test_the_console_approval_leaves_the_queue_and_issues_a_capability(
         json={"approver": "operator-x", "approved_scope": "this_proposal_only"},
     ).json()
 
-    assert body["issued"] is True
-    assert body["capability_id"]
+    assert body["stage"] == "approved"
+    assert "capability_id" not in body and "issued" not in body
+    with engagement_scope(eid) as conn:
+        assert conn.execute(text("SELECT count(*) FROM capabilities")).scalar_one() == 0
     assert body["approved_scope"] == "this_proposal_only"
     assert client.get(f"/api/engagements/{eid}/approvals").json() == []
 
@@ -245,11 +250,10 @@ def test_the_console_cannot_approve_what_opa_never_escalated(
         authorization={"source": "engagement_scope", "scope_object_id": "MISSING"},
         discovery={"source": "explicit_scope"},
     )
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="worker-1",
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="worker-1",
+    )
     assert outcome.decision == "DENY"
 
     r = client.post(

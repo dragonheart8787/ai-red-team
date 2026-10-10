@@ -135,6 +135,19 @@ action_proposals = Table(
     Column("requested_capability_ttl_seconds", Integer),
     Column("decision", Text),
     Column("decision_reasons", ARRAY(Text), nullable=False),
+    # D58-5/D60 (migration 0016): where the proposal is in the pipeline, as committed state.
+    Column("pipeline_stage", Text, nullable=False),
+    Column("stage_detail", Text),
+    _ts("stage_updated_at"),
+    Column("authorized_scope_object_id", Text),
+    Column("classified_asset_id", Text),
+    Column("provenance_complete", Boolean, nullable=False),
+    # D58-8/D61 (migration 0017): the policy version in force when the decision was made; the
+    # just-in-time issue passes it to the broker so a policy change since then is refused.
+    Column("decided_policy_version", BigInteger),
+    # D58-8 closeout (migration 0018): the reviewer's advisory hints at the decision, so the policy
+    # can be re-run on the same inputs at dispatch without calling a model again.
+    Column("reviewer_hints", JSONB),
     _ts("created_at"), _ts("updated_at"),
 )
 
@@ -158,6 +171,8 @@ approvals = Table(
     _ts("valid_until", nullable=False),
     Column("approved_by", Text, nullable=False),
     Column("approved_scope", Text, nullable=False),
+    # D58-8 closeout (migration 0018): what the approver saw; re-derived and compared at dispatch.
+    Column("snapshot", JSONB),
     Column("revoked", Boolean, nullable=False),
     _ts("revoked_at"), _ts("created_at"),
 )

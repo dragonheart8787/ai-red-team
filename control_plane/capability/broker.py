@@ -402,6 +402,7 @@ def issue_capability(
     credential_id: str | None = None,
     proposal_id: str | None = None,
     scope_object_id: str | None = None,
+    expected_policy_version: int | None = None,
 ) -> IssueResult:
     """Issue a capability, or refuse (§4.6).
 
@@ -414,12 +415,20 @@ def issue_capability(
     caller has already had the resolver authorize this target against that scope
     object, and recording which one lets every later heartbeat confirm the
     premise still holds.
+
+    ``expected_policy_version`` (D61) is for an issue that happens *later* than the decision it
+    carries out: the just-in-time issue of an approved proposal, minutes or hours after OPA
+    escalated it. The caller names the policy version the decision was made under and the broker
+    refuses (``policy_version_changed``) if the policy has moved since -- a human approved *that*
+    decision, not whatever the policy has become. Left out, nothing is compared, which is right for
+    the ALLOW path where the decision and the issue are moments apart.
     """
     budget = budget or Budget()
 
     reasons = check_preconditions(
         conn, engagement_id=engagement_id,
         approval_id=approval_id, credential_id=credential_id,
+        policy_version=expected_policy_version,
         scope_object_id=scope_object_id, action=action,
     )
     if reasons:

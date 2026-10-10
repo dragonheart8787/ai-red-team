@@ -1,3 +1,8 @@
+# BEFORE THE NEXT RUN (ACCEPTANCE 5.55): this script has NOT been run since D60. Part four
+# (part_four_revocation) asserts D45's finding that a mid-flight revoke "found nothing to revoke";
+# under D60 the capability is committed before the container starts, so that check now FAILS,
+# correctly, and is to be rewritten to the new behaviour, not made to pass. First confirm parts
+# 1-3 (credentialed collection, Security Graph write, audit trail) behave exactly as before D60.
 """D45 — AD Collection end-to-end verification: real dispatch, not fixtures.
 
 D42 (ad_domain scope authorization) and D44 (credential Vault mount_for_run)
@@ -238,7 +243,7 @@ def run_main_dispatch(*, engagement_id: str, domain: str, scope_object_id: str,
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=policy, agent_id="d45-scripted-worker",
             actor=ACTOR, sandbox=sandbox, network_allowlist=network_allowlist,
             budget=Budget(max_duration_seconds=max_duration_seconds),

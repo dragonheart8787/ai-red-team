@@ -26,7 +26,10 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import execution_constraints, propose_action
 from control_plane.capability.broker import Budget
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-from control_plane.state.db import engagement_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import browser
 from tool_gateway.sandbox import SandboxResult
 
@@ -123,17 +126,16 @@ def test_web_render_runs_end_to_end_through_propose_action(engagement_id, regist
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
-            agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
-            proxy_url="http://10.86.0.2:3128",
-            ca_cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
-            proxy_cert_spki="PINPINPIN",
-            budget=Budget(tool={"browser": {
-                "max_navigations": 1, "max_subresources_per_navigation": 8}}),
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
+        agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
+        proxy_url="http://10.86.0.2:3128",
+        ca_cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+        proxy_cert_spki="PINPINPIN",
+        budget=Budget(tool={"browser": {
+            "max_navigations": 1, "max_subresources_per_navigation": 8}}),
+    )
 
     assert outcome.decision == "ALLOW", (outcome.deny_reasons, outcome.approval_reasons)
     assert outcome.run_id is not None
@@ -168,7 +170,7 @@ def test_the_rendered_evidence_is_raw_plus_untrusted_derived_view(engagement_id,
     )
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
             agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
             proxy_url="http://10.86.0.2:3128", proxy_cert_spki="PINPINPIN",
@@ -256,14 +258,13 @@ def _render_decision(engagement_id, registry, *, classification):
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
-            agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
-            proxy_url="http://10.86.0.2:3128", proxy_cert_spki="PINPINPIN",
-            budget=Budget(tool={"browser": {"max_subresources_per_navigation": 8}}),
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
+        agent_id="worker-1", sandbox=sandbox, network_allowlist=[ALLOWED_CIDR],
+        proxy_url="http://10.86.0.2:3128", proxy_cert_spki="PINPINPIN",
+        budget=Budget(tool={"browser": {"max_subresources_per_navigation": 8}}),
+    )
     return outcome, sandbox
 
 

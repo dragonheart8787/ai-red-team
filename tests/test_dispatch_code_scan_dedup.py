@@ -46,7 +46,10 @@ from sqlalchemy import text
 
 from control_plane.capability.broker import Budget, issue_capability
 from control_plane.orchestrator.dispatch import SUCCEEDED, dispatch_code_scan
-from control_plane.state.db import engagement_scope
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import semgrep
 from tool_gateway.sandbox import SandboxResult
 
@@ -68,7 +71,8 @@ class StubSandbox:
         self.exit_code = exit_code
 
     def run(self, *, command, network_allowlist, max_duration_seconds,
-            run_id=None, tmpfs=None, source_mounts=None):
+            run_id=None, tmpfs=None, source_mounts=None,
+            engagement_id=None, no_network=False):
         self.runs.append({
             "command": list(command), "allowlist": list(network_allowlist),
             "source_mounts": dict(source_mounts or {}),
@@ -145,7 +149,7 @@ def _capability(conn, engagement_id: str):
 def _dispatch(conn, engagement_id, *, target, sandbox, ruleset_path=None):
     capability = _capability(conn, engagement_id)
     return dispatch_code_scan(
-        conn, engagement_id=engagement_id,
+        engagement_id=engagement_id,
         proposal_id=_proposal(conn, engagement_id, target=target),
         capability=capability, target=target, actor="orchestrator",
         sandbox=sandbox, ruleset_path=ruleset_path,

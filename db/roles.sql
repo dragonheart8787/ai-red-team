@@ -76,6 +76,15 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'credential_admin') THEN
         CREATE ROLE credential_admin LOGIN;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_reader') THEN
+        CREATE ROLE scheduler_reader LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_admin') THEN
+        CREATE ROLE scheduler_admin LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_state_writer') THEN
+        CREATE ROLE scheduler_state_writer LOGIN;
+    END IF;
 END
 $$;
 
@@ -136,3 +145,28 @@ ALTER ROLE credential_admin
 ALTER ROLE global_policy_admin
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'global_policy_admin_password';
+
+-- The scheduler's three roles (D62, D58-1/3). Three jobs, three roles, none of them cyberorch_app:
+--
+--   scheduler_reader       reads the scheduling decision's inputs and nothing else: the enrollment
+--                          list, three columns of engagements, five columns of a closed-vocabulary
+--                          view of action_proposals, and the scheduler's own state table. No
+--                          INSERT anywhere; no grant on tasks, capabilities, tool_runs, evidence,
+--                          approvals, audit_log or credential_material. Still subject to the
+--                          engagement_isolation policy: with no engagement bound it sees no
+--                          engagement's rows.
+--   scheduler_admin        writes the enrollment list (the operator's CLI, never the service) and
+--                          reads nothing else.
+--   scheduler_state_writer writes scheduler_state, a table whose every column is an id, a
+--                          timestamp or a CHECK-closed code, and nothing else.
+-- NOBYPASSRLS like every other role here: their reach is defined by grants and policies in
+-- migration 0019, not by trusting a service to stay in its lane.
+ALTER ROLE scheduler_reader
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'scheduler_reader_password';
+ALTER ROLE scheduler_admin
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'scheduler_admin_password';
+ALTER ROLE scheduler_state_writer
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'scheduler_state_writer_password';

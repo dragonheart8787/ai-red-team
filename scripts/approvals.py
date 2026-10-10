@@ -8,6 +8,11 @@ adds a judgement of its own about what to show or what to allow.
     python scripts/approvals.py --engagement ENG-... approve PROP-... --scope this_proposal_only
     python scripts/approvals.py --engagement ENG-... deny PROP-... --reason "out of window"
     python scripts/approvals.py --engagement ENG-... watch --interval 30
+    python scripts/approvals.py --engagement ENG-... awaiting-dispatch [--older-than 300]
+
+``approve`` records the human's decision and nothing else (D61): no capability is issued until
+the tool is dispatched (``approved_dispatch.dispatch_approved``). ``awaiting-dispatch`` lists
+what has been approved and not yet run.
 
 Same shape as ``scripts/policy_layers.py`` / ``scripts/global_audit.py``:
 argparse, a readable default, ``--json`` where it helps. ``list`` and ``watch``
@@ -34,6 +39,7 @@ from control_plane.api.approvals import (  # noqa: E402
     grant_approval,
     list_pending_approvals,
 )
+from control_plane.api.approved_dispatch import list_approved_awaiting_dispatch  # noqa: E402
 from control_plane.audit.query import reconstruct_decision  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.state.db import engagement_scope  # noqa: E402
@@ -87,6 +93,39 @@ def cmd_list(args) -> int:
     return 0
 
 
+def cmd_awaiting_dispatch(args) -> int:
+    """Approved proposals nothing has dispatched yet (D61). Read-only."""
+    with engagement_scope(args.engagement) as conn:
+        rows = list_approved_awaiting_dispatch(
+            conn, engagement_id=args.engagement, older_than_seconds=args.older_than)
+    # The scheduler's reason for a proposal it did not dispatch (D62). Read as scheduler_reader --
+    # the pipeline role has no grant on that table -- and only if that connection is configured.
+    try:
+        from control_plane.scheduler.skips import skip_reasons
+
+        skips = skip_reasons(args.engagement)
+        skips_note = None
+    except RuntimeError:
+        skips, skips_note = {}, "(scheduler reader not configured: skip reasons not shown)"
+    for r in rows:
+        reason, since = skips.get(r["proposal_id"], (None, None))
+        r["skip_reason"], r["skipped_since"] = reason, since
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True, default=str))
+        return 0
+    print(f"{len(rows)} approved proposal(s) awaiting dispatch:\n")
+    if skips_note:
+        print(f"  {skips_note}\n")
+    for r in rows:
+        live = "" if r["approval_live"] else "  [approval no longer live]"
+        why = f"  [SKIPPED by the scheduler: {r['skip_reason']}]" if r["skip_reason"] else ""
+        print(f"  {r['proposal_id']}  {r['action']} on {r['target']}  approved by "
+              f"{r['approved_by']} {int(r['waiting_seconds'])}s ago{live}{why}")
+    if not rows:
+        print("  (none)")
+    return 0
+
+
 def cmd_approve(args) -> int:
     try:
         with engagement_scope(args.engagement) as conn:
@@ -99,15 +138,12 @@ def cmd_approve(args) -> int:
         # Fail-closed: the transaction rolled back, nothing was written.
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    if outcome.issued:
-        print(f"approved {outcome.proposal_id} (scope={outcome.approved_scope}); "
-              f"capability {outcome.capability_id} issued via the broker.")
-        return 0
-    # The approval object exists and is valid; the broker declined to issue for
-    # its own reasons. Reported, not hidden — and not retried as an approval.
-    print(f"approval {outcome.approval_id} recorded, but the broker did not "
-          f"issue a capability: {', '.join(outcome.reasons)}", file=sys.stderr)
-    return 3
+    # D61: the approval is a recorded fact, and the proposal now waits for a dispatcher. No
+    # capability exists yet -- it is issued at the moment the tool is dispatched.
+    print(f"approved {outcome.proposal_id} (scope={outcome.approved_scope}); approval "
+          f"{outcome.approval_id} recorded. It is awaiting dispatch: the capability is issued "
+          f"when the tool runs, not now.")
+    return 0
 
 
 def cmd_deny(args) -> int:
@@ -169,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     dn.add_argument("--by", required=True, help="Who is denying (recorded).")
     dn.add_argument("--reason", default="", help="Why (recorded).")
 
+    ad = sub.add_parser("awaiting-dispatch",
+                        help="List approved proposals that nothing has dispatched yet.")
+    ad.add_argument("--older-than", type=float, default=None,
+                    help="Only those waiting at least this many seconds.")
+
     wa = sub.add_parser("watch", help="Poll for new pending approvals.")
     wa.add_argument("--interval", type=int, default=30)
 
@@ -177,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     return {
         "list": cmd_list, "approve": cmd_approve,
         "deny": cmd_deny, "watch": cmd_watch,
+        "awaiting-dispatch": cmd_awaiting_dispatch,
     }[args.command](args)
 
 

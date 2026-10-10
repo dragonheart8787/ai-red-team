@@ -25,6 +25,7 @@ enforced by a conditional UPDATE rather than a read followed by a write.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -32,18 +33,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from control_plane.audit.logger import record_audit
-from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request
+from control_plane.capability.broker import BUDGET_EXHAUSTED, consume_request, get_capability
 from control_plane.dedup.fingerprint import execution_fingerprint
-from control_plane.evidence.store import record_evidence
+from control_plane.evidence.store import record_evidence, write_raw_artifact
 from control_plane.graph.store import record_batch
+from control_plane.orchestrator import stages
 from control_plane.orchestrator.git_fetch import (
     GitFetchError,
     cleanup_repo,
     fetch_repo,
     parse_repo_scope_value,
 )
+from control_plane.state.db import engagement_scope
 from control_plane.vault import vault
 from tool_gateway import registry
 from tool_gateway.adapters import (
@@ -58,9 +62,13 @@ from tool_gateway.adapters import (
 from tool_gateway.sandbox import (
     TOOL_CA_PATH,
     DockerSandbox,
+    NetworkNotAvailable,
+    NotStarted,
     SandboxResult,
     SandboxUnavailable,
 )
+
+logger = logging.getLogger("cyberorch.dispatch")
 
 QUEUED = "queued"
 DISPATCHING = "dispatching"
@@ -223,7 +231,227 @@ def _build_plan_params(adapter) -> frozenset[str]:
     return frozenset(inspect.signature(adapter.build_plan).parameters)
 
 
-def dispatch_scan(
+#: The sandbox refused before any container existed because the network is held
+#: by another engagement, or its range collides with another network (D59).
+#: Distinct from UNKNOWN_OUTCOME on purpose: nothing started, so the outcome is
+#: *known* and the same proposal can be tried again once the network is free.
+#: Recording it as unknown (what every ``SandboxUnavailable`` gets) would park a
+#: proposal for a human over something the system can simply retry.
+NETWORK_UNAVAILABLE = "network_unavailable"
+
+#: The sandbox failed before any container of this run existed, for a reason that is not the
+#: network: Docker unreachable, the tool image absent, the container could not be created (D58-7).
+#: Same standing as ``NETWORK_UNAVAILABLE`` and for the same reason -- the outcome is *known*, so it
+#: is ``failed`` (retryable), never ``unknown_outcome``.
+SANDBOX_NOT_STARTED = "sandbox_not_started"
+
+
+def _refused_before_start(
+    conn: Connection, *, engagement_id: str, actor: str, run_id: str,
+    proposal_id: str, exc: NotStarted,
+) -> DispatchOutcome:
+    """Record a run the sandbox declined to start, before any container existed (D59, D58-7).
+
+    The audit payload carries the sandbox's message and the stable code, which
+    by construction name no other engagement; who holds the network is in the
+    operator log, not in this engagement's trail.
+    """
+    _finish_run(conn, run_id, FAILED, exit_code=None)
+    _set_state(conn, proposal_id, FAILED)
+    record_audit(
+        engagement_id=engagement_id, actor=actor,
+        event_type="tool_run.refused", subject_type="tool_run", subject_id=run_id,
+        decision=DENY_DECISION,
+        reasons=(NETWORK_UNAVAILABLE if isinstance(exc, NetworkNotAvailable)
+                 else SANDBOX_NOT_STARTED, exc.reason),
+        payload={"error": str(exc)},
+    )
+    # run_id is not returned: nothing executed, so propose_action must not draw
+    # an "executed" provenance edge for it.
+    return DispatchOutcome(False, None, FAILED, reason=exc.reason)
+
+
+@dataclass
+class _Started:
+    """What a run's first stage committed, and what the later stages need of it."""
+
+    run_id: str
+    adapter: Any
+    plan: Any
+    tool_version: str
+    target: str
+    allowlist: list[str]
+    capability_id: str
+    fresh_for_seconds: int
+    ruleset_version: str | None = None
+
+
+def _fresh_capability(conn: Connection, engagement_id: str, capability):
+    """The capability as it is *now*, or a refusal (D60).
+
+    The one the caller holds was read in an earlier stage, and a stage that committed is exactly
+    what lets a kill switch, a pause or a revocation reach it: the capability row is visible to
+    ``revoke_all_for_engagement`` the moment its stage commits. So the dispatch stage starts by
+    asking again -- of the capability, and of the engagement it belongs to -- rather than trusting
+    what it was handed. Returns ``(capability, None)`` or ``(None, DispatchOutcome)``.
+    """
+    fresh = get_capability(conn, capability.capability_id)
+    if fresh is None or fresh.revoked or not fresh.is_live():
+        return None, DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+    engagement = conn.execute(
+        text("SELECT status, kill_switch_engaged FROM engagements WHERE engagement_id = :e"),
+        {"e": engagement_id},
+    ).one_or_none()
+    if engagement is None or engagement[1] or engagement[0] != "active":
+        return None, DispatchOutcome(False, None, QUEUED, reason="engagement_not_active")
+    return fresh, None
+
+
+def _close_early(conn: Connection, proposal_id: str, outcome: DispatchOutcome) -> None:
+    """A dispatch that ended before a run row existed ends the pipeline, with its reason."""
+    detail = outcome.reason or "closed"
+    if outcome.reason == "dedup_hit" and outcome.run_id:
+        detail = f"dedup_hit:{outcome.run_id}"
+    if outcome.reason == "not_claimable":
+        return  # someone else owns this dispatch; its stage is theirs to move
+    stages.advance(conn, proposal_id, expected=stages.BEFORE_DISPATCH,
+                   new=stages.CLOSED, detail=detail)
+
+
+def _begin(engagement_id: str, proposal_id: str, start) -> _Started | DispatchOutcome:
+    """Stage 3a, in its own transaction: everything up to and including the committed run row.
+
+    ``start(conn)`` is the old dispatch body up to the point it would have called the sandbox, and
+    returns either a refusal (a ``DispatchOutcome``) or a ``_Started``. Whatever it returns is
+    committed here -- the run row, the ``running`` state, the ``dispatching`` stage -- *before* any
+    container exists, so a process that dies from here on leaves a row for the reconciler to find.
+    Losing the stage race rolls the whole transaction back and reports a lost claim.
+    """
+    try:
+        with engagement_scope(engagement_id) as conn:
+            started = start(conn)
+            if isinstance(started, DispatchOutcome):
+                _close_early(conn, proposal_id, started)
+            return started
+    except stages.StageConflict:
+        with engagement_scope(engagement_id) as conn:
+            state = conn.execute(
+                text("SELECT dispatch_state FROM action_proposals WHERE proposal_id = :p"),
+                {"p": proposal_id},
+            ).scalar_one_or_none()
+        return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
+
+
+def _execute(
+    sandbox_run, *, engagement_id: str, proposal_id: str, actor: str, run_id: str,
+) -> SandboxResult | DispatchOutcome:
+    """Stage 3b: the container. No database connection is held while it runs.
+
+    A refusal the sandbox made *before* a container existed, and a failure of the sandbox itself,
+    are each recorded here in their own short transaction and returned as the outcome. Anything
+    else propagates with the stage still ``dispatching`` -- which is what the reconciler reads.
+    """
+    try:
+        return sandbox_run()
+    except NotStarted as exc:
+        with engagement_scope(engagement_id) as conn:
+            outcome = _refused_before_start(
+                conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
+                proposal_id=proposal_id, exc=exc,
+            )
+            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
+                           new=stages.CLOSED, detail=exc.reason)
+        return outcome
+    except SandboxUnavailable as exc:
+        # The tool may or may not have run — the sandbox failed at a point we
+        # cannot distinguish. §8.8 says that is UNKNOWN_OUTCOME, not FAILED,
+        # because "failed" invites a retry.
+        with engagement_scope(engagement_id) as conn:
+            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
+            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="tool_run.unknown_outcome", subject_type="tool_run",
+                subject_id=run_id, reasons=("sandbox_unavailable",),
+                payload={"error": str(exc)},
+            )
+            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
+                           new=stages.RECORDED, detail=UNKNOWN_OUTCOME)
+        return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
+
+
+def _revoked_during_run(conn: Connection, capability_id: str) -> dict[str, Any]:
+    """Audit-payload fields saying the capability was revoked while its run was in flight.
+
+    Nothing stops a container that is already running (that is D44-7 / D58-16, not built); what the
+    stage boundary can do is say so. Empty when nothing happened.
+    """
+    capability = get_capability(conn, capability_id)
+    if capability is not None and capability.revoked:
+        return {"capability_revoked_during_run": capability.revoked_reason or True}
+    return {}
+
+
+def _record_scan_result(
+    *, engagement_id: str, proposal_id: str, actor: str, started: _Started,
+    result: SandboxResult, view_fn=None, incomplete_reason: str | None = None,
+) -> DispatchOutcome:
+    """Stage 3c: the result, in its own short transaction, as soon as the container is gone.
+
+    The raw bytes are made durable on disk *first* -- they are the one thing that cannot be had
+    again if the database is unreachable at this moment -- and only then is the transaction
+    opened. If it fails, the run row is still ``running`` (the reconciler's job) and the log says
+    where the output is.
+    """
+    adapter = started.adapter
+    raw = (
+        f"$ {' '.join(started.plan.command)}\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
+    ).encode()
+    evidence_id = f"{EVIDENCE_PREFIX.get(adapter.TOOL, 'TOOL')}-{uuid.uuid4().hex[:12]}"
+    path, digest = write_raw_artifact(engagement_id, evidence_id, raw)
+    # ``incomplete_reason``: a tool may declare that its exit code cannot tell "found nothing" from
+    # "could not read the input" (Gitleaks, D55). Such a run is FAILED, not SUCCEEDED -- so it is
+    # not a clean bill of health in the evidence and, because only SUCCEEDED runs are ever served
+    # from the dedup cache, not an "already scanned" for the next proposal either.
+    status = SUCCEEDED if result.succeeded and incomplete_reason is None else FAILED
+    view_fn = view_fn or adapter.derive_view
+    audit_extra = ({"scan_incomplete_reason": incomplete_reason}
+                   if incomplete_reason is not None else {})
+    try:
+        with engagement_scope(engagement_id) as conn:
+            record_evidence(
+                conn, engagement_id=engagement_id, evidence_id=evidence_id,
+                run_id=started.run_id, evidence_type="tool_output", raw=raw,
+                derived_view=view_fn(result.stdout, result.stderr),
+                tool=adapter.TOOL, tool_version=started.tool_version,
+                ruleset_version=started.ruleset_version,
+            )
+            _finish_run(
+                conn, started.run_id, status, exit_code=result.exit_code,
+                fresh_for_seconds=started.fresh_for_seconds if status == SUCCEEDED else None,
+            )
+            _set_state(conn, proposal_id, status)
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type=f"tool_run.{status}", subject_type="tool_run",
+                subject_id=started.run_id, decision="ALLOW" if status == SUCCEEDED else None,
+                payload={**result.as_dict(), "evidence_id": evidence_id, **audit_extra,
+                         **_revoked_during_run(conn, started.capability_id)},
+            )
+            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
+                           new=stages.RECORDED, detail=status)
+    except Exception:
+        logger.critical(
+            "run %s finished (exit %s) but its result could not be recorded; the output is "
+            "on disk at %s (sha256 %s) and the run row is still 'running'",
+            started.run_id, result.exit_code, path, digest,
+        )
+        raise
+    return DispatchOutcome(True, started.run_id, status, evidence_id=evidence_id, result=result)
+
+
+def _scan_start(
     conn: Connection,
     *,
     engagement_id: str,
@@ -239,7 +467,12 @@ def dispatch_scan(
     ca_cert_pem: str | None = None,
     proxy_cert_spki: str | None = None,
 ) -> DispatchOutcome:
-    """Run one scan and record run, evidence and state transitions.
+    """The first stage of one scan: everything up to a committed ``running`` run row (D60).
+
+    (The rest of this docstring is the original ``dispatch_scan``'s, and every rule in it still
+    holds; the container and the result are now ``dispatch_scan``'s second and third stages.)
+
+    Run one scan and record run, evidence and state transitions.
 
     The capability supplies the constraints and the budget; the sandbox
     supplies the network boundary. Both are required — a scan with neither is
@@ -266,8 +499,9 @@ def dispatch_scan(
     the same shape as D13's Worker interface, which has no ``discovery``
     argument to falsify.
     """
-    if capability.revoked or not capability.is_live():
-        return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+    capability, refusal = _fresh_capability(conn, engagement_id, capability)
+    if refusal is not None:
+        return refusal
 
     adapter = adapter_for(capability.action)
     if adapter is None:
@@ -413,78 +647,23 @@ def dispatch_scan(
         },
     )
     _set_state(conn, proposal_id, RUNNING)
+    # The stage transition is taken in the same transaction as the run row, so "dispatching" is
+    # committed exactly when "a run row exists in state running" is -- never one without the other.
+    stages.take(conn, proposal_id, expected=stages.BEFORE_DISPATCH, new=stages.DISPATCHING)
     record_audit(
         engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
         subject_type="tool_run", subject_id=run_id,
         payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
-
-    # A tool that ships its own image says so; the rest run in the shared one.
-    # When the caller passed a sandbox it already chose the image, so respect it.
-    adapter_image = getattr(adapter, "IMAGE", None)
-    sandbox = sandbox or (
-        DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
-    )
-    try:
-        result = sandbox.run(
-            command=plan.command, network_allowlist=allowlist,
-            max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
-            # web.post feeds its body here rather than through argv, so the
-            # body never reaches the process table or the audit payload below,
-            # and curl's @- sigil stays fixed (see http_post.build_plan).
-            stdin=getattr(plan, "stdin", None) or None,
-            # The public CA the tool verifies the proxy's leaf against (D35).
-            # None for nmap and for plain-HTTP web runs.
-            ca_cert_pem=ca_cert_pem,
-            # Writable tmpfs the tool's image needs over its read-only root
-            # (the browser; D36). None for tools that need no writable path.
-            tmpfs=getattr(adapter, "TMPFS", None),
-        )
-    except SandboxUnavailable as exc:
-        # The tool may or may not have run — the sandbox failed at a point we
-        # cannot distinguish. §8.8 says that is UNKNOWN_OUTCOME, not FAILED,
-        # because "failed" invites a retry.
-        _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
-        _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type="tool_run.unknown_outcome", subject_type="tool_run",
-            subject_id=run_id, reasons=("sandbox_unavailable",),
-            payload={"error": str(exc)},
-        )
-        return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
-
-    raw = (
-        f"$ {' '.join(plan.command)}\n"
-        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
-    ).encode()
-    prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
-    evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
-    record_evidence(
-        conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
-        evidence_type="tool_output", raw=raw,
-        derived_view=adapter.derive_view(result.stdout, result.stderr),
-        tool=adapter.TOOL, tool_version=tool_version,
+    return _Started(
+        run_id=run_id, adapter=adapter, plan=plan, tool_version=tool_version,
+        target=target, allowlist=list(allowlist), capability_id=capability.capability_id,
+        fresh_for_seconds=fresh_for_seconds,
     )
 
-    status = SUCCEEDED if result.succeeded else FAILED
-    _finish_run(
-        conn, run_id, status, exit_code=result.exit_code,
-        fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
-    )
-    _set_state(conn, proposal_id, status)
-    record_audit(
-        engagement_id=engagement_id, actor=actor,
-        event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
-        decision="ALLOW" if status == SUCCEEDED else None,
-        payload={**result.as_dict(), "evidence_id": evidence_id},
-    )
-    return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
 
-
-def dispatch_collection(
-    conn: Connection,
+def dispatch_scan(
     *,
     engagement_id: str,
     proposal_id: str,
@@ -495,8 +674,99 @@ def dispatch_collection(
     network_allowlist: list[str] | None = None,
     execution_context: Mapping[str, Any] | None = None,
     fresh_for_seconds: int = 1800,
+    proxy_url: str | None = None,
+    ca_cert_pem: str | None = None,
+    proxy_cert_spki: str | None = None,
 ) -> DispatchOutcome:
-    """Run one bulk collection (``ad.collect``) and record its two artifacts.
+    """Run one scan: three stages, each committed on its own (D58-5, D60).
+
+    1. **Start** (:func:`_scan_start`, one transaction): re-read the capability and the engagement,
+       build the plan, claim the dispatch, spend the request budget, insert the ``tool_runs`` row as
+       ``running``, move the proposal to ``dispatching``. Committed before a container exists.
+    2. **Run**: the sandbox, with no database connection held. An LLM-sized wait and a container-
+       sized wait used to pin a pooled connection and a snapshot; they no longer do.
+    3. **Record** (one short transaction): the evidence, the finished run, the proposal's state, the
+       ``recorded`` stage. Opened the moment the container is gone, with the raw output already on
+       disk.
+
+    There is no ``conn`` parameter: a caller's transaction is exactly what cannot be allowed to
+    contain these stages, since it would commit them all at once, at its own exit.
+
+    The note that matters from the old docstring, kept because D34 rests on it: there is no
+    ``action``, ``writes_data`` or ``changes_state`` parameter. The action comes off the capability,
+    which was fixed when OPA decided, and the side effects are looked up from it.
+    """
+    started = _begin(
+        engagement_id, proposal_id,
+        lambda conn: _scan_start(
+            conn, engagement_id=engagement_id, proposal_id=proposal_id,
+            capability=capability, target=target, actor=actor, sandbox=sandbox,
+            network_allowlist=network_allowlist, execution_context=execution_context,
+            fresh_for_seconds=fresh_for_seconds, proxy_url=proxy_url,
+            ca_cert_pem=ca_cert_pem, proxy_cert_spki=proxy_cert_spki,
+        ),
+    )
+    if isinstance(started, DispatchOutcome):
+        return started
+
+    # A tool that ships its own image says so; the rest run in the shared one.
+    # When the caller passed a sandbox it already chose the image, so respect it.
+    adapter_image = getattr(started.adapter, "IMAGE", None)
+    sandbox = sandbox or (
+        DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
+    )
+    plan = started.plan
+    ran = _execute(
+        lambda: sandbox.run(
+            command=plan.command, network_allowlist=started.allowlist,
+            max_duration_seconds=plan.max_duration_seconds, run_id=started.run_id,
+            # web.post feeds its body here rather than through argv, so the
+            # body never reaches the process table or the audit payload below,
+            # and curl's @- sigil stays fixed (see http_post.build_plan).
+            stdin=getattr(plan, "stdin", None) or None,
+            # The public CA the tool verifies the proxy's leaf against (D35).
+            # None for nmap and for plain-HTTP web runs.
+            ca_cert_pem=ca_cert_pem,
+            # Writable tmpfs the tool's image needs over its read-only root
+            # (the browser; D36). None for tools that need no writable path.
+            tmpfs=getattr(started.adapter, "TMPFS", None),
+            # Who this run is for (D59): the sandbox keeps two engagements off one
+            # network, and cannot know which is which unless it is told.
+            engagement_id=engagement_id,
+        ),
+        engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+        run_id=started.run_id,
+    )
+    if isinstance(ran, DispatchOutcome):
+        return ran
+    return _record_scan_result(
+        engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+        started=started, result=ran,
+    )
+
+
+def _collection_start(
+    conn: Connection,
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    network_allowlist: list[str] | None = None,
+    execution_context: Mapping[str, Any] | None = None,
+    fresh_for_seconds: int = 1800,
+    mounts: list,
+) -> DispatchOutcome | _Started:
+    """The first stage of ``ad.collect`` (D60): everything up to a committed ``running`` run row.
+
+    ``mounts`` is an out-parameter: the credential file is appended the moment it exists, so the
+    caller's ``finally`` removes it however this stage -- or any later one -- ends.
+
+    (The rest of this docstring is the original ``dispatch_collection``'s, and every rule in it
+    still holds.)
+
+    Run one bulk collection (``ad.collect``) and record its two artifacts.
 
     Parallel to :func:`dispatch_scan`, not a retrofit of it (D42-1/D42-6
     design doc §2.5, Option B): reuses the same ``tool_runs`` row, the same
@@ -538,8 +808,9 @@ def dispatch_collection(
     match, and a mismatch is refused. A credential stored before D50-B carries
     no identity and is refused too -- unknown, never "none needed".
     """
-    if capability.revoked or not capability.is_live():
-        return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+    capability, refusal = _fresh_capability(conn, engagement_id, capability)
+    if refusal is not None:
+        return refusal
 
     adapter = ad_collector
     if capability.action != adapter.ACTION:
@@ -696,6 +967,7 @@ def dispatch_collection(
         },
     )
     _set_state(conn, proposal_id, RUNNING)
+    stages.take(conn, proposal_id, expected=stages.BEFORE_DISPATCH, new=stages.DISPATCHING)
     record_audit(
         engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
         subject_type="tool_run", subject_id=run_id,
@@ -703,108 +975,140 @@ def dispatch_collection(
                  "network_allowlist": allowlist, "capability_id": capability.capability_id},
     )
 
-    # Minted only now -- after the dedup check and the claim -- so a dedup
+    # Minted only now -- after the dedup check, the claim and the stage -- so a dedup
     # hit or a lost claim race never mints (and never has to clean up) a
     # credential file nothing will use (D44). ad.collect is the one dispatch
     # path that can defer this past the fingerprint step at all: unlike
     # D43's commit_sha, credential_id is already known from the capability
     # itself, with nothing to discover that the fingerprint depends on.
-    mounted_credential = vault.mount_for_run(
+    mounts.append(vault.mount_for_run(
         conn, credential_id=capability.credential_id, run_id=run_id,
         engagement_id=engagement_id, actor=actor,
+    ))
+    return _Started(
+        run_id=run_id, adapter=adapter, plan=plan, tool_version=tool_version,
+        target=target, allowlist=list(allowlist), capability_id=capability.capability_id,
+        fresh_for_seconds=fresh_for_seconds,
     )
 
+
+def _record_collection_graph(
+    *, engagement_id: str, actor: str, run_id: str, adapter, stdout: str,
+) -> None:
+    """The second artifact (§2.5 of the design doc): the full, unbounded graph, never the bounded
+    derived_view. Its own transaction, *after* the run's result is committed (D60): a run whose
+    output cannot be parsed or whose batch cannot be written is still a recorded, successful run,
+    and the graph can be rebuilt from the raw artifact. A failure here is its own audited event,
+    never a re-judgment of the run -- and never a reason to lose the evidence.
+    """
     try:
+        nodes, edges = adapter.parse_graph(stdout)
+        with engagement_scope(engagement_id) as conn:
+            record_batch(
+                conn, engagement_id=engagement_id, run_id=run_id,
+                nodes=nodes, edges=edges,
+            )
+            record_audit(
+                engagement_id=engagement_id, actor=actor,
+                event_type="security_graph.recorded", subject_type="tool_run",
+                subject_id=run_id,
+                payload={"node_count": len(nodes), "edge_count": len(edges)},
+            )
+    except (ValueError, KeyError) as exc:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="security_graph.record_failed", subject_type="tool_run",
+            subject_id=run_id, reasons=(UNPARSEABLE_COLLECTION_RESULT,),
+            payload={"error": str(exc)},
+        )
+    except SQLAlchemyError as exc:
+        record_audit(
+            engagement_id=engagement_id, actor=actor,
+            event_type="security_graph.record_failed", subject_type="tool_run",
+            subject_id=run_id, reasons=("graph_write_failed",),
+            payload={"error": str(exc)[:500]},
+        )
+
+
+def dispatch_collection(
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    sandbox: DockerSandbox | None = None,
+    network_allowlist: list[str] | None = None,
+    execution_context: Mapping[str, Any] | None = None,
+    fresh_for_seconds: int = 1800,
+) -> DispatchOutcome:
+    """Run one bulk collection (``ad.collect``): start, run, record, then the graph (D60).
+
+    The stages are :func:`dispatch_scan`'s, with two additions that are this action's. The
+    credential file is minted in the start stage and removed in the ``finally`` below no matter
+    where the stages end (D44-5). And the Security Graph batch is written in a transaction of its
+    own *after* the evidence and the run's result are committed.
+    """
+    mounts: list = []
+    started = None
+    try:
+        started = _begin(
+            engagement_id, proposal_id,
+            lambda conn: _collection_start(
+                conn, engagement_id=engagement_id, proposal_id=proposal_id,
+                capability=capability, target=target, actor=actor,
+                network_allowlist=network_allowlist, execution_context=execution_context,
+                fresh_for_seconds=fresh_for_seconds, mounts=mounts,
+            ),
+        )
+        if isinstance(started, DispatchOutcome):
+            return started
+
         # A tool that ships its own image says so (adapter.IMAGE); the rest
         # run in the shared one -- same lookup dispatch_scan and
         # dispatch_code_scan already do for their own adapters (D45: this one
         # was missing, so a caller that did not hand-pick a sandbox got
         # DockerSandbox's default nmap image instead of bloodhound-python's).
+        adapter = started.adapter
         adapter_image = getattr(adapter, "IMAGE", None)
         sandbox = sandbox or (
             DockerSandbox(image=adapter_image) if adapter_image else DockerSandbox()
         )
-        try:
-            result = sandbox.run(
-                command=plan.command, network_allowlist=allowlist,
-                max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
-                source_mounts={mounted_credential.host_path: adapter.CONTAINER_CRED_PATH},
+        plan = started.plan
+        ran = _execute(
+            lambda: sandbox.run(
+                command=plan.command, network_allowlist=started.allowlist,
+                max_duration_seconds=plan.max_duration_seconds, run_id=started.run_id,
+                source_mounts={mounts[0].host_path: adapter.CONTAINER_CRED_PATH},
+                engagement_id=engagement_id,
+            ),
+            engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+            run_id=started.run_id,
+        )
+        if isinstance(ran, DispatchOutcome):
+            return ran
+        outcome = _record_scan_result(
+            engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+            started=started, result=ran,
+        )
+        # Attempted only when the tool itself reported success -- a failed run has no graph to
+        # write.
+        if outcome.state == SUCCEEDED:
+            _record_collection_graph(
+                engagement_id=engagement_id, actor=actor, run_id=started.run_id,
+                adapter=adapter, stdout=ran.stdout,
             )
-        except SandboxUnavailable as exc:
-            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
-            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
-            record_audit(
-                engagement_id=engagement_id, actor=actor,
-                event_type="tool_run.unknown_outcome", subject_type="tool_run",
-                subject_id=run_id, reasons=("sandbox_unavailable",),
-                payload={"error": str(exc)},
-            )
-            return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
-
-        raw = (
-            f"$ {' '.join(plan.command)}\n"
-            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
-        ).encode()
-        prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
-        evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
-        record_evidence(
-            conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
-            evidence_type="tool_output", raw=raw,
-            derived_view=adapter.derive_view(result.stdout, result.stderr),
-            tool=adapter.TOOL, tool_version=tool_version,
-        )
-
-        status = SUCCEEDED if result.succeeded else FAILED
-
-        # The second artifact (§2.5 of the design doc): the full, unbounded
-        # graph, never the bounded derived_view above. Attempted only when
-        # the tool itself reported success -- a failed run has no graph to
-        # write. A parse failure here does not flip an otherwise-successful
-        # run to FAILED (the tool ran and exited cleanly; that is what
-        # `status` reports) -- it is a distinct, separately-audited failure
-        # of the second write, not a re-judgment of the first.
-        if status == SUCCEEDED:
-            try:
-                nodes, edges = adapter.parse_graph(result.stdout)
-                record_batch(
-                    conn, engagement_id=engagement_id, run_id=run_id,
-                    nodes=nodes, edges=edges,
-                )
-                record_audit(
-                    engagement_id=engagement_id, actor=actor,
-                    event_type="security_graph.recorded", subject_type="tool_run",
-                    subject_id=run_id,
-                    payload={"node_count": len(nodes), "edge_count": len(edges)},
-                )
-            except (ValueError, KeyError) as exc:
-                record_audit(
-                    engagement_id=engagement_id, actor=actor,
-                    event_type="security_graph.record_failed", subject_type="tool_run",
-                    subject_id=run_id, reasons=(UNPARSEABLE_COLLECTION_RESULT,),
-                    payload={"error": str(exc)},
-                )
-
-        _finish_run(
-            conn, run_id, status, exit_code=result.exit_code,
-            fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
-        )
-        _set_state(conn, proposal_id, status)
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
-            decision="ALLOW" if status == SUCCEEDED else None,
-            payload={**result.as_dict(), "evidence_id": evidence_id},
-        )
-        return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
+        return outcome
     finally:
         # Always -- success, failure, or sandbox-unavailable all leave a
         # minted credential file on the control-plane host's disk that
         # nothing else will clean up (D44-5, the same caller-owns-cleanup
         # contract D43's git_fetch.cleanup_repo already established).
-        vault.cleanup_mount(
-            mounted_credential, engagement_id=engagement_id, actor=actor,
-            run_id=run_id,
-        )
+        for mounted in mounts:
+            vault.cleanup_mount(
+                mounted, engagement_id=engagement_id, actor=actor,
+                run_id=getattr(started, "run_id", "unstarted"),
+            )
 
 
 #: A control-plane-side repo fetch failed before any sandbox run started
@@ -814,18 +1118,18 @@ def dispatch_collection(
 #: attempted, but the source it names could not be retrieved.
 REPO_FETCH_FAILED = "repo_fetch_failed"
 
-#: Semgrep needs no network access at all (tool_gateway/adapters/semgrep.py
-#: module docstring): the repository and the ruleset both arrive as
-#: read-only bind mounts, not over a network the container has no route on.
-#: DockerSandbox still requires a non-empty CIDR allowlist to build its
-#: internal, gateway-less network (§8.3's validate_allowlist) -- ``internal
-#: =True`` is what removes the route out, not the specific range named
-#: here, so this fixed, otherwise-unused private block stands in for a real
-#: target range that this action has no target range to give.
+#: Semgrep and Gitleaks need no network access at all (the adapters' module
+#: docstrings): the repository and the ruleset both arrive as read-only bind
+#: mounts. This range is therefore only a *record* -- it is what the execution
+#: fingerprint and ``tool_runs.network_allowlist`` carry for "no egress", and what
+#: ``validate_allowlist`` requires to be non-empty. Since D59 the container does
+#: not join a network built from it: ``dispatch_code_scan`` passes
+#: ``no_network=True``. Before that it did, and since the name came from this one
+#: constant, *every* engagement's code scans ran on one shared bridge.
 NO_EGRESS_ALLOWLIST = ["10.255.255.0/29"]
 
 
-def dispatch_code_scan(
+def _code_scan_start(
     conn: Connection,
     *,
     engagement_id: str,
@@ -833,12 +1137,22 @@ def dispatch_code_scan(
     capability,
     target: str,
     actor: str,
-    sandbox: DockerSandbox | None = None,
     execution_context: Mapping[str, Any] | None = None,
     fresh_for_seconds: int = 1800,
     ruleset_path: str | None = None,
-) -> DispatchOutcome:
-    """Run one code-scan action (``code.scan``, ``code.secrets``) and record it (D43, D55).
+    fetched_out: list,
+) -> DispatchOutcome | _Started:
+    """The first stage of a code scan (D60): everything up to a committed ``running`` run row.
+
+    ``fetched_out`` is an out-parameter: the checkout is appended the moment it exists, so the
+    caller's ``finally`` removes it however this stage -- or any later one -- ends. The fetch runs
+    inside this stage's transaction, holding a pooled connection for its duration (a shallow clone;
+    see ``git_fetch``). It reads, writes nothing, and if the process dies during it nothing was
+    committed past ``capability_issued``, so a resumed proposal simply fetches again.
+
+    (The rest of this docstring is the original ``dispatch_code_scan``'s.)
+
+    Run one code-scan action (``code.scan``, ``code.secrets``) and record it (D43, D55).
 
     A third bespoke dispatch function, alongside :func:`dispatch_scan` and
     :func:`dispatch_collection`, for the same reason ``dispatch_collection``
@@ -874,8 +1188,9 @@ def dispatch_code_scan(
     absent (D43-6's original public-repo-only scope) means ``auth_token``
     stays ``None`` and this function behaves exactly as it did before D44.
     """
-    if capability.revoked or not capability.is_live():
-        return DispatchOutcome(False, None, QUEUED, reason="capability_not_live")
+    capability, refusal = _fresh_capability(conn, engagement_id, capability)
+    if refusal is not None:
+        return refusal
 
     # The adapter is the one the capability's action names, not a hard-wired
     # one (D55: this function serves every code-scan tool, and was written
@@ -986,131 +1301,146 @@ def dispatch_code_scan(
         _set_state(conn, proposal_id, FAILED)
         return DispatchOutcome(False, None, FAILED, reason=REPO_FETCH_FAILED)
 
+    fetched_out.append(fetched)
+    rules_version = adapter.ruleset_version(ruleset_path)
+    tool_version = adapter.tool_version()
+    ctx = {**dict(execution_context or {}),
+           "commit_sha": fetched.commit_sha, "branch": fetched.branch}
+    if capability.credential_id is not None:
+        ctx["credential_id"] = capability.credential_id
+    fingerprint = execution_fingerprint(
+        engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
+        normalized_target=target, normalized_params=plan.as_params(),
+        execution_context=fingerprint_context(ctx, NO_EGRESS_ALLOWLIST),
+        ruleset_version=rules_version,
+    )
+
+    cached = find_cached_run(conn, fingerprint)
+    if cached is not None:
+        _set_state(conn, proposal_id, SUCCEEDED)
+        return DispatchOutcome(False, cached["run_id"], SUCCEEDED, reason="dedup_hit")
+
+    if not claim_for_dispatch(conn, proposal_id):
+        state = conn.execute(
+            text("SELECT dispatch_state FROM action_proposals WHERE proposal_id = :p"),
+            {"p": proposal_id},
+        ).scalar_one_or_none()
+        return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
+
+    run_id = f"RUN-{uuid.uuid4().hex[:12]}"
+
+    conn.execute(
+        text("""
+            INSERT INTO tool_runs (run_id, engagement_id, proposal_id, capability_id,
+                tool, tool_version, ruleset_version, normalized_target, normalized_params,
+                execution_context, execution_fingerprint, status, network_allowlist,
+                started_at)
+            VALUES (:run, :eng, :pid, :cap, :tool, :tver, :rver, :target,
+                    CAST(:params AS jsonb), CAST(:ctx AS jsonb), :fp, :status,
+                    :allowlist, now())
+        """),
+        {
+            "run": run_id, "eng": engagement_id, "pid": proposal_id,
+            "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
+            "rver": rules_version, "target": target, "params": _json(plan.as_params()),
+            "ctx": _json(ctx), "fp": fingerprint,
+            "status": RUNNING, "allowlist": list(NO_EGRESS_ALLOWLIST),
+        },
+    )
+    _set_state(conn, proposal_id, RUNNING)
+    stages.take(conn, proposal_id, expected=stages.BEFORE_DISPATCH, new=stages.DISPATCHING)
+    record_audit(
+        engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
+        subject_type="tool_run", subject_id=run_id,
+        payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
+                 "commit_sha": fetched.commit_sha,
+                 "capability_id": capability.capability_id},
+    )
+    return _Started(
+        run_id=run_id, adapter=adapter, plan=plan, tool_version=tool_version,
+        target=target, allowlist=list(NO_EGRESS_ALLOWLIST),
+        capability_id=capability.capability_id, fresh_for_seconds=fresh_for_seconds,
+        ruleset_version=rules_version,
+    )
+
+
+def dispatch_code_scan(
+    *,
+    engagement_id: str,
+    proposal_id: str,
+    capability,
+    target: str,
+    actor: str,
+    sandbox: DockerSandbox | None = None,
+    execution_context: Mapping[str, Any] | None = None,
+    fresh_for_seconds: int = 1800,
+    ruleset_path: str | None = None,
+) -> DispatchOutcome:
+    """Run one code-scan action: start, run, record -- the stages of :func:`dispatch_scan` (D60).
+
+    The checkout the start stage fetches is removed in the ``finally`` below however the stages
+    end: a dedup hit, a lost claim race, a sandbox failure and a completed run all leave one on
+    disk that nobody else will clean up (``git_fetch.fetch_repo``'s own docstring: the caller owns
+    cleanup).
+    """
+    fetched_out: list = []
     try:
-        rules_version = adapter.ruleset_version(ruleset_path)
-        tool_version = adapter.tool_version()
-        ctx = {**dict(execution_context or {}),
-               "commit_sha": fetched.commit_sha, "branch": fetched.branch}
-        if capability.credential_id is not None:
-            ctx["credential_id"] = capability.credential_id
-        fingerprint = execution_fingerprint(
-            engagement_id=engagement_id, tool=adapter.TOOL, tool_version=tool_version,
-            normalized_target=target, normalized_params=plan.as_params(),
-            execution_context=fingerprint_context(ctx, NO_EGRESS_ALLOWLIST),
-            ruleset_version=rules_version,
+        started = _begin(
+            engagement_id, proposal_id,
+            lambda conn: _code_scan_start(
+                conn, engagement_id=engagement_id, proposal_id=proposal_id,
+                capability=capability, target=target, actor=actor,
+                execution_context=execution_context, fresh_for_seconds=fresh_for_seconds,
+                ruleset_path=ruleset_path, fetched_out=fetched_out,
+            ),
         )
-
-        cached = find_cached_run(conn, fingerprint)
-        if cached is not None:
-            _set_state(conn, proposal_id, SUCCEEDED)
-            return DispatchOutcome(False, cached["run_id"], SUCCEEDED, reason="dedup_hit")
-
-        if not claim_for_dispatch(conn, proposal_id):
-            state = conn.execute(
-                text("SELECT dispatch_state FROM action_proposals WHERE proposal_id = :p"),
-                {"p": proposal_id},
-            ).scalar_one_or_none()
-            return DispatchOutcome(False, None, state or QUEUED, reason="not_claimable")
-
-        run_id = f"RUN-{uuid.uuid4().hex[:12]}"
-
-        conn.execute(
-            text("""
-                INSERT INTO tool_runs (run_id, engagement_id, proposal_id, capability_id,
-                    tool, tool_version, ruleset_version, normalized_target, normalized_params,
-                    execution_context, execution_fingerprint, status, network_allowlist,
-                    started_at)
-                VALUES (:run, :eng, :pid, :cap, :tool, :tver, :rver, :target,
-                        CAST(:params AS jsonb), CAST(:ctx AS jsonb), :fp, :status,
-                        :allowlist, now())
-            """),
-            {
-                "run": run_id, "eng": engagement_id, "pid": proposal_id,
-                "cap": capability.capability_id, "tool": adapter.TOOL, "tver": tool_version,
-                "rver": rules_version, "target": target, "params": _json(plan.as_params()),
-                "ctx": _json(ctx), "fp": fingerprint,
-                "status": RUNNING, "allowlist": list(NO_EGRESS_ALLOWLIST),
-            },
-        )
-        _set_state(conn, proposal_id, RUNNING)
-        record_audit(
-            engagement_id=engagement_id, actor=actor, event_type="tool_run.started",
-            subject_type="tool_run", subject_id=run_id,
-            payload={"tool": adapter.TOOL, "target": target, "command": list(plan.command),
-                     "commit_sha": fetched.commit_sha,
-                     "capability_id": capability.capability_id},
-        )
+        if isinstance(started, DispatchOutcome):
+            return started
+        fetched = fetched_out[0]
+        adapter = started.adapter
+        plan = started.plan
 
         sandbox = sandbox or DockerSandbox(image=adapter.IMAGE)
-        try:
-            result = sandbox.run(
+        ran = _execute(
+            lambda: sandbox.run(
                 command=plan.command, network_allowlist=NO_EGRESS_ALLOWLIST,
-                max_duration_seconds=plan.max_duration_seconds, run_id=run_id,
+                max_duration_seconds=plan.max_duration_seconds, run_id=started.run_id,
                 tmpfs=adapter.TMPFS,
                 source_mounts={
                     fetched.local_path: adapter.CONTAINER_REPO_PATH,
                     (ruleset_path or adapter.DEFAULT_RULESET_HOST_PATH):
                         adapter.CONTAINER_RULESET_PATH,
                 },
-            )
-        except SandboxUnavailable as exc:
-            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
-            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
-            record_audit(
-                engagement_id=engagement_id, actor=actor,
-                event_type="tool_run.unknown_outcome", subject_type="tool_run",
-                subject_id=run_id, reasons=("sandbox_unavailable",),
-                payload={"error": str(exc)},
-            )
-            return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
-
-        raw = (
-            f"$ {' '.join(plan.command)}\n"
-            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n"
-        ).encode()
-        prefix = EVIDENCE_PREFIX.get(adapter.TOOL, "TOOL")
-        evidence_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
-        record_evidence(
-            conn, engagement_id=engagement_id, evidence_id=evidence_id, run_id=run_id,
-            evidence_type="tool_output", raw=raw,
-            derived_view=adapter.derive_view(
-                result.stdout, result.stderr, repo_local_path=fetched.local_path,
+                engagement_id=engagement_id,
+                # No segment at all (D59). The allowlist above is the fingerprint's
+                # and the audit trail's record that this run had no egress; the
+                # container itself joins no network, so there is nothing for
+                # another engagement's scan to share with it.
+                no_network=True,
             ),
-            tool=adapter.TOOL, tool_version=tool_version, ruleset_version=rules_version,
+            engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+            run_id=started.run_id,
         )
+        if isinstance(ran, DispatchOutcome):
+            return ran
 
-        # A tool may declare that its exit code cannot tell "found nothing"
-        # from "could not read the input" (Gitleaks, D55: an unreadable
-        # repository is reported as "no leaks found", exit 0). Such a run is
-        # FAILED, not SUCCEEDED -- so it is not a clean bill of health in the
-        # evidence and, because only SUCCEEDED runs are ever served from the
-        # dedup cache, not a "already scanned" for the next proposal either.
+        # A tool may declare that its exit code cannot tell "found nothing" from "could not read
+        # the input" (Gitleaks, D55: an unreadable repository is reported as "no leaks found",
+        # exit 0). Such a run is FAILED, not SUCCEEDED.
         incomplete_reason = None
         completeness = getattr(adapter, "scan_incomplete_reason", None)
-        if result.succeeded and completeness is not None:
-            incomplete_reason = completeness(result.stdout, result.stderr)
-        status = SUCCEEDED if result.succeeded and incomplete_reason is None else FAILED
-        _finish_run(
-            conn, run_id, status, exit_code=result.exit_code,
-            fresh_for_seconds=fresh_for_seconds if status == SUCCEEDED else None,
+        if ran.succeeded and completeness is not None:
+            incomplete_reason = completeness(ran.stdout, ran.stderr)
+        return _record_scan_result(
+            engagement_id=engagement_id, proposal_id=proposal_id, actor=actor,
+            started=started, result=ran, incomplete_reason=incomplete_reason,
+            view_fn=lambda out, err: adapter.derive_view(
+                out, err, repo_local_path=fetched.local_path,
+            ),
         )
-        _set_state(conn, proposal_id, status)
-        audit_payload = {**result.as_dict(), "evidence_id": evidence_id}
-        if incomplete_reason is not None:
-            audit_payload["scan_incomplete_reason"] = incomplete_reason
-        record_audit(
-            engagement_id=engagement_id, actor=actor,
-            event_type=f"tool_run.{status}", subject_type="tool_run", subject_id=run_id,
-            decision="ALLOW" if status == SUCCEEDED else None,
-            payload=audit_payload,
-        )
-        return DispatchOutcome(True, run_id, status, evidence_id=evidence_id, result=result)
     finally:
-        # Always -- a dedup hit, a lost claim race, a sandbox failure and a
-        # completed run all leave a fetched checkout on disk that nobody
-        # else will clean up (git_fetch.fetch_repo's own docstring: the
-        # caller owns cleanup).
-        cleanup_repo(fetched.local_path)
+        for fetched in fetched_out:
+            cleanup_repo(fetched.local_path)
 
 
 def _finish_run(
@@ -1160,6 +1490,10 @@ def reconcile_stale_dispatches(
                  "AND status = ANY(:inflight)"),
             {"pid": proposal_id, "unknown": UNKNOWN_OUTCOME, "inflight": list(IN_FLIGHT)},
         )
+        # The stage follows the state it describes (D60): an interrupted run's outcome is now
+        # recorded -- as unknown -- and the proposal is no longer "dispatching".
+        stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
+                       new=stages.RECORDED, detail=UNKNOWN_OUTCOME)
         record_audit(
             engagement_id=engagement_id, actor=actor,
             event_type="dispatch.unknown_outcome", subject_type="action_proposal",

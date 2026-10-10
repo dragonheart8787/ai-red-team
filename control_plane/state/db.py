@@ -26,6 +26,9 @@ _GLOBAL_AUDITOR_ENGINE: Engine | None = None
 _UI_READER_ENGINE: Engine | None = None
 _CREDENTIAL_ADMIN_ENGINE: Engine | None = None
 _GLOBAL_POLICY_ADMIN_ENGINE: Engine | None = None
+_SCHEDULER_READER_ENGINE: Engine | None = None
+_SCHEDULER_ADMIN_ENGINE: Engine | None = None
+_SCHEDULER_STATE_WRITER_ENGINE: Engine | None = None
 
 
 def database_url() -> str:
@@ -92,6 +95,33 @@ def global_policy_admin_url() -> str:
     )
 
 
+def scheduler_reader_url() -> str:
+    """The scheduler's read connection string (D62): ``scheduler_reader``, decision inputs only."""
+    return require_env(
+        "SCHEDULER_READER_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export SCHEDULER_READER_DATABASE_URL "
+             "for the scheduler_reader role.",
+    )
+
+
+def scheduler_admin_url() -> str:
+    """The enrollment writer's connection string (D62). Read only by the operator CLI."""
+    return require_env(
+        "SCHEDULER_ADMIN_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export SCHEDULER_ADMIN_DATABASE_URL "
+             "for the scheduler_admin role.",
+    )
+
+
+def scheduler_state_writer_url() -> str:
+    """The scheduler's state writer connection string (D62). Writes ``scheduler_state`` only."""
+    return require_env(
+        "SCHEDULER_STATE_WRITER_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export SCHEDULER_STATE_WRITER_DATABASE_URL "
+             "for the scheduler_state_writer role.",
+    )
+
+
 def get_engine() -> Engine:
     global _ENGINE
     if _ENGINE is None:
@@ -150,6 +180,36 @@ def get_global_policy_admin_engine() -> Engine:
     return _GLOBAL_POLICY_ADMIN_ENGINE
 
 
+def get_scheduler_reader_engine() -> Engine:
+    """Pool for ``scheduler_reader`` (D62): the scheduling decision's inputs, SELECT only."""
+    global _SCHEDULER_READER_ENGINE
+    if _SCHEDULER_READER_ENGINE is None:
+        _SCHEDULER_READER_ENGINE = create_engine(
+            scheduler_reader_url(), pool_pre_ping=True, future=True
+        )
+    return _SCHEDULER_READER_ENGINE
+
+
+def get_scheduler_admin_engine() -> Engine:
+    """Engine for the enrollment writer (D62). Operator CLI only."""
+    global _SCHEDULER_ADMIN_ENGINE
+    if _SCHEDULER_ADMIN_ENGINE is None:
+        _SCHEDULER_ADMIN_ENGINE = create_engine(
+            scheduler_admin_url(), pool_pre_ping=True, future=True
+        )
+    return _SCHEDULER_ADMIN_ENGINE
+
+
+def get_scheduler_state_writer_engine() -> Engine:
+    """Pool for ``scheduler_state_writer`` (D62): ``scheduler_state`` and nothing else."""
+    global _SCHEDULER_STATE_WRITER_ENGINE
+    if _SCHEDULER_STATE_WRITER_ENGINE is None:
+        _SCHEDULER_STATE_WRITER_ENGINE = create_engine(
+            scheduler_state_writer_url(), pool_pre_ping=True, future=True
+        )
+    return _SCHEDULER_STATE_WRITER_ENGINE
+
+
 def get_credential_admin_engine() -> Engine:
     """A fifth pool, for the one role allowed to write credential material (D44).
 
@@ -169,9 +229,11 @@ def reset_engine() -> None:
     """Drop the cached engines (tests switch roles between connections)."""
     global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE, _UI_READER_ENGINE
     global _CREDENTIAL_ADMIN_ENGINE, _GLOBAL_POLICY_ADMIN_ENGINE
+    global _SCHEDULER_READER_ENGINE, _SCHEDULER_ADMIN_ENGINE, _SCHEDULER_STATE_WRITER_ENGINE
     for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE,
                    _UI_READER_ENGINE, _CREDENTIAL_ADMIN_ENGINE,
-                   _GLOBAL_POLICY_ADMIN_ENGINE):
+                   _GLOBAL_POLICY_ADMIN_ENGINE, _SCHEDULER_READER_ENGINE,
+                   _SCHEDULER_ADMIN_ENGINE, _SCHEDULER_STATE_WRITER_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
@@ -180,6 +242,9 @@ def reset_engine() -> None:
     _UI_READER_ENGINE = None
     _CREDENTIAL_ADMIN_ENGINE = None
     _GLOBAL_POLICY_ADMIN_ENGINE = None
+    _SCHEDULER_READER_ENGINE = None
+    _SCHEDULER_ADMIN_ENGINE = None
+    _SCHEDULER_STATE_WRITER_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
@@ -187,6 +252,9 @@ GLOBAL_AUDITOR_ROLE = "global_auditor"
 UI_READER_ROLE = "ui_reader"
 CREDENTIAL_ADMIN_ROLE = "credential_admin"
 GLOBAL_POLICY_ADMIN_ROLE = "global_policy_admin"
+SCHEDULER_READER_ROLE = "scheduler_reader"
+SCHEDULER_ADMIN_ROLE = "scheduler_admin"
+SCHEDULER_STATE_WRITER_ROLE = "scheduler_state_writer"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -233,6 +301,17 @@ def assert_global_policy_admin(conn: Connection) -> None:
             f"publishing or retiring a global policy layer requires the "
             f"{GLOBAL_POLICY_ADMIN_ROLE} connection (5.37); this connection is {role!r}. "
             "It is an operator's action: use scripts/manage_global_policy.py."
+        )
+
+
+def assert_scheduler_admin(conn: Connection) -> None:
+    """Refuse an enrollment write on a connection that is not scheduler_admin (D62)."""
+    role = conn.execute(text("SELECT current_user")).scalar_one()
+    if role != SCHEDULER_ADMIN_ROLE:
+        raise PermissionError(
+            f"changing the scheduler's enrollment requires the {SCHEDULER_ADMIN_ROLE} "
+            f"connection (D62); this connection is {role!r}. It is an operator's action: "
+            "use scripts/manage_scheduler_enrollment.py."
         )
 
 
@@ -383,3 +462,60 @@ def global_policy_admin_scope() -> Iterator[Connection]:
     """
     with get_global_policy_admin_engine().begin() as conn:
         yield conn
+
+
+@contextmanager
+def scheduler_reader_scope(engagement_id: str) -> Iterator[Connection]:
+    """A read transaction bound to one engagement, as ``scheduler_reader`` (D62).
+
+    The scheduling decision's only window onto an engagement: the columns and the view the role was
+    granted, filtered by the same ``engagement_isolation`` policy as every other role. It cannot
+    write, and it holds no grant on the content tables, so code that is handed this connection
+    cannot read what it must not decide on.
+    """
+    with _scoped(get_scheduler_reader_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def scheduler_reader_enrollment_scope() -> Iterator[Connection]:
+    """The enrollment list, as ``scheduler_reader``, no engagement bound (D62).
+
+    ``scheduler_enrollment`` is global by design -- the reader has to list ids to know which
+    engagement to open -- and is the only thing readable without one. Every engagement table still
+    returns nothing on this connection.
+    """
+    with get_scheduler_reader_engine().begin() as conn:
+        yield conn
+
+
+@contextmanager
+def scheduler_state_writer_scope(engagement_id: str) -> Iterator[Connection]:
+    """A write transaction on ``scheduler_state`` for one engagement (D62); nothing else."""
+    with _scoped(get_scheduler_state_writer_engine(), engagement_id) as conn:
+        yield conn
+
+
+@contextmanager
+def scheduler_admin_scope() -> Iterator[Connection]:
+    """The enrollment writer's transaction (D62). The operator CLI only; a test scans for that."""
+    with get_scheduler_admin_engine().begin() as conn:
+        yield conn
+
+
+def open_scheduler_lock_connection() -> Connection:
+    """One dedicated, unpooled, autocommit connection for the singleton lock (D62, D58-2).
+
+    Its own engine and no pool: the advisory lock belongs to *this* session, so the session must
+    not be shared, recycled or pre-pinged away. TCP keepalives make a vanished server noticed in
+    seconds. The caller owns it and closes it.
+    """
+    from sqlalchemy.pool import NullPool
+
+    engine = create_engine(
+        scheduler_reader_url(), poolclass=NullPool, future=True,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2,
+                      "keepalives_count": 3},
+    )
+    return engine.connect()

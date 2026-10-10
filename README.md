@@ -53,12 +53,20 @@ proxy, multi-provider routing, Web Agent, Playwright, approval UI.
 | `migration_owner` | alembic | owns every table; runs DDL |
 | `cyberorch_app` | everything at runtime | read/write state; **read-only** on both registries |
 | `registry_admin` | Engagement Manager only | `cyberorch_app` plus writes to `scope_registry` and `metadata_registry` |
+| `global_auditor` | audit queries | reads `scope = 'global'` audit rows, nothing else |
+| `ui_reader` | the web console | `SELECT` only (D29) |
+| `credential_admin` | the credential vault | `credential_material` and `credentials`, nothing else |
+| `global_policy_admin` | `scripts/manage_global_policy.py` (an operator) | the only writer of global policy layers (5.37) |
+| `scheduler_reader` | the scheduler's decision side | three `engagements` columns, a closed-vocabulary view of proposals, the enrollment list and its own state; no content, no audit log (D62) |
+| `scheduler_admin` | `scripts/manage_scheduler_enrollment.py` (an operator) | writes the enrollment list, reads nothing else (D62) |
+| `scheduler_state_writer` | the scheduler | writes its closed-vocabulary state table, nothing else (D62) |
 
-None of the three is a superuser and none carries `BYPASSRLS`, so RLS applies
+None of them is a superuser and none carries `BYPASSRLS`, so RLS applies
 to all of them. `registry_admin` is a writer, not an administrator: it is
 confined to one engagement exactly like `cyberorch_app`, and holds no `DELETE`
 anywhere — registry rows are retired with `active = FALSE` so the audit trail
-keeps something to point at.
+keeps something to point at. (`db/roles.sql` is the authority for the list;
+the table above was three rows long until the D63 audit.)
 
 The split exists because §5 calls the two registries the highest value attack
 surface in the system: whoever can write them can authorize themselves, or

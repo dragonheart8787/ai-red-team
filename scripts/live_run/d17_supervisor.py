@@ -643,7 +643,7 @@ def close_everything(engagement_id: str, *, lab_scope: str, sandbox, reviewer
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=reviewer, policy=policy, agent_id="d17-closing-worker",
             sandbox=sandbox, network_allowlist=[ALLOWLIST],
             budget=Budget(max_duration_seconds=30, max_targets=256),

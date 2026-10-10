@@ -231,9 +231,9 @@ def post_approve(
         "approval_id": outcome.approval_id,
         "proposal_id": outcome.proposal_id,
         "approved_scope": outcome.approved_scope,
-        "issued": outcome.issued,
-        "capability_id": outcome.capability_id,
-        "reasons": list(outcome.reasons),
+        # D61: approval records the fact and nothing else. The proposal is now awaiting
+        # dispatch; the capability is issued when the tool is dispatched, not here.
+        "stage": outcome.stage,
     }
 
 

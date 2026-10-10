@@ -116,7 +116,8 @@ class _RecordingDockerSandbox:
         _RecordingDockerSandbox.instances.append(self)
 
     def run(self, *, command, network_allowlist, max_duration_seconds, run_id=None,
-            stdin=None, ca_cert_pem=None, tmpfs=None, source_mounts=None):
+            stdin=None, ca_cert_pem=None, tmpfs=None, source_mounts=None,
+            engagement_id=None, no_network=False):
         self.runs.append({
             "command": list(command), "network_allowlist": list(network_allowlist),
             "source_mounts": dict(source_mounts or {}),
@@ -210,7 +211,7 @@ def test_ad_collect_runs_end_to_end_through_propose_action(engagement_id, monkey
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
             actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
             budget=Budget(max_duration_seconds=90), credential_id=credential_id,
@@ -302,7 +303,7 @@ def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
             actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
             budget=Budget(max_duration_seconds=90),
@@ -372,13 +373,12 @@ def test_dns_server_reaches_the_real_command_through_propose_action(
         scope_object_id, credential_username="svc-account", dns_server=DNS_SERVER,
     )
 
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
-            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
-            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+        actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+        budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+    )
 
     assert outcome.decision == "ALLOW", outcome.deny_reasons
     assert outcome.run_id is not None
@@ -405,13 +405,12 @@ def test_a_dns_server_outside_the_allowlist_is_refused_through_propose_action(
         scope_object_id, credential_username="svc-account", dns_server="203.0.113.5",
     )
 
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
-            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
-            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+        actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+        budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+    )
 
     assert outcome.decision == "ALLOW", outcome.deny_reasons  # OPA allowed; dispatch refused
     assert outcome.run_id is None
@@ -434,13 +433,12 @@ def test_the_credentials_identity_is_used_when_the_proposal_states_none(
     credential_id = _store_credential(engagement_id)  # bound to "svc-account"/password
     proposal = _proposal(scope_object_id, credential_username=None)
 
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
-            actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
-            budget=Budget(max_duration_seconds=90), credential_id=credential_id,
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+        actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
+        budget=Budget(max_duration_seconds=90), credential_id=credential_id,
+    )
 
     assert outcome.decision == "ALLOW", outcome.deny_reasons
     assert outcome.run_id is not None
@@ -468,7 +466,7 @@ def test_a_proposal_stating_a_different_identity_than_the_credential_is_refused(
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
             actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
             budget=Budget(max_duration_seconds=90), credential_id=credential_id,
@@ -507,7 +505,7 @@ def test_a_legacy_credential_with_no_bound_identity_is_refused_through_propose_a
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
             actor=ACTOR, sandbox=None, network_allowlist=["10.0.0.0/8"],
             budget=Budget(max_duration_seconds=90), credential_id=credential_id,

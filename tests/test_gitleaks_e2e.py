@@ -35,7 +35,7 @@ from control_plane.policy.layers import publish_policy_layer
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
-from control_plane.state.db import engagement_scope, registry_admin_scope
+from control_plane.state.db import registry_admin_scope
 from tests.gitleaks_support import (
     CANARY,
     HistoryRepo,
@@ -43,6 +43,10 @@ from tests.gitleaks_support import (
     real_sandbox,
     suppression_repo,
 )
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import gitleaks
 
 ACTOR = "test-harness"
@@ -101,13 +105,12 @@ def _propose(engagement_id, sandbox, repo_value, scope_object_id, **target_extra
         resources=("source_code",), expected_data=("finding",),
         reason="D55 permanent propose_action regression test",
     )
-    with engagement_scope(engagement_id) as conn:
-        return propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
-            actor=ACTOR, sandbox=sandbox, network_allowlist=["10.0.0.0/8"],
-            budget=Budget(max_duration_seconds=90),
-        )
+    return propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",
+        actor=ACTOR, sandbox=sandbox, network_allowlist=["10.0.0.0/8"],
+        budget=Budget(max_duration_seconds=90),
+    )
 
 
 def _run_row(engagement_id, run_id):

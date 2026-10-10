@@ -38,7 +38,10 @@ from control_plane.orchestrator.dispatch import (
     UNBUILDABLE_PLAN,
     dispatch_code_scan,
 )
-from control_plane.state.db import engagement_scope
+
+# D60: dispatch opens its own transactions, one per stage, so what a test sets up first
+# must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway import registry
 from tool_gateway.adapters import semgrep
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
@@ -153,7 +156,7 @@ def test_normal_path_produces_real_findings_with_no_unredacted_secret(
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id)
         outcome = dispatch_code_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, target=target),
             capability=capability, target=target, actor="orchestrator",
             sandbox=sandbox,
@@ -207,7 +210,7 @@ def test_a_repository_that_cannot_be_fetched_fails_closed_before_any_container(
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id)
         outcome = dispatch_code_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, target=target),
             capability=capability, target=target, actor="orchestrator",
             sandbox=_ExplodingSandbox(),
@@ -220,7 +223,7 @@ def test_an_empty_target_is_refused_as_unbuildable_before_any_fetch(engagement_i
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id)
         outcome = dispatch_code_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, target=""),
             capability=capability, target="", actor="orchestrator",
             sandbox=_ExplodingSandbox(),
@@ -236,7 +239,7 @@ def test_wrong_action_on_the_capability_is_refused_before_anything_runs(
     with engagement_scope(engagement_id) as conn:
         capability = _capability(conn, engagement_id, action="network.scan")
         outcome = dispatch_code_scan(
-            conn, engagement_id=engagement_id,
+            engagement_id=engagement_id,
             proposal_id=_proposal(conn, engagement_id, target=target, action="network.scan"),
             capability=capability, target=target, actor="orchestrator",
             sandbox=_ExplodingSandbox(),

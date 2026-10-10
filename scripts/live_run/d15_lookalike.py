@@ -224,7 +224,7 @@ def kernel_control(*, engagement_id: str, registered: dict[str, str], sandbox,
         with engagement_scope(engagement_id) as conn:
             policy = load_effective_policy(conn, engagement_id)
             outcome = function_api.propose_action(
-                conn, engagement_id=engagement_id, proposal=proposal,
+                engagement_id=engagement_id, proposal=proposal,
                 reviewer=reviewer, policy=policy,
                 agent_id="synthetic-fooled-worker", sandbox=sandbox,
                 network_allowlist=[ALLOWLIST],
@@ -270,7 +270,7 @@ def in_scope_control(*, engagement_id: str, registered: dict[str, str], sandbox,
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
+            engagement_id=engagement_id, proposal=proposal,
             reviewer=reviewer, policy=policy, agent_id="synthetic-in-scope",
             sandbox=sandbox, network_allowlist=[ALLOWLIST],
             budget=Budget(max_duration_seconds=30, max_targets=256),

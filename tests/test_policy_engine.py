@@ -25,7 +25,10 @@ from control_plane.capability.broker import Budget
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import ALLOW, DENY, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import list_scope_objects
-from control_plane.state.db import engagement_scope
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tests.scenarios.conftest import RecordingBroker
 
 
@@ -294,7 +297,7 @@ def test_the_budget_deny_happens_before_a_capability_exists(
 
     with engagement_scope(eid) as conn:
         outcome = function_api.propose_action(
-            conn, engagement_id=eid, proposal=proposal,
+            engagement_id=eid, proposal=proposal,
             reviewer=HonestFakeReviewer(risk_hint="low"),
             policy=_policy({"network.scan": ALLOW}), agent_id="fake-worker",
             sandbox=_ExplodingSandbox(),

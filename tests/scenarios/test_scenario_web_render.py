@@ -35,8 +35,11 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import propose_action
 from control_plane.capability.broker import Budget
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-from control_plane.state.db import engagement_scope
 from control_plane.tls.engagement_ca import generate_ca, leaf_spki_pin, sign_leaf
+
+# D60: propose_action opens its own transactions, one per stage, so what a test sets up
+# first must be committed -- as it is in production. See tests/helpers.committing_scope.
+from tests.helpers import committing_scope as engagement_scope
 from tool_gateway.adapters import browser
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -94,9 +97,9 @@ def browser_sandbox():
 
 
 @pytest.fixture(scope="module")
-def render_topology(browser_sandbox):
-    """A target serving JS pages, and a proxy terminating TLS for it with a
-    per-engagement leaf the browser will pin."""
+def render_target(browser_sandbox):
+    """A target serving JS pages, and the per-engagement CA/leaf the browser pins.
+    Module-scoped: the target and its networks do not belong to any one test."""
     ca = generate_ca("ENG-D37")
     leaf = sign_leaf(ca, TARGET_IP)
     spki = leaf_spki_pin(leaf.leaf_cert_pem)
@@ -104,7 +107,6 @@ def render_topology(browser_sandbox):
     name = f"cyberorch-d37-target-{uuid.uuid4().hex[:8]}"
     target_network = browser_sandbox.ensure_network([TARGET_CIDR])
     browser_sandbox.ensure_network([TOOL_CIDR])
-    endpoint = None
     try:
         started = subprocess.run(
             ["docker", "run", "-d", "--name", name, "--network", target_network.name,
@@ -114,24 +116,39 @@ def render_topology(browser_sandbox):
             pytest.fail(f"could not start the web target: {started.stderr}",
                         pytrace=False)
         _wait_until_serving(name)
-
-        endpoint = browser_sandbox.start_egress_proxy(
-            grant={"capability_id": "CAP-D37", "host": TARGET_IP,
-                   "port": TARGET_HTTPS_PORT, "methods": ["GET"],
-                   # Generous, so the runner's per-navigation ceiling is what
-                   # aborts the fan-out test, cleanly attributed to the browser
-                   # budget rather than the proxy backstop.
-                   "max_requests": 100},
-            tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
-            leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
-        )
-        yield {"proxy": endpoint, "ca_cert_pem": ca.cert_pem, "spki": spki}
+        yield {"ca": ca, "leaf": leaf, "ca_cert_pem": ca.cert_pem, "spki": spki}
     finally:
-        if endpoint is not None:
-            browser_sandbox.stop_egress_proxy(endpoint)
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         browser_sandbox.remove_network([TARGET_CIDR])
         browser_sandbox.remove_network([TOOL_CIDR])
+
+
+@pytest.fixture
+def render_topology(browser_sandbox, render_target, engagement_id):
+    """The target above plus a proxy *for this test's engagement* (D59).
+
+    The proxy carries one capability's grant and now belongs to one engagement: it
+    is started with that engagement's id, and the dispatch that uses it passes the
+    same id, so the sandbox sees one tenant on the network. It used to be a
+    module-wide pool shared by every test's engagement, which is the shape the
+    network-isolation rule exists to refuse."""
+    leaf = render_target["leaf"]
+    endpoint = browser_sandbox.start_egress_proxy(
+        grant={"capability_id": "CAP-D37", "host": TARGET_IP,
+               "port": TARGET_HTTPS_PORT, "methods": ["GET"],
+               # Generous, so the runner's per-navigation ceiling is what
+               # aborts the fan-out test, cleanly attributed to the browser
+               # budget rather than the proxy backstop.
+               "max_requests": 100},
+        tool_side=[TOOL_CIDR], target_side=[TARGET_CIDR],
+        leaf_cert_pem=leaf.leaf_cert_pem, leaf_key_pem=leaf.leaf_key_pem,
+        engagement_id=engagement_id,
+    )
+    try:
+        yield {"proxy": endpoint, "ca_cert_pem": render_target["ca_cert_pem"],
+               "spki": render_target["spki"]}
+    finally:
+        browser_sandbox.stop_egress_proxy(endpoint)
 
 
 def _authorize(registry, engagement_id):
@@ -156,7 +173,7 @@ def _render(conn, engagement_id, scope_id, topology, *, path, budget):
         writes_data=False, changes_state=False,
     )
     return propose_action(
-        conn, engagement_id=engagement_id, proposal=proposal,
+        engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
         agent_id="worker-1", sandbox=DockerSandbox(image=browser.IMAGE),
         network_allowlist=[TOOL_CIDR],

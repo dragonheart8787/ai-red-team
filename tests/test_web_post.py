@@ -82,7 +82,6 @@ def _propose(
     from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
     from control_plane.api.function_api import propose_action
     from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-    from control_plane.state.db import engagement_scope
 
     scope_id = f"SCOPE-{uuid.uuid4().hex[:10]}"
     registry.scope(scope_object_id=scope_id, type="cidr", value=ALLOWED_CIDR,
@@ -109,12 +108,11 @@ def _propose(
         discovery={"source": "explicit_scope"},
         writes_data=writes_data, changes_state=changes_state,
     )
-    with engagement_scope(engagement_id) as conn:
-        return propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
-            sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
-        )
+    return propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
+        sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +504,6 @@ def test_web_post_needs_a_known_classification_like_every_content_touching_actio
     from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
     from control_plane.api.function_api import propose_action
     from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
-    from control_plane.state.db import engagement_scope
     from tool_gateway.sandbox import SandboxUnavailable
 
     scope_id = f"SCOPE-{engagement_id[-10:]}"
@@ -533,12 +530,11 @@ def test_web_post_needs_a_known_classification_like_every_content_touching_actio
         def run(self, **kwargs):
             raise SandboxUnavailable("dispatch is not what this test measures")
 
-    with engagement_scope(engagement_id) as conn:
-        outcome = propose_action(
-            conn, engagement_id=engagement_id, proposal=proposal,
-            reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
-            sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
-        )
+    outcome = propose_action(
+        engagement_id=engagement_id, proposal=proposal,
+        reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
+        sandbox=_NoSandbox(), network_allowlist=[ALLOWED_CIDR],
+    )
 
     assert outcome.decision == "HUMAN_APPROVAL"
     assert "unknown_classification_for_action_class" in outcome.approval_reasons
