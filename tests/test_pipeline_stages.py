@@ -177,6 +177,11 @@ def assert_coherent(snap: dict) -> None:
                 "an approved proposal has a capability before anything dispatched it")
         if stage == stages.DISPATCHING:
             assert p["dispatch_state"] == "running", p
+        if stage == stages.RECORDED:
+            # The stage's detail and the dispatch state are one fact written twice; two writers
+            # that disagree (ACCEPTANCE 5.74: `recorded / unknown_outcome` beside a succeeded run)
+            # are what this catches.
+            assert p["detail"] == p["dispatch_state"], f"recorded, but two stories: {p}"
     if snap["capabilities"]:
         assert snap["proposals"], "a capability with no proposal"
         for pid in snap["with_capability"]:

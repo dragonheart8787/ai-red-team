@@ -29,6 +29,10 @@ between them.
                          about to start, or is running. This is the stage a crash leaves behind;
                          the existing ``reconcile_stale_dispatches`` finds it.
 * ``recorded``           the run's outcome (succeeded, failed or ``unknown_outcome``) is committed.
+                         ``recorded / unknown_outcome`` is the one non-final ``recorded``: the
+                         reconciler declared a run unknown, and a result that arrives afterwards
+                         replaces it in the dispatch's record transaction (``run.late_result``,
+                         ACCEPTANCE 5.74).
 * ``closed``             finished without a run: refused at the decision, the capability was
                          refused, the dispatch refused before a run row existed, or a dedup hit.
                          ``stage_detail`` says which.

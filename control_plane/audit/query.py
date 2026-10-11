@@ -63,6 +63,7 @@ STAGE_OF_EVENT = {
     "security_graph.recorded": "execution",
     "security_graph.record_failed": "execution",
     "dispatch.unknown_outcome": "execution",
+    "run.late_result": "execution",
     "engagement.paused": "engagement",
     "engagement.resumed": "engagement",
     "engagement.completed": "engagement",
