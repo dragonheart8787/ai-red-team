@@ -66,6 +66,18 @@ NET_ADMIN could add the missing route itself, which would make the boundary
 advisory. The sandbox is what the design calls the last physical boundary,
 and it has to hold even when the three layers above it have been bypassed.
 
+**A deadline inside the container (D65-A).** The budget (``max_duration_seconds``) is enforced
+from here: ``wait(timeout)`` and then ``kill()``. A control plane that dies in between leaves the
+container running -- one given a 5 s budget was still running 21 s after its parent was
+``kill -9``'d. So every tool container's command is wrapped in ``cyberorch-deadline``
+(``tool_gateway/deadline/``), a small static program that runs as PID 1, starts the tool, and ends
+the container with exit 124 ten seconds after the budget if nothing else has. It is bind-mounted
+read-only, its sha256 is checked against the committed ``SHA256SUMS`` before **every** run, and a
+missing or altered helper stops the run before a container exists
+(:class:`DeadlineHelperUnavailable`, a :class:`NotStarted`). Running without it is spelled
+``deadline_helper=None`` by the caller; there is no default that does. See
+``tool_gateway/deadline_helper.py`` and ``docs/D65A_CONTAINER_DEADLINE_DESIGN.md``.
+
 DEFERRED — enforcement against a non-Docker network
 ---------------------------------------------------
 The allowlisted CIDR is realized as a Docker-managed bridge subnet, so targets
@@ -113,7 +125,10 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+
+from tool_gateway import deadline_helper as dh
 
 try:  # pragma: no cover - import guard
     import docker
@@ -269,11 +284,48 @@ class NetworkRangeConflict(NetworkNotAvailable):
     reason = "network_range_conflicts_with_another_network"
 
 
+class DeadlineHelperUnavailable(NotStarted):
+    """The in-container deadline helper cannot be used, so no container was created (D65-A).
+
+    Missing, unreadable, not executable, not the pinned bytes, no pin for this architecture, or its
+    in-container path already taken. ``reason`` is the stable code (``deadline_helper_*``). Nothing
+    runs without a deadline: the alternative to this error is a tool that can outlive the control
+    plane, which is the exposure the helper exists to close.
+    """
+
+    reason = "deadline_helper_unavailable"
+
+    def __init__(self, message: str, reason: str | None = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
+
+
+class ToolNotExecutable(ContainerStartRefused):
+    """The helper started and then could not execute the tool's command: the tool never ran.
+
+    Without the helper this was Docker refusing ``start()`` for a command that does not exist
+    (:class:`ContainerStartRefused`); with it, ``exec`` happens inside the container, so the helper
+    reports it instead -- exit 127 and one line on stderr, nothing else. Only that exact shape
+    counts; a tool that merely exits 127 is a result.
+    """
+
+    reason = "tool_command_not_executable"
+
+
 #: Label every sandbox-created container carries: the engagement it works for
 #: (``NO_OWNER`` when the caller named none -- probes and lab scripts). Two
 #: containers with different owners are never live on one network at once.
 OWNER_LABEL = "cyberorch.owner"
 NO_OWNER = ""
+
+#: Label carrying the container's in-container deadline in seconds, or ``none`` when the caller
+#: opted out. The reconciler reads it (D64) and reports a container without one.
+DEADLINE_LABEL = "cyberorch.deadline"
+
+#: Default for ``run(deadline_helper=...)``: "the helper built from this repository". A sentinel,
+#: not ``None``, so that turning the deadline off is something a caller writes.
+_REPOSITORY_HELPER: Any = object()
 
 #: Container states in which a container can still send or receive.
 _LIVE_STATES = frozenset({"created", "running", "paused", "restarting"})
@@ -385,6 +437,41 @@ def _daemon_errors_are_not_started():
         raise
     except (DockerException, _RequestsConnectionError) as exc:
         raise DaemonUnreachable(f"docker is not reachable: {exc}") from exc
+
+
+def _is_only_the_helpers_refusal(stderr: str) -> bool:
+    """Whether stderr is exactly the helper's one "cannot execute" line and nothing else.
+
+    A tool that exits 127 on its own, or writes anything before or after, is not this: its output is
+    a result. (A tool that forges the line and exits 127 makes its own run read as "not started";
+    that costs the tool its own output and nothing else, and is the price of the helper having no
+    channel to the control plane but exit status and stderr.)
+    """
+    lines = stderr.strip().splitlines()
+    return len(lines) == 1 and lines[0].startswith(dh.NOT_EXECUTABLE_PREFIX)
+
+
+def _docker_time(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def _ran_for_the_deadline(container, deadline_seconds: int | None) -> bool:
+    """Whether Docker's own clock says this container ran at least ``deadline - tolerance``.
+
+    The discriminator for exit 124 (D65-A): the number is also what ``timeout(1)`` uses and what a
+    tool may exit with for its own reasons, but a tool cannot make the container's
+    ``StartedAt``/``FinishedAt`` span longer. Anything that cannot be read is "no": the exit stays a
+    plain 124, which is a failure either way.
+    """
+    if deadline_seconds is None:
+        return False
+    try:
+        container.reload()
+        state = container.attrs["State"]
+        ran = (_docker_time(state["FinishedAt"]) - _docker_time(state["StartedAt"])).total_seconds()
+    except (DockerException, _RequestsConnectionError, KeyError, ValueError, TypeError):
+        return False
+    return ran >= deadline_seconds - dh.TOLERANCE_SECONDS
 
 
 @dataclass
@@ -791,6 +878,32 @@ class DockerSandbox:
             return "no_answer"
         return "reachable"
 
+    @staticmethod
+    def _verified_helper(requested: Any, source_mounts, tmpfs) -> dh.VerifiedHelper | None:
+        """The helper to mount, checked just now -- or None when the caller opted out.
+
+        Raised as :class:`DeadlineHelperUnavailable` before anything exists, so the run is recorded
+        as "not started" and can be retried; never degraded into a run without a deadline.
+        """
+        if requested is None:
+            return None
+        taken = set((source_mounts or {}).values()) | set(tmpfs or {})
+        if dh.CONTAINER_PATH in taken:
+            raise DeadlineHelperUnavailable(
+                f"{dh.CONTAINER_PATH} is already used by another mount of this run",
+                "deadline_helper_path_in_use",
+            )
+        try:
+            return dh.verify(None if requested is _REPOSITORY_HELPER else requested)
+        except dh.HelperProblem as exc:
+            logger.error("deadline helper refused (%s): %s", exc.reason, exc)
+            raise DeadlineHelperUnavailable(str(exc), exc.reason) from exc
+
+    def _image_entrypoint(self, client) -> list[str]:
+        """The image's own ENTRYPOINT (``[]`` for none), which the helper's argv must carry on."""
+        entrypoint = client.images.get(self.image).attrs.get("Config", {}).get("Entrypoint")
+        return [str(part) for part in entrypoint] if entrypoint else []
+
     def ensure_image(self) -> None:
         """Confirm the tool image exists locally.
 
@@ -819,6 +932,7 @@ class DockerSandbox:
         source_mounts: Mapping[str, str] | None = None,
         engagement_id: str | None = None,
         no_network: bool = False,
+        deadline_helper: Any = _REPOSITORY_HELPER,
     ) -> SandboxResult:
         """Execute ``command`` confined to ``network_allowlist``.
 
@@ -874,6 +988,14 @@ class DockerSandbox:
         pinned ruleset file Semgrep is told to run — two control-plane-owned
         inputs the container should not have to fetch or trust from anywhere
         else).
+
+        ``deadline_helper`` (D65-A) is the in-container deadline: left out, it is the helper built
+        from ``tool_gateway/deadline/``, whose sha256 is checked against ``SHA256SUMS`` here,
+        before anything is created, on every call. A path uses that file instead (still checked
+        against the same pin). ``None`` runs the command bare and labels the container
+        ``cyberorch.deadline=none``; nothing in production passes it. The helper becomes the
+        container's entrypoint -- an image's own ENTRYPOINT follows it -- and the run's deadline is
+        the budget plus ``dh.SLACK_SECONDS``, so the control plane's own timeout fires first.
         """
         allowlist = validate_allowlist(network_allowlist)
         run_id = run_id or uuid.uuid4().hex[:12]
@@ -881,10 +1003,13 @@ class DockerSandbox:
         # Everything up to the container's creation is "not started" if it fails (D58-7), whatever
         # shape the failure takes -- including the raw connection error a cached client raises once
         # its daemon has died, which the SDK does not wrap (D58 E6).
+        helper = self._verified_helper(deadline_helper, source_mounts, tmpfs)
         with _daemon_errors_are_not_started():
             self.ensure_image()
             client = self.client()
             network = None if no_network else self.ensure_network(allowlist)
+            image_entrypoint = self._image_entrypoint(client) if helper is not None else []
+        deadline = dh.deadline_for(max_duration_seconds) if helper is not None else None
         container = None
         started = time.monotonic()
         ca_file: str | None = None
@@ -896,12 +1021,19 @@ class DockerSandbox:
             volumes[ca_file] = {"bind": TOOL_CA_PATH, "mode": "ro"}
         for host_path, container_path in (source_mounts or {}).items():
             volumes[host_path] = {"bind": container_path, "mode": "ro"}
+        if helper is not None:
+            volumes[helper.path] = {"bind": dh.CONTAINER_PATH, "mode": "ro"}
 
         try:
             with _daemon_errors_are_not_started():
                 container = client.containers.create(
                     image=self.image,
                     command=list(command),
+                    # The helper first, the image's own entrypoint (if it has one) after it, then
+                    # the command: Docker would have run entrypoint + command; this runs the same
+                    # thing under the deadline. Absent when the caller opted out.
+                    entrypoint=(None if helper is None else
+                                [dh.CONTAINER_PATH, str(deadline), "--", *image_entrypoint]),
                     network="none" if network is None else network.name,
                     volumes=volumes,
                     # Writable tmpfs over a read-only root, for a tool that must
@@ -917,7 +1049,8 @@ class DockerSandbox:
                     read_only=True,
                     mem_limit=self.memory_limit,
                     pids_limit=self.pids_limit,
-                    labels={"cyberorch.run_id": run_id, OWNER_LABEL: owner},
+                    labels={"cyberorch.run_id": run_id, OWNER_LABEL: owner,
+                            DEADLINE_LABEL: "none" if deadline is None else str(deadline)},
                 )
             if network is not None:
                 # Before start: a refused run has executed nothing.
@@ -963,6 +1096,17 @@ class DockerSandbox:
             duration = time.monotonic() - started
             stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
             stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
+
+            if helper is not None and not timed_out:
+                if exit_code == dh.EXIT_NOT_EXECUTABLE and _is_only_the_helpers_refusal(stderr):
+                    raise ToolNotExecutable(
+                        "the tool's command could not be executed; nothing of this run executed"
+                    )
+                if exit_code == dh.EXIT_DEADLINE and _ran_for_the_deadline(container, deadline):
+                    # The helper's deadline, not the tool's own 124: Docker's clock says the
+                    # container ran as long as the deadline. Same result as the control plane's
+                    # own timeout -- a failed run.
+                    timed_out, exit_code = True, -1
 
             return SandboxResult(
                 exit_code=exit_code, stdout=stdout, stderr=stderr,

@@ -902,6 +902,16 @@ extended to the objects it manages.
 
 ## 8. The deadline inside the container (summary; the design is `docs/D65A_CONTAINER_DEADLINE_DESIGN.md`)
 
+**Implemented (D64 implementation step 4, ACCEPTANCE 5.77).** The helper exists, in Rust: `tool_gateway/deadline/`,
+mounted at `/cyberorch-deadline` as the container's *entrypoint* (two of the five images have one of their own, which
+follows it), checked against the committed `SHA256SUMS` before every run, with the label `cyberorch.deadline=<D>` (or
+`none` for an explicit opt-out) on every container `DockerSandbox.run` creates. For the reconciler this means: the
+**label** says what deadline a container was started with and is absent only on containers the sandbox did not create
+for a tool run (the egress proxy has none: D65A-7); an **exited container with code 124 that ran at least `D − 2 s`**
+by Docker's own timestamps is a run whose control plane died and whose helper ended it (§7 of the D65-A document); and
+the container-kill threshold `T_kill` is a backstop, as §8 says below. Nothing in the reconciler reads the label yet —
+that is step 6.
+
 **The problem.** A tool container's duration is enforced from outside, by the control plane's
 `container.wait(timeout)` and `kill()`. If the control plane dies nothing stops the container: a 5 s budget was
 still running 21 s after `kill -9` of its parent `[E: E16-A]`, and Docker has no option for a maximum lifetime

@@ -1,8 +1,9 @@
 # D65-A — A deadline inside the tool container: design checkpoint
 
-**Status: design only.** No code, migration or test is written or changed by this document; the helper prototypes
-used for the experiments live in the session's scratch area. Nothing is built until the decisions in §11 are
-answered.
+**Status: implemented (D64 implementation step 4, ACCEPTANCE 5.77).** The language is Rust, as recommended in §3.1.
+This document keeps the design and its measurements; where the implementation differs from the text below, the
+difference is stated in **§13 Implementation notes** at the end and the passage is corrected in place. The helper
+prototypes used for the experiments live in the session's scratch area, not in the repository.
 
 **How claims are tagged.** `[R]` read in the code at this commit; `[E]` executed here, on this machine, with the
 experiment named in §12; `[D]` taken from an older document (named); `[N]` not verified — knowledge or reasoning
@@ -106,24 +107,43 @@ functions by hand, `extern "C"`, with no dependency at all but more `unsafe`), n
 all thin calls, and a Rust toolchain in CI. **C remains a defensible choice** (53 lines, no dependency, 715 KB)
 with a hash that belongs to a compiler and libc; **Go is no longer recommended.** The choice is yours.
 
-### 3.2 Where it lives, how it is pinned (proposed layout)
+### 3.2 Where it lives, how it is pinned
 
 ```
 tool_gateway/deadline/
-    src/main.rs        the whole program (Rust; for C: main.c, for Go: main.go + go.mod)
-    Cargo.toml, Cargo.lock, rust-toolchain.toml     the toolchain and the one dependency, pinned
-    build.sh           the one build command, with the reproducibility flags; writes bin/cyberorch-deadline-linux-<arch>
-    SHA256SUMS         the expected sha256 of each architecture's binary (committed)
-    README.md          behaviour table of §2, exit codes of §7
-    bin/               the built binaries (git-ignored)
+    src/main.rs               the whole program
+    Cargo.toml, Cargo.lock    one dependency, libc 0.2.190, with its registry checksum
+    vendor/libc/              that dependency's source, in the repository (6.6 MB, 452 files)
+    .cargo/config.toml        crates-io replaced by vendor/; offline
+    rust-toolchain.toml       the compiler version, for a developer using rustup by hand
+    TOOLCHAIN.sha256          sha256 of the five Rust 1.94.1 tarballs the build uses
+    toolchain.sh              downloads exactly those, verifies each BEFORE unpacking, installs under .toolchain/
+    build.sh                  the one build command; --check compares with SHA256SUMS and never rewrites it
+    SHA256SUMS                the expected sha256 of each architecture's binary (committed)
+    README.md                 behaviour table, exit codes, where the binary must live
+    bin/ target/ .toolchain/  git-ignored
+tool_gateway/deadline_helper.py   the control plane's side: locate, verify, constants
 ```
 
-* **Pin:** `SHA256SUMS` is committed. The sandbox compares the file's sha256 with it before every run (§5).
-  A change to `main.rs`, `Cargo.lock` or the Rust version changes the hash, and the commit that does it has to update
-  `SHA256SUMS` — a reviewer sees both together.
-* **CI:** a step builds the helper with the pinned Rust toolchain (`--locked`) and compares with `SHA256SUMS`; a mismatch fails the job.
-  That is also the reproducibility test: if CI cannot reproduce the committed hash, the pin is worth nothing, and
-  the job says so `[N: the first CI run is the real test of cross-machine reproducibility]`.
+* **Pin:** `SHA256SUMS` is committed. The sandbox compares the file's sha256 with it before every run (§5). A change
+  to `main.rs`, `Cargo.lock`, `vendor/`, the build flags or the toolchain changes the hash, and the commit that does
+  it updates `SHA256SUMS` by hand, so a reviewer sees both together.
+* **Toolchain:** `toolchain.sh` installs Rust 1.94.1 (`rustc`, `cargo`, host `rust-std`, and the `rust-std` of the two
+  musl targets) from `static.rust-lang.org` tarballs and refuses any whose sha256 is not the one in
+  `TOOLCHAIN.sha256`; it then checks that `rustc` reports commit `e408947bf`. Each digest was checked against three
+  sources when written (the computed one, the `.sha256` file next to the tarball, `xz_hash` in the release
+  manifest) and they agreed. Nothing asks rustup or a "latest" URL for anything.
+* **Offline, locked:** `cargo build --release --locked --offline`; the one dependency comes from `vendor/`, whose
+  files cargo checks against `.cargo-checksum.json`, and `Cargo.lock` carries the crate's registry checksum. A test
+  re-hashes every vendored file and compares the package checksum with `Cargo.lock`.
+* **Linker and paths:** `rust-lld` from the pinned toolchain (not the host's `ld`), `--remap-path-prefix` for the
+  source and the toolchain, a cleared `CARGO_*`/`RUSTFLAGS` environment.
+* **CI:** the first job (`deadline-helper`) runs `build.sh --check`; the test job `needs` it and runs against *its*
+  binary. A mismatch fails the job and the expected value is not edited to match: it would mean the build is not
+  reproducible or the source changed without its pin. **The first CI run reproduced both hashes** (x86_64
+  `2b38534c…`, aarch64 `48fe6da7…`) `[E: CI run 38144571535, job deadline-helper]`, on a different machine from
+  the one that produced them (same bytes also from a different directory, a separate toolchain install and a
+  different `HOME` locally).
 * **Provenance** is therefore "built from this commit's source with this toolchain, and equal to the committed
   hash", not "a binary somebody put there".
 
@@ -133,7 +153,7 @@ In `DockerSandbox.run` the command is built in one place (`containers.create(com
 from `source_mounts`) `[R]`. The change is local to it:
 
 * `volumes[<helper path on the host>] = {"bind": "/cyberorch-deadline", "mode": "ro"}`;
-* `command = ["/cyberorch-deadline", str(D), "--", *command]`;
+* `entrypoint = ["/cyberorch-deadline", str(D), "--", *image_entrypoint]`, `command` unchanged (see below);
 * the container gets one more label, `cyberorch.deadline=<D>`, so the reconciler can read the container's own
   deadline and report a container without one;
 * adapters, the registry, the Rego policy and the `Budget` are untouched; `max_duration_seconds` keeps its meaning.
@@ -146,9 +166,13 @@ Facts that make this safe to do:
 * **a host filesystem mounted `noexec` fails closed:** the container's `start` is refused ("failed to create task
   for container…") before anything of the tool runs, and the sandbox types that refusal as `ContainerStartRefused`,
   a `NotStarted` `[E: E26]`; the deployment notes must say where the file lives;
-* images with an `ENTRYPOINT`: the images here have none (`Config.Entrypoint` null for `nmap` and `gitleaks`); the
-  others were not checked, and for an image that has one `command` becomes its arguments, so the wrapper would not
-  run `[N]` — the implementation checks each adapter image and the test suite asserts it.
+* images with an `ENTRYPOINT`: **two of the five tool images have one** (`semgrep`: `["/usr/local/bin/semgrep"]`;
+  `browser`: `["/usr/bin/python3","-u","/opt/browser_runner.py"]`; `nmap`, `gitleaks` and `bloodhound` have none)
+  `[E: docker image inspect]`. Passing the wrapper as `command` would have made it an argument of that entrypoint.
+  The implementation therefore sets the container's **entrypoint** to
+  `[/cyberorch-deadline, D, --, *image_entrypoint]` and leaves `command` as the adapter built it: Docker would
+  have run `entrypoint + command`, and this runs the same argv under the deadline. A test runs the semgrep image
+  through it.
 
 **Alternative (D65A-2): bake the helper into each image.** The image digest then pins it, there is no host path,
 no `noexec` question, and no check at run time. Against: six image builds change (there are seven `build_*.sh` scripts; one builds a test target; any image built later must
@@ -230,9 +254,9 @@ each adapter's `derive_view` is unaffected by the extra stderr line.
 
 | Part | Change |
 |---|---|
-| `tool_gateway/deadline/` | new: source, `go.mod`, `build.sh`, `SHA256SUMS`, README |
+| `tool_gateway/deadline/`, `tool_gateway/deadline_helper.py` | new: source, vendored libc, toolchain pin, `build.sh`, `SHA256SUMS`, README; the control plane's verify/locate module |
 | `tool_gateway/sandbox.py` `run` | wrap the command, add the mount and the label, verify the hash, map exit 124 per §7, type the two new failures; `DeadlineHelperUnavailable` is a new `NotStarted` subclass with a `reason` code |
-| `.github/workflows/test.yml` | a toolchain setup step (pinned) and the build + hash comparison step; the helper must be built before the tests that run containers |
+| `.github/workflows/test.yml` | a first job that builds the helper with `build.sh --check`; the test job `needs` it and downloads its binary |
 | `tests/test_image_literals.py` | no new image; the CI-built set gains nothing, but a sibling test checks that the helper is built by CI |
 | `docs` | ACCEPTANCE: the exposure window of D44-7 no longer depends on the control plane staying alive; `D64` updated to say the helper exists |
 | adapters, registry, Rego, `Budget`, the schema | **none** |
@@ -293,3 +317,31 @@ container, network or file left; the helper binaries were in the scratch area).
 Not run: the Rust, C or Go build on another machine or in CI (reproducibility across toolchains `[N]`); the aarch64
 Rust binary on arm64 hardware; images other than `nmap`, `gitleaks`, busybox and `python:3.12-slim` with a wrapped command; the helper as
 PID 1 under a user-namespace-remapped daemon `[N]`.
+
+## 13. Implementation notes (D64 implementation step 4, ACCEPTANCE 5.77)
+
+What differs from, or was decided beyond, the text above:
+
+* **Entrypoint, not command** (§4): two of the five images set an `ENTRYPOINT`; the helper becomes the container's
+  entrypoint and the image's own follows it.
+* **Where each failure surfaces** (§5, §7): a helper that is missing, unreadable, not executable by everyone, not the
+  pinned bytes, for an architecture with no pin, or whose in-container path another mount already uses raises
+  `DeadlineHelperUnavailable` (a `NotStarted`) **before** `containers.create`, with a stable code
+  `deadline_helper_{missing,unreadable,hash_mismatch,not_executable,unpinned,unsupported_architecture,path_in_use}`;
+  dispatch records it as `failed`, retryable, never `unknown_outcome`. Lab scripts opt out with
+  `deadline_helper=None` (label `cyberorch.deadline=none`); no production code does, and a test lists every
+  such call in `control_plane/` and `tool_gateway/`.
+* **The 127 discriminator** (§7): the helper's "cannot execute" line is the only thing on stderr and the exit is 127
+  → `ToolNotExecutable` (a `ContainerStartRefused`, so a `NotStarted`). A tool that exits 127 itself, or writes
+  anything else on stderr, is a result. A tool that forges exactly that one line and exits 127 makes *its own run*
+  read as "not started": it loses its own output and is retried; the helper has no channel to the control plane
+  but exit status and stderr, so this cannot be closed without a second channel, and the tool already controls
+  everything else it prints.
+* **The 124 discriminator** (§7) is exactly "exit 124 **and** `FinishedAt − StartedAt ≥ D − 2 s`"; anything Docker
+  does not let us read counts as "no", which leaves the exit at 124 (a failure either way).
+* **Slack** is `deadline_helper.SLACK_SECONDS = 10`; `D = budget + 10`, never below 1.
+* **Check cost:** read + sha256 of a 425 KB file on every run, under 2 ms.
+* **Not run:** the aarch64 binary on arm64 hardware (its hash is pinned and CI reproduces it, but nothing executes
+  it); the helper under a user-namespace-remapped daemon; a reconciler that reads `cyberorch.deadline` (D64
+  step 6). The `browser` image was not started under the helper by a dedicated test — the existing suite's browser
+  tests do, by default, since every `DockerSandbox.run` now wraps its command.
