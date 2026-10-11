@@ -138,7 +138,9 @@ def _set_state(conn: Connection, proposal_id: str, state: str) -> None:
     )
 
 
-def _take_result_stage(conn: Connection, proposal_id: str, *, detail: str) -> bool:
+def _take_result_stage(
+    conn: Connection, proposal_id: str, run_id: str, *, detail: str,
+) -> bool:
     """First statement of a dispatch's record transaction: win the stage, or be a late result.
 
     ``True`` is the ordinary case: ``dispatching -> recorded`` was ours. If the stage had already
@@ -147,6 +149,12 @@ def _take_result_stage(conn: Connection, proposal_id: str, *, detail: str) -> bo
     unknown has now finished, and its result replaces "unknown" in the same transaction (the caller
     audits ``run.late_result``). That is ``False`` here. Anything else is not ours to overwrite and
     raises :class:`stages.StageConflict`, which rolls the whole record back.
+
+    **Whose result it is.** ``run_id`` is the run this dispatch started, and the late transition
+    is conditional on *that run* being the proposal's run and being ``unknown_outcome`` -- in the
+    same statement that moves the proposal, not in a separate check. A proposal the reconciler
+    declared unknown is not overwritten by a result that belongs to another run, or to a run
+    of another proposal, or to a run that is not itself unknown (ACCEPTANCE 5.74).
     """
     if stages.advance(conn, proposal_id, expected=stages.DISPATCHING, new=stages.RECORDED,
                       detail=detail):
@@ -158,15 +166,18 @@ def _take_result_stage(conn: Connection, proposal_id: str, *, detail: str) -> bo
                 stage_updated_at = now(), updated_at = now()
             WHERE proposal_id = :pid AND pipeline_stage = :recorded
               AND stage_detail = :unknown AND dispatch_state = :unknown
+              AND EXISTS (SELECT 1 FROM tool_runs r
+                          WHERE r.run_id = :run AND r.proposal_id = :pid
+                            AND r.status = :unknown)
             RETURNING proposal_id
         """),
-        {"pid": proposal_id, "recorded": stages.RECORDED, "detail": detail,
+        {"pid": proposal_id, "run": run_id, "recorded": stages.RECORDED, "detail": detail,
          "unknown": UNKNOWN_OUTCOME},
     ).scalar_one_or_none()
     if late is None:
         raise stages.StageConflict(
             f"proposal {proposal_id!r} is no longer in stage {stages.DISPATCHING!r}, and is not "
-            f"the reconciler's {stages.RECORDED}/{UNKNOWN_OUTCOME}"
+            f"the reconciler's {stages.RECORDED}/{UNKNOWN_OUTCOME} for run {run_id!r}"
         )
     return True
 
@@ -482,11 +493,12 @@ def _record_scan_result(
         with engagement_scope(engagement_id) as conn:
             # First statement: win the stage -- or be a late result over the reconciler's
             # ``unknown_outcome`` -- or record nothing at all (ACCEPTANCE 5.74).
-            late = _take_result_stage(conn, proposal_id, detail=status)
+            late = _take_result_stage(conn, proposal_id, started.run_id, detail=status)
             recorded = _finish_run(
                 conn, started.run_id, status, exit_code=result.exit_code,
                 fresh_for_seconds=started.fresh_for_seconds if status == SUCCEEDED else None,
                 only_if_status=UNKNOWN_OUTCOME if late else None,
+                of_proposal=proposal_id if late else None,
             )
             if not recorded:
                 raise stages.StageConflict(
@@ -513,8 +525,9 @@ def _record_scan_result(
                     engagement_id=engagement_id, actor=actor, event_type=LATE_RESULT_EVENT,
                     subject_type="tool_run", subject_id=started.run_id,
                     reasons=("result_after_unknown_outcome",),
-                    payload={"proposal_id": proposal_id, "previous": UNKNOWN_OUTCOME,
-                             "status": status, "evidence_id": evidence_id},
+                    payload={"proposal_id": proposal_id, "run_id": started.run_id,
+                             "previous": UNKNOWN_OUTCOME, "status": status,
+                             "evidence_id": evidence_id},
                 )
     except stages.StageConflict:
         logger.critical(
@@ -1529,10 +1542,11 @@ def dispatch_code_scan(
 def _finish_run(
     conn: Connection, run_id: str, status: str, *,
     exit_code: int | None, fresh_for_seconds: int | None = None,
-    only_if_status: str | None = None,
+    only_if_status: str | None = None, of_proposal: str | None = None,
 ) -> bool:
     """Set a run's final status. With ``only_if_status`` the update is conditional on the run
-    still being in that status, and the return value says whether it was."""
+    still being in that status, with ``of_proposal`` on the run belonging to that proposal, and
+    the return value says whether it did."""
     moved = conn.execute(
         text("""
             UPDATE tool_runs
@@ -1543,10 +1557,11 @@ def _finish_run(
                 END
             WHERE run_id = :run
               AND (CAST(:only AS text) IS NULL OR status = CAST(:only AS text))
+              AND (CAST(:prop AS text) IS NULL OR proposal_id = CAST(:prop AS text))
             RETURNING run_id
         """),
         {"run": run_id, "status": status, "code": exit_code, "fresh": fresh_for_seconds,
-         "only": only_if_status},
+         "only": only_if_status, "prop": of_proposal},
     ).scalar_one_or_none()
     return moved is not None
 

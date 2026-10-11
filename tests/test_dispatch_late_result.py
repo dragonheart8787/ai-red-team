@@ -211,15 +211,122 @@ def test_which_states_a_result_may_be_recorded_over(world, stage, detail, state,
     go(world)                                       # a proposal that has been through everything
     _set(eid, "UPDATE action_proposals SET pipeline_stage = :s, stage_detail = :d, "
               "dispatch_state = :ds", s=stage, d=detail, ds=state)
+    # The run is unknown in every case, so that what decides is the proposal's own state: a run
+    # that is not unknown is refused whatever the proposal says (tested below), which would hide
+    # whether the stage conditions are doing their part.
+    _set(eid, "UPDATE tool_runs SET status = 'unknown_outcome', exit_code = NULL")
     with engagement_scope(eid) as conn:
         pid = only(snapshot(eid))["proposal_id"]
+        run_id = conn.execute(text("SELECT run_id FROM tool_runs")).scalar_one()
         if expected == "refused":
             with pytest.raises(stages.StageConflict):
-                dispatch._take_result_stage(conn, pid, detail="succeeded")
+                dispatch._take_result_stage(conn, pid, run_id, detail="succeeded")
             return
-        late = dispatch._take_result_stage(conn, pid, detail="succeeded")
+        late = dispatch._take_result_stage(conn, pid, run_id, detail="succeeded")
         assert late is (expected == "late")
         assert stages.stage_of(conn, pid) == (stages.RECORDED, "succeeded")
+
+
+# ---------------------------------------------------------------------------
+# whose result it is: the late transition carries the run id and checks it
+# ---------------------------------------------------------------------------
+
+def _two_unknown_proposals(world):
+    """Two proposals of one engagement, each with its own run, both declared unknown by the
+    reconciler (stage, dispatch state and run)."""
+    eid = world["engagement_id"]
+    go(world, key="key-a", target="10.82.0.5")
+    go(world, key="key-b", target="10.82.0.6")
+    _set(eid, "UPDATE action_proposals SET pipeline_stage = 'recorded', "
+              "stage_detail = 'unknown_outcome', dispatch_state = 'unknown_outcome'")
+    _set(eid, "UPDATE tool_runs SET status = 'unknown_outcome', exit_code = NULL")
+    with engagement_scope(eid) as conn:
+        rows = conn.execute(text(
+            "SELECT proposal_id, run_id FROM tool_runs ORDER BY created_at")).all()
+    assert len(rows) == 2 and rows[0][0] != rows[1][0]
+    return rows[0], rows[1]
+
+
+def test_a_late_result_moves_the_proposal_only_for_the_run_that_is_its_own(world):
+    (pid_a, run_a), (pid_b, run_b) = _two_unknown_proposals(world)
+    eid = world["engagement_id"]
+    with engagement_scope(eid) as conn:
+        # another proposal's run, although that run is unknown too: not this proposal's result
+        with pytest.raises(stages.StageConflict) as caught:
+            dispatch._take_result_stage(conn, pid_a, run_b, detail="succeeded")
+        assert run_b in str(caught.value)
+        # a run id that exists nowhere
+        with pytest.raises(stages.StageConflict):
+            dispatch._take_result_stage(conn, pid_a, "RUN-NO-SUCH-RUN", detail="succeeded")
+    with engagement_scope(eid) as conn:
+        assert stages.stage_of(conn, pid_a) == (stages.RECORDED, "unknown_outcome")
+        assert stages.stage_of(conn, pid_b) == (stages.RECORDED, "unknown_outcome")
+        # the run that is its own
+        assert dispatch._take_result_stage(conn, pid_a, run_a, detail="succeeded") is True
+        assert stages.stage_of(conn, pid_a) == (stages.RECORDED, "succeeded")
+        assert stages.stage_of(conn, pid_b) == (stages.RECORDED, "unknown_outcome")
+
+
+def test_a_late_result_for_a_run_that_is_not_itself_unknown_is_refused(world):
+    (pid_a, run_a), _ = _two_unknown_proposals(world)
+    eid = world["engagement_id"]
+    _set(eid, "UPDATE tool_runs SET status = 'running' WHERE run_id = :r", r=run_a)
+    with engagement_scope(eid) as conn:
+        with pytest.raises(stages.StageConflict):
+            dispatch._take_result_stage(conn, pid_a, run_a, detail="succeeded")
+        assert stages.stage_of(conn, pid_a) == (stages.RECORDED, "unknown_outcome")
+
+
+def test_finishing_a_run_can_be_made_conditional_on_its_proposal(world):
+    """The second line of the same defence: even holding the right stage, a run row of another
+    proposal is not rewritten."""
+    (pid_a, run_a), (_, run_b) = _two_unknown_proposals(world)
+    eid = world["engagement_id"]
+    with engagement_scope(eid) as conn:
+        assert dispatch._finish_run(
+            conn, run_b, "succeeded", exit_code=0, only_if_status="unknown_outcome",
+            of_proposal=pid_a) is False
+        assert conn.execute(text("SELECT status FROM tool_runs WHERE run_id = :r"),
+                            {"r": run_b}).scalar_one() == "unknown_outcome"
+        assert dispatch._finish_run(
+            conn, run_a, "succeeded", exit_code=0, only_if_status="unknown_outcome",
+            of_proposal=pid_a) is True
+
+
+def test_a_run_that_stopped_being_unknown_after_the_stage_check_is_still_not_overwritten(
+    world, monkeypatch,
+):
+    """The stage move and the run update are two statements. The first now checks the run itself,
+    but the second keeps its own condition, for the window between them: here the first is
+    stubbed to say yes about a run that is in fact still ``running``."""
+    eid = world["engagement_id"]
+
+    def during(_kwargs):
+        _set(eid, "UPDATE action_proposals SET pipeline_stage = 'recorded', "
+                  "stage_detail = 'unknown_outcome', dispatch_state = 'unknown_outcome'")
+
+    monkeypatch.setattr(dispatch, "_take_result_stage",
+                        lambda conn, proposal_id, run_id, *, detail: True)
+    outcome = go(world, sandbox=FakeSandbox(during=during))
+    assert outcome.failure == dispatch.STAGE_MOVED
+    final = _rows(eid)
+    assert final["runs"] == [("running", None)] and final["evidence"] == 0
+    assert "run.late_result" not in final["audit"] and "tool_run.succeeded" not in final["audit"]
+
+
+def test_the_late_result_audit_record_names_the_run_and_the_proposal(world):
+    eid = world["engagement_id"]
+    outcome = go(world, sandbox=FakeSandbox(during=lambda _k: _reconcile(eid)))
+    with engagement_scope(eid) as conn:
+        rows = conn.execute(text(
+            "SELECT subject_id, payload FROM audit_log WHERE event_type = 'run.late_result'"
+        )).all()
+        proposal_id = conn.execute(text("SELECT proposal_id FROM action_proposals")).scalar_one()
+    assert len(rows) == 1
+    subject, payload = rows[0]
+    assert subject == outcome.run_id
+    assert payload.get("run_id") == outcome.run_id and payload.get("proposal_id") == proposal_id
+    assert payload["previous"] == "unknown_outcome" and payload["status"] == "succeeded"
 
 
 # ---------------------------------------------------------------------------
