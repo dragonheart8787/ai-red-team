@@ -205,3 +205,36 @@ Four things the audit left, done in a small follow-up commit:
    — verified by turning the rewrite off, which fails the guard. (This does not make the real `0001` safe to
    re-run on a live database — it never was; it is a property to know.)
 5. Full serial run after the closeout: **1 716 passed** (1 709 at the audit + 3 migration + 4 policy-change).
+
+### 8.1 Second closeout round
+
+* **`scheduler_state_writer` is approved** (D-7); the design note's "needs your confirmation" and the report's
+  assumptions section are gone, and the design note's status line now says built and final.
+* **The withdrawal test under mutation, alone:** with the `withdrawn_at IS NULL` filter removed,
+  `test_withdrawing_an_enrollment_takes_effect_on_the_next_tick` is red by itself (its own proposal appears in
+  `dispatched`); restored, green. **A correction:** the mutation reported in the D62 report (M2, "29 red") was
+  malformed — `SELECT DISTINCT … ORDER BY enrollment_id` is a SQL error, so everything was red for the wrong
+  reason. The report row is corrected and the test now asserts on its own proposal.
+* **A test-isolation bug found while doing it:** `test_schema.py::test_emergency_overlay_may_deny` inserted a
+  global overlay that denies `network.scan` and never retired it, so on a second local run every test that expects
+  `network.scan` to be allowed (the scheduler's) failed with `action_denied_by_policy`. CI starts from a fresh
+  database so it never saw it. The test now retires its row.
+* **CHECK constraints and NULL:** all 28 CHECKs in `public` read against `attnotnull` — see ACCEPTANCE 5.69 for the
+  list, the rule ("a closed-code column is NOT NULL, or NULL is a stated state and a further CHECK excludes it
+  where a code is required") and `tests/test_check_constraints_null_rule.py`, which makes a new CHECK on a
+  nullable column fail until it is justified. One candidate recorded, executed: nothing ties a later stage to a
+  non-NULL `decision`.
+* **The migration test now also checks** that `scheduler_state` and `scheduler_enrollment` have
+  `FORCE ROW LEVEL SECURITY` after **every** migration step, up and down one revision at a time, and that
+  `0020`'s `NO FORCE` … `UPDATE` … `FORCE` pair is atomic: it is one `upgrade()` with nothing that commits
+  between, and a failure injected between the two statements leaves the committed schema (revision, constraints,
+  rows, `FORCE`) exactly as it was at 0019. Mutation-checked three ways: `FORCE` never turned back on (the
+  stepwise test and the atomicity test red); `NO FORCE` in an `autocommit_block` (red); a mid-migration `END`,
+  which the source check cannot see (red by behaviour).
+* **One flaky test seen, not caused by this round:** `test_graph_queries_stay_fast_on_a_hub_shaped_fixture` failed
+  in a full local run (`statement_timeout` of 5 s on `paths_within_hops`) and in the first rerun after it, then
+  passed 7 times in a row; the full suite then passed (1720). Nothing under
+  `control_plane/graph` changed. The graph tables are never cleaned between runs and each run adds about 36k
+  edges (350k rows locally at the time), so the query's cost depends on planner statistics that may lag behind a
+  fixture just loaded. CI starts from an empty database and has not shown it. Recorded, not fixed here: a test
+  that times a query should analyze what it just loaded, or clean up after itself.

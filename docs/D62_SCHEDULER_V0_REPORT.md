@@ -55,7 +55,7 @@ All three: LOGIN, NOSUPERUSER, NOBYPASSRLS. `cyberorch_app` has **no** grant on 
 | # | mutation | result |
 |---|---|---|
 | M1 | remove the lock (acquire returns True, `held()` True) | 3 red: second instance refused, killed lock connection, lock-lost exit code |
-| M2 | enrollment read ignores withdrawal | red (29, mostly collateral: old withdrawn engagements get served); targeted: `test_withdrawing_an_enrollment…` |
+| M2 | enrollment read ignores withdrawal (the `withdrawn_at IS NULL` filter removed) | red: `test_withdrawing_an_enrollment_takes_effect_on_the_next_tick` alone (the withdrawn engagement's own proposal is dispatched); 4 red across the e2e/service/skips files. **Correction (D63):** the figure first reported here ("29 red") came from a malformed mutation (`SELECT DISTINCT … ORDER BY`), which broke the query — the tests were red for the wrong reason. Re-run properly, and the test tightened to assert on its own proposal rather than on an empty list. |
 | M3a | grant reader `SELECT (reason)` on `action_proposals` | 3 red (grant matrix, refused-list ×2) |
 | M3b | grant reader `SELECT` on `audit_log` | 2 red |
 | M3c | grant state writer `UPDATE (status)` on `engagements` | 1 red (grant matrix) |
@@ -89,11 +89,11 @@ All three: LOGIN, NOSUPERUSER, NOBYPASSRLS. `cyberorch_app` has **no** grant on 
   container list). Capacity re-measured: /32→0, /31→1, /30→1, /29→5, /28→13.
 * The sandbox keeps its `cyberorch-allow-*` networks; a test that needs a fresh subnet uses its own.
 
-## 6. Assumptions I made and you have not explicitly confirmed
+## 6. Decisions
 
-* D-7: the third role `scheduler_state_writer` (implemented as in the design note).
-* D-9 was first implemented with an `ip`-scope widening (a /29–/27 block); you decided against it, and it was
-  removed (see §8). No assumption about it remains.
+None is left as an assumption. D-7 (the third role `scheduler_state_writer`) is **approved**. D-9 was first
+implemented with an `ip`-scope widening (a /29–/27 block); the decision went the other way and it was removed
+(see §8) — `ip` scopes are skipped.
 
 ## 7. Open / candidates
 

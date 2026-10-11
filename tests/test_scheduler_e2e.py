@@ -127,8 +127,10 @@ def test_withdrawing_an_enrollment_takes_effect_on_the_next_tick(world):
     sandbox = FakeSandbox()
     with sup.running(sandbox) as sched:
         sup.withdraw(eid)
-        assert sched.tick().dispatched == []
-    assert sandbox.calls == 0 and stage(eid, pid)[0] == stages.APPROVED
+        report = sched.tick()
+    assert pid not in report.dispatched      # (leftovers of other engagements are not this test)
+    assert stage(eid, pid)[0] == stages.APPROVED
+    assert sup.rows(eid, "SELECT 1 FROM capabilities") == []
 
 
 # ---------------------------------------------------------------------------------------------

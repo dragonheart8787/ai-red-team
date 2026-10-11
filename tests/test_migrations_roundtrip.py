@@ -24,6 +24,11 @@ What is established:
   constraints, policies, indexes, triggers, functions and grants are **identical** to the first
   head;
 * 0016-0020 are really undone by their downgrades (the scheduler's tables, the stage column);
+* after **every** migration step, up or down, ``scheduler_state`` and ``scheduler_enrollment`` (when
+  they exist) have ``FORCE ROW LEVEL SECURITY`` on -- the table owner is bound by the policies;
+* 0020 switches ``FORCE`` off for one statement to rewrite rows (the owner is otherwise blind to
+  them) and back on: that pair is shown to be **atomic** -- a failure between them rolls both back,
+  so there is no committed state in which the table's isolation is off;
 * 0020 specifically: a row holding the retired skip code is **rewritten** on the way up, the
   database then refuses that code, and on the way down the old constraint accepts it again.
 """
@@ -101,6 +106,22 @@ class Scratch:
             capture_output=True, text=True,
             env={**os.environ, "MIGRATION_DATABASE_URL": self.url}, timeout=300)
         assert done.returncode == 0, f"alembic {' '.join(args)} failed:\n{done.stderr[-2000:]}"
+
+    def alembic_fails(self, *args: str) -> str:
+        done = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", str(self.ini), *args], cwd=REPO,
+            capture_output=True, text=True,
+            env={**os.environ, "MIGRATION_DATABASE_URL": self.url}, timeout=300)
+        assert done.returncode != 0, f"alembic {' '.join(args)} was expected to fail"
+        return done.stderr
+
+    def force_rls(self) -> dict[str, bool]:
+        """``relforcerowsecurity`` of the scheduler's tables that exist at the current revision."""
+        with self.engine.begin() as conn:
+            return {r[0]: r[1] for r in conn.execute(text(
+                "SELECT relname, relforcerowsecurity FROM pg_class "
+                "WHERE relnamespace = CAST(:s AS regnamespace) "
+                "AND relname IN ('scheduler_state', 'scheduler_enrollment')"), {"s": self.name})}
 
     def revision(self) -> str | None:
         with self.engine.begin() as conn:
@@ -226,6 +247,72 @@ def _skip_it(conn, engagement_id: str, proposal_id: str, code: str) -> None:
         "INSERT INTO scheduler_state (engagement_id, proposal_id, kind, disposition, reason_code) "
         "VALUES (:e, :p, 'proposal', 'skipped', :c)"),
         {"e": engagement_id, "p": proposal_id, "c": code})
+
+
+SCHEDULER_TABLES = {"scheduler_state", "scheduler_enrollment"}
+
+
+def _revisions_from(first: str) -> list[str]:
+    """Revision ids from ``first`` to head, oldest first, read from the script directory."""
+    script = ScriptDirectory.from_config(Config(str(REPO / "alembic.ini")))
+    return [r.revision for r in reversed(list(script.walk_revisions())) if r.revision >= first]
+
+
+def test_the_schedulers_tables_keep_force_row_security_after_every_step_up_and_down(scratch):
+    steps = _revisions_from("0018")
+    assert steps[-1] == _head() and "0019" in steps and "0020" in steps
+
+    def check(revision: str) -> None:
+        present = scratch.force_rls()
+        if revision >= "0019":
+            assert set(present) == SCHEDULER_TABLES, (revision, present)
+        else:
+            assert present == {}, (revision, present)
+        assert all(present.values()), f"FORCE ROW LEVEL SECURITY is off at {revision}: {present}"
+
+    scratch.alembic("upgrade", steps[0])
+    check(steps[0])
+    for revision in steps[1:]:                                  # up, one migration at a time
+        scratch.alembic("upgrade", revision)
+        check(revision)
+    for revision in reversed(steps[:-1]):                       # and down, one at a time
+        scratch.alembic("downgrade", revision)
+        check(revision)
+    scratch.alembic("upgrade", "head")                          # and up the whole way again
+    check(_head())
+
+
+def test_0020_switches_force_row_security_off_and_on_inside_one_transaction(scratch):
+    """The rewrite needs ``NO FORCE`` for one statement. If a failure (or a crash) could leave it
+    off, a committed state would exist in which the owner is not bound by the isolation policy.
+    Two proofs: the pair is in one ``upgrade()`` with nothing that commits in between, and a failure
+    injected between them leaves the committed schema exactly as it was at 0019."""
+    path = REPO / "db" / "migrations" / "versions" / "0020_scheduler_state_narrow.py"
+    source = path.read_text()
+    upgrade = source[source.index("def upgrade()"):source.index("def downgrade()")]
+    off = upgrade.index("ALTER TABLE scheduler_state NO FORCE ROW LEVEL SECURITY")
+    rewrite = upgrade.index("UPDATE scheduler_state")
+    on = upgrade.index("ALTER TABLE scheduler_state FORCE ROW LEVEL SECURITY")
+    assert off < rewrite < on
+    assert "autocommit" not in source and "COMMIT" not in source.upper().replace("COMMENT", "")
+
+    scratch.alembic("upgrade", "0019")
+    eid, pid = _seed_a_skipped_proposal(scratch, RETIRED)
+    before = scratch.fingerprint()
+    assert scratch.force_rls()["scheduler_state"] is True
+
+    broken = Path(scratch.ini).parent / "migrations" / "versions" / "0020_scheduler_state_narrow.py"
+    text_ = broken.read_text()
+    marker = '    op.execute("ALTER TABLE scheduler_state FORCE ROW LEVEL SECURITY;")\n'
+    assert text_.count(marker) == 1
+    broken.write_text(text_.replace(marker, '    op.execute("SELECT 1/0;")\n' + marker))
+
+    scratch.alembic_fails("upgrade", "0020")
+
+    assert scratch.revision() == "0019"                          # nothing of 0020 was committed
+    assert scratch.force_rls()["scheduler_state"] is True        # in particular, not the NO FORCE
+    assert scratch.fingerprint() == before                       # nor the dropped constraints
+    assert _state_code(scratch, eid, pid) == RETIRED             # nor the rewrite
 
 
 def _seed_a_skipped_proposal(scratch: Scratch, code: str) -> tuple[str, str]:
