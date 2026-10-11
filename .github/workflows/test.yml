@@ -108,6 +108,14 @@ jobs:
           ncat --version 2>&1 | head -1
           curl --version | head -1
 
+      - name: Pull the image the deadline tests run their tools in
+        # D65-A. tests/test_deadline_sandbox.py runs scripted tools (sh, python) as PID 1's child in
+        # python:3.12-slim, because the scratch-built nmap image has no shell. The semgrep and
+        # bloodhound builds name it as a base, but a BuildKit build does not leave its base in the
+        # local image store, so the first CI run of those tests found it "not present" (run
+        # 38148388178). Pulled explicitly, so the tests depend on a step, not on a side effect.
+        run: docker pull python:3.12-slim
+
       - name: Build the sandbox tool image
         # Without this the §8.3 isolation tests fail rather than skip, which is
         # the intended behaviour -- a green run that never started a container
