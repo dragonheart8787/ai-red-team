@@ -92,6 +92,9 @@ established so provenance can be derived from rows instead of written alongside 
 * **The `dispatching` guard takes "any stage before dispatch"**, not "exactly `capability_issued`".
   Hand-built proposals (nine test files insert rows directly) are `received`; `claim_for_dispatch`
   already makes the dispatch exclusive, and the stage guard adds ordering without breaking them.
+  *(D63, migration 0021: such a proposal now needs a `decision` of its own — the database refuses any
+  stage past `received` with none — so the eight fixtures that dispatch by hand insert `ALLOW`.
+  ACCEPTANCE 5.69.)*
 * **Audit stays *inside* the stage's transaction, after the transition is won.** A stage that loses
   the race has written nothing. The cost, stated in `audit/logger.py` since D8 and true here: if a
   stage's transaction fails *after* its audit write, the record outlives the state and a retry

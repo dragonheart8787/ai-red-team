@@ -25,8 +25,12 @@ from control_plane.state.db import get_engine
 #: (table, constraint) -> why a NULL in a nullable column it mentions is acceptable.
 NULL_IS_A_STATE = {
     ("action_proposals", "action_proposals_decision_check"):
-        "NULL until the decision stage: a `received` proposal has no decision yet. Nothing in a "
-        "CHECK ties a later stage to a non-NULL decision (ACCEPTANCE 5.69, a candidate).",
+        "NULL until the decision stage: a `received` proposal has no decision yet. Every later "
+        "stage is tied to a non-NULL decision by action_proposals_decision_past_received (0021).",
+    ("action_proposals", "action_proposals_decision_past_received"):
+        "the stage rule itself: `decision IS NOT NULL OR pipeline_stage = 'received'` -- NULL is "
+        "legal at `received` and at no other stage (tested in test_migrations_roundtrip and "
+        "test_action_proposals_decision_stage).",
     ("findings", "findings_verifier_state_check"):
         "NULL = not verified yet; the verifier states are the closed set once it has run.",
     ("scheduler_state", "scheduler_state_reason_code_check"):

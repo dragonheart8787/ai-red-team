@@ -123,10 +123,10 @@ def _proposal(conn, engagement_id: str, *, action: str = "ad.collect") -> str:
         text("""
             INSERT INTO action_proposals (proposal_id, engagement_id, agent_id,
                 request_idempotency_key, dispatch_state, action, target,
-                "authorization", discovery)
+                "authorization", discovery, decision)
             VALUES (:pid, :eid, 'fake-worker', :key, 'queued', :action,
                     CAST(:target AS jsonb), CAST(:auth AS jsonb),
-                    CAST(:disc AS jsonb))
+                    CAST(:disc AS jsonb), 'ALLOW')
         """),
         {
             "pid": proposal_id, "eid": engagement_id, "key": f"key-{proposal_id}",

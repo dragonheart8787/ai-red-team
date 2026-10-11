@@ -231,10 +231,48 @@ Four things the audit left, done in a small follow-up commit:
   rows, `FORCE`) exactly as it was at 0019. Mutation-checked three ways: `FORCE` never turned back on (the
   stepwise test and the atomicity test red); `NO FORCE` in an `autocommit_block` (red); a mid-migration `END`,
   which the source check cannot see (red by behaviour).
-* **One flaky test seen, not caused by this round:** `test_graph_queries_stay_fast_on_a_hub_shaped_fixture` failed
-  in a full local run (`statement_timeout` of 5 s on `paths_within_hops`) and in the first rerun after it, then
-  passed 7 times in a row; the full suite then passed (1720). Nothing under
-  `control_plane/graph` changed. The graph tables are never cleaned between runs and each run adds about 36k
-  edges (350k rows locally at the time), so the query's cost depends on planner statistics that may lag behind a
-  fixture just loaded. CI starts from an empty database and has not shown it. Recorded, not fixed here: a test
-  that times a query should analyze what it just loaded, or clean up after itself.
+* **One flaky test seen** (`test_graph_queries_stay_fast_on_a_hub_shaped_fixture`, a 5 s statement timeout): found
+  at the time not to be caused by this round; its cause and fix are in §8.2.
+
+### 8.2 Third closeout round
+
+* **Every mutation of the D62 report and the D63 audit re-verified (31).** The question was not "do they go
+  red" but "do they go red *on the assertion*". `scripts/mutation_check.py` now runs a mutation only after the
+  unmutated tests are green, requires the change to compile / import / run, records each failing test and the
+  exception it died of, and calls the mutation valid only if none of the failures is the mutation's own error and
+  the named target tests are among the assertion failures (ACCEPTANCE 5.70). The D62 report §4 has the table
+  with the names and messages. **Result: 31 of 31 valid, none red for a syntax, SQL or import reason** — after
+  four defects were found and removed: three tests that caught their mutation by accident (`ValueError: too many
+  values to unpack`; an `IntegrityError` outside any `pytest.raises`; `ValueError: substring not found`) now assert
+  explicitly, and the tool's own restore of the 0021 mutation left the constraint without its comment. The
+  figures the first reports gave are replaced (they grew with the suite, and M2's "29" was withdrawn). Out of scope
+  and **not** re-run: the mutations 5.56 and 5.58 list (D61, D58-7) — this audit only repeats their counts.
+* **The graph timing test (5.23):** the cause was the planner's statistics, not other engagements' rows. Right after
+  an engagement's ~36k edges are loaded and before `ANALYZE`, the recursive query takes a plan that does not finish
+  in 8 s (0, 1, 3, 6, 9 other engagements present: the same); after `ANALYZE` it takes 0.05–0.07 s — at every one of
+  those counts. The test now analyzes what it loaded, asserts from `EXPLAIN` that the recursive step uses an index
+  condition on `src_node_id` (mutation: indexes dropped — red), and **removes its rows** (the runtime role can only
+  append; the table owner deletes; the edge table is vacuumed first because `dst_node_id`, a foreign key, has no
+  index and deleting a node otherwise scans the table once per node: two minutes instead of two seconds). The
+  production consequence (the first graph query after a bulk load can time out until autovacuum) is recorded in
+  5.23, not fixed.
+* **`action_proposals.decision` (5.69):** the stages where NULL is legal were listed from the code first —
+  `received` only; the hand-built dispatch route that produced `recorded`/`closed` rows with no decision (132 and
+  78 in the development database) is closed too. **Migration 0021** adds `CHECK (decision IS NOT NULL OR
+  pipeline_stage = 'received')`; the decision stage now writes the decision in the same statement that moves the
+  stage (a CHECK cannot be deferred); eight fixtures insert `ALLOW`. Up/down test: the upgrade is blocked by an
+  undecided `recorded` row and leaves nothing behind, goes through once it is corrected, the database then refuses
+  every stage but `received`, the downgrade removes the constraint, and it blocks again. The development
+  database was re-provisioned (it held the hand-built rows; `init_db.sh`, `.env` identical) — a database that
+  holds such rows refuses the migration with the constraint name, and nothing back-fills a decision.
+* **End-of-session residue check (5.71):** active policy layers without an engagement and containers left by the
+  session fail the run; sandbox networks it made are removed and counted. Tested for each kind, through a
+  subprocess session for the wiring, and by three mutations. The Docker host's own leftovers from earlier
+  sessions (seven networks, six created containers from manual experiments) were removed once, by hand, before the
+  run.
+* Full serial run after this round: **1 764 passed** (1 720 after closeout 2, +44: 36 for the decision stage and
+  the NULL rule, 6 migration/0021, 6 residue check, 2 residue wiring, 1 graph cleanup, less the changes in
+  parametrization). The residue check ran at the end of that run and found nothing; the one active
+  global layer the database held afterwards was a baseline left by an interrupted script of this round's
+  own (not by the suite — it was already there when the session started, so by design it is not residue) and was
+  retired by hand.

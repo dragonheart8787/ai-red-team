@@ -30,7 +30,11 @@ What is established:
   them) and back on: that pair is shown to be **atomic** -- a failure between them rolls both back,
   so there is no committed state in which the table's isolation is off;
 * 0020 specifically: a row holding the retired skip code is **rewritten** on the way up, the
-  database then refuses that code, and on the way down the old constraint accepts it again.
+  database then refuses that code, and on the way down the old constraint accepts it again;
+* 0021 specifically: a proposal past ``received`` with no decision **blocks** the upgrade (and
+  nothing of it is committed), once the row is corrected the upgrade goes through and the database
+  refuses every stage but ``received`` without a decision, and the downgrade takes the constraint
+  away again.
 """
 
 from __future__ import annotations
@@ -290,10 +294,13 @@ def test_0020_switches_force_row_security_off_and_on_inside_one_transaction(scra
     path = REPO / "db" / "migrations" / "versions" / "0020_scheduler_state_narrow.py"
     source = path.read_text()
     upgrade = source[source.index("def upgrade()"):source.index("def downgrade()")]
-    off = upgrade.index("ALTER TABLE scheduler_state NO FORCE ROW LEVEL SECURITY")
-    rewrite = upgrade.index("UPDATE scheduler_state")
-    on = upgrade.index("ALTER TABLE scheduler_state FORCE ROW LEVEL SECURITY")
-    assert off < rewrite < on
+    off = upgrade.find("ALTER TABLE scheduler_state NO FORCE ROW LEVEL SECURITY")
+    rewrite = upgrade.find("UPDATE scheduler_state")
+    on = upgrade.find("ALTER TABLE scheduler_state FORCE ROW LEVEL SECURITY")
+    assert min(off, rewrite, on) >= 0, (
+        f"0020 must switch FORCE off, rewrite, and switch it on again (positions {off}, "
+        f"{rewrite}, {on}; -1 = missing)")
+    assert off < rewrite < on, "0020 does not do NO FORCE, then the rewrite, then FORCE"
     assert "autocommit" not in source and "COMMIT" not in source.upper().replace("COMMENT", "")
 
     scratch.alembic("upgrade", "0019")
@@ -356,8 +363,69 @@ def test_0020_rewrites_the_retired_code_up_refuses_it_after_and_accepts_it_again
 
     scratch.alembic("downgrade", "0019")
     assert scratch.revision() == "0019"
-    _insert_state(scratch, eid, RETIRED)                         # the old constraint is back
+    try:
+        _insert_state(scratch, eid, RETIRED)                     # the old constraint is back
+    except IntegrityError as refused:
+        pytest.fail(f"after the downgrade the database still refuses the retired code: "
+                    f"{str(refused.orig).splitlines()[0]}")
     assert _state_code(scratch, eid, pid) == REWRITTEN_TO        # (the rewrite is not undone: it
                                                                  # was a correction, not a mapping)
+    scratch.alembic("upgrade", "head")
+    assert scratch.revision() == _head()
+
+
+# ---------------------------------------------------------------------------------------------
+# 0021: a proposal past `received` has a decision
+# ---------------------------------------------------------------------------------------------
+
+CONSTRAINT_0021 = "action_proposals_decision_past_received"
+
+
+def _set_stage(scratch: Scratch, eid: str, pid: str, stage: str, decision: str | None) -> None:
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        conn.execute(text(
+            "UPDATE action_proposals SET pipeline_stage = :s, decision = :d "
+            "WHERE proposal_id = :p"),
+            {"s": stage, "d": decision, "p": pid})
+
+
+def test_0021_blocks_on_an_undecided_proposal_past_received_and_leaves_nothing_behind(scratch):
+    from control_plane.orchestrator.stages import RECEIVED, STAGES
+
+    scratch.alembic("upgrade", "0020")
+    eid = f"ENG-MIG-{uuid.uuid4().hex[:8]}"
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        conn.execute(text("INSERT INTO engagements (engagement_id, customer_id, "
+                          "policy_snapshot_version) VALUES (:e, 'CUST', 1)"), {"e": eid})
+        pid = _add_proposal(conn, eid)
+    _set_stage(scratch, eid, pid, "recorded", None)             # 0020 lets this exist
+    before = scratch.fingerprint()
+
+    error = scratch.alembic_fails("upgrade", "0021")
+
+    assert CONSTRAINT_0021 in error and "violated by some row" in error, error[-600:]
+    assert scratch.revision() == "0020"
+    assert scratch.fingerprint() == before                       # the failed step left no trace
+
+    _set_stage(scratch, eid, pid, "recorded", "ALLOW")           # the row is corrected by a person
+    scratch.alembic("upgrade", "0021")
+    assert scratch.revision() == "0021"
+
+    for stage in STAGES:                                         # every stage, no decision
+        if stage == RECEIVED:
+            _set_stage(scratch, eid, pid, stage, None)
+            continue
+        with pytest.raises(IntegrityError) as refused:
+            _set_stage(scratch, eid, pid, stage, None)
+        assert CONSTRAINT_0021 in str(refused.value), stage
+        _set_stage(scratch, eid, pid, stage, "ALLOW")            # and with one, accepted
+
+    scratch.alembic("downgrade", "0020")
+    assert scratch.revision() == "0020"
+    _set_stage(scratch, eid, pid, "recorded", None)              # the way back is open again
+    assert "violated by some row" in scratch.alembic_fails("upgrade", "head")   # and blocks again
+    _set_stage(scratch, eid, pid, "recorded", "ALLOW")
     scratch.alembic("upgrade", "head")
     assert scratch.revision() == _head()

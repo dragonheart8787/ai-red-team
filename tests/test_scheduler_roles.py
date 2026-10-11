@@ -336,9 +336,11 @@ def test_the_vocabulary_in_the_constraints_is_the_vocabulary_in_the_code(db_avai
                 | set(vocab.DISPOSITIONS) | set(vocab.DEFER_REASONS) | set(vocab.SKIP_REASONS))
     assert literals == expected
     # and the clause that ties a *skip* to its reason lists exactly the five, not more
-    (skip_clause,) = re.findall(
+    clauses = re.findall(
         r"disposition = 'skipped'::text\) AND \(reason_code IS NOT NULL\) "
         r"AND \(reason_code = ANY \(ARRAY\[(.*?)\]\)", " ".join(definitions))
+    assert len(clauses) == 1, "no clause ties a skip to a non-NULL code from the closed list"
+    (skip_clause,) = clauses
     assert set(re.findall(r"'([^']*)'", skip_clause)) == set(vocab.SKIP_REASONS)
     assert len(vocab.SKIP_REASONS) == 5
 

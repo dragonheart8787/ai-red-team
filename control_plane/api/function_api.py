@@ -767,11 +767,11 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
     try:
         with engagement_scope(eid) as conn:
             # First statement: win the transition, or do nothing at all. The audit record below
-            # is written only by the winner.
-            stages.take(conn, proposal_id, expected=stages.RECEIVED, new=new_stage,
-                        detail=detail)
+            # is written only by the winner. The decision is written by the same statement that
+            # moves the stage: since 0021 the database refuses any stage past ``received`` with no
+            # decision, so the two cannot be two statements.
             _record_decision(
-                conn, proposal_id, decision,
+                conn, proposal_id, decision, new_stage=new_stage, stage_detail=detail,
                 authorized_scope_object_id=authorization.scope_object_id,
                 classified_asset_id=metadata.asset_id,
                 policy_version=policy_version,
@@ -1412,24 +1412,32 @@ def _persist_proposal(
 
 
 def _record_decision(
-    conn: Connection, proposal_id: str, decision, *,
+    conn: Connection, proposal_id: str, decision, *, new_stage: str, stage_detail: str | None,
     authorized_scope_object_id: str | None, classified_asset_id: str | None,
     policy_version: int | None = None, reviewer_hints: Mapping[str, Any] | None = None,
 ) -> None:
-    """The decision, its reasons, and the two facts the resolvers established.
+    """Move ``received`` to ``new_stage`` and record the decision with it, in one statement.
 
-    The scope object and asset are kept on the proposal so that its provenance edges can be derived
-    from committed rows later (``graph.record_provenance``) instead of being written alongside the
-    decision from values only this call holds.
+    The decision, its reasons, and the two facts the resolvers established. The scope object and
+    asset are kept on the proposal so that its provenance edges can be derived from committed rows
+    later (``graph.record_provenance``) instead of being written alongside the decision from values
+    only this call holds. Raises :class:`stages.StageConflict` when the proposal is no longer at
+    ``received`` -- the same outcome as ``stages.take``, whose job this statement does here.
     """
-    conn.execute(
+    moved = conn.execute(
         text("UPDATE action_proposals SET decision = :d, decision_reasons = :r, "
              "authorized_scope_object_id = :scope, classified_asset_id = :asset, "
              "decided_policy_version = :pver, reviewer_hints = CAST(:hints AS jsonb), "
-             "updated_at = now() WHERE proposal_id = :p"),
+             "pipeline_stage = :new, stage_detail = :detail, stage_updated_at = now(), "
+             "updated_at = now() "
+             "WHERE proposal_id = :p AND pipeline_stage = :expected RETURNING proposal_id"),
         {"p": proposal_id, "d": decision.decision,
          "r": list(decision.deny_reasons + decision.approval_reasons),
          "scope": authorized_scope_object_id, "asset": classified_asset_id,
-         "pver": policy_version,
+         "pver": policy_version, "new": new_stage, "detail": stage_detail,
+         "expected": stages.RECEIVED,
          "hints": json.dumps(reviewer_hints) if reviewer_hints is not None else None},
-    )
+    ).scalar_one_or_none()
+    if moved is None:
+        raise stages.StageConflict(
+            f"proposal {proposal_id!r} is no longer in stage {stages.RECEIVED!r}")

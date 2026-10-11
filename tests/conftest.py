@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from control_plane.config import load_dotenv
 from control_plane.state.db import get_engine
+from tests import residue
 from tests.helpers import (
     EngagementManager,
     deactivate_global_layer,
@@ -54,7 +55,33 @@ def db_available() -> bool:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _a_global_baseline_exists():
+def _nothing_is_left_behind(request):
+    """Compare the world after the session with the world before it (tests/residue.py).
+
+    Set up first and torn down last -- ``_a_global_baseline_exists`` asks for it, so the baseline
+    this session published has been retired by the time the comparison is made. A failure here is
+    an ERROR at the end of the run: the run does not pass while it is true.
+    """
+    try:
+        before = residue.snapshot()
+    except Exception:  # pragma: no cover - no database; db_available reports it
+        yield
+        return
+    yield
+    found = residue.leftovers(before)
+    if found.networks_removed:
+        reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(
+                f"residue: removed {len(found.networks_removed)} sandbox network(s) the session "
+                f"left behind (the sandbox keeps one per allowlist by design)")
+    if found.failures():
+        pytest.fail("the test session left state behind:\n  " + "\n  ".join(found.failures()),
+                    pytrace=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _a_global_baseline_exists(_nothing_is_left_behind):
     """``create_engagement`` refuses when no global baseline is in force (5.20, D54), so a
     session that makes engagements needs one. Ensured once, for the whole session, and retired
     afterwards only if this session published it. Skipped when there is no database: tests that
