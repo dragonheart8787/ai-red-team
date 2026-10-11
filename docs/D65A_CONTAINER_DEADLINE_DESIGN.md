@@ -26,8 +26,8 @@ deadline), took a trapped-TERM tool and a `setsid` grandchild with it, passed st
 `docker stop` (0.2 s), preserved the tool's own exit codes, and worked as uid 65534 with all capabilities dropped
 and a read-only root `[E: E25]`. With the control plane alive the budget still wins `[E: E16-C]`.
 
-The decisions that are yours (§11): the language (Go recommended — one hash pins it on every machine and
-architecture; C is smaller but its hash belongs to a toolchain), how it reaches the container (bind-mount
+The decisions that are yours (§11): the language (**Rust** recommended after the step-4a comparison — §3.1; the
+first revision recommended Go, whose prototype turned out not to reap orphans), how it reaches the container (bind-mount
 recommended, baking it into the images is the alternative), what happens when it is missing (fail closed,
 recommended), the slack (10 s), and what 124 is mapped to.
 
@@ -70,29 +70,48 @@ Behaviour, both builds (§3), through `DockerSandbox.run` or Docker directly `[E
 
 ## 3. Source, language and pin
 
-### 3.1 Two builds were made and compared (E24)
+### 3.1 Three builds were made and compared (E24, E27)
 
-| | **C** (`gcc -O2 -static -s -fno-ident -Wl,--build-id=none`) | **Go** (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid="`) |
-|---|---|---|
-| Size | 714,680 bytes | 1,757,332 bytes |
-| Source | ~55 lines, `sigtimedwait` loop | ~55 lines, `os/exec` + a timer |
-| Same sha256 from another directory, another file name, a second later | yes | yes |
-| What the hash depends on | the compiler **and the static libc** that built it: a CI runner with another gcc or glibc gives another hash `[N: not tried on a second machine]` | the Go version (pinned in `go.mod` and by `GOTOOLCHAIN`); no libc `[N: cross-machine not tried]` |
-| Other architecture | needs a cross toolchain (none here) | `GOARCH=arm64` built here without one (not run on arm64 hardware `[N]`) |
-| PID 1 character | no runtime, one thread | a runtime with several threads; larger than the program needs |
-| Read + sha256 per run | 2.4 ms | 5.7 ms (negligible against a run of 120 s) |
+C and Go in the first revision; **Rust added at implementation step 4a** (D64 implementation, before any
+code of the helper is written). The prototypes are in the session scratch area
+(`scratchpad/d65a_prototypes/{c,go,rust}`), not in the repository.
 
-**Recommendation (D65A-1): Go.** The point of a pin is that anyone can rebuild and compare; that works across
-machines and architectures with Go and only on a matching toolchain with C. The cost is a 1.7 MB binary and a
-runtime in PID 1, which is acceptable for a program with this little to do. If you would rather keep PID 1 as
-small as possible, C is a defensible choice with a per-toolchain hash, committed alongside the binary.
+| | **C** (`gcc -O2 -static -s -fno-ident -Wl,--build-id=none`) | **Go** (`CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid="`) | **Rust, musl** (`cargo build --release --locked --target x86_64-unknown-linux-musl`, `opt-level="s"`, LTO, `panic="abort"`, `strip`) |
+|---|---|---|---|
+| Size | 714,680 B | 1,757,332 B | **430,608 B** (aarch64: 376,096 B). The glibc-static Rust build is 1,221,408 B |
+| Lines of source | 53 | 53 | 87 (9 `unsafe` blocks around `libc`) |
+| Same sha256 from another directory / name / later `[E]` | yes | yes | yes — also with `--remap-path-prefix`, a different `--target-dir`, and for aarch64 |
+| What the hash depends on | compiler **and** the static libc that built it `[N: not tried on a second machine]` | the Go version (`go.mod` + `GOTOOLCHAIN`) | the rustc version (the musl libc is bundled in the `rust-std` component), `Cargo.lock` (one third-party crate: `libc`, pinned with its checksum) |
+| Other architecture | needs a cross toolchain (none here) | `GOARCH=arm64` without one (not run on arm64 hardware `[N]`) | `aarch64-unknown-linux-musl` built here with `rust-lld`, no C toolchain (not run on arm64 `[N]`) |
+| **PID 1, resident set** `[E: E27]` | 652 kB | **2,408 kB** | **448 kB** |
+| **PID 1, threads** `[E: E27]` | 1 | **8** | 1 |
+| **Reaps orphans re-parented to it** `[E: E27]` | yes (0 zombies) | **no — 3 zombies left** in a test where a tool leaves three orphans | yes (0 zombies) |
+| Behaviour table of §2 (stdin, exit codes, 124, `docker stop` forwarding, non-root + `cap_drop ALL`, parent `kill -9`) `[E: E25, E27]` | all pass | all pass | all pass (`docker stop` 0.1 s; parent killed at 2 s, deadline 6 s → exit 124 after 6.11 s) |
+| Read + sha256 per run | 2.4 ms | 5.7 ms | < 2 ms (smaller file) |
+
+**What step 4a changed in the picture.** The Go prototype is the one the first revision recommended, and it has a
+defect that matters for exactly this program: as PID 1 it waits only for its direct child, so a tool that leaves
+orphans (a shell that backgrounds a process; a scanner that forks helpers) leaves **zombies that nobody reaps** —
+3 of 3 in the test — and a container has a `pids_limit` of 256 `[R: sandbox.py]`, which a tool that forks
+repeatedly can exhaust with zombies alone. It is fixable (a `SIGCHLD` loop calling `Wait4(-1, …)` coordinated with
+`cmd.Wait`), but it is the kind of PID-1 detail that Go's runtime makes awkward and C and Rust make direct. Go also
+runs 8 threads and 2.4 MB in PID 1 for a program that waits on a timer.
+
+**Recommendation (D65A-1), revised: Rust (musl, static).** The smallest binary (430 KB, one thread, 448 kB
+resident); the PID-1 behaviour the program exists for (signal handling with `sigtimedwait`, orphan reaping) is
+the same direct calls as C; the hash is toolchain-pinned like Go's and was reproducible across directories,
+flags and architectures here; it cross-builds to aarch64 with no C toolchain. Against it: one third-party
+dependency (`libc`, version- and checksum-pinned by `Cargo.lock`; the alternative is declaring the six libc
+functions by hand, `extern "C"`, with no dependency at all but more `unsafe`), nine `unsafe` blocks that are
+all thin calls, and a Rust toolchain in CI. **C remains a defensible choice** (53 lines, no dependency, 715 KB)
+with a hash that belongs to a compiler and libc; **Go is no longer recommended.** The choice is yours.
 
 ### 3.2 Where it lives, how it is pinned (proposed layout)
 
 ```
 tool_gateway/deadline/
-    main.go            the whole program
-    go.mod             module + `toolchain go1.24.7`
+    src/main.rs        the whole program (Rust; for C: main.c, for Go: main.go + go.mod)
+    Cargo.toml, Cargo.lock, rust-toolchain.toml     the toolchain and the one dependency, pinned
     build.sh           the one build command, with the reproducibility flags; writes bin/cyberorch-deadline-linux-<arch>
     SHA256SUMS         the expected sha256 of each architecture's binary (committed)
     README.md          behaviour table of §2, exit codes of §7
@@ -100,9 +119,9 @@ tool_gateway/deadline/
 ```
 
 * **Pin:** `SHA256SUMS` is committed. The sandbox compares the file's sha256 with it before every run (§5).
-  A change to `main.go` or to the Go version changes the hash, and the commit that does it has to update
+  A change to `main.rs`, `Cargo.lock` or the Rust version changes the hash, and the commit that does it has to update
   `SHA256SUMS` — a reviewer sees both together.
-* **CI:** a step builds the helper with the pinned Go and compares with `SHA256SUMS`; a mismatch fails the job.
+* **CI:** a step builds the helper with the pinned Rust toolchain (`--locked`) and compares with `SHA256SUMS`; a mismatch fails the job.
   That is also the reproducibility test: if CI cannot reproduce the committed hash, the pin is worth nothing, and
   the job says so `[N: the first CI run is the real test of cross-machine reproducibility]`.
 * **Provenance** is therefore "built from this commit's source with this toolchain, and equal to the committed
@@ -213,7 +232,7 @@ each adapter's `derive_view` is unaffected by the extra stderr line.
 |---|---|
 | `tool_gateway/deadline/` | new: source, `go.mod`, `build.sh`, `SHA256SUMS`, README |
 | `tool_gateway/sandbox.py` `run` | wrap the command, add the mount and the label, verify the hash, map exit 124 per §7, type the two new failures; `DeadlineHelperUnavailable` is a new `NotStarted` subclass with a `reason` code |
-| `.github/workflows/test.yml` | a Go setup step (pinned) and the build + hash comparison step; the helper must be built before the tests that run containers |
+| `.github/workflows/test.yml` | a toolchain setup step (pinned) and the build + hash comparison step; the helper must be built before the tests that run containers |
 | `tests/test_image_literals.py` | no new image; the CI-built set gains nothing, but a sibling test checks that the helper is built by CI |
 | `docs` | ACCEPTANCE: the exposure window of D44-7 no longer depends on the control plane staying alive; `D64` updated to say the helper exists |
 | adapters, registry, Rego, `Budget`, the schema | **none** |
@@ -249,7 +268,7 @@ Each is mutation-checked (`scripts/mutation_check.py`) and the container ones us
 
 | # | Question | Recommendation and why |
 |---|---|---|
-| **D65A-1** ⚑ | Language and pin | **Go**, pinned by `go.mod` + `GOTOOLCHAIN`, hash in `SHA256SUMS`, CI rebuild-and-compare. Same hash on any machine and architecture (to be confirmed by CI, `[N]`); 1.7 MB and a runtime in PID 1. C is smaller (0.7 MB, one thread) but its hash is tied to a compiler and libc. |
+| **D65A-1** ⚑ | Language and pin | **Rust (musl, static)**, pinned by `rust-toolchain.toml` + `Cargo.lock` + `--locked`, hash in `SHA256SUMS`, CI rebuild-and-compare (cross-machine reproducibility to be confirmed by CI, `[N]`). 430 KB, one thread, reaps orphans; the Go prototype did not (3 zombies, 8 threads, 2.4 MB) and is no longer recommended. C (715 KB, no dependency) is the alternative; its hash is tied to a compiler and libc. |
 | **D65A-2** ⚑ | Delivery | **Bind-mount** the verified file (no image changes, one place to check). Alternative: bake it into the six images (image digest as the pin; more build scripts, drift between images). |
 | **D65A-3** | Slack | **10 s `[N]`** beyond `B`; measured normal-path kill latency 0.3 s. |
 | **D65A-4** ⚑ | Missing or wrong helper | **Fail closed:** `DeadlineHelperUnavailable(NotStarted)`, nothing runs. Lab scripts opt out explicitly; the label records `none`. |
@@ -260,17 +279,17 @@ Each is mutation-checked (`scripts/mutation_check.py`) and the container ones us
 
 ## 12. Experiments
 
-All run on this machine (Docker 29.3.1, docker-py 7.2.0, Go 1.24.7, gcc 13.3), with cleanup afterwards (no
+All run on this machine (Docker 29.3.1, docker-py 7.2.0, rustc 1.94.1, Go 1.24.7, gcc 13.3), with cleanup afterwards (no
 container, network or file left; the helper binaries were in the scratch area).
 
 | # | What | Result |
 |---|---|---|
 | **E5, E16** | (from the D64 document) a tool container with its control plane `kill -9`'d, without and with a first prototype helper | without: running 20.9–25 s later. With a 10 s deadline: exited 124 at 10.7 s; with the control plane alive and a 5 s budget: `run()` returned at 5.3 s, `timed_out=True`; a TERM-trapping tool with a `setsid` grandchild: exited 124 at 4.7 s on a 4 s deadline, no survivor |
 | **E15** | Docker's own options; which images have `timeout(1)`; a static helper builds | no maximum lifetime; `timeout` in `semgrep`, `bloodhound`, `browser`, absent from `nmap`, `gitleaks`, `egress-proxy`; static C helper builds |
-| **E24** | the helper builds, C and Go | §3.1 |
+| **E24, E27** | the helper builds (C and Go: E24; Rust musl, glibc-static and aarch64: E27), and the PID-1 measurements | §3.1 |
 | **E25** | the helper's behaviour, both builds, through `DockerSandbox.run` and directly | §2 |
 | **E26** | the helper on a `noexec` filesystem | the container's `start` is refused before anything runs |
 
-Not run: the Go build on another machine or in CI (reproducibility across toolchains `[N]`); the arm64 binary on
-arm64; images other than `nmap`, `gitleaks`, busybox and `python:3.12-slim` with a wrapped command; the helper as
+Not run: the Rust, C or Go build on another machine or in CI (reproducibility across toolchains `[N]`); the aarch64
+Rust binary on arm64 hardware; images other than `nmap`, `gitleaks`, busybox and `python:3.12-slim` with a wrapped command; the helper as
 PID 1 under a user-namespace-remapped daemon `[N]`.
