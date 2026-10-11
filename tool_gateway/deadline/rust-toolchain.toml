@@ -1,0 +1,7 @@
+# The compiler this helper is built with. build.sh does not rely on rustup: it installs exactly
+# these components from tarballs whose sha256 is committed (TOOLCHAIN.sha256) and refuses any
+# other compiler. This file is for a developer who has rustup and runs cargo by hand.
+[toolchain]
+channel = "1.94.1"
+profile = "minimal"
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

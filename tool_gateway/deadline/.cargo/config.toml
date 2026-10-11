@@ -1,0 +1,11 @@
+# Offline, vendored build (D65-A). `cargo build --locked --offline` resolves `libc` from ./vendor
+# and from nowhere else; the checksum of every vendored file is in vendor/libc/.cargo-checksum.json
+# and cargo verifies it, and Cargo.lock pins the crate's registry checksum.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[net]
+offline = true

@@ -9,7 +9,39 @@ on:
   pull_request:
 
 jobs:
+  deadline-helper:
+    # D65-A. The program every tool container runs as PID 1 is built here from the pinned source,
+    # the vendored libc and a toolchain whose tarballs are checked against TOOLCHAIN.sha256, and its
+    # sha256 must equal SHA256SUMS. A mismatch fails the job -- and the fix is never to edit
+    # SHA256SUMS to match: it means the build is not reproducible or the source changed without its
+    # pin, and either is a finding. The test job below runs the sandbox against *this job's* binary,
+    # which the sandbox then verifies against SHA256SUMS again before every run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the deadline helper and compare it with SHA256SUMS
+        run: |
+          set -o pipefail
+          ./tool_gateway/deadline/build.sh --check 2>&1 | tee /tmp/deadline-build.log
+          sha256sum tool_gateway/deadline/bin/*
+          ls -l tool_gateway/deadline/bin
+
+      - name: Environment, for comparing a mismatch with a local build
+        if: always()
+        run: |
+          tool_gateway/deadline/.toolchain/prefix/bin/rustc -vV || true
+          uname -a; ld --version | head -1 || true; gcc --version | head -1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deadline-helper
+          path: tool_gateway/deadline/bin/
+          if-no-files-found: error
+
   test:
+    needs: deadline-helper
     runs-on: ubuntu-latest
 
     services:
@@ -32,6 +64,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch the deadline helper built and verified by the previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: deadline-helper
+          path: tool_gateway/deadline/bin
+
+      - name: Make the helper executable
+        # An artifact does not carry the mode. The sandbox refuses a helper that is not executable,
+        # and refuses one whose sha256 is not in SHA256SUMS, before every run.
+        run: chmod 0755 tool_gateway/deadline/bin/cyberorch-deadline-linux-*
 
       - uses: actions/setup-python@v5
         with:
