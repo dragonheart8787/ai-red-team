@@ -16,6 +16,9 @@ from mutation_check import Edit, Mutation, main  # noqa: E402
 
 DISPATCH = "control_plane/orchestrator/dispatch.py"
 LATE = ("tests/test_dispatch_late_result.py",)
+M0017 = "db/migrations/versions/0017_approval_stages.py"
+M0021 = "db/migrations/versions/0021_decision_past_received.py"
+RLS_WRITES = ("tests/test_migrations_rls_writes.py", "tests/test_migrations_roundtrip.py")
 
 CATALOGUE = [
     Mutation(
@@ -70,6 +73,33 @@ CATALOGUE = [
                     "            record_audit(\n"
                     "                engagement_id=engagement_id, actor=actor,\n                event_type=f\"tool_run.{status}\""),),
         targets=("test_the_reconciler_first_then_the_result_arrives_late",)),
+    # ---- step 2: ACCEPTANCE 5.75, data statements in migrations under FORCE ROW LEVEL SECURITY
+    Mutation(
+        "D64-2-a", "0017's downgrade repairs rows as the owner without switching FORCE off", RLS_WRITES,
+        edits=(Edit(M0017, "def downgrade() -> None:\n    op.execute(\"ALTER TABLE action_proposals NO FORCE ROW LEVEL SECURITY;\")\n",
+                    "def downgrade() -> None:\n"),),
+        targets=("test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows",
+                 "test_each_data_statement_runs_with_force_off_for_every_table_it_touches"),
+        allowed_errors=("CheckViolation", "IntegrityError")),
+    Mutation(
+        "D64-2-b", "0017's back-fill reads approvals with FORCE still on (a granted approval is re-opened)", RLS_WRITES,
+        edits=(Edit(M0017, "    op.execute(\"ALTER TABLE approvals NO FORCE ROW LEVEL SECURITY;\")\n", ""),),
+        targets=("test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows",
+                 "test_each_data_statement_runs_with_force_off_for_every_table_it_touches")),
+    Mutation(
+        "D64-2-c", "0017's back-fill reads audit_log with FORCE still on (a denied proposal is re-opened)", RLS_WRITES,
+        edits=(Edit(M0017, "    op.execute(\"ALTER TABLE audit_log NO FORCE ROW LEVEL SECURITY;\")\n", ""),),
+        targets=("test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows",
+                 "test_each_data_statement_runs_with_force_off_for_every_table_it_touches")),
+    Mutation(
+        "D64-2-d", "0017 switches FORCE off for approvals and never back on", RLS_WRITES,
+        edits=(Edit(M0017, "    op.execute(\"ALTER TABLE approvals FORCE ROW LEVEL SECURITY;\")\n", ""),),
+        targets=("test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows",
+                 "test_each_data_statement_runs_with_force_off_for_every_table_it_touches")),
+    Mutation(
+        "D64-2-e", "a migration gains a data statement nobody listed", RLS_WRITES,
+        edits=(Edit(M0021, "def upgrade() -> None:\n", "def upgrade() -> None:\n    op.execute(\"UPDATE action_proposals SET updated_at = updated_at;\")\n"),),
+        targets=("test_every_data_statement_in_a_migration_is_known",)),
 ]
 
 

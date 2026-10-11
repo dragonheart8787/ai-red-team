@@ -429,3 +429,98 @@ def test_0021_blocks_on_an_undecided_proposal_past_received_and_leaves_nothing_b
     _set_stage(scratch, eid, pid, "recorded", "ALLOW")
     scratch.alembic("upgrade", "head")
     assert scratch.revision() == _head()
+
+
+# ---------------------------------------------------------------------------------------------
+# 0017 with rows (ACCEPTANCE 5.75): the data statements of a migration under FORCE RLS
+# ---------------------------------------------------------------------------------------------
+
+def _seed_at_0016(scratch: Scratch) -> tuple[str, dict[str, str]]:
+    """An engagement and one proposal for each stage 0016 knows, plus the three ways a proposal that
+    was ``closed`` for ``HUMAN_APPROVAL`` can have ended -- written with an engagement bound, the
+    way the application writes them."""
+    eid = f"ENG-MIG-{uuid.uuid4().hex[:8]}"
+    ids: dict[str, str] = {}
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        conn.execute(text("INSERT INTO engagements (engagement_id, customer_id, "
+                          "policy_snapshot_version) VALUES (:e, 'CUST', 1)"), {"e": eid})
+        shapes = {                       # name -> (stage, detail, decision)
+            "received": ("received", None, None),
+            "decided": ("decided", None, "ALLOW"),
+            "capability_issued": ("capability_issued", None, "ALLOW"),
+            "dispatching": ("dispatching", None, "ALLOW"),
+            "recorded": ("recorded", "succeeded", "ALLOW"),
+            "closed_deny": ("closed", "decision_DENY", "DENY"),
+            "ha_pending": ("closed", "decision_HUMAN_APPROVAL", "HUMAN_APPROVAL"),
+            "ha_approved": ("closed", "decision_HUMAN_APPROVAL", "HUMAN_APPROVAL"),
+            "ha_denied": ("closed", "decision_HUMAN_APPROVAL", "HUMAN_APPROVAL"),
+        }
+        for name, (stage, detail, decision) in shapes.items():
+            ids[name] = _add_proposal(conn, eid)
+            conn.execute(text(
+                "UPDATE action_proposals SET pipeline_stage = :s, stage_detail = :d, decision = :x "
+                "WHERE proposal_id = :p"),
+                {"s": stage, "d": detail, "x": decision, "p": ids[name]})
+        conn.execute(text(
+            "INSERT INTO approvals (approval_id, engagement_id, proposal_id, action_class, "
+            "valid_until, approved_by, approved_scope) VALUES "
+            "(:a, :e, :p, 'network.scan', now() + interval '1 day', 'human', "
+            "'this_proposal_only')"),
+            {"a": f"APPR-{uuid.uuid4().hex[:6]}", "e": eid, "p": ids["ha_approved"]})
+        conn.execute(text(
+            "INSERT INTO audit_log (engagement_id, actor, event_type, subject_type, subject_id) "
+            "VALUES (:e, 'human', 'approval.denied', 'action_proposal', :p)"),
+            {"e": eid, "p": ids["ha_denied"]})
+    return eid, ids
+
+
+def _stage_of(scratch: Scratch, eid: str, pid: str) -> tuple[str, str | None]:
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        return tuple(conn.execute(text(
+            "SELECT pipeline_stage, stage_detail FROM action_proposals WHERE proposal_id = :p"),
+            {"p": pid}).one())
+
+
+def test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows(scratch):
+    scratch.alembic("upgrade", "0016")
+    eid, ids = _seed_at_0016(scratch)
+    untouched = {n: _stage_of(scratch, eid, ids[n]) for n in
+                 ("received", "decided", "capability_issued", "dispatching", "recorded",
+                  "closed_deny")}
+
+    scratch.alembic("upgrade", "0017")
+
+    # The back-fill: a HUMAN_APPROVAL that was waiting becomes `awaiting_approval`; one a human
+    # approved stays closed (no old approval is resurrected); one that was denied says so.
+    assert _stage_of(scratch, eid, ids["ha_pending"]) == ("awaiting_approval", None)
+    assert _stage_of(scratch, eid, ids["ha_approved"]) == ("closed", "decision_HUMAN_APPROVAL")
+    assert _stage_of(scratch, eid, ids["ha_denied"]) == ("closed", "approval_denied")
+    assert {n: _stage_of(scratch, eid, ids[n]) for n in untouched} == untouched
+    assert scratch.force_rls() == {}                            # (the scheduler's tables: not yet)
+
+    # A proposal that is `approved` at 0017 has nowhere to go in the old vocabulary.
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        ids["approved"] = _add_proposal(conn, eid)
+        conn.execute(text(
+            "UPDATE action_proposals SET pipeline_stage = 'approved', stage_detail = 'APPR-X', "
+            "decision = 'HUMAN_APPROVAL' WHERE proposal_id = :p"), {"p": ids["approved"]})
+
+    scratch.alembic("downgrade", "0016")                         # fails today without the repair
+    assert scratch.revision() == "0016"
+    for name in ("ha_pending", "approved"):                      # both read as the old `closed`
+        assert _stage_of(scratch, eid, ids[name]) == ("closed", "decision_HUMAN_APPROVAL"), name
+    assert {n: _stage_of(scratch, eid, ids[n]) for n in untouched} == untouched
+
+    scratch.alembic("upgrade", "head")                           # and the way back up is clean
+    assert scratch.revision() == _head()
+    assert _stage_of(scratch, eid, ids["ha_approved"]) == ("closed", "decision_HUMAN_APPROVAL")
+    # every table the data statements touched has FORCE ROW LEVEL SECURITY back
+    with scratch.engine.begin() as conn:
+        off = [r[0] for r in conn.execute(text(
+            "SELECT relname FROM pg_class WHERE relnamespace = CAST(:s AS regnamespace) "
+            "AND relkind = 'r' AND relrowsecurity AND NOT relforcerowsecurity"),
+            {"s": scratch.name})]
+    assert off == [], f"FORCE ROW LEVEL SECURITY is off after the migrations for: {off}"
