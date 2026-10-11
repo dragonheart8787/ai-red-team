@@ -17,7 +17,7 @@ merge audit:
 | D58-6b what an L2 hold is | **NOT built** | — |
 | D58-7 `UNKNOWN_OUTCOME` | **built, option B** (the mislabel fixed; "never auto-retry" kept; the retry half is not taken) | `D58_7_SANDBOX_NOT_STARTED_REPORT.md`, 5.58 |
 | D58-8 lease / approved-proposal dispatch | **built** (D61, H-A) with the approval re-derivation | `D61_JIT_CAPABILITY_REPORT.md`, 5.56 |
-| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2) | — |
+| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2). **Design checkpoint written, decisions open (D63 → D64):** scope, identity/permissions, relation to the scheduler, audit; thirteen decisions D64-1…13 | `D64_RECONCILER_DESIGN.md`, 5.72 |
 | D58-10 recording the defects X1–X16 | **done** (D63 closeout): X1–X5, X8, X11, X12 as they were closed (5.52, 5.53, 5.56–5.58); X6 residual, X7, X9, X10, X13, X14, X15, X16 as open rows 5.60–5.67 | ACCEPTANCE 5.60–5.67 |
 | D58-11 priority basis | not needed yet (serial scheduler) | — |
 | D58-12 planning / closed-directions ledger | **NOT built** | — |
