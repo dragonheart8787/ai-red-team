@@ -1,4 +1,4 @@
-# D64 — The reconciler (D58-9): design checkpoint (revision 2)
+# D64 — The reconciler (D58-9): design checkpoint (revision 3)
 
 **Status: design only.** No code, migration or test is written or changed by this document. Everything below
 the line "Decisions" is a proposal waiting for answers; nothing is built until they are given.
@@ -7,19 +7,39 @@ the line "Decisions" is a proposal waiting for answers; nothing is built until t
 experiment named in §6; `[D]` taken from an older document (named); `[N]` not verified — knowledge or reasoning
 that I have not checked against this system.
 
-**What revision 2 changes** (each was asked for; the experiments behind them are §6 E9–E16):
+**What revision 3 changes** (the ten items asked for; the experiments behind them are E17–E26 in §6, run in
+rolled-back transactions, in a template-copied temporary database, or against Docker, with the scripts kept in
+the session's scratch area):
 
-1. ACCEPTANCE 5.72 now says what was measured: the address pool is not the limit, range overlap is (§1.5).
-2. D64-5 becomes a new terminal stage `abandoned`, with the design of migration 0022 and a grace period (§1.8).
-   The experiments found two things the first draft would have got wrong: a CHECK that passes on NULL (the
-   5.69 trap), and a caller that loses a race to the reconciler is told `DENY` with no reason (E9, E10).
-3. Every overdue threshold is now derived from the capability's budget, and §2.3 says how the reconciler is
-   allowed to read a budget at all (E11, E12).
-4. §2.4 is rewritten as the Docker permission boundary and the real limits of label-forgery protection (E13).
-5. Every deletion is verified afterwards; §1.7 lists the verification for each (E14).
-6. The deadline inside the container is listed as a separate deliverable candidate, with the `kill -9`
-   experiment (§8, E15–E16).
-7. The thirteen decisions of §5 are also given one line each in the reply.
+1. **§1.8 lists the properties of `abandoned` one by one so they can be checked against your definition. I do
+   not have that definition:** the request says "見上" ("see above") twice, and no message in this conversation
+   carries one. The comparison is therefore *not done*; the table is built so that it can be, row by row.
+2. **D64-1 (§2.2a):** the plan and act sides use separate connections; every state change goes through the
+   existing engagement-scoped `cyberorch_app` path, so no cross-engagement write exists or is added; the AST
+   tests that pin it are described. The narrow-grant act role of revision 2 (E12) is withdrawn.
+3. **D64-2 (§2.3):** how a `SECURITY DEFINER` function reads past row-level security — it does not, it runs
+   under its owner's policies — with the six experiments (E20), the checklist (`search_path`, owner, PUBLIC,
+   output types) and four defects that the experiments found in the revision-2 sketch of the function.
+4. **D64-3 (§1.2, §3.1, §3.2):** the budget is capped, `B = min(budget, B_cap)`, cap proposed 1,800 s; D58-16's
+   Rego ceiling is a prerequisite; closing is a conditional UPDATE; nine race tests are planned. **E17 showed
+   that a claim in revision 2 (§3.1) was wrong**; it is now ACCEPTANCE 5.74.
+5. **D64-5 (§1.8, §1.9):** every place that names a stage, and the structural tests; the reason-code CHECK
+   excludes NULL explicitly.
+6. **D64-8 (§1.5):** conflict-driven removal first, a 24 h sweep second; a sandbox network that is gone is
+   re-created; what a stopped container does to `network rm` was measured (E21).
+7. **D64-10 (§3.3):** the start order is a convention, and the document says so; concurrency tests are listed.
+8. **D64-12 (§1.5):** a credential or TLS file is removable when no live container mounts it **and** it is older
+   than the longest legal run plus the dispatch margin (E22).
+9. **§9:** the shared `snapshot_schema()` and the template database. Replaying the COMMENT incident it catches
+   it; it also found ACCEPTANCE 5.75 (E18, E19).
+10. **D65-A** has its own document, `docs/D65A_CONTAINER_DEADLINE_DESIGN.md`; §8 here is the summary.
+
+**Order of work once the decisions are confirmed:** D65-A first; then migration 0022 together with the two small
+dispatch-side fixes it depends on; then the reconciler (migration 0023 and the package).
+
+*Revision 2 (earlier)* corrected ACCEPTANCE 5.72, gave D64-5 the terminal stage `abandoned`, derived the
+thresholds from the budget, added the Docker boundary, the verified removals and the in-container deadline
+candidate. Its content is folded into the sections below.
 
 ## 0. In one page
 
@@ -47,14 +67,25 @@ many are `dispatching` and `capability_issued`, then goes on `[R]`. Nothing else
 * **A consequence of migration 0021:** a proposal stuck at `received` can no longer be closed without a
   decision. The answer proposed here is a new terminal stage, `abandoned` (§1.8, migration 0022), not a
   loosening of `closed`.
+* **A claim of revision 2 was wrong, and an experiment says how.** §3.1 said that a dispatch that loses the
+  stage race to the reconciler "loses its result, which is flagged unknown". With the existing
+  `reconcile_stale_dispatches` run while a container is still running, the dispatch's result is **recorded as
+  a success beside a `recorded / unknown_outcome` stage** — stage, dispatch state, run status, evidence and
+  audit contradict each other — because the dispatch ignores that its own stage transition matched no row
+  `[E: E17]`. That is ACCEPTANCE 5.74 and a prerequisite of the reconciler.
+* **A downgrade with real rows has never been run, and the first one failed.** `alembic downgrade 0016` on a
+  copy of the development database fails at 0017: its data repair runs as the owner under FORCE ROW LEVEL
+  SECURITY and moves nothing `[E: E18]` (ACCEPTANCE 5.75). The 0022 draft had the same flaw until the same
+  experiment caught it `[E: E19]`.
 * **A time bound is not a number to type in.** No ceiling on `max_duration_seconds` exists in the broker `[R]`,
   so a constant would be wrong in both directions. Every bound below is `budget + a term built from client
   timeouts in the code`, and the reconciler reads the budget through one narrow function, not the table (§1.2,
   §2.3).
 
-The proposal, in short (each is argued below and listed as a decision in §5): a **separate process** with its
-**own database role** and **its own lock**, split like the scheduler into a read-only *plan* side and an *act*
-side, the plan reading through one `SECURITY DEFINER` function; **never** resumes, re-runs, re-issues or
+The proposal, in short (each is argued below and listed as a decision in §5): a **separate process** with
+**its own lock**, split like the scheduler into a read-only *plan* side (its own login role, which can only
+execute one `SECURITY DEFINER` function) and an *act* side whose every state change goes through the existing
+engagement-scoped `cyberorch_app` path — **no cross-engagement write, no new write grant**; **never** resumes, re-runs, re-issues or
 re-proposes anything (I7 and D58-6 stay where they are); acts on Docker **only** on objects whose labels are
 confirmed by the database, by full container id, re-inspected immediately before; **verifies every removal
 afterwards** and audits only what it verified.
@@ -108,21 +139,67 @@ from the capability:
 | the run | `container.wait(timeout=max_duration_seconds)`, then `kill()` | `B` = the capability's `max_duration_seconds` |
 | after the run | `kill`, `logs` × 2, `remove`: 4 calls `[R]` (a proxy run: + 1 call to remove the proxy); then the DB writes | `Q` ≤ 4 × 60 s = 240 s (proxy run: 300 s) |
 
-Two different judgements use them, and they must not share a threshold:
+**The budget is capped: `B = min(budget.max_duration_seconds, B_cap)`.** Nothing in the broker or the policy
+bounds `max_duration_seconds` `[R: only `max_targets` is checked in `authz.rego`; ADR D58-16 records it]`, so a
+budget of a day is legal and would turn every bound below into a day. Two consequences. First, the reconciler
+must not trust the number without limit, so it applies a cap. Second, the system should not *issue* what the cap
+would overrule: D58-16's operator-owned per-action ceiling, enforced in Rego, is a **prerequisite** of these
+thresholds (it is not built `[D: ADR D58-16]`). Until it exists the cap is the only bound, and a dispatch whose
+budget is above it is, from the reconciler's side, judged overdue by the capped time — it can be killed while its
+owner still expects it to run. A run longer than the cap is outside what this system was designed for, and the
+reconciler says so (a count in `reconciler.started` and a log line per capability) rather than waiting.
+
+**Proposed `B_cap` = 1,800 s `[N]`.** Evidence: the largest budget any code path builds is 600 s (`Budget()`;
+the adapters default to the same `budget.get("max_duration_seconds", 600)`); `propose_action` uses 120 s, the
+approval path 120 s, the live-run scripts 30–120 s `[R: grep]`. 1,800 s is three times the largest in use —
+room to grow without a change, short enough that the worst bound stays under an hour (`B_cap + 660 s` = 2,460 s;
+with a proxy `B_cap + 1,215 s` = 3,015 s). The Rego ceiling, when built, must be ≤ the cap, and a test compares
+the two so that they cannot drift.
+
+Two different judgements use the bounds, and they must not share a threshold:
 
 * **Kill the container** (R2). The control plane's own `wait` starts within milliseconds of `start`, so a
   container that is *still running* at `State.StartedAt + B + K` — K = 60 s, the longest the control plane's own
-  `kill()` is allowed — has outlived its owner's ability to stop it. The container's own start time comes from
+  `kill()` is allowed — has outlived its owner's ability to stop it. The container's start time comes from
   Docker, not from a guess about the database. `T_kill = StartedAt + B + 60 s`.
 * **Declare the proposal's outcome unknown** (R1). This is a database fact about whether a *live* driver can
   still be about to write; it must cover the slowest honest driver: `T_unknown = stage_updated_at + B + P + Q`,
   which is `B + 660 s` for an ordinary run (`B + 1,215 s` with a proxy). **These are upper bounds read from the
   code, not measured worst cases `[N]`**; a typical run starts its container in under a second `[E: E16]`.
-  They are computed from `docker.constants.DEFAULT_TIMEOUT_SECONDS` and from the call counts, not copied, so
-  a change in either changes the bound. A wrong guess is bounded by the stage guard (§3.1), not safe by luck.
+  They are computed from `docker.constants.DEFAULT_TIMEOUT_SECONDS` and from the call counts, not copied, so a
+  change in either changes the bound.
 
-If the budget cannot be read (no capability row for the proposal; a value ≤ 0), the plan **does not guess**: it
-reports the row and does nothing to it.
+If the budget cannot be read (no capability row for the proposal; a value ≤ 0; a value the function's guarded
+cast could not read, §2.3), the plan **does not guess**: it reports the row and does nothing to it.
+
+**Closing a dispatch is one conditional UPDATE, a compare-and-set on what the plan observed.** The plan hands the
+act side `(engagement_id, proposal_id, planned stage_updated_at)`; the act side, in a transaction scoped to that
+one engagement, runs
+
+```sql
+WITH moved AS (
+  UPDATE action_proposals
+  SET pipeline_stage = 'recorded', stage_detail = 'unknown_outcome', dispatch_state = 'unknown_outcome',
+      stage_updated_at = now(), updated_at = now()
+  WHERE proposal_id = :p AND pipeline_stage = 'dispatching' AND stage_updated_at = :planned
+  RETURNING proposal_id)
+UPDATE tool_runs SET status = 'unknown_outcome'
+WHERE proposal_id IN (SELECT proposal_id FROM moved) AND status IN ('dispatching', 'running')
+```
+
+Zero rows moved means someone else moved the proposal since the plan looked, and nothing is audited (§4). The
+existing `reconcile_stale_dispatches` is **not** used for this and stays a test helper: it sets `dispatch_state`
+first, filters on `updated_at` instead of the stage, and ignores the result of its own stage `advance` `[E: E17]`.
+The same shape closes the other residues: `capability_issued` with a lapsed lease (the lease predicate evaluated
+in the same statement), `approved` in a killed engagement (the engagement's kill flag in the same statement),
+`received` past the grace (§1.8).
+
+**The live side has to cooperate, and today it does not.** The race in which the reconciler is wrong about a
+dispatch being dead is excluded by the time bound, not by the code: a dispatch whose record transaction finds its
+stage already moved must *fail* that transaction instead of recording a success next to it (ACCEPTANCE 5.74:
+`stages.take` in place of `stages.advance` at the three record sites of `dispatch.py`). The raw output is already
+durable on disk before that transaction and its path is logged, so a lost record loses no evidence. This fix is
+part of the same change as 0022 and is tested by RT1 (§3.2).
 
 For an overdue dispatch:
 
@@ -130,15 +207,15 @@ For an overdue dispatch:
    `[E: E5]`);
 2. if one is running past `T_kill` → **kill it**, keep the exited container for a retention window (D64-4) so a
    human can read its output, then remove it later (§1.7);
-3. past `T_unknown`: mark the run and the proposal `unknown_outcome`, stage `recorded` (the existing function's
-   job) with `requires_human_review`;
+3. past `T_unknown`: the conditional UPDATE above — `unknown_outcome`, `requires_human_review`;
 4. **never** call `dispatch_*`, `propose_action`, `dispatch_approved` — the ladder to *try again* is D58-6.
 
 The kill is the one new *destructive* act on a thing the tool may still be doing; I7 forbids a silent
 re-execution, not stopping an overdue process, and the kill switch's own gap (it does not stop a running
 container, D44-7/D58-16 `[D]`) is the same gap seen from the other side. If the control plane is in fact alive
 but slow, the reconciler's kill makes its `wait` return an exit code instead of `timed_out`: the run is
-recorded as failed, not as timed out — a cosmetic difference, stated.
+recorded as failed, not as timed out — a cosmetic difference, stated. With the in-container deadline (D65-A) the
+kill becomes a backstop that should seldom fire.
 
 ### 1.3 R3 — `capability_issued`, lease lapsed
 
@@ -186,16 +263,45 @@ R6 (`received`, `decided`) is §1.8.
   (§1.2), identified by labels (`cyberorch.egress_proxy`, `cyberorch.run_id`, `cyberorch.owner`) cross-checked
   against `tool_runs`/`capabilities`. Their secret files go with them (`ProxyEndpoint.secret_files` is lost with
   the process, so files are swept by pattern: below).
-* **Networks:** a network is removable when **no container of any state is attached** and it has been idle for a
-  retention period (D64-8); removal races a concurrent `ensure_network` (the dispatch finds the network, the
-  network is removed, `containers.create` fails with "network not found") — typed `NotStarted`, retryable, so
-  safe but noisy. A second trigger: a `NetworkRangeConflict` caused by *our own* idle network should clear it
-  (D64-8) — this is the case that actually occurs. The reconciler must **not** call
-  `DockerSandbox.remove_network`: it returns nothing and swallows every error `[E: E14]`; it uses the Docker
-  API directly and verifies (§1.7).
-* **Files:** `/tmp/cyberorch-cred-*` and `/tmp/cyberorch-tls-*` older than a bound, regular files owned by the
-  expected uid, never symlinks (§1.7); the *mode* (0644 credential mount) and a per-run `0700` directory are
-  D58-17's decision, not this one's (D64-12).
+* **Networks — a conflict first, a sweep second (D64-8).**
+  * *Primary trigger: a conflict.* The failure that actually occurs is a dispatch refused with
+    `network_range_conflicts_with_another_network` `[E: E3, E21-N4]`. That refusal is recorded
+    (`tool_run.refused`, reasons `network_unavailable` and that code; the message names the requested range; the
+    `tool_runs` row keeps `network_allowlist`) `[R: dispatch.py _refused_before_start, sandbox.py]`. The
+    reconciler finds recent refusals with that code — through the same `SECURITY DEFINER` function (§2.3), which
+    would return `(engagement_id, run_id, network_allowlist, at)` and nothing else — computes which of **our**
+    labelled networks overlap the requested range (`ipaddress` overlap against the label
+    `cyberorch.allowlist`), and removes each such network that is idle, then verifies (§1.7). An overlapping
+    network that is *not* ours (a lab's) is reported and left. It does not retry the refused proposal (D58-6).
+  * *Secondary: a 24-hour sweep* of idle networks, so that a system that never hits a conflict does not
+    accumulate them for ever. Idle = no container of any state attached, and the newest container that used it
+    finished (or, with none ever, the network was created) at least 1 h ago. The 24 h period is chosen `[N]`; the
+    sweep bounds the *count*, for which no limit was found (1,100 were created, E2), it does not prevent a failure.
+  * *Why "no container of any state", not Docker's own refusal.* Docker refuses `network rm` only for **running
+    and paused** containers; a **created** (never started) and an **exited** container do **not** block it, and
+    `containers.list(all=True, filters={"network": name})` finds all four `[E: E21-N1]`. Removing a network
+    under a `created` container is exactly a dispatch between `create` and `start`: its `start` then fails with
+    "network … not found", which the sandbox types as `ContainerStartRefused` — a `NotStarted`, safe and
+    retryable `[E: E21-N3]`. So the reconciler's rule is stricter than Docker's, and the 1 h idle period (far
+    longer than a dispatch's `P`) is what closes the window.
+  * *A network that is gone is re-created.* `ensure_network` finds nothing and creates it again with the same
+    name and subnet, and the next run on it succeeded `[E: E21-N2]`: removing an idle network costs one network
+    creation, not a failed dispatch.
+  * The reconciler must **not** call `DockerSandbox.remove_network`: it returns nothing and swallows every
+    error `[E: E14]`; it uses the Docker API directly and verifies (§1.7).
+* **Files — judged by who mounts them, then by age (D64-12).** A `cyberorch-cred-*` or `cyberorch-tls-*` file
+  is removable when **both** hold:
+  1. *no container in a live state — `created`, `running`, `paused`, `restarting` — has it as a mount source.*
+     Found with `containers.list(all=True, filters={"volume": <host path>})`, or by reading `Mounts[].Source`
+     of every container; both find created, running and exited holders, and an exited one no longer needs the
+     file `[E: E22]`;
+  2. *it is older than `B_cap + P + Q`* (§1.2): the longest legal run plus the dispatch's own margin.
+
+  Neither alone is enough. Age alone would remove the credential of a legal long run. "Not mounted" alone would
+  remove a file that was written *before* its container exists (`mount_for_run` and `start_egress_proxy` write
+  first and create second `[R]`), i.e. a dispatch that is about to start. Regular files owned by the expected
+  uid, never symlinks; opened through a directory fd; verified (§1.7). The *mode* of the credential file and a
+  per-run `0700` directory are D58-17's decision, not this one's.
 
 ### 1.6 The boundary with D58-6
 
@@ -246,54 +352,68 @@ more — stated, not hidden; D64-11).
 ### 1.8 R6 — the terminal stage `abandoned`, migration 0022, and the grace period
 
 *Why a new stage, not a looser `closed`.* Migration 0021 made `closed` (and every stage past `received`) require
-a decision. A proposal stuck at `received` has none, and "closed" would say a decision was made. The first
-draft left them alone; this one gives them a terminal stage of their own, so that **"undecided" and "abandoned"
-are visible in the stage and the database still refuses `closed` without a decision.** (The revision request said "see above" for the definition of `abandoned`; no earlier message carrying a definition is available to me, so this section is built from the D64-5 question it answers, and the definition below is the one to confirm or correct.)
+a decision. A proposal stuck at `received` has none, and "closed" would say a decision was made. Revision 1 left
+them alone; a terminal stage of their own makes **"undecided" and "abandoned" visible in the stage while the
+database still refuses `closed` without a decision.**
 
-**Definition.** `abandoned` is terminal. It is reached only from `received`, only by the reconciler, only when no
-decision exists, and carries `stage_detail = 'undecided_past_grace'`. Nothing ran, nothing was decided, no
-capability exists. It is the *known not-run* shape D58-6 reads.
+**The definition, as properties that can be checked one by one.** *I do not have your definition* (the request
+says "見上" and nothing above it carries one), so this is the definition I built, laid out so that a row can be
+confirmed or corrected; if yours differs on a row — say, abandoning `decided` rows, or a manual path — say which.
+
+| # | Property | Enforced by |
+|---|---|---|
+| A1 | Terminal: nothing moves a proposal out of `abandoned`. | `ABANDONED ∈ TERMINAL`; no `expected=` in the code names it; structural test (§1.9) |
+| A2 | Reachable only from `received`. | the reconciler's compare-and-set, `WHERE pipeline_stage = 'received' AND stage_updated_at = :planned` |
+| A3 | Written only by the reconciler. | structural test: one module holds the write; **the database cannot enforce *who*** `[N]` |
+| A4 | Only when no decision exists. | CHECK `action_proposals_abandoned_is_undecided` (`decision IS NULL`) |
+| A5 | Exactly one reason code, never NULL. | the same CHECK: `stage_detail IS NOT NULL AND stage_detail = 'undecided_past_grace'` |
+| A6 | Only after a grace. | the reconciler's predicate `stage_updated_at < now() - grace`; it refuses to start with a grace below twice the floor |
+| A7 | No capability, run or approval can exist for it. | follows from A2 (they are created only after `decided`); asserted by the coherence check |
+| A8 | Known not run; reopenable only by a **new key**; the old key keeps answering "abandoned". | the explicit outcome below; D58-6 reads it |
+| A9 | Not a decision. | no `policy.decided` is ever written for it; its audit event is `reconciler.proposal_abandoned` |
 
 **Migration 0022 (one transaction, proposed text — not written).**
 
 | Step | Statement | Why |
 |---|---|---|
 | 1 | replace `action_proposals_pipeline_stage_check` with the list plus `'abandoned'` | the stage must be legal |
-| 2 | replace `action_proposals_decision_past_received` with `decision IS NOT NULL OR pipeline_stage IN ('received','abandoned')` | the one legal NULL stage list grows from `{received}` to `{received, abandoned}`; `closed` still cannot be undecided `[E: E9-A4]` |
-| 3 | add `action_proposals_abandoned_is_undecided`: `pipeline_stage <> 'abandoned' OR (decision IS NULL AND stage_detail IS NOT NULL AND stage_detail = 'undecided_past_grace')` | an abandoned row has no decision and the one reason code. **The `IS NOT NULL` is not decoration:** written as `… AND stage_detail = '…'` the CHECK passes on a NULL detail, and `abandoned` with no reason was accepted `[E: E9-A11]` — the 5.69 rule, met a second time |
+| 2 | replace `action_proposals_decision_past_received` with `decision IS NOT NULL OR pipeline_stage IN ('received','abandoned')`, **and set its COMMENT again** | the one legal NULL stage list grows from `{received}` to `{received, abandoned}`; `closed` still cannot be undecided `[E: E9-A4]`. A dropped and re-added constraint loses its COMMENT — what broke the suite in revision 2 `[E: E19-T2]` |
+| 3 | add `action_proposals_abandoned_is_undecided`: `pipeline_stage <> 'abandoned' OR (decision IS NULL AND stage_detail IS NOT NULL AND stage_detail = 'undecided_past_grace')`, with a COMMENT | an abandoned row has no decision and the one reason. **The `IS NOT NULL` is not decoration:** written as `… AND stage_detail = '…'` the CHECK passes on a NULL detail and `abandoned` with no reason was accepted `[E: E9-A11]` — ACCEPTANCE 5.69, met a second time, and it must be listed in `test_check_constraints_null_rule.py` with its reason |
 | 4 | rebuild `action_proposals_open_stage` with `NOT IN ('recorded','closed','abandoned')` | otherwise every abandoned row stays in the "open" index for ever `[E: E9-A9]` |
-| 5 | `COMMENT ON COLUMN … pipeline_stage` updated | the documentation of the stage list |
+| 5 | update the COMMENT on `pipeline_stage` | the documented stage list |
 
-*Upgrade* only relaxes constraints, so it needs no pre-check and cannot fail on existing rows.
+*Upgrade* only relaxes constraints, so it needs no pre-check and cannot fail on existing rows. Compared with
+`snapshot_schema()` (§9) it changes exactly the three existing constraints/index it names and adds one
+constraint, nothing else `[E: E19-T3]`.
 
-*Downgrade* must move the rows first: `UPDATE … SET pipeline_stage='received', stage_detail=NULL,
-stage_updated_at=now() WHERE pipeline_stage='abandoned'`, then drop the new CHECK, restore the two old ones, and
-rebuild the index. A downgrade without the row move **fails**: `check constraint "action_proposals_pipeline_stage_check"
-… is violated by some row` `[E: E9-A10]`; with it, every abandoned row (155 in that run) went back to `received` and the
-constraint definitions came back identical `[E: E10 setup, with the comment caveat of §6]`. The semantics of the downgrade — an abandoned
-proposal becomes resumable again by its key — are stated in the migration docstring; a migration cannot write
-the audit record that says so.
-
-*Code the stage implies (listed so they are not forgotten; not written):* `stages.ABANDONED` in `STAGES` and
-`TERMINAL`; `_outcome_from_rows` gets an explicit `abandoned` branch (below); the tests that enumerate stages
-(`LEGAL_NULL_STAGES`, the pipeline-coherence checks) grow by one.
+*Downgrade* must move the rows first, **and must switch row-level security off around the move**: in one
+transaction, `ALTER TABLE action_proposals NO FORCE ROW LEVEL SECURITY`; `UPDATE … SET pipeline_stage =
+'received', stage_detail = NULL, stage_updated_at = now() WHERE pipeline_stage = 'abandoned'`; `ALTER TABLE …
+FORCE ROW LEVEL SECURITY`; then drop the new CHECK, restore the two old ones **with the 0021 COMMENT**, rebuild
+the index, restore the column comment. Without the row move the old stage CHECK cannot be added (`is violated by
+some row`) `[E: E9-A10]`; **without the `NO FORCE` the owner's UPDATE sees no rows under FORCE RLS and moves
+nothing, with the same failure** `[E: E19-T3b]` — which the first run of this experiment missed because it ran
+as the superuser, who bypasses RLS. 0020 does the same switch for `scheduler_state`; 0017's downgrade does not
+(ACCEPTANCE 5.75). With both fixes the round trip leaves **no schema difference** and the moved rows are
+`received / NULL` `[E: E19-T5]`; omitting the COMMENT restore is caught by the snapshot `[E: E19-T4]`. The
+semantics of the downgrade — an abandoned proposal becomes resumable again by its key — go in the migration
+docstring; a migration cannot write the audit record that says so.
 
 **What a caller sees.** The experiment (E10) runs the real `propose_action` and abandons the row while its
 decision stage is in flight:
 
-* the reconciler's conditional update wins; the caller's `_record_decision` then loses on the stage guard, and
+* the reconciler's conditional update wins; the caller's `_record_decision` then loses on the stage guard and
   **writes no `policy.decided` record** (the audit-after-win order, `stages.py`); the only trace is the earlier
   `policy_reviewer.opinion` record, and the reviewer call is wasted;
 * **but the caller is returned `DENY` with `deny_reasons=()` and `failure=None`** — the current
   `_outcome_from_rows` treats "no decision" as `DENY` and has no reason to give. A retry with the same key gets
-  the same. That is a defect in the first draft of this design, not in the code as it stands (nothing reaches
-  it today). **0022's code change must give the `abandoned` stage its own outcome:** `DENY`,
+  the same. Nothing reaches this today. **0022's code change must give the stage its own outcome:** `DENY`,
   `deny_reasons=('abandoned_before_decision',)`, `failure='abandoned'`, so that a caller can tell "refused" from
   "never decided" and knows the next step is a new key;
 * if the caller wins instead, the abandon matches no row and writes nothing `[E: E10-R2]`.
 
-So the race is **safe in either order at the data level** (one decision at most; never two; no run), and the
-grace period is a matter of *not surprising live callers*, not of correctness.
+So the race is **safe in either order at the data level** (one decision at most, never two; no run), and the
+grace is a matter of *not surprising live callers*, not of correctness.
 
 **The grace period, from two parts.**
 
@@ -305,16 +425,72 @@ grace period is a matter of *not surprising live callers*, not of correctness.
   grace below twice the floor (300 s).
 * *Courtesy — let the caller's retry find its proposal.* A caller that failed mid-decision retries with the same
   key; abandonment before it does turns a recoverable retry into "use a new key". How long callers retry is a
-  property of the callers, not something the code knows `[N]`. **Proposal: 1 hour** (configurable, ≥ the floor),
-  chosen, not derived.
+  property of the callers `[N]`. **Proposal: 1 hour** (configurable, ≥ the floor), chosen, not derived.
 
 `decided` (an ALLOW, no capability) is closed after the same grace as `closed / abandoned_after_decision` — it
 has a decision, so it may be `closed`.
 
-**Tests the stage will need (when built):** the 0022 round trip with abandoned rows present; the CHECK matrix of
-E9 including the NULL detail; the race of E10 as a test (loser gets the explicit outcome, one decision at most);
-a fault injected at each boundary of the reconciler's own transaction (the way `test_decision_boundaries.py`
-does); and a structural test that nothing but the reconciler's module writes the stage.
+### 1.9 Every place that names a stage, and the structural tests that keep the list true
+
+Found by reading the code, not remembered (grep of `stages.`, `pipeline_stage` and the stage literals across
+`control_plane`, `scripts`, `agents`, `tool_gateway`, `db/migrations`, `tests`, `policy_tests`). The
+`dispatch_state` column also contains `dispatching` — a different vocabulary — which is why the structural test
+below keys on the column, not on the word.
+
+| Where | Names | What `abandoned` needs |
+|---|---|---|
+| `orchestrator/stages.py`: constants, `STAGES`, `TERMINAL`, `BEFORE_DISPATCH`, `WAITING`, the docstring diagram | all | add `ABANDONED` to `STAGES` and `TERMINAL`; **not** to `BEFORE_DISPATCH` or `WAITING`; redraw the diagram |
+| DB CHECK `action_proposals_pipeline_stage_check` (0016, 0017) | the list | add (0022) |
+| DB CHECK `action_proposals_decision_past_received` (0021) | `received` | add `abandoned` (0022) |
+| DB partial index `action_proposals_open_stage` (0016, 0017) | `recorded, closed` | add `abandoned` (0022) |
+| `state/models.py` | the column | none |
+| `api/function_api.py` `_drive` | `RECEIVED, APPROVED, DECIDED, CAPABILITY_ISSUED`, else-branch | none: an abandoned row falls into the else-branch and returns `_outcome_from_rows` |
+| `api/function_api.py` `_outcome_from_rows` | `DISPATCHING, CLOSED, RECORDED, TERMINAL` | **the explicit `abandoned` outcome** (§1.8); decide whether `TERMINAL` membership triggers `_record_provenance` — proposal: no, `provenance/graph.py:190` already returns for any stage but `recorded`/`closed` and an abandoned proposal has no outcome to record |
+| `api/function_api.py` `take/advance` at 826, 890, 924, 955; `_record_decision` | their own stages | none; none expects `abandoned` |
+| `api/approvals.py` (`AWAITING_APPROVAL → APPROVED/CLOSED`) | | none |
+| `api/approved_dispatch.py` SQL `pipeline_stage = :approved`, the stage read at 296 | `APPROVED` | none; test that `dispatch_approved` refuses a row at `abandoned` |
+| `orchestrator/dispatch.py`: `BEFORE_DISPATCH` takes, `DISPATCHING`, `RECORDED`, `CLOSED`; `reconcile_stale_dispatches` | | none; a hand-written dispatch of an abandoned row is refused by `take(expected=BEFORE_DISPATCH)` — test; (5.74: the `advance`→`take` change lands here) |
+| `scheduler/decide.py` SQL (`'approved'`, `('dispatching','capability_issued')`), `service.py`, the view `scheduler_proposals` | two lists | none; the view exposes every stage and the scheduler reads two lists — test that an abandoned row is invisible to every scheduler count |
+| `provenance/graph.py:190` | `("recorded","closed")` | leave; documented above |
+| `scripts/mutations_d62_d63.py` | `received`, `recorded` literals | new mutations for 0022 (§1.9 tests) |
+| tests: `test_pipeline_stages` (iterates `stages.STAGES`), `test_action_proposals_decision_stage` (`LEGAL_NULL_STAGES`, `set(stages.STAGES) == …`), `test_decision_boundaries`, `test_migrations_roundtrip`, `test_check_constraints_null_rule`, `test_scheduler_e2e`, `test_scheduler_roles`, `test_approved_dispatch`, `test_sandbox_not_started`, `tests/crash_child.py` | | updated where they enumerate stages |
+| docs: the `stages.py` docstring, ADR, D60 report, ACCEPTANCE 5.53/5.69 | the list | updated |
+
+**Structural tests (to write with 0022):**
+
+* **ST1 — every stage literal in code is a stage.** Parse `control_plane/` (and `scripts/`) with `ast`; take every
+  string constant that sits in a SQL text next to `pipeline_stage` (`=`, `IN`, `<>`, `NOT IN`, `ANY`) and require
+  it ⊆ `stages.STAGES`. A typo (`'abandonned'`) or a stage nobody added fails.
+* **ST2 — the database and the code agree.** Read `pg_get_constraintdef` of `action_proposals_pipeline_stage_check`
+  and require its list == `set(stages.STAGES)`; read the partial index predicate and require the excluded set ==
+  `set(stages.TERMINAL)`; read `decision_past_received` and require the stage list == `LEGAL_NULL_STAGES`.
+* **ST3 — the file registry.** A dictionary in the test lists every file that mentions a stage name or constant
+  and why; a new file that starts naming a stage fails until it is listed — the same device as
+  `NULL_IS_A_STATE`.
+* **ST4 — one writer.** `ABANDONED` / `'abandoned'` appears as a *write* only in the reconciler's act module;
+  `function_api.py` reads it. (A3.)
+* **ST5 — every stage is classified once.** A table `STAGE_CLASS = {stage: terminal | waiting | before_dispatch |
+  in_flight}` in the test must cover `stages.STAGES` exactly and agree with the constants; a new stage fails
+  until classified.
+* **ST6 — behaviour, table-driven.** Parametrized over `stages.STAGES` (as `test_action_proposals_decision_stage`
+  already is): a proposal placed at each stage gets the right `_outcome_from_rows` (an explicit failure for each
+  terminal stage — the case that gave a reasonless `DENY` for `abandoned`), the right scheduler counts, and the
+  right refusal from `dispatch_approved` and the `dispatch_*` functions.
+* **ST7 — the round trip carries rows.** The 0022 up/down test runs with a row at **every** stage including
+  `abandoned` and `awaiting_approval/approved` (the missing coverage that let 5.75 hide), compares
+  `snapshot_schema()` (§9) after every step, and asserts the moved rows.
+
+**Reason codes, and the NULL rule.** Every closed-code column this work adds follows ACCEPTANCE 5.69: either
+`NOT NULL`, or the CHECK says `IS NOT NULL` explicitly in each branch that needs a code (A5). The three CHECKs 0022
+touches or adds are entered in `test_check_constraints_null_rule.py::NULL_IS_A_STATE` with their reasons (the
+updated `decision_past_received`: NULL decision legal at two named stages; `abandoned_is_undecided`: NULL
+decision is the point, NULL detail is refused explicitly), and a fault test inserts `abandoned` with a NULL
+detail and requires the refusal. The reconciler's *audit* reason codes are a closed list in code (`emit` refuses
+anything else, §4); with no state table (D64-11) there is no column to CHECK. **A measured option, not in 0022 unless
+you say so:** `stage_detail` is free text for `closed` and `recorded` (families such as `decision_*`,
+`capability_refused:*`, `dedup_hit:<id>`), not a closed vocabulary; today it is never NULL for those stages — 0 of
+1,080 `closed` and 0 of 2,089 `recorded` rows in this database `[E: E19 survey]` — so a CHECK requiring a detail
+for them would hold, at the cost of one more constraint to keep in step.
 
 ## 2. Identity and permissions
 
@@ -335,17 +511,61 @@ the ability to issue and delete capabilities and delete proposals — far more t
 
 | | **A. Inside the scheduler** | **B. Separate process, `cyberorch_app` per engagement** | **C. Separate process, own role `reconciler`, one process** | **D. Separate process, own role, split plan / act (like D62)** |
 |---|---|---|---|---|
-| DB identity | the scheduler's roles (`scheduler_reader`, `scheduler_state_writer`) + the runtime role for dispatch | `cyberorch_app` | a new narrow role | a read-only `reconciler_reader` (EXECUTE on one function) + a write role with column-level `UPDATE` under `engagement_scope` |
-| New privileges | writes on `action_proposals`/`tool_runs` for the scheduler | none | column-level `UPDATE` on stage/dispatch columns, `tool_runs.status`, `INSERT` audit; the read function | the same, split across two roles |
+| DB identity | the scheduler's roles (`scheduler_reader`, `scheduler_state_writer`) + the runtime role for dispatch | `cyberorch_app` | a new narrow role | a read-only login role `reconciler_reader` that can only `EXECUTE` the read function (§2.3), for the plan side; **the existing engagement-scoped `cyberorch_app` path** (`engagement_scope`) for every state change on the act side |
+| New privileges | writes on `action_proposals`/`tool_runs` for the scheduler | none | column-level `UPDATE` on stage/dispatch columns, `tool_runs.status`, `INSERT` audit; the read function | **none for writing** (no new role, grant or policy that writes); for reading: the reader role, the function owner role, the function and SELECT-only policies for the owner (§2.3) |
 | Docker | the scheduler's (already has the socket) | its own | its own | the **act** side only |
 | Lock | shared (`SingletonLock`) | own key | own key | own key |
-| For | one deployable; the lock already excludes a second copy; startup reconcile-then-resume (R-A) is a function call | no schema/role change | least privilege; a bug in the sweeper cannot issue a capability | the strongest separation; a decision can be inspected before it is carried out (as `--dry-run`); the actor never needs to read a budget (§2.3) |
-| Against | breaks D62's structural property: the decision side imports only `scheduler_reader` and the execution side only `engagement_scope`, pinned by AST tests `[R]` `test_scheduler_structure.py`; the scheduler would acquire stage-write and Docker-delete powers; a reconciler bug stops dispatch (same process); the serial loop would block on a long removal | the broadest privilege for the least-needed work; cross-engagement enumeration still unsolved | one process holds both "decide" and "delete" | two roles, two connections, more migration; slower to build |
+| For | one deployable; the lock already excludes a second copy; startup reconcile-then-resume (R-A) is a function call | no schema/role change | least privilege; a bug in the sweeper cannot issue a capability | the strongest separation; a decision can be inspected before it is carried out (as `--dry-run`); the act side never reads a budget; **no cross-engagement write exists** because every write is scoped to one engagement by the same mechanism `propose_action` uses |
+| Against | breaks D62's structural property: the decision side imports only `scheduler_reader` and the execution side only `engagement_scope`, pinned by AST tests `[R]` `test_scheduler_structure.py`; the scheduler would acquire stage-write and Docker-delete powers; a reconciler bug stops dispatch (same process); the serial loop would block on a long removal | the broadest privilege for the least-needed work; cross-engagement enumeration still unsolved | one process holds both "decide" and "delete" | two connections, more migration; slower to build; `cyberorch_app` can do more than the reconciler needs, so the restriction is in code and tests (§2.2a), not in a grant |
 
-**Can it touch `cyberorch_app`'s connection?** Technically yes (B); the question is whether it should. My
-recommendation is **no**: a role that can only do what a reconcile does (C/D). That costs one migration (a role
-plus grants, in the shape of 0019, after 0022) and one more structural test (the reconciler imports no dispatch
-code).
+**Can it use `cyberorch_app`?** For *writes*, yes, and that is now the recommendation (D64-1): a state change
+is one conditional UPDATE under `engagement_scope(eid)`, exactly the mechanism every stage uses, so it can touch
+only that engagement. For *reading* across engagements it cannot (RLS), hence the reader and the function (§2.3).
+Revision 2 proposed a separate write role with column-level `UPDATE` (E12); it would have been narrower in the
+database and a second write path to maintain. It is withdrawn in favour of one write path pinned by tests.
+
+### 2.2a Connections, and the tests that pin them (D64-1)
+
+The scheduler's own structure test (`tests/test_scheduler_structure.py`) is the model: it reads the syntax trees
+of `control_plane/scheduler/` and pins which module may import which connection. The same, for the reconciler:
+
+| | **Plan side** (`reconciler/plan.py`, `observe.py`) | **Act side** (`act.py`, `act_docker.py`, `act_files.py`) |
+|---|---|---|
+| Database | `reconciler_reader_scope()` — a new scope in `state/db.py`, login role `reconciler_reader`, which can do one thing: `EXECUTE` the read function | `engagement_scope(engagement_id)` — the existing path: `cyberorch_app` with `cyberorch.engagement_id` set for the **one** engagement of the row being changed |
+| Docker | read calls only: `containers.list/get`, `networks.list/get`, `inspect` | `kill`, `remove`, network `remove` |
+| Files | `lstat`, `listdir` | `unlink` through a directory fd |
+| Hands over / takes | a frozen dataclass `Action` of plain data: `engagement_id`, the object's id, `expected_stage`, `planned_stage_updated_at`, `reason_code` — no connection, no cursor, no Docker object | consumes an `Action`, re-verifies it, acts, verifies the result (§1.7), returns a `Result` |
+
+The plan connection is closed before the act side opens its own; no transaction spans both. **No new write path:**
+a statement aimed at another engagement's row moves 0 rows under `engagement_scope` (the policy
+`engagement_isolation`, as for every other caller), so a cross-engagement write cannot be expressed by the act side.
+
+The price is that `cyberorch_app` can do more than the reconciler needs (insert and delete capabilities, delete
+proposals). So the restriction is pinned in the code's structure, not by a grant:
+
+1. **AST, plan side.** From `control_plane.state.db` it imports only `reconciler_reader_scope`; it imports none of
+   `engagement_scope`, `get_engine`, `control_plane.api`, `control_plane.orchestrator`, `control_plane.audit`,
+   `control_plane.capability`, `control_plane.policy`, `control_plane.vault`, `tool_gateway`, `agents`. (Same
+   shape as the scheduler's `decide.py` test.)
+2. **AST, act side.** From `state.db` it imports only `engagement_scope`; not `reconciler_reader_scope`, not the
+   plan module, not `control_plane.api` and not `control_plane.orchestrator.dispatch` — the reconciler never
+   calls `propose_action`, `dispatch_*` or `dispatch_approved` (I7). It reaches `record_audit` only through
+   `reconciler.emit`.
+3. **Statement allow-list, act side.** Every string literal in `act*.py` that is SQL must match one of a short
+   list of shapes — the conditional `UPDATE action_proposals SET pipeline_stage … WHERE … pipeline_stage =
+   :expected AND stage_updated_at = :planned` (§1.2) and `UPDATE tool_runs SET status …` — and none may contain
+   `DELETE`, `INSERT` (the audit emitter excepted), `DROP`, `TRUNCATE`, or name `capabilities`, `approvals` or
+   `credential_material`. A mutation test adds `DELETE FROM capabilities` to the act side and requires the test
+   to go red.
+4. **Docker verbs.** `kill` and `remove` appear only in `act_docker.py`; `create`, `run`, `exec_run`, `prune`,
+   `put_archive` appear nowhere in `control_plane/reconciler/`.
+5. **Runtime separation.** A test gives the plan a recording connection factory and asserts the act side never
+   receives it; a type-annotation check requires that no field of `Action` is a `Connection`, cursor or Docker
+   object.
+6. **One writer.** Nothing outside `control_plane/reconciler/` writes `abandoned` or imports `reconciler` (ST4).
+
+If you prefer the narrow database grant over the code-level pinning, E12 is what it would look like; the two can
+be combined (a narrow grant in addition) at the price of the second write path.
 
 ### 2.3 Reading across engagements — and how the reconciler may read a budget
 
@@ -362,9 +582,41 @@ What a role needs to read them, found by trying it in a transaction that was rol
 
 **Recommendation (D64-2): the function.** It is the narrowest of the four: no table is readable, the budget
 leaves the database as one integer, and the function is the one place that says what the reconciler may know.
-The columns it returns are listed in the migration and pinned by a test (the way `scheduler_proposals` is). Its
-cost is the usual one of `SECURITY DEFINER`: `search_path` is pinned in the definition, `EXECUTE` is revoked from
-`PUBLIC`, and the owner role owns nothing else.
+
+#### How a `SECURITY DEFINER` function reads — it does not bypass row-level security (E20)
+
+A `SECURITY DEFINER` function runs with its **owner's** identity, and the owner's row policies apply like anyone's.
+What it changes is *whose* policies; it does not switch policies off. Measured, in a transaction that was rolled
+back, with the reader and owner as plain `NOLOGIN` roles:
+
+| # | Experiment | Result |
+|---|---|---|
+| S1 | the owner has **no** policy for the table | the function returns **0 rows**; the owner's own direct `SELECT` also 0 |
+| S1′ | the same function owned by a `BYPASSRLS` role | it sees every row — the configuration to forbid |
+| S2 | the owner has a stuck-stage policy; the function has **no** stage filter of its own; the reader sets `cyberorch.engagement_id` | a `recorded` row of that engagement **is returned**: the existing `engagement_isolation` policy is `TO PUBLIC`, so it applies to the owner too and policies are OR-ed. With an explicit stage filter in the function body: 0 |
+| S3 | `EXECUTE` | defaults to `PUBLIC`: an unrelated role could call it. After `REVOKE ALL … FROM PUBLIC`, that role is refused and the reader still can |
+| S4 | `search_path` | an **unpinned** function resolved `action_proposals` to a `TEMP` table the caller had made (and granted the owner `SELECT` on) and returned `{FORGED-ROW}`; the function with `SET search_path = pg_catalog, public, pg_temp` and schema-qualified names ignored it. The reader has `TEMP` on the database by default; it has no `CREATE` on `public` |
+| S5 | a capability whose budget the function cannot cast | `(budget->>'max_duration_seconds')::int` on `"abc"` raises `invalid input syntax for type integer: "abc"` for the **whole call** — one bad row blinds the reconciler — and echoes the value. The guarded form `CASE WHEN … ~ '^[1-9][0-9]{0,8}$' THEN (…)::int END` returns NULL for `"abc"`, `5.5` and `99999999999`, which the plan reports as `budget_unreadable` |
+| S6 | owner and output | owner `NOSUPERUSER NOBYPASSRLS NOLOGIN`, owns no table; `RETURNS TABLE(text, integer, …)` only |
+
+**What the revision-2 sketch of the function would have got wrong:** it had no stage filter (S2), no pinned
+`search_path` (S4), an unguarded cast (S5), and no `PUBLIC` revoke (S3). All four are in the checklist now.
+
+**The checklist the migration must satisfy, and what pins each item:**
+
+| Item | Requirement | Pinned by |
+|---|---|---|
+| owner | a dedicated `NOLOGIN` role: `rolsuper = false`, `rolbypassrls = false`, `rolcreaterole = false`; not the table owner; owns no table, schema or other function | catalog test (and `snapshot_schema()` role lines) |
+| policies | `SELECT`-only policies `TO <owner>` on the five tables, each restricted (stuck stages / a proposal that is visible) | grant-matrix test + a per-table test: the owner sees no `recorded` row without a GUC |
+| column grants | the owner has column-level `SELECT` on exactly the columns the function reads, nothing wider | grant-matrix test, like the scheduler roles' |
+| stage filter | an explicit `pipeline_stage IN (…)` in the function body, because a GUC widens the owner's policies (S2) | test: GUC set, a `recorded` row is never returned |
+| `search_path` | `SET search_path = pg_catalog, public, pg_temp` in the definition; every relation schema-qualified | catalog test on `proconfig`; a test over the function body |
+| `PUBLIC` | `REVOKE ALL ON FUNCTION … FROM PUBLIC`; `GRANT EXECUTE` to `reconciler_reader` only | `proacl` test |
+| `TEMP` / `CREATE` | `REVOKE TEMP ON DATABASE … FROM reconciler_reader` (and from `PUBLIC` where no other role needs it); no `CREATE` on `public` | privilege test |
+| output type | `RETURNS TABLE(…)` with a **pinned column list** of scalar types — ids, the closed `pipeline_stage` text, integers, timestamps, booleans; no `jsonb`, no array, no free text; `budget.tool` never appears | the pinned list in the test |
+| casts | every cast of document content guarded by a pattern → NULL | fault test with `"abc"`, `5.5`, `-1`, `0`, `99999999999`, a missing key |
+| volatility | `STABLE`; reads only | catalog test |
+| error text | no error the function raises contains document content (S5) | the same fault test |
 
 Two things this is *not*, said plainly:
 
@@ -373,17 +625,13 @@ Two things this is *not*, said plainly:
   document or any other tenant data, but it does see *which engagements have stuck work* (6,903 of 13,338
   engagements in this database) `[E: E11]`. That is inherent in "read across engagements" and is the reason
   D64-2 is a decision for you.
-* **The budget is not mutable under the reconciler's feet.** The code never updates `capabilities.budget`
-  (the five `UPDATE capabilities` statements touch lease, heartbeat, the request counter and revocation only `[R]`); nothing in the
-  database *prevents* it `[N: no trigger found]`.
+* **The budget is not mutable under the reconciler's feet.** The code never updates `capabilities.budget` (the
+  five `UPDATE capabilities` statements touch lease, heartbeat, the request counter and revocation only `[R]`);
+  nothing in the database *prevents* it `[N: no trigger found]`.
 
-**The write side.** The act side is an ordinary per-engagement scope with a role that has column-level `UPDATE`
-(`pipeline_stage`, `stage_detail`, `stage_updated_at`, `updated_at`) and nothing else: with no GUC it sees and
-changes nothing; with the GUC of one engagement a statement aimed at another engagement's row moves 0 rows;
-`UPDATE decision` and `DELETE` are `permission denied` `[E: E12]`. It never reads a budget: the plan hands it
-`(proposal_id, expected_stage, planned stage_updated_at)` and its statement is a **compare-and-set on exactly
-that observation** (`WHERE pipeline_stage = :expected AND stage_updated_at = :planned`), so a row that moved
-between plan and act is not touched. This is what lets the plan side be read-only and the act side be small.
+**The write side** is §2.2a: the act side never reads a budget. The plan hands it `(engagement_id, proposal_id,
+planned stage_updated_at)` and its statement is a **compare-and-set on exactly that observation**, so a row that
+moved between plan and act is not touched. (Revision 2's narrow write role, E12, is kept in §6 as the alternative.)
 
 ### 2.4 Docker: the permission boundary, and what label checks can and cannot prove
 
@@ -457,13 +705,11 @@ skips anything that is not a regular file of the expected owner, and verifies th
   enrolled engagement and `approved_waiting`/`approved_redispatch` `[R]`; it acts on none. The reconciler is the
   consumer of those numbers.
 * **Start order (ADR D58-9 lean R-A, reconcile-then-resume `[D]`).** A scheduler that starts while R1/R3 rows
-  exist dispatches new work on top of unexplained state. Options: (a) the reconciler runs **once, to completion,
-  before** the scheduler starts (an operator/`systemd` ordering), then periodically; (b) the scheduler refuses to
-  start if the reconciler's last pass is older than its own last stop (a marker row); (c) the scheduler runs the
-  reconcile pass itself before its loop (option A of §2.2).
+  exist dispatches new work on top of unexplained state. The options and the honest answer are §3.3: **nothing
+  makes the order true; it is a convention.**
 * **One lock or two?** *One shared key* excludes the two at once by construction (no interference to reason
   about) but a long reconcile blocks dispatch and the reverse. *Two keys* let them overlap, which needs the
-  argument below.
+  argument below and the tests of §3.2–§3.3.
 
 ### 3.1 Can they interfere?
 
@@ -473,14 +719,55 @@ The scheduler only moves `approved → capability_issued → dispatching → rec
 | Reconciler touches | Scheduler might be doing | Why it is safe |
 |---|---|---|
 | `capability_issued`, lease lapsed → `closed: capability_not_live` | issuing/dispatching the same row | the update is conditional on the stage and the observed `stage_updated_at`; a lapsed lease means the dispatch would refuse the same row with the same reason `[E: E6]` — both paths end identically |
-| `dispatching`, overdue → `unknown_outcome` | the same dispatch, still recording | overdue = past `B + P + Q` (§1.2), the sum of every bound the code puts on a live dispatch; if the scheduler is stalled *past* that point its later `advance(expected=DISPATCHING)` loses (the stage guard), the result is lost but **flagged unknown** — never silently double |
+| `dispatching`, overdue → `unknown_outcome` | the same dispatch, still recording | **Corrected after E17.** Revision 2 said that a dispatch which loses the stage race "loses its result, which is flagged unknown". It does not: `advance` returns False and `_record_scan_result` ignores it, so the result *is* recorded as a success beside a `recorded / unknown_outcome` stage (ACCEPTANCE 5.74). What makes the pair safe is (a) the reconciler's close being a compare-and-set that runs only past `B + P + Q`, a time a live dispatch cannot reach, and (b) the dispatch side taking its stage with `take`, so that the case the bound excludes fails loudly instead of contradicting itself. (b) is a prerequisite fix, in the same change as 0022 |
 | `received` → `abandoned` | a caller still in its decision stage | the same stage guard: whoever commits first wins; the loser writes no decision record; the caller then gets the explicit `abandoned` outcome (§1.8, `[E: E10]`) |
 | `approved`, killed engagement/expired approval → `closed` | about to dispatch it | the scheduler re-reads the engagement right before acting (`servable_now`) and `dispatch_approved` refuses killed/expired itself `[R]`; the reconciler's close is a compare-and-set on `APPROVED` — whichever commits first wins, the other matches no row |
 | removing a container/proxy/network | a dispatch that has just created it | removal requires "the DB says finished/absent/overdue", and a brand-new run has a `running` row inside its deadline |
 | removing an idle network | `ensure_network` has just returned it | a race (§1.5): the create fails as `NotStarted`, retryable; avoided by an idle-retention period long compared with a dispatch; Docker itself refuses to remove a network with an attached endpoint `[E: E13-D4]` |
 
-So two locks are *safe given* the conditional updates and the deadlines; one shared lock is *simpler*. The
-decision is D64-10.
+So two locks are *safe given* the conditional updates, the deadlines and the two prerequisite fixes; one shared
+lock is *simpler*. The decision is D64-10.
+
+### 3.2 Race tests (planned, not written)
+
+The pattern is the one `tests/test_decision_boundaries.py` and the E10/E17 experiments use: a `threading.Barrier`
+or a hook inside `FakeSandbox.during` / the reviewer holds one side while the other runs, then both orders are
+checked. Each test also states the mutation that must turn it red.
+
+| # | Race | Both orders must end in | Mutation that must break it |
+|---|---|---|---|
+| RT1 | reconciler closes a `dispatching` row while the (fake) container is still running, then the dispatch finishes (E17 as a test) | exactly one of {dispatch recorded `succeeded`, reconciler `unknown_outcome`} — **never both**; the loser writes no evidence row and no success audit; the raw output is on disk; stage, `dispatch_state`, `tool_runs.status` and audit agree | `stages.take` → `stages.advance` at the record sites |
+| RT2 | the dispatch records first; the reconciler's compare-and-set arrives later | 0 rows moved, no audit, the dispatch's result untouched | drop `stage_updated_at = :planned` from the predicate |
+| RT3 | `capability_issued`, lease lapsed: the reconciler closes while a heartbeat renews the lease or the dispatch takes the stage | dispatch wins → reconciler moves 0; reconciler wins → the dispatch refuses with `capability_not_live`; the final state is the same `closed` either way | evaluate the lease in Python instead of in the statement |
+| RT4 | `received` → `abandoned` while the caller is inside its decision stage (E10 as a test) | at most one `policy.decided`; the loser's outcome is the explicit `abandoned` one or the committed decision, never a reasonless `DENY` | remove the explicit `abandoned` branch of `_outcome_from_rows` |
+| RT5 | `approved` in a killed engagement: the reconciler closes while the scheduler tries `dispatch_approved` | one winner; no container call if the reconciler wins; no `closed` after a recorded run | close without the kill predicate |
+| RT6 | two reconcile passes act on the same `Action` (the lock bypassed in the test) | the second moves 0 rows; one audit event | audit before checking the row count |
+| RT7 | pause or kill switch between plan and act | a paused engagement's rows are not touched (the predicate is re-evaluated in the statement); a killed one is closed | plan-time check only |
+| RT8 | container: the reconciler kills/removes while the control plane's own `kill()` / `remove(force=True)` run | whichever order, the object is gone, verification passes, `NotFound` on the second remover counts as gone and raises no `action_failed` | treat `NotFound` as failure |
+| RT9 | network: removed between `ensure_network` and `containers.create`/`start` (E21-N3), with a retry | the first dispatch fails typed `NotStarted`, the retry succeeds on the re-created network | remove a network that still has a `created` container |
+
+### 3.3 Start order and locks, said honestly (D64-10)
+
+**Nothing enforces that the reconciler ran before the scheduler.** "Reconcile first" is an operator convention (a
+`systemd` `After=`, a runbook line). The two are separate processes with separate lock keys, and nothing in the
+database makes one wait for the other. What exists: (a) the stage guards, which make a concurrent action lose
+cleanly (§3.1); (b) the time bounds, which keep the reconciler off a live dispatch; (c) each side's lock against a
+second copy of *itself*. What does **not** exist is any guarantee that a new dispatch does not start on top of
+unreconciled state. If the order matters enough, option (b) of the earlier list — a marker row, with the
+scheduler refusing to start while the reconciler's last completed pass is older than the scheduler's last stop —
+turns the convention into a check, at the cost of a table and a coupling. **Not recommended now:** the two work on
+disjoint states except through the guarded updates, and the harm of the wrong order is bounded to a stale row
+being acted on one pass later.
+
+**Concurrency tests (planned):**
+
+| # | Test | Invariant |
+|---|---|---|
+| CT1 | both processes run against one database for N cycles, with a fixture holding every residue class (R1–R9) and a live stream of fake dispatches | after each cycle (extending `assert_coherent`): no proposal with contradictory stage / `dispatch_state` / run status; no proposal executed twice (the sandbox call count per proposal ≤ 1); every `*_removed` event has its object gone; no event for an action that changed nothing |
+| CT2 | the order inverted: the scheduler starts first on a database with stale R1/R3 rows, then the reconciler | the same invariants; the scheduler's `dispatching` / `capability_issued` counts fall to 0 afterwards |
+| CT3 | `kill -9` of either process at random points between plan and act (the `crash_child.py` pattern of the D60 tests), then restart | eventually consistent; nothing audited that did not happen |
+| CT4 | the two lock keys | both can be held at once (positive control that they do not exclude each other); a second copy of each is excluded |
+| CT5 | real Docker: the reconciler runs a pass while a real run (the `nmap` image) is inside its deadline | the live run's container is not touched |
 
 ## 4. Audit
 
@@ -509,8 +796,8 @@ Proposed vocabulary (names are proposals):
 | `reconciler.container_killed` | engagement (owner known) | `run_id`, `reason_code` | `overran_deadline` |
 | `reconciler.container_removed` | engagement (owner known) / global | `run_id`, `reason_code` | `overran_deadline`, `run_finished`, `no_run_row_past_grace` |
 | `reconciler.proxy_removed` | engagement / global | `run_id`, `reason_code` | `owner_run_ended`, `overran_deadline` |
-| `reconciler.network_removed` | global | `network_id` (the hash in the name), `reason_code` | `idle_past_retention`, `blocks_overlapping_range` |
-| `reconciler.files_removed` | global | `kind`, `count` | kinds `credential_mount`, `tls_leaf` |
+| `reconciler.network_removed` | global | `network_id` (the hash in the name), `reason_code` | `range_conflict`, `idle_sweep` |
+| `reconciler.files_removed` | global | `kind`, `count` | kinds `credential_mount`, `tls_leaf` (removed only when no live container mounts them and they are older than `B_cap + P + Q`) |
 | `reconciler.action_failed` | global / engagement | `kind`, `reason_code` | `in_use`, `daemon_error`, `not_gone_after_removal`, `not_changed_after_update`, `still_running_after_kill`, `budget_unreadable` |
 
 `dispatch.unknown_outcome` (the existing event, `requires_human_review`) is **kept as the record of an
@@ -522,24 +809,25 @@ Recommendation in the third column; "depends on" in the last.
 
 | # | Question | Recommendation and why | Depends on |
 |---|---|---|---|
-| **D64-1** ⚑ | Process and identity (§2.2): A inside the scheduler / B separate with `cyberorch_app` / C separate, own role / D separate, own role, plan–act split | **D** (C if you want it smaller). Least privilege, and it keeps D62's decide/execute separation (pinned by AST tests) intact. A is cheapest and breaks that property; B grants far more than the work needs (it can issue and delete capabilities). | — |
-| **D64-2** ⚑ | How the reconciler reads across engagements, and the budget (§2.3) | **One `SECURITY DEFINER` function, `EXECUTE` only for the reader; no table readable.** The budget leaves the database as one integer; the first role able to see more than one engagement without the GUC, listing which engagements have stuck work. Alternatives: column grants + policy (exposes `budget.tool`), enrollment table only (misses un-enrolled engagements). | D64-1 |
-| **D64-3** ⚑ | The overdue thresholds | **Derived from the capability's budget, never typed in:** kill a container at `StartedAt + B + 60 s`; declare `unknown_outcome` at `stage_updated_at + B + P + Q` (`B + 660 s`, `B + 1,215 s` with a proxy — upper bounds read from the code's client timeouts `[N]`, not measured worst cases); close a lapsed lease at `lease_expires_at + 30 s`; budget unreadable → report, change nothing. | D64-1, D64-2 |
+| **D64-1** ⚑ | Process and identity (§2.2, §2.2a): A inside the scheduler / B separate with `cyberorch_app` / C separate, own role / D separate, plan–act split | **D, with every write through the existing engagement-scoped `cyberorch_app` path.** Separate process; plan side = a new login role that can only `EXECUTE` the read function; act side = `engagement_scope(eid)` per proposal, so **no cross-engagement write exists and no write grant is added** (the narrow-grant act role of revision 2, E12, is withdrawn). The restriction lives in code and is pinned by two AST tests, a statement allow-list, a Docker-verb test and a runtime-separation test (§2.2a). A breaks D62's structure (pinned by AST tests); B/`cyberorch_app` as the *read* identity cannot read across engagements. | — |
+| **D64-2** ⚑ | How the reconciler reads across engagements, and the budget (§2.3) | **One `SECURITY DEFINER` function owned by a dedicated, non-bypass `NOLOGIN` role; `EXECUTE` only for the reader; no table readable.** It does not bypass RLS — it runs under the owner's policies — so it filters the stage itself (a GUC would otherwise widen it), pins `search_path`, revokes `PUBLIC` and `TEMP`, returns scalar types only and guards every cast (E20: one uncastable budget would otherwise blind the whole pass). The first role able to see more than one engagement without the GUC — it can list which engagements have stuck work. Alternatives: column grants + policy (exposes `budget.tool`); enrollment table only (misses un-enrolled engagements). | D64-1 |
+| **D64-3** ⚑ | The overdue thresholds | **Derived from the budget, capped, never typed in:** `B = min(budget.max_duration_seconds, B_cap)`, **`B_cap` = 1,800 s `[N]`**; kill a container at `StartedAt + B + 60 s`; `unknown_outcome` at `stage_updated_at + B + P + Q` (`B + 660 s`, `B + 1,215 s` with a proxy — upper bounds read from the code's client timeouts `[N]`); a lapsed lease at `lease_expires_at + 30 s`; **closing is one conditional UPDATE** (compare-and-set on the stage and the observed `stage_updated_at`); budget unreadable → report, change nothing. **Prerequisites:** D58-16's operator-owned Rego ceiling (≤ `B_cap`, compared by a test) and the dispatch-side fix of ACCEPTANCE 5.74 (a lost stage must fail the record, not contradict it). Race tests RT1–RT9 (§3.2). | D64-1, D64-2, D58-16 |
 | **D64-4** ⚑ | An overdue **running** container | **Kill it, keep the exited container a retention window (24 h `[N]`), remove after.** I7 forbids silent re-execution, not stopping an overdue process; keeping the corpse preserves the only evidence of what ran. Alternative: remove at once (frees the network now, loses the evidence). The in-container deadline (§8) would make this a backstop. | D64-3 |
-| **D64-5** ⚑ | Stuck `received` (no decision), now that 0021 forbids closing it | **A new terminal stage `abandoned`, migration 0022** (stage list + decision CHECK + an `IS NOT NULL` reason CHECK + index; the downgrade moves rows back to `received`), written only by the reconciler after a grace of **1 h `[N]`** (floor 150 s from the reviewer and OPA timeouts `[R]`; refuse to start below twice the floor); a retried key gets an explicit `abandoned` outcome, not today's reasonless `DENY`. Alternative: leave them, report their age. | D58-6 |
+| **D64-5** ⚑ | Stuck `received` (no decision), now that 0021 forbids closing it | **A new terminal stage `abandoned`, migration 0022.** Defined as nine checkable properties (§1.8 — *compare with yours; I do not have it*); CHECKs written NULL-exact (E9-A11); index rebuilt; the downgrade moves rows with `NO FORCE / FORCE ROW LEVEL SECURITY` around the UPDATE and restores the COMMENT (E19); every place that names a stage inventoried, with seven structural tests (§1.9); an explicit `abandoned` outcome for a retried key instead of today's reasonless `DENY`. Grace **1 h `[N]`**, floor 150 s, refuse to start below twice the floor. Option: also require `stage_detail IS NOT NULL` for `closed`/`recorded` (0 NULL in 1,080 / 2,089 rows here) — not in 0022 unless you say so. Alternative: leave them, report their age. | D58-6 |
 | **D64-6** | `capability_issued` with a lapsed lease: close it (`capability_not_live`)? | **Yes** — exactly what a resumed `propose_action` does `[E: E6]`; known not-run. | D64-1 |
 | **D64-7** | `approved` rows: which to close | Only those the scheduler **cannot reach**: engagement killed (`engagement_killed`), or not enrolled with an expired/revoked approval. Leave paused. For servable engagements the scheduler already resolves expiry `[E: E7]`. | D64-1 |
-| **D64-8** ⚑ | Sandbox networks (§1.5) | Remove a network when it has **no attached container of any state** and has been idle **1 h `[N]`**, **verified gone**; also remove one that causes a `NetworkRangeConflict` for a new allowlist if it is idle (self-heal of the overlap case, the one that occurs). Alternatives: never remove, alarm on count (overlap still bites, E3); a network per run (a sandbox redesign; out of scope). | D64-1, D64-10 |
+| **D64-8** ⚑ | Sandbox networks (§1.5) | **Conflict-driven first, a 24 h sweep second.** On a recorded `network_range_conflicts…` refusal, remove our idle networks that overlap the requested range (others are reported); a 24 h sweep removes idle ones. Idle = no container of **any** state attached (Docker itself refuses only for running/paused, E21) and the last container finished ≥ 1 h ago `[N]`; verified gone. A removed network is re-created by the next dispatch (E21-N2); a race with `create`→`start` is a typed `NotStarted` (E21-N3). Alternatives: never remove, alarm on count (overlap still bites, E3); a network per run (a sandbox redesign; out of scope). | D64-1, D64-10 |
 | **D64-9** | Label integrity and the Docker boundary (§2.4) | **Select by label *and* the DB's knowledge; act by full id after re-inspect; `NO_OWNER` report-only; no HMAC label** (it adds nothing against whoever holds the socket). State that "only ours" is a property of the reconciler's code, not of Docker; the real boundary is a dedicated daemon or a verb-limiting socket proxy — an operations decision, not made here. | D64-1 |
-| **D64-10** ⚑ | Start order and locks (§3) | **One-shot reconcile to completion before the scheduler starts, then periodic; two lock keys** (the safety argument is §3.1). One shared key is simpler but makes a long reconcile and dispatch exclude each other. | D64-1 |
+| **D64-10** ⚑ | Start order and locks (§3, §3.3) | **Two lock keys. Reconcile-before-schedule is an operator convention, and the document says so** — nothing makes one process wait for the other. Safety rests on the guarded updates, the time bounds and the two prerequisite fixes (§3.1), not on order. Concurrency tests CT1–CT5 (§3.3) include the inverted order. A marker row that turns the order into a check exists and is not recommended now. One shared key is simpler but makes a long reconcile and dispatch exclude each other. | D64-1 |
 | **D64-11** | A `reconciler_state` table for "reported once, ever"? | **No** for now: audit actions taken and verified (§4); observation-only cases are logged; a failed action is audited once per object and reason per process. Add the table if an operator needs the deferred-style record D62 has. | — |
-| **D64-12** | Host files | The reconciler sweeps `cyberorch-cred-*` and `cyberorch-tls-*` by prefix and age, through a directory fd, regular files of the expected owner only, verified by `lstat`. The *mode* and a per-run `0700` directory are **D58-17's**; until then the sweeper must run as the control plane's uid to delete the 0600 files. | D58-17 |
-| **D64-13** | Excluded from this deliverable | R10 (task claims, X7), the failure ladder / reopen (D58-6), quotas (D58-13), credentialed-dispatch kill (D58-16) — and **the deadline inside the container, which is listed as its own deliverable candidate (§8)**. | — |
+| **D64-12** | Host files (§1.5) | Remove `cyberorch-cred-*` and `cyberorch-tls-*` when **no container in a live state (`created`, `running`, `paused`, `restarting`) mounts the file *and* it is older than `B_cap + P + Q`** — neither condition alone (E22); regular files of the expected owner through a directory fd, verified by `lstat`. The mode and a per-run `0700` directory remain **D58-17's**; until then the sweeper runs as the control plane's uid to delete the 0600 files. | D58-17 |
+| **D64-13** | Excluded from this deliverable | R10 (task claims, X7), the failure ladder / reopen (D58-6), quotas (D58-13), credentialed-dispatch kill (D58-16, except its Rego ceiling, which D64-3 needs) — and **the deadline inside the container, which has its own design document (`docs/D65A_CONTAINER_DEADLINE_DESIGN.md`) and goes first.** | — |
 
 Order of dependence: D64-1 first; D64-2, 3, 6, 7, 9, 10 follow from it; D64-4 from D64-3; D64-8 from D64-1 and
-D64-10; D64-5 and D64-12 wait on D58-6 and D58-17. Migrations if all recommendations are taken: **0022**
-(the `abandoned` stage, with its small code change) and **0023** (the reconciler's roles, grants and read
-function), in that order; 0022 can ship alone.
+D64-10; D64-5 and D64-12 wait on D58-6 and D58-17; D64-3 waits on D58-16's ceiling. **Order of work if you confirm:**
+D65-A (its own document); then **0022** with the two dispatch-side fixes (ACCEPTANCE 5.74, and the explicit
+`abandoned` outcome) and the 0017 downgrade fix (5.75); then **0023** (the reconciler's roles, grants and read
+function) and the reconciler package. 0022 can ship alone.
 
 ## 6. Experiments
 
@@ -553,6 +841,14 @@ the `COMMENT` on `action_proposals_decision_past_received` (set by migration 002
 next full-suite run caught it (`test_the_constraint_is_validated_and_says_what_it_is_for`, one failure), it was
 restored by hand and the test re-run — the same trap as D63-j. A restore of schema state has to compare
 comments too.
+
+**Revision 3, E17–E26.** E17 used the test fixtures (the engagement and rows it creates are removed by them; the
+session-end residue check passed). E18–E20 ran in a **template-copied temporary database** (`cyberorch_d64tmp`,
+dropped afterwards) or in transactions that were rolled back, and each ends with a `snapshot_schema()` comparison
+or a count of what is left. E21–E26 used Docker and removed what they made; afterwards no container, sandbox
+network, `/tmp/cyberorch-*` file, temporary database or `d64*`/`s_*` role was left, and the two containers that
+were there before (`web-target-d40`, `d11-target`) were untouched. The lesson of revision 2 is applied: nothing
+modified the development database.
 
 | # | What | Result |
 |---|---|---|
@@ -572,60 +868,102 @@ comments too.
 | **E14** | removal verification (V1–V3) | **V1** `DockerSandbox.remove_network` with a container attached: returned `None`, no exception, **network still present** (`inspect` found it); after the container was removed, a second call made it `NotFound`. **V2** `remove(force=True)` of a running container: 187 ms; `get(id)` → `NotFound`, `list(all=True, id)` → `[]`. **V3** in a directory with a regular `cyberorch-tls-*.pem` (0600) and a symlink of the same pattern to another file: `os.path.exists` follows the link and says True for both; the `lstat`/dir-fd sweep removed the regular file (verified by `FileNotFoundError`), skipped the symlink and left its target intact |
 | **E15** | facts for §8: Docker's own lifetime options; which tool images can run a deadline wrapper; whether a static helper can be built | `docker run --help` has `--stop-timeout` (grace on stop) and `--health-timeout`; **no maximum lifetime**. `timeout(1)` present in `semgrep`, `bloodhound`, `browser`; **absent from `nmap`, `gitleaks`, `egress-proxy`** (no such binary / no shell). A 790 KB statically linked C helper built with `gcc -static`; `Config.Entrypoint` and `Cmd` are null for the `nmap` and `gitleaks` images |
 | **E16** | a deadline inside the container, with the control plane `kill -9`'d (A–D), through `DockerSandbox.run` with the helper bind-mounted read-only by the existing `source_mounts` | **A** no helper, budget 5 s, parent killed at 3 s: container `running` 20.9 s later when observation stopped. **B** helper deadline 10 s, parent killed at 3 s: container `exited` with code **124** at 10.7 s (start ≈ 0.7 s after launch). **C** control plane alive, budget 5 s, helper 10 s: `run()` returned after 5.3 s, `timed_out=True` — the backstop does not change the normal path. **D** a tool that traps TERM and starts a `setsid` grandchild, helper 4 s, parent killed at 1 s: container exited (124) at 4.7 s; the grandchild existed while it ran (positive control: 2 host processes) and **0** after |
+| **E17** | the existing `reconcile_stale_dispatches` (threshold 0) run from inside a `FakeSandbox.during` hook, i.e. while the dispatch's container is "running"; then the dispatch finishes | the function marked the proposal; the state right then: `recorded / unknown_outcome`, run `unknown_outcome`. The live caller was returned `ALLOW` with a run. **Final row: stage `recorded`, detail `unknown_outcome`, `dispatch_state` `succeeded`, `tool_runs` `succeeded` exit 0, 1 evidence row, audit `dispatch.unknown_outcome` ×1, `tool_run.started` ×1, `tool_run.succeeded` ×1** — self-contradictory (ACCEPTANCE 5.74) |
+| **E18** | `alembic downgrade` step by step on a template copy of the development database (6,387 `approved`, 200 `awaiting_approval` rows), then `upgrade head`; `snapshot_schema()` before and after | downgrades to 0020, 0019, 0018, 0017 succeed; **to 0016 fails: `check constraint "action_proposals_pipeline_stage_check" … is violated by some row`** (0017's UPDATE runs as the owner under FORCE RLS and moves nothing; ACCEPTANCE 5.75). `upgrade head` from 0017 succeeds; schema differences: 0 |
+| **E19** | `snapshot_schema()` (§9) in a template copy: T1 two snapshots of an untouched database; T2 replay of the COMMENT incident; T3 the 0022 upgrade; T3b the downgrade as first drafted; T4 the downgrade without restoring the COMMENT; T5 with it. Plus a survey of `stage_detail` | **T1** 431 keys (232 columns, 83 constraints, 40 indexes, 26 policies, 28 relations, 11 roles, 5 functions, 4 triggers, 1 view, 1 alembic), no difference. **T2** the snapshot reports `constraint:action_proposals.action_proposals_decision_past_received` changed — its COMMENT gone; after restoring it, no difference. **T3** the upgrade changes exactly: `decision_past_received`, `pipeline_stage_check`, the index `open_stage`, and adds `abandoned_is_undecided`. **T3b** the downgrade without `NO FORCE / FORCE` **fails** (`is violated by some row`: the owner's UPDATE moved nothing under FORCE RLS; the superuser run of revision 2 bypassed RLS and hid this). **T4** with the RLS switch but no COMMENT restore: the snapshot reports the lost COMMENT; the moved row is `received / NULL`. **T5** complete: no schema difference. Survey: `closed` 1,080 rows, 0 with a NULL `stage_detail`; `recorded` 2,089, 0; `received` 3,091 undecided rows exist in this development database |
+| **E20** | `SECURITY DEFINER` (S1–S6), in a rolled-back transaction | see §2.3: S1 owner without a policy → 0 rows; S1′ `BYPASSRLS` owner sees all; S2 a GUC widens what the owner sees (a `recorded` row returned) until the function filters the stage; S3 `EXECUTE` defaults to `PUBLIC`; S4 an unpinned function read the caller's TEMP table (`{FORGED-ROW}`), the pinned one did not, the reader has `TEMP` by default and no `CREATE` on `public`; S5 `"abc"` aborts the whole call and is echoed, the guarded cast gives NULL for `"abc"`, `5.5`, `99999999999`; S6 owner `NOSUPERUSER NOBYPASSRLS NOLOGIN` owns nothing, output `TABLE(text, integer)` |
+| **E21** | networks (N1–N4) | **N1** `network rm` with a container attached: `running` **refused** (`has active endpoints`); `paused` **refused**; `created` (never started) **removed**; `exited` **removed**; `containers.list(all=True, filters={"network": …})` finds all four. **N2** an idle network removed, then `ensure_network`: re-created with the same name; a run on it exited 0. **N3** the network removed between `ensure_network` and the container's `start`: `ContainerStartRefused` (a `NotStarted`, reason `container_start_refused`), message `network … not found`. **N4** a `/24` exists and a `/29` inside it is asked for: `NetworkRangeConflict`, reason `network_range_conflicts_with_another_network`, message naming the range |
+| **E22** | files mounted into containers | a bind-mounted file is listed in `Mounts[].Source` of a `created`, a `running` **and** an `exited` container; `containers.list(volume=<host path>)` finds all three; reading every container's mounts and keeping the live states (`created`, `running`, `paused`, `restarting`) finds the first two, and none once they are removed |
+| **E23** | `CREATE DATABASE … TEMPLATE cyberorch` | first copy of the 139 MB database 8.9 s, the next 0.5 s; **refused while any other session is connected to the source** (`source database "cyberorch" is being accessed by other users`); `migration_owner` and `cyberorch_app` lack `CREATEDB` — a superuser (or a dedicated role) is needed |
+| **E24** | the deadline helper, build (D65-A) | a 60-line C helper, `gcc -O2 -static -s -fno-ident -Wl,--build-id=none`: 714,680 bytes, the same sha256 when rebuilt from another directory, under another file name, a second later; a Go version, `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid="`: 1,757,332 bytes, the same sha256 from another directory and a second later, and an `arm64` build produced without a cross toolchain |
+| **E25** | the deadline helper, behaviour (D65-A), both builds | stdin passthrough; exit codes (3 → 3, killed -9 → 137, the tool's own 124 → 124 after 0.2 s, missing binary → 127 with a message); deadline 3 s → 124 after 3.2 s; `docker stop` of a tool that traps TERM took 0.2 s (SIGTERM forwarded) and exited 0; uid 65534 + `cap_drop ALL` + read-only root + `no-new-privileges` works; the parent `kill -9`'d at 2 s with a 6 s deadline → exit 124 after 6.1 s by Docker's own timestamps and no leftover grandchild |
+| **E26** | the helper on a `noexec` host filesystem | the container's `start` is refused (`failed to create task for container …`), before anything of the tool runs — fail-closed |
 
 Not run: the 2-minute node-delete cost (ACCEPTANCE 5.23) was measured at D63; the stale credential file
 (`cyberorch-cred-*`) was not reproduced here (`[D]` ADR E12 recorded it at D58); a Docker restart's effect on
 networks (would they survive a daemon restart with their containers?) was not tested `[N]`; Docker's behaviour
 for a non-root member of the `docker` group, a socket proxy and rootless mode were not tested `[N]`; the
 worst-case duration of the pre-start and post-run phases (§1.2) is a bound read from the code, not a measured
-maximum `[N]`.
+maximum `[N]`; the helper's reproducibility across *machines* and toolchain versions (E24 covers one machine) `[N]`.
 
 ## 7. What this document does not do
 
-It writes no code, no migration and no test. It does not pick values for the grace, the retention windows or
-the idle period (they are labelled `[N]` and listed as decisions). It does not decide D58-6, D58-13, D58-16 or
-D58-17; it names where it depends on them. Once you have answered §5 (⚑), the build is: migration 0022 and the
-small code change it implies (§1.8); a role, grants and the read function (migration 0023, in the shape of
-0019); a `control_plane/reconciler` package split like `scheduler` (plan / act / verify / emit / lock); one
-operator script; tests that fail every boundary (the way `tests/test_decision_boundaries.py` does for the
-decision stage) and that make a call report success without effect to prove nothing is audited unverified; a
-structural test that the reconciler imports no dispatch code; and the residue check (`tests/residue.py`)
+It writes no code, no migration and no test; the prototypes of `snapshot_schema()` and of the deadline helper live
+in the session's scratch area. It does not pick values for the grace, `B_cap`, the retention windows or the idle
+period (they are labelled `[N]` and listed as decisions). It does not decide D58-6, D58-13, D58-16 or D58-17; it
+names where it depends on them. Once you have answered §5 (⚑), the build is, in this order: **D65-A** (its own
+document); **0022** with the dispatch-side fixes (5.74, the explicit `abandoned` outcome) and the 0017 downgrade
+fix (5.75), and `snapshot_schema()`; then **0023** (roles, grants, the read function) and a
+`control_plane/reconciler` package split like `scheduler` (plan / act / verify / emit / lock); one operator
+script; the tests of §1.9, §2.2a, §3.2 and §3.3 (each failing a boundary, the way
+`tests/test_decision_boundaries.py` does for the decision stage), including the one that makes a call report
+success without effect to prove nothing is audited unverified; and the residue check (`tests/residue.py`)
 extended to the objects it manages.
 
-## 8. Candidate deliverable (separate): a deadline inside the container
+## 8. The deadline inside the container (summary; the design is `docs/D65A_CONTAINER_DEADLINE_DESIGN.md`)
 
 **The problem.** A tool container's duration is enforced from outside, by the control plane's
-`container.wait(timeout)` and `kill()`. If the control plane dies, nothing stops the container: a 5 s budget was
-still running 21 s after `kill -9` of its parent `[E: E16-A]`, and Docker has no option to give a container a
-maximum lifetime `[E: E15]`. Today the only thing that would end it is the reconciler (§1.2), and the reconciler's
-bound for *declaring the outcome unknown* is `B + 660 s`. A deadline inside the container is the precise answer:
-the container ends itself at the budget, whoever is or is not alive.
+`container.wait(timeout)` and `kill()`. If the control plane dies nothing stops the container: a 5 s budget was
+still running 21 s after `kill -9` of its parent `[E: E16-A]`, and Docker has no option for a maximum lifetime
+`[E: E15]`. **The experiment answer:** a small static PID-1 helper, bind-mounted read-only through the existing
+`source_mounts` primitive, starts the tool and ends the container at `B + slack`, exit 124; with the parent
+`kill -9`'d the container exited after 6.1 s on a 6 s deadline, grandchildren included `[E: E16, E25]`. With the
+control plane alive the budget still wins `[E: E16-C]`. It is a separate deliverable because it changes how every
+run is started and has its own tests; with it, the reconciler's container kill becomes a backstop and the
+`B + 660 s` bound concerns database state only. It goes **first**, because the reconciler's thresholds (§1.2)
+are written for the world in which it exists.
 
-**What was tried (E15, E16):**
+## 9. Shared test utilities: `snapshot_schema()` and the template database
 
-| Option | Works? | Notes |
-|---|---|---|
-| `timeout -s KILL N <tool>` as the command | only where `timeout` exists | present in `semgrep`, `bloodhound`, `browser`; **absent from `nmap`, `gitleaks`, `egress-proxy`** `[E: E15]`. Not universal. |
-| **a small static helper, bind-mounted read-only as the command's first element** | **yes, in every image tried** | the existing `source_mounts` primitive carries it, so `DockerSandbox.run` needed no change for the experiment. It is PID 1: it starts the tool, sets an alarm, and on expiry kills the tool and exits **124**. Its exit ends the PID namespace, so grandchildren die with it (E16-D, with a positive control). With the control plane alive the budget still wins (E16-C). Deadline precision: the container exited 0.7 s after the nominal time, which is its own start-up (E16-B). |
-| a host-side dead-man timer (`sleep N; docker kill ID`, detached) | `[N]` not tested | survives the control plane only if it is not in the same process group / cgroup; adds a host process per run. |
-| the reconciler alone (§1.2) | yes, but late | bound `B + 660 s`; kills a container still running at `StartedAt + B + 60 s`. |
+**The problem, from two incidents.** A restore that compared constraint *definitions* but not their COMMENTs lost
+a COMMENT (D63-j, and again in revision 2 of this document, caught by the next full-suite run). The existing
+`Scratch.fingerprint()` in `tests/test_migrations_roundtrip.py` covers columns, constraints (definition only),
+policies, indexes, trigger names, function bodies and table/column grants; it does **not** cover COMMENTs, the
+owner, `relrowsecurity`/`relforcerowsecurity`, `convalidated`, function attributes (`SECURITY DEFINER`,
+`search_path`, ACL), view definitions or options, relation ACLs, default ACLs or role attributes — the things this
+design depends on.
 
-**Open points for a deliverable (not decided here):**
+**The tool (proposed; prototype in the scratch area).** `tests/schema_snapshot.py`:
 
-* *Which deadline.* `B + slack` (slack ≈ 5–10 s) so that in the normal path the control plane's own kill wins
-  and the helper is only the backstop (E16-C).
-* *The exit code.* 124 means "deadline" in E16; a tool can return 124 too. Dispatch must decide how it maps
-  the code onto `timed_out` `[N]`.
-* *The helper is trusted code running as PID 1 beside the tool.* It adds no capability (the container keeps
-  `cap_drop ALL`, `no-new-privileges`, read-only root), but it must be built reproducibly, pinned by hash, and
-  mounted read-only; per-architecture builds are needed (the experiment's is x86-64). Signal forwarding for
-  `docker stop` (the experiment's helper does not forward SIGTERM) must be added.
-* *Images with an `ENTRYPOINT`.* The images here have none (`Config.Entrypoint` null for `nmap` and `gitleaks`);
-  the others were not checked `[N]`.
-* *Tests it needs:* the E16 experiments as real tests (parent killed → container gone at the deadline; tool
-  traps TERM; grandchild; normal path unchanged), each mutation-checked.
+* `snapshot_schema(conn, schema="public") -> dict[str, str]` — one entry per schema object, key `kind:name`, value a
+  normalised text of everything about it: for columns the type, nullability, default, identity, generated flag,
+  ACL and COMMENT; for relations the kind, owner, both RLS flags, ACL, options and COMMENT; for constraints the
+  definition, `convalidated`, deferrability and COMMENT; for indexes the definition, validity and COMMENT; for
+  triggers the definition, enabled state and COMMENT; for policies the command, roles, `USING` and `WITH CHECK`;
+  for functions the full definition, owner, `SECURITY DEFINER`, `proconfig`, ACL and COMMENT; for views the
+  definition; for roles `rolsuper`, `rolcreaterole`, `rolcreatedb`, `rolcanlogin`, `rolbypassrls`; default ACLs;
+  the Alembic version. No OIDs and no timestamps, so two snapshots of equal schemas are equal. **431 entries on the
+  current database.**
+* `diff_snapshots(a, b) -> list[str]` — `missing after`, `new after`, `changed` with the first differing
+  characters shown.
+* `assert_schema_unchanged(before, after, allow=())` — for tests; `allow` names the keys a step is *meant* to change.
 
-**Why separate from D64.** It changes how every adapter's command is assembled or how `run` starts a container,
-has its own tests and its own review, and is useful with or without the reconciler. With it, the reconciler's
-container kill becomes a backstop and the `B + 660 s` bound only concerns *database* state, not running
-processes. Listed as the candidate **D65-A** (a name for tracking, not a commitment).
+**Proof it earns its place** `[E: E19]`: two snapshots of an untouched database are equal; the revision-2 incident
+replayed (drop and re-add the CHECK without its COMMENT) is reported as one changed key, and no difference remains
+once the COMMENT is restored; the 0022 upgrade is reported as exactly four changed keys and one new one; the
+downgrade is shown to need `NO FORCE / FORCE` (the snapshot alone would not have shown that — the *data* did; see
+ST7); `alembic downgrade`/`upgrade` over the real data left 0 differences (E18).
+
+**Where it is used (all part of the implementation, none written now):**
+
+1. replaces `Scratch.fingerprint()`; the round-trip tests compare snapshots after **every** step up and down, not
+   only the first and the last;
+2. `scripts/mutation_check.py`: after the restore of each mutation, compare a snapshot taken before — it would have
+   caught D63-j;
+3. destructive experiments and tests: every one ends with a snapshot comparison against the source ("no
+   difference"), or is run in a transaction that is rolled back.
+
+**The temporary database.** `CREATE DATABASE … TEMPLATE cyberorch` copies 139 MB in 0.5 s (8.9 s cold), but it is
+**refused while any other session is connected to the source**, and the application roles cannot create databases
+`[E: E23]`. So it cannot be done from a pytest session that already holds pooled connections. Options:
+
+| | How | For | Against |
+|---|---|---|---|
+| (a) | a never-connected `cyberorch_template` kept at head by `scripts/init_db.sh`, copied by a role with `CREATEDB` | real data shape, fast | a new database and a new privilege; must be refreshed after every migration |
+| **(b) recommended for tests** | the existing scratch-**schema** harness (migrations run into a `migtest_*` schema, ~4–6 s per test), plus rows seeded at every stage | no new privilege; already in CI; no source-session problem | no production-sized data |
+| (c) | terminate other sessions, then copy | works | kills the session's own connections; unsuitable inside a test run |
+
+**Recommendation:** (b) for CI tests, **with representative rows at every stage** (the missing coverage that hid
+ACCEPTANCE 5.75); the template copy only for manual and destructive experiments, run by a superuser with no other
+sessions on the source, as the experiments of this revision (E18, E19, E20) were. Revision 2's E10 changed the
+development database directly — which is how the COMMENT was lost.
