@@ -13,12 +13,12 @@ merge audit:
 | D58-3 metadata/content line | **built** (D62): the reader sees the columns tabled in the design note, `action` only as a closed class | same |
 | D58-4 audit of scheduler decisions | **built** (D62): Option B, edge-triggered, closed vocabulary | same |
 | D58-5 transaction shape | **built** (D60): Option B, stages that each commit | `D60_PIPELINE_STAGES_REPORT.md`, 5.53 |
-| D58-6 failure containment (the ladder) | **NOT built.** v0 stops the whole service on any fault it cannot account for (a temporary simplification) | — |
+| D58-6 failure containment (the ladder) | **NOT built.** v0 stops the whole service on any fault it cannot account for (a temporary simplification). **Recorded for it (D63):** an approval waiting for dispatch is voided by any applicable policy publication and the proposal is closed; under a resident service that is routine and nothing re-proposes — the ladder must detect it, tell the person, and require a **new proposal and a new approval** (never auto-re-approve). Verified through a tick | ACCEPTANCE 5.68 |
 | D58-6b what an L2 hold is | **NOT built** | — |
 | D58-7 `UNKNOWN_OUTCOME` | **built, option B** (the mislabel fixed; "never auto-retry" kept; the retry half is not taken) | `D58_7_SANDBOX_NOT_STARTED_REPORT.md`, 5.58 |
 | D58-8 lease / approved-proposal dispatch | **built** (D61, H-A) with the approval re-derivation | `D61_JIT_CAPABILITY_REPORT.md`, 5.56 |
 | D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2) | — |
-| D58-10 recording the defects X1–X16 | **partly**: recorded as they were closed (5.52, 5.53, 5.56–5.58); X6 (residual), X7, X9, X10, X13, X14, X15, X16 are *not* separate ACCEPTANCE rows | — |
+| D58-10 recording the defects X1–X16 | **done** (D63 closeout): X1–X5, X8, X11, X12 as they were closed (5.52, 5.53, 5.56–5.58); X6 residual, X7, X9, X10, X13, X14, X15, X16 as open rows 5.60–5.67 | ACCEPTANCE 5.60–5.67 |
 | D58-11 priority basis | not needed yet (serial scheduler) | — |
 | D58-12 planning / closed-directions ledger | **NOT built** | — |
 | D58-13 resource quotas | **NOT built** (the scheduler is serial: concurrency 1) | — |
@@ -27,7 +27,7 @@ merge audit:
 | D58-16 unattended credentialed dispatch / kill | **NOT built** (the kill switch does not stop a running container) | — |
 | D58-17 secret residency / orphans | **NOT built** | — |
 
-Built: D58-1, -2, -3, -4, -5, -7, -8, -14. Not built: -6, -6b, -9, -12, -13, -15, -16, -17 (and -10 in part).
+Built: D58-1, -2, -3, -4, -5, -7, -8, -14; D58-10 done. Not built: -6, -6b, -9, -12, -13, -15, -16, -17.
 Labels: commit `adc4632` is titled "D62" but is D58-7; the scheduler is D62 (the D58-7 report was relabelled).
 
 **Addendum (D59).** X12 / D58-14 (cross-engagement network reachability) was taken out of this document and

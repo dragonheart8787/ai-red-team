@@ -106,7 +106,7 @@ nothing is built; a reader of the last addendum might conclude it is done. The s
 
 The body is still the text written at `ad2c8d5`; the index says so. Two sentences in the addenda were stale
 and are corrected (D61's "nothing in production calls `dispatch_approved` until the scheduler exists").
-**D58-10 is recorded as partial, honestly:** defects X1–X5, X11 and X12 were recorded as they were closed (5.52, 5.53, 5.58), and X3/X8 in part (5.56, 5.57);
+**Update (D63 closeout): D58-10 is now done — X6 residual, X7, X9, X10, X13–X16 are ACCEPTANCE 5.60–5.67, the failure ladder is 5.68.** At the time of the merge it was partial, honestly: defects X1–X5, X11 and X12 were recorded as they were closed (5.52, 5.53, 5.58), and X3/X8 in part (5.56, 5.57);
 X6 (residual), X7, X9, X10, X13–X16 are listed only in the ADR, not as ACCEPTANCE rows. That is a gap in the
 record, not in the code, and it is listed in §6 rather than papered over.
 
@@ -173,3 +173,35 @@ No production code was changed by this audit. (Before it, in the same round: `ip
   authorization from the Docker network range (`tool_gateway`), without which an `ip` scope cannot run.
 * Two live-run scripts (`d40_three_role.py`, `d45_ad_collection_e2e.py`) have not been executed since D59/D60;
   the first step of their next run is written at the top of each file.
+
+## 8. Closeout (after the merge)
+
+Four things the audit left, done in a small follow-up commit:
+
+1. **Migrations were only ever run upward.** `tests/test_migrations_roundtrip.py` (3 tests) runs the real
+   `alembic`, as `migration_owner`, in a scratch schema: an empty
+   schema upgrades to the script head (not hard-coded); head → `0015` → head and head → base → head arrive at
+   a schema whose columns, constraints, policies, indexes, triggers, functions and grants are **identical** to
+   the first head; the scheduler tables and the stage columns really are gone at `0015`; and `0020` is
+   exercised on data — a row holding the retired skip code is rewritten on the way up, the database then
+   refuses the code, and on the way down the old constraint takes it again. Mutation-checked: a no-op
+   `0020` downgrade, and a `0020` upgrade without the rewrite, each turn the `0020` test red.
+2. **D58-10 done:** ACCEPTANCE 5.60–5.67 record X6 (residual), X7, X9, X10, X13, X14, X15, X16, each with its
+   status, its ADR source and what was re-checked against the tree now (§3.3's "partly" is closed).
+3. **D58-6:** ACCEPTANCE 5.68 records that a waiting approval is voided by any applicable policy publication and
+   the proposal closed, with nothing to re-propose it — **verified through a tick**
+   (`tests/test_scheduler_policy_change.py`, 4 tests: an engagement layer and a global layer each void it and
+   the service goes on; another engagement's layer does not apply; a voided proposal is not picked up again).
+4. The ADR index rows for D58-6 and D58-10 point at those rows.
+
+   **A finding while writing it, worth stating plainly.** The migrations are not relocatable: `0001` ends with
+   `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cyberorch_app`, and the role
+   migrations' downgrades `REVOKE USAGE ON SCHEMA public`. My first version ran the chain with only the
+   `search_path` changed; the grants went to the shared `public` schema anyway, the application role got
+   `UPDATE`/`DELETE` on `audit_log` and the privilege tests (30 of them) failed in the full suite. Nothing was
+   committed; the development database was dropped and re-provisioned with `scripts/init_db.sh`. The test now
+   runs the chain from a temporary copy in which `SCHEMA public` (and the 0015 functions' `search_path = public`)
+   name the scratch schema, and its fixture **asserts the shared schema's privileges are exactly what they were**
+   — verified by turning the rewrite off, which fails the guard. (This does not make the real `0001` safe to
+   re-run on a live database — it never was; it is a property to know.)
+5. Full serial run after the closeout: **1 716 passed** (1 709 at the audit + 3 migration + 4 policy-change).
