@@ -270,9 +270,7 @@ Four things the audit left, done in a small follow-up commit:
   subprocess session for the wiring, and by three mutations. The Docker host's own leftovers from earlier
   sessions (seven networks, six created containers from manual experiments) were removed once, by hand, before the
   run.
-* Full serial run after this round: **1 764 passed** (1 720 after closeout 2, +44: 36 for the decision stage and
-  the NULL rule, 6 migration/0021, 6 residue check, 2 residue wiring, 1 graph cleanup, less the changes in
-  parametrization). The residue check ran at the end of that run and found nothing; the one active
+* Full serial run after this round: **1 764 passed** (1 720 after closeout 2). The residue check ran at the end of that run and found nothing; the one active
   global layer the database held afterwards was a baseline left by an interrupted script of this round's
   own (not by the suite — it was already there when the session started, so by design it is not residue) and was
   retired by hand.
