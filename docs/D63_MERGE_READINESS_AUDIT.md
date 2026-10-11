@@ -274,3 +274,23 @@ Four things the audit left, done in a small follow-up commit:
   global layer the database held afterwards was a baseline left by an interrupted script of this round's
   own (not by the suite — it was already there when the session started, so by design it is not residue) and was
   retired by hand.
+
+### 8.3 Pre-merge round (closeout 4)
+
+The branch carried one production change (the decision stage, `function_api._decide` / `_record_decision`) and one
+migration (0021), the rest tests and documents. Before merging it:
+
+* **The decision-stage change, verified.** What changed: `_record_decision` now moves `received` to the new stage
+  *and* writes the decision in one conditional `UPDATE … WHERE pipeline_stage = 'received' RETURNING`, raising
+  `StageConflict` if it moved nothing; `_decide` calls it instead of `stages.take` followed by an `UPDATE` (two
+  statements fail the 0021 CHECK on the first, and a CHECK cannot be deferred). The five D60 boundary tests pass
+  unchanged under 0021. A new `tests/test_decision_boundaries.py` (16) fails every boundary of the stage and the
+  idempotency paths and finds **no** proposal that leaves `received` undecided (ACCEPTANCE 5.69).
+* **Older mutations re-verified** with the same tool and rule: D60's six, D61's six re-derivation mutations, D58-7's
+  four and its follow-up's three — all valid; the counts are corrected in those reports, including one wrong
+  description in D60 (ACCEPTANCE 5.70). Four tests that caught a mutation only by an unexpected exception now
+  assert explicitly. Everything before D62 not in that list is stated as not re-verified.
+* **A structural guard for image literals** (`tests/test_image_literals.py`, ACCEPTANCE 5.73), after the second time
+  a test named an image CI did not have.
+* **Recorded, not fixed:** the node-delete cost (ACCEPTANCE 5.23) and the sandbox networks that nothing in
+  production removes (5.72, an input to D58-9).

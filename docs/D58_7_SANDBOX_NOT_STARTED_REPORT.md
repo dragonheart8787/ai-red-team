@@ -55,6 +55,15 @@ cached-client and image tests red; daemon errors not translated → both X5 test
 raising an untyped error → three red; every `SandboxUnavailable` treated as not started → the control
 and the ordering guard red.
 
+*Re-verified at D63 closeout 4* (`scripts/mutation_check.py`, ACCEPTANCE 5.70; valid, each red on the
+tested behaviour): network family only → **7** red (the daemon, cached-client, missing-image, refused-start
+tests, the AST ordering guard and `test_dispatch`'s missing-image test); daemon errors not translated → **2**
+(the raw `requests` `ConnectionError` escapes where `DaemonUnreachable` is asserted); `client()` untyped → **3**
+(a `RuntimeError` where the typed refusal is asserted); every `SandboxUnavailable` as not started → **3** (the
+control test and its `test_dispatch` twin die of `AttributeError: … no attribute 'reason'`, and the ordering
+guard). The AST ordering guard used `list.index` and so was red by `ValueError` when its handler was removed;
+it now asserts that the handler exists first.
+
 ## Not done
 
 * A raw connection error **after** `start()` still propagates (stage `dispatching`, reconciler's);
@@ -86,3 +95,8 @@ is `failed`/`closed` (the daemon's explanation asserted in the operator log, abs
 nothing for the reconciler; the guard types only on proof (running / exited / has-a-PID states re-raise); a failed
 inspection re-raises. Mutation-verified: `start()` untyped again → the two real-Docker tests red; proof dropped →
 the guard test red; failed inspection typed → the inspection test red.
+
+*Re-verified at D63 closeout 4*: `start()` untyped again → **3** red (the daemon's `APIError` escapes three
+tests that expect the typed refusal); proof dropped → **1**; failed inspection typed → **1**. The last two had
+been red only by an unexpected `ContainerStartRefused` escaping a `pytest.raises(APIError)` — not an assertion;
+both tests now fail explicitly ("typed as 'not started' without proof that the container never ran").

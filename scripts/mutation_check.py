@@ -68,6 +68,8 @@ class Edit:
     path: str
     old: str
     new: str
+    #: How many times ``old`` must occur (all are replaced). Normally exactly once.
+    count: int = 1
 
 
 @dataclass
@@ -215,10 +217,10 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
             path = ROOT / edit.path
             originals.setdefault(path, path.read_bytes())
             source = path.read_text()
-            if source.count(edit.old) != 1:
+            if source.count(edit.old) != edit.count:
                 result.verdict = "INVALID"
                 result.problems.append(f"{edit.path}: the text to change appears "
-                                       f"{source.count(edit.old)} times, not once")
+                                       f"{source.count(edit.old)} times, not {edit.count}")
                 return result
             path.write_text(source.replace(edit.old, edit.new))
         for path in originals:
@@ -257,7 +259,12 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
                 result.problems.append(f"{path.relative_to(ROOT)} was not restored")
 
     counts = result.counts()
-    red_targets = {f["test"].split("::")[-1] for f in result.failures if f["kind"] == "target"}
+    # a parametrized test counts under its full id and under its bare name
+    red_targets = set()
+    for f in result.failures:
+        if f["kind"] == "target":
+            name = f["test"].split("::")[-1]
+            red_targets.update({name, re.sub(r"\[.*\]$", "", name)})
     missing = [t for t in mutation.targets if t not in red_targets]
     if counts["broken"]:
         result.problems.append(f"{counts['broken']} failure(s) are the mutation's own error")

@@ -5,7 +5,10 @@
 "valid" means. The ids are the ones the reports use (``M1`` ... ``M15`` in the D62 report; ``D63-*``
 in the D63 audit and in ACCEPTANCE 5.60-5.69).
 
-The older mutation claims in ACCEPTANCE 5.56 and 5.58 (D61, D58-7) are not in this catalogue.
+Added at D63 closeout 4 (the older ones, re-verified with the same rule): ``D60-*`` (the six of the
+D60 report §5), ``D61-r*`` (the six re-derivation mutations of 5.56 / the D61 report), ``D58-7-*``
+(the four of the D58-7 report and the three of its follow-up). Not in the catalogue: the five
+"issue" mutations of 5.56 (D61 report §4.4) and everything before D58.
 """
 
 from __future__ import annotations
@@ -31,6 +34,15 @@ M0021 = "db/migrations/versions/0021_decision_past_received.py"
 SVC = "control_plane/scheduler/service.py"
 DEC = "control_plane/scheduler/decide.py"
 ALLOW = "control_plane/scheduler/allowlist.py"
+STAGES_PY = "control_plane/orchestrator/stages.py"
+FAPI = "control_plane/api/function_api.py"
+DISPATCH = "control_plane/orchestrator/dispatch.py"
+APPROVED = "control_plane/api/approved_dispatch.py"
+SANDBOX = "tool_gateway/sandbox.py"
+PIPELINE = ("tests/test_pipeline_stages.py", "tests/test_decision_boundaries.py")
+APPROVED_TESTS = ("tests/test_approved_dispatch.py",)
+NOT_STARTED = ("tests/test_sandbox_not_started.py", "tests/test_network_isolation.py",
+               "tests/test_dispatch.py")
 
 
 def _grant(sql_up: str, sql_down: str, summary: str, mid: str) -> Mutation:
@@ -275,6 +287,144 @@ CATALOGUE = [
                     '"\\n  ".join(found.failures()),\n'
                     "                    pytrace=False)\n", "        pass\n"),),
         targets=("test_a_session_that_leaves_a_global_layer_behind_fails",)),
+
+    # --- the decision stage's boundaries (D63 closeout 4) ----------------------------------
+    Mutation(
+        "D63-p", "the decision statement moves the stage but does not write the decision",
+        ("tests/test_decision_boundaries.py",),
+        edits=(Edit(FAPI, '        text("UPDATE action_proposals SET decision = :d, decision_reasons = :r, "',
+                    '        text("UPDATE action_proposals SET decision_reasons = :r, "'),),
+        targets=("test_a_fault_at_each_boundary_of_the_decision_stage_never_leaves_received_undecided",)),
+
+    Mutation(
+        "D63-q", "the decision statement no longer requires the proposal to be at 'received'",
+        PIPELINE,
+        edits=(Edit(FAPI, '             "WHERE proposal_id = :p AND pipeline_stage = :expected RETURNING proposal_id"),',
+                    '             "WHERE proposal_id = :p RETURNING proposal_id"),'),),
+        targets=("test_two_callers_racing_for_the_decision_leave_one_decision_and_no_undecided_row",)),
+
+    # --- the image-literal guard (A3) -------------------------------------------------------
+    Mutation(
+        "D63-r", "CI no longer builds the web-target image (the workflow step is dropped)",
+        ("tests/test_image_literals.py",),
+        edits=(Edit(".github/workflows/test.yml", "        run: ./tool_gateway/images/build_web_target_image.sh",
+                    "        run: echo skipped"),),
+        targets=("test_every_image_a_test_names_is_one_ci_builds_or_pulls",)),
+    Mutation(
+        "D63-s", "a test names busybox:latest, which CI does not have",
+        ("tests/test_image_literals.py",),
+        edits=(Edit("tests/test_residue_check.py", 'BASE_IMAGE = "python:3.12-slim"',
+                    'BASE_IMAGE = "busybox:latest"'),),
+        targets=("test_every_image_a_test_names_is_one_ci_builds_or_pulls",)),
+
+    # --- D60 (report section 5): the six guards of "a stage runs once" ----------------------
+    Mutation(
+        "D60-1", "the stage transition always wins (advance returns True)", PIPELINE,
+        edits=(Edit(STAGES_PY, "    return moved is not None", "    return True"),)),
+    Mutation(
+        "D60-2", "...and the driver also ignores the committed stage (retry = run everything)",
+        PIPELINE,
+        edits=(Edit(STAGES_PY, "    return moved is not None", "    return True"),
+               Edit(FAPI, "        stage, _detail = _stage_of(run.engagement_id, proposal_id)\n",
+                    "        stage, _detail = _stage_of(run.engagement_id, proposal_id)\n"
+                    "        if _ == 0:\n            stage = stages.RECEIVED\n"))),
+    Mutation(
+        "D60-3", "ON CONFLICT ... DO NOTHING removed (a retry no longer finds its proposal)",
+        PIPELINE, allowed_errors=("UniqueViolation",),
+        edits=(Edit(FAPI, "            ON CONFLICT (engagement_id, request_idempotency_key) DO NOTHING\n"
+                    "            RETURNING proposal_id", "            RETURNING proposal_id"),)),
+    Mutation(
+        "D60-4", "dispatch does not take the dispatching stage", PIPELINE,
+        edits=(Edit(DISPATCH, "    stages.take(conn, proposal_id, expected=stages.BEFORE_DISPATCH, "
+                    "new=stages.DISPATCHING)\n", "    pass\n", count=3),)),
+    Mutation(
+        "D60-5", "a provenance failure is not isolated (it propagates)", PIPELINE,
+        edits=(Edit(FAPI, "    except SQLAlchemyError as exc:\n        logger.error(\n"
+                    "            \"provenance for %s was not recorded",
+                    "    except ZeroDivisionError as exc:\n        logger.error(\n"
+                    "            \"provenance for %s was not recorded"),),
+        allowed_errors=("OperationalError",)),
+    Mutation(
+        "D60-6", "dispatch trusts the capability it was handed instead of re-reading it", PIPELINE,
+        edits=(Edit(DISPATCH, "    fresh = get_capability(conn, capability.capability_id)\n"
+                    "    if fresh is None or fresh.revoked or not fresh.is_live():",
+                    "    fresh = capability\n    if False:"),)),
+
+    # --- D61 re-derivation (5.56 / D61 report): the six guards ------------------------------
+    Mutation(
+        "D61-r1", "no re-derivation at all", APPROVED_TESTS,
+        edits=(Edit(APPROVED, "    reasons: list[str] = []\n    try:\n        target = normalize_target("
+                    "dict(proposal[\"target\"]))", "    return ()\n    reasons: list[str] = []\n    try:\n"
+                    "        target = normalize_target(dict(proposal[\"target\"]))"),)),
+    Mutation(
+        "D61-r2", "the classification is not compared", APPROVED_TESTS,
+        edits=(Edit(APPROVED, "    if now[\"classification\"] != approved[\"classification\"]:\n"
+                    "        reasons.append(CLASSIFICATION_CHANGED)", "    pass"),)),
+    Mutation(
+        "D61-r3", "the approval/proposal binding is not checked", APPROVED_TESTS,
+        edits=(Edit(APPROVED, "    if approval is None or approval[\"proposal_id\"] != proposal[\"proposal_id\"]:\n"
+                    "        return (APPROVAL_NOT_FOR_PROPOSAL,)\n"
+                    "    if approval[\"action_class\"] != proposal[\"action\"]:\n"
+                    "        return (APPROVAL_NOT_FOR_PROPOSAL,)",
+                    "    if approval is None:\n        return (APPROVAL_NOT_FOR_PROPOSAL,)"),)),
+    Mutation(
+        "D61-r4", "the OPA verdict is ignored", APPROVED_TESTS,
+        edits=(Edit(APPROVED, "    if decision.decision == fa.DENY:\n        reasons.append(POLICY_NOW_DENIES)\n"
+                    "    elif decision.decision == fa.HUMAN_APPROVAL:",
+                    "    if False:\n        reasons.append(POLICY_NOW_DENIES)\n    elif False:"),)),
+    Mutation(
+        "D61-r5", "there is no ceiling on the constraints (the proposal may ask for more)",
+        APPROVED_TESTS,
+        edits=(Edit(APPROVED, "    if derived != approved_constraints(approval):", "    if False:"),)),
+    Mutation(
+        "D61-r6", "the approvals immutability trigger is disabled", APPROVED_TESTS,
+        sql_up=("ALTER TABLE approvals DISABLE TRIGGER approvals_guard_update",),
+        sql_down=("ALTER TABLE approvals ENABLE TRIGGER approvals_guard_update",)),
+
+    # --- D58-7 (report): the four, and the three of the follow-up ---------------------------
+    Mutation(
+        "D58-7-1", "dispatch handles only the network family of refusals (the pre-fix behaviour)",
+        NOT_STARTED,
+        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        with engagement_scope(engagement_id) as conn:\n"
+                    "            outcome = _refused_before_start(",
+                    "    except NetworkNotAvailable as exc:\n        with engagement_scope(engagement_id) as conn:\n"
+                    "            outcome = _refused_before_start("),)),
+    Mutation(
+        "D58-7-2", "daemon errors are not translated into DaemonUnreachable", NOT_STARTED,
+        edits=(Edit(SANDBOX, "    except (DockerException, _RequestsConnectionError) as exc:\n"
+                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n@dataclass",
+                    "    except ZeroDivisionError as exc:\n"
+                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n@dataclass"),),
+        allowed_errors=("DockerException", "APIError", "ConnectionError")),
+    Mutation(
+        "D58-7-3", "client() raises an untyped error when the daemon is unreachable", NOT_STARTED,
+        edits=(Edit(SANDBOX, "            self._client = None\n"
+                    "            raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc",
+                    "            self._client = None\n"
+                    "            raise RuntimeError(f\"docker is not reachable: {exc}\") from exc"),),
+        allowed_errors=("RuntimeError",)),
+    Mutation(
+        "D58-7-4", "every SandboxUnavailable is treated as not started", NOT_STARTED,
+        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        with engagement_scope(engagement_id) as conn:\n"
+                    "            outcome = _refused_before_start(",
+                    "    except SandboxUnavailable as exc:\n        with engagement_scope(engagement_id) as conn:\n"
+                    "            outcome = _refused_before_start("),),
+        allowed_errors=("AttributeError",)),
+    Mutation(
+        "D58-7-5", "(follow-up) start() is untyped again", NOT_STARTED,
+        edits=(Edit(SANDBOX, "            container.start()\n        except APIError as exc:",
+                    "            container.start()\n        except ZeroDivisionError as exc:"),),
+        allowed_errors=("APIError",)),
+    Mutation(
+        "D58-7-6", "(follow-up) the proof that the container never ran is dropped", NOT_STARTED,
+        edits=(Edit(SANDBOX, "            if not never_ran:\n                raise", "            if False:\n                raise"),)),
+    Mutation(
+        "D58-7-7", "(follow-up) a failed inspection is typed as not started", NOT_STARTED,
+        edits=(Edit(SANDBOX, "            except (DockerException, _RequestsConnectionError):\n"
+                    "                raise exc from None",
+                    "            except (DockerException, _RequestsConnectionError):\n"
+                    "                state = {\"Status\": \"created\", \"Running\": False, \"Pid\": 0,\n"
+                    "                         \"StartedAt\": \"0001-01-01T00:00:00Z\"}"),)),
 ]
 
 

@@ -185,17 +185,21 @@ another connection and from audit counts, never from the call's own return value
 | a reused key for a different request is refused | `test_a_key_reused_…` |
 | provenance failure leaves the result whole; repairing it adds only what is missing, any number of times; not written for an unfinished proposal | `test_a_provenance_failure_…`, `…_not_written_for…` |
 
-**Mutation tests.** Each guard put back the old way, observed red, restored (`diff` against the saved
-copy checked clean after):
+**Mutation tests (re-verified at D63 closeout 4 with `scripts/mutation_check.py`; ACCEPTANCE 5.70).** Each
+guard put back the old way, the tests run (`test_pipeline_stages.py`, and since D63 `test_decision_boundaries.py`),
+every failure's test name and exception recorded, restored. All six are valid; the numbers below replace the
+ones first reported, which were counted by hand, on a suite without the D63 additions, and — for the third —
+described the wrong failure.
 
-| Mutation | Red |
+| Mutation | Red (now) |
 |---|---|
-| the stage transition always "wins" (`advance` → `True`) | `test_two_callers_with_one_key_…` (two deciders) |
-| …and the driver also ignores the committed stage (the pre-D60 "retry = run everything") | **7 tests**: the same-request-twice, retry-after-decision, three boundary-retries, the killed-process retry, the two-callers race |
-| `ON CONFLICT … DO NOTHING` removed (a retry inserts a second proposal) | **10 tests** |
-| dispatch does not take the `dispatching` stage | the stage walk, and the killed-process test |
-| provenance failure not isolated (propagates) | `test_a_provenance_failure_cannot_take_a_recorded_result_with_it` |
-| dispatch trusts the capability it was handed instead of re-reading it | `test_a_kill_switch_between_the_capability_and_the_dispatch_…` |
+| the stage transition always "wins" (`stages.advance` returns `True`) | **1** — `test_two_callers_with_one_key_leave_one_of_everything` (`assert 2 == 1`: two deciders). *Since D63 (0021) the decision stage no longer goes through `advance`: its own conditional `UPDATE … WHERE pipeline_stage = 'received'` is its guard (below), so this mutation reaches only the later stages.* |
+| …and the driver also ignores the committed stage (the pre-D60 "retry = run everything"; emulated by forcing the first pass to start at `received`) | **3** — `test_the_same_request_twice_is_one_proposal_one_decision_one_run` ("a stage was run a second time"), `test_a_retry_after_the_decision_does_not_decide_again` (`assert 2 == 1`), the two-callers race. (The first report said 7: it was a different emulation, and the decision stage's guard has since moved out of `advance`.) |
+| `ON CONFLICT … DO NOTHING` removed | **23** (10 first reported) — every retry now raises `UniqueViolation` from the unique index on `(engagement_id, request_idempotency_key)`. **A correction:** the first report said "a retry inserts a second proposal"; it cannot — the unique index refuses it. What `ON CONFLICT` buys is that the refusal becomes a resume. The tests are red by the index's error, which is the right layer to see it at, not by an assertion. |
+| dispatch does not take the `dispatching` stage (all three `dispatch_*`) | **27** — the stage walk, the killed-process and failure-at-recording tests, the five boundary retries, provenance, the same-request-twice test, … all on assertions about the stage (`'capability_issued' == 'dispatching'`). |
+| a provenance failure is not isolated (the `except` no longer catches it) | **2** — `test_a_provenance_failure_cannot_take_a_recorded_result_with_it` and (D63) `test_a_deny_whose_provenance_then_fails_keeps_its_decision`; both now fail with an explicit message ("a provenance failure escaped and took the … result with it") instead of letting the error escape. |
+| dispatch trusts the capability it was handed instead of re-reading it | **1** — `test_a_kill_switch_between_the_capability_and_the_dispatch_is_caught_at_the_boundary` (`'engagement_not_active' == 'capability_not_live'`). |
+| *(D63)* the decision statement no longer requires the proposal to be at `received` | **2** — the two-callers race in both files (two decisions written). This is the guard that replaced `advance` for the decision stage. |
 
 One mutation is *not* separately red and that is a design fact worth recording: with only the guard
 disabled, the retry tests stay green, because the driver reads the stage first — two independent

@@ -454,6 +454,7 @@ def test_the_sandbox_unavailable_handler_is_preceded_by_the_not_started_one():
     assert len(tries) == 1
     names = [h.type.id for h in tries[0].handlers if isinstance(h.type, ast.Name)]
     # D58-7: the handler is for the whole "not started" family (the network is one member)
+    assert "NotStarted" in names, f"the handler for the 'not started' family is gone: {names}"
     assert names.index("NotStarted") < names.index("SandboxUnavailable")
     public = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
               and n.name in ("dispatch_scan", "dispatch_collection", "dispatch_code_scan")}

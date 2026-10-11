@@ -513,7 +513,10 @@ def test_a_provenance_failure_cannot_take_a_recorded_result_with_it(world, monke
 
     with monkeypatch.context() as patched:
         patched.setattr(graph, "record_provenance", edges_fail)
-        outcome = go(world)
+        try:
+            outcome = go(world)
+        except OperationalError:
+            pytest.fail("a provenance failure escaped and took the recorded result with it")
     # The result is whole: the old pipeline lost all of this to one cheap, late write.
     assert outcome.run_id and outcome.evidence_id and outcome.failure is None
     snap = snapshot(world["engagement_id"])
