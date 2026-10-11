@@ -717,9 +717,9 @@ class CapabilityLifecycle(RuleBasedStateMachine):
                     text("""
                         INSERT INTO action_proposals (proposal_id, engagement_id,
                             agent_id, request_idempotency_key, action, target,
-                            "authorization", discovery)
+                            "authorization", discovery, decision)
                         VALUES (:p, :e, 'fake-worker', :k, :a, '{}'::jsonb,
-                                '{}'::jsonb, '{}'::jsonb)
+                                '{}'::jsonb, '{}'::jsonb, 'ALLOW')
                     """),
                     {"p": proposal_id, "e": self.engagement_id, "k": key, "a": ACTION},
                 )

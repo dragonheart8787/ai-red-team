@@ -31,11 +31,13 @@ on its own, rather than by a hand-maintained exception list.
 from __future__ import annotations
 
 import ast
+import os
 import time
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
+from control_plane.graph import queries
 from control_plane.graph.queries import NodeRef, paths_within_hops, shortest_path
 from control_plane.graph.store import GraphEdge, GraphNode, record_batch
 from control_plane.state.db import engagement_scope
@@ -183,6 +185,46 @@ def _hub_fixture(engagement_id: str) -> tuple[str, NodeRef, NodeRef, NodeRef]:
     return run_id, ref(low_priv_idx), ref(wide_fanout_idx), ref(da_idx)
 
 
+def _remove_graph_rows(engagement_id: str) -> None:
+    """Take back what ``_hub_fixture`` wrote (~36k edges). The runtime role can only read and
+    append to the Security Graph, so this is the table owner's job, with the engagement bound so
+    that row-level security (which binds the owner too) lets it see the rows.
+
+    The edges go first, then a VACUUM, then the nodes: ``security_graph_edges.dst_node_id`` is a
+    foreign key with no index, so deleting a node scans the edge table for references to it, and
+    scanning ~36k dead edge rows once per node is minutes rather than a moment."""
+    engine = create_engine(os.environ["MIGRATION_DATABASE_URL"], future=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("SELECT set_config('cyberorch.engagement_id', :e, true)"),
+                         {"e": engagement_id})
+            conn.execute(text("DELETE FROM security_graph_edges"))     # RLS: this engagement's
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM security_graph_edges"))
+        with engine.begin() as conn:
+            conn.execute(text("SELECT set_config('cyberorch.engagement_id', :e, true)"),
+                         {"e": engagement_id})
+            conn.execute(text("DELETE FROM security_graph_nodes"))
+    finally:
+        engine.dispose()
+
+
+def _analyze_graph_tables() -> None:
+    """What autovacuum does in production, done now so the planner's statistics describe the rows
+    just loaded rather than whatever state the tables were last left in (ACCEPTANCE 5.23)."""
+    engine = create_engine(os.environ["MIGRATION_DATABASE_URL"], future=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ANALYZE security_graph_edges"))
+            conn.execute(text("ANALYZE security_graph_nodes"))
+    finally:
+        engine.dispose()
+
+
+def _plan(conn, query: str, **params) -> str:
+    return "\n".join(r[0] for r in conn.execute(text("EXPLAIN " + query), params).all())
+
+
 def test_graph_queries_stay_fast_on_a_hub_shaped_fixture(engagement_id):
     """Regression guard for the exact cost D42-2 measured and rejected.
 
@@ -190,19 +232,40 @@ def test_graph_queries_stay_fast_on_a_hub_shaped_fixture(engagement_id):
     control_plane/graph/queries.py's two recursive queries to the naive,
     per-path visited-array / UNION ALL formulation makes this test fail —
     see the note at the bottom of this file for the exact numbers observed.
+
+    It removes what it loaded (the graph tables are append-only for the runtime role, so an
+    unremoved fixture of ~36k edges per run accumulated for ever and, with it, the statistics the
+    planner chooses by), and it checks the **plan**, not only the clock: the recursive step must
+    reach ``security_graph_edges`` through an index condition on ``src_node_id``. The other plan
+    the planner can pick -- scan the engagement's edges and filter by ``src_node_id`` as a join
+    condition -- is correct but quadratic, and which one it picks depends on the table's
+    statistics (ACCEPTANCE 5.23), which is why the tables are analyzed after the load.
     """
-    _run_id, low_priv, wide_fanout, domain_admins = _hub_fixture(engagement_id)
+    try:
+        _run_id, low_priv, wide_fanout, domain_admins = _hub_fixture(engagement_id)
+        _analyze_graph_tables()
 
-    with engagement_scope(engagement_id) as conn:
-        conn.execute(text("SET LOCAL statement_timeout = 5000"))
+        with engagement_scope(engagement_id) as conn:
+            conn.execute(text("SET LOCAL statement_timeout = 5000"))
 
-        start = time.perf_counter()
-        shortest_path(conn, start=low_priv, target=domain_admins, max_depth=10)
-        elapsed_shortest = time.perf_counter() - start
+            for query, start in ((queries._PATHS_WITHIN_HOPS_QUERY, wide_fanout),
+                                 (queries._SHORTEST_PATH_QUERY, low_priv)):
+                plan = _plan(conn, query, start=queries._node_id(conn, start),
+                             target=queries._node_id(conn, domain_admins), max_depth=10)
+                assert "security_graph_edges" in plan
+                assert "Join Filter: (e.src_node_id" not in plan, plan
+                assert any("Index Cond" in line and "src_node_id" in line
+                           for line in plan.splitlines()), plan
 
-        start = time.perf_counter()
-        reachable = paths_within_hops(conn, start=wide_fanout, max_depth=10)
-        elapsed_paths = time.perf_counter() - start
+            start = time.perf_counter()
+            shortest_path(conn, start=low_priv, target=domain_admins, max_depth=10)
+            elapsed_shortest = time.perf_counter() - start
+
+            start = time.perf_counter()
+            reachable = paths_within_hops(conn, start=wide_fanout, max_depth=10)
+            elapsed_paths = time.perf_counter() - start
+    finally:
+        _remove_graph_rows(engagement_id)
 
     assert elapsed_shortest < 2.0, f"shortest_path took {elapsed_shortest:.2f}s on the hub fixture"
     assert elapsed_paths < 2.0, f"paths_within_hops took {elapsed_paths:.2f}s on the hub fixture"
@@ -213,6 +276,14 @@ def test_graph_queries_stay_fast_on_a_hub_shaped_fixture(engagement_id):
         f"hub fixture's wide-fanout node only reached {len(reachable)} nodes -- "
         "not hub-shaped enough to be a meaningful regression guard"
     )
+
+
+def test_the_hub_fixture_leaves_nothing_behind(engagement_id):
+    _hub_fixture(engagement_id)
+    _remove_graph_rows(engagement_id)
+    with engagement_scope(engagement_id) as conn:
+        assert conn.execute(text("SELECT count(*) FROM security_graph_edges")).scalar_one() == 0
+        assert conn.execute(text("SELECT count(*) FROM security_graph_nodes")).scalar_one() == 0
 
 
 # ---------------------------------------------------------------------------

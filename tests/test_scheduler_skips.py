@@ -87,7 +87,9 @@ def test_a_skipped_proposal_over_many_ticks_does_not_stop_the_service_and_is_rec
     assert exit_code == vocab.EXIT_OK          # twelve ticks, each of which found the proposal
     assert sandbox.calls == 0
     assert _stage(eid, pid)[0] == stages.APPROVED       # waiting, untouched, still approved
-    (skipped,) = sup.audit(eid, "scheduler.skipped")
+    events = sup.audit(eid, "scheduler.skipped")
+    assert len(events) == 1, f"scheduler.skipped was written {len(events)} times over 12 ticks"
+    (skipped,) = events
     assert skipped["payload"] == {"proposal_id": pid, "reason_code": vocab.SCOPE_TOO_NARROW}
     assert tuple(_state(eid, pid)) == (vocab.SKIPPED_STATE, vocab.SCOPE_TOO_NARROW)
     assert sup.audit(eid, "scheduler.dispatched", "scheduler.deferred") == []
@@ -175,7 +177,9 @@ def test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened(enrolled,
     assert sandbox.calls == 0 and sandbox.allowlists == []
     assert _stage(eid, pid)[0] == stages.APPROVED
     assert tuple(_state(eid, pid)) == (vocab.SKIPPED_STATE, vocab.SCOPE_TOO_NARROW)
-    (event,) = sup.audit(eid, "scheduler.skipped")                    # once, not once per tick
+    events = sup.audit(eid, "scheduler.skipped")                      # once, not once per tick
+    assert len(events) == 1, f"scheduler.skipped was written {len(events)} times over 6 ticks"
+    (event,) = events
     assert event["payload"] == {"proposal_id": pid, "reason_code": vocab.SCOPE_TOO_NARROW}
     assert sup.rows(eid, "SELECT 1 FROM capabilities") == []
 

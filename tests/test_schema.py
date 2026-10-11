@@ -176,13 +176,24 @@ def test_emergency_overlay_cannot_allow_an_action(db_available):
 
 
 def test_emergency_overlay_may_deny(db_available):
+    """An overlay may tighten. The row is **retired at the end**: it denies ``network.scan`` for
+    every engagement, and left active it made every later test that expects that action to be
+    allowed fail with ``action_denied_by_policy`` (the scheduler's, on a second local run)."""
     with get_global_policy_admin_engine().begin() as conn:
-        conn.execute(text("""
+        layer_id = conn.execute(text("""
             INSERT INTO policy_layers (layer, version, document)
-            VALUES ('emergency_overlay', 97,
+            VALUES ('emergency_overlay', :v,
                     '{"actions": {"network.scan": "DENY"}, "data_deny": ["PII"]}'::jsonb)
-            ON CONFLICT DO NOTHING
-        """))
+            RETURNING id
+        """), {"v": uuid.uuid4().int % 2_000_000_000}).scalar_one()
+    try:
+        with get_global_policy_admin_engine().begin() as conn:
+            assert conn.execute(text(
+                "SELECT active FROM policy_layers WHERE id = :i"), {"i": layer_id}).scalar_one()
+    finally:
+        with get_global_policy_admin_engine().begin() as conn:
+            conn.execute(text("UPDATE policy_layers SET active = false WHERE id = :i"),
+                         {"i": layer_id})
 
 
 def test_findings_has_no_confidence_column(db_available):

@@ -164,6 +164,14 @@ Mutation-verified, each turning the suite red: no re-derivation at all (10 tests
 compared (4), approval/proposal binding unchecked (2), OPA verdict ignored (3), no constraint ceiling (2),
 trigger disabled (8).
 
+*Re-verified at D63 closeout 4* (`scripts/mutation_check.py`, ACCEPTANCE 5.70; all six valid — each red on an
+assertion, none on an error of the mutation): no re-derivation **8**, classification not compared **3**,
+binding unchecked **1** (`test_an_approval_that_belongs_to_another_proposal_cannot_be_used`), OPA verdict ignored
+**3**, no constraint ceiling **1** (`test_the_proposal_cannot_ask_for_more_than_was_approved`), trigger disabled
+**8** (five of them "Regex pattern did not match": a grant refuses the write, but not with the trigger's
+message — so the test does tell the layers apart). The figures first reported (10, 4, 2, 3, 2, 8) were counts
+from the time; four of the six differ now, none by being red for a wrong reason.
+
 **Two refusal layers, stated once (the wording was inconsistent between this section and the limits; unified at
 the D63 audit).**
 

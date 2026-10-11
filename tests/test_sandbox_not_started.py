@@ -305,6 +305,18 @@ class _FakeContainer:
 NEVER = {"Status": "created", "Running": False, "Pid": 0, "StartedAt": "0001-01-01T00:00:00Z"}
 
 
+def _refused_untyped(container) -> None:
+    """``_start_container`` must re-raise the daemon's own error. Typing it as 'not started' is the
+    failure under test, so it is reported as one (not left to escape as an unexpected exception)."""
+    try:
+        DockerSandbox._start_container(container)
+    except ContainerStartRefused:
+        pytest.fail("typed as 'not started' without proof that the container never ran")
+    except docker.errors.APIError:
+        return
+    pytest.fail("the daemon's refusal was swallowed")
+
+
 def test_a_refusal_is_typed_only_on_proof_the_container_never_ran():
     with pytest.raises(ContainerStartRefused):
         DockerSandbox._start_container(_FakeContainer(NEVER))
@@ -315,13 +327,11 @@ def test_a_refusal_is_typed_only_on_proof_the_container_never_ran():
         {**NEVER, "Status": "exited", "StartedAt": "2026-10-08T03:00:00Z"},   # ran and ended
         {**NEVER, "Pid": 77},                                         # a process existed
     ):
-        with pytest.raises(docker.errors.APIError):
-            DockerSandbox._start_container(_FakeContainer(state))
+        _refused_untyped(_FakeContainer(state))
 
 
 def test_a_refusal_whose_inspection_fails_stays_unplaced():
     """If Docker cannot be asked what happened, nothing is proven: the original error propagates
     (the proposal stays ``dispatching``, the reconciler's) rather than "not started"."""
     box = _FakeContainer(NEVER, reload_error=docker.errors.DockerException("daemon went away"))
-    with pytest.raises(docker.errors.APIError):
-        DockerSandbox._start_container(box)
+    _refused_untyped(box)

@@ -106,7 +106,7 @@ nothing is built; a reader of the last addendum might conclude it is done. The s
 
 The body is still the text written at `ad2c8d5`; the index says so. Two sentences in the addenda were stale
 and are corrected (D61's "nothing in production calls `dispatch_approved` until the scheduler exists").
-**D58-10 is recorded as partial, honestly:** defects X1–X5, X11 and X12 were recorded as they were closed (5.52, 5.53, 5.58), and X3/X8 in part (5.56, 5.57);
+**Update (D63 closeout): D58-10 is now done — X6 residual, X7, X9, X10, X13–X16 are ACCEPTANCE 5.60–5.67, the failure ladder is 5.68.** At the time of the merge it was partial, honestly: defects X1–X5, X11 and X12 were recorded as they were closed (5.52, 5.53, 5.58), and X3/X8 in part (5.56, 5.57);
 X6 (residual), X7, X9, X10, X13–X16 are listed only in the ADR, not as ACCEPTANCE rows. That is a gap in the
 record, not in the code, and it is listed in §6 rather than papered over.
 
@@ -173,3 +173,124 @@ No production code was changed by this audit. (Before it, in the same round: `ip
   authorization from the Docker network range (`tool_gateway`), without which an `ip` scope cannot run.
 * Two live-run scripts (`d40_three_role.py`, `d45_ad_collection_e2e.py`) have not been executed since D59/D60;
   the first step of their next run is written at the top of each file.
+
+## 8. Closeout (after the merge)
+
+Four things the audit left, done in a small follow-up commit:
+
+1. **Migrations were only ever run upward.** `tests/test_migrations_roundtrip.py` (3 tests) runs the real
+   `alembic`, as `migration_owner`, in a scratch schema: an empty
+   schema upgrades to the script head (not hard-coded); head → `0015` → head and head → base → head arrive at
+   a schema whose columns, constraints, policies, indexes, triggers, functions and grants are **identical** to
+   the first head; the scheduler tables and the stage columns really are gone at `0015`; and `0020` is
+   exercised on data — a row holding the retired skip code is rewritten on the way up, the database then
+   refuses the code, and on the way down the old constraint takes it again. Mutation-checked: a no-op
+   `0020` downgrade, and a `0020` upgrade without the rewrite, each turn the `0020` test red.
+2. **D58-10 done:** ACCEPTANCE 5.60–5.67 record X6 (residual), X7, X9, X10, X13, X14, X15, X16, each with its
+   status, its ADR source and what was re-checked against the tree now (§3.3's "partly" is closed).
+3. **D58-6:** ACCEPTANCE 5.68 records that a waiting approval is voided by any applicable policy publication and
+   the proposal closed, with nothing to re-propose it — **verified through a tick**
+   (`tests/test_scheduler_policy_change.py`, 4 tests: an engagement layer and a global layer each void it and
+   the service goes on; another engagement's layer does not apply; a voided proposal is not picked up again).
+4. The ADR index rows for D58-6 and D58-10 point at those rows.
+
+   **A finding while writing it, worth stating plainly.** The migrations are not relocatable: `0001` ends with
+   `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cyberorch_app`, and the role
+   migrations' downgrades `REVOKE USAGE ON SCHEMA public`. My first version ran the chain with only the
+   `search_path` changed; the grants went to the shared `public` schema anyway, the application role got
+   `UPDATE`/`DELETE` on `audit_log` and the privilege tests (30 of them) failed in the full suite. Nothing was
+   committed; the development database was dropped and re-provisioned with `scripts/init_db.sh`. The test now
+   runs the chain from a temporary copy in which `SCHEMA public` (and the 0015 functions' `search_path = public`)
+   name the scratch schema, and its fixture **asserts the shared schema's privileges are exactly what they were**
+   — verified by turning the rewrite off, which fails the guard. (This does not make the real `0001` safe to
+   re-run on a live database — it never was; it is a property to know.)
+5. Full serial run after the closeout: **1 716 passed** (1 709 at the audit + 3 migration + 4 policy-change).
+
+### 8.1 Second closeout round
+
+* **`scheduler_state_writer` is approved** (D-7); the design note's "needs your confirmation" and the report's
+  assumptions section are gone, and the design note's status line now says built and final.
+* **The withdrawal test under mutation, alone:** with the `withdrawn_at IS NULL` filter removed,
+  `test_withdrawing_an_enrollment_takes_effect_on_the_next_tick` is red by itself (its own proposal appears in
+  `dispatched`); restored, green. **A correction:** the mutation reported in the D62 report (M2, "29 red") was
+  malformed — `SELECT DISTINCT … ORDER BY enrollment_id` is a SQL error, so everything was red for the wrong
+  reason. The report row is corrected and the test now asserts on its own proposal.
+* **A test-isolation bug found while doing it:** `test_schema.py::test_emergency_overlay_may_deny` inserted a
+  global overlay that denies `network.scan` and never retired it, so on a second local run every test that expects
+  `network.scan` to be allowed (the scheduler's) failed with `action_denied_by_policy`. CI starts from a fresh
+  database so it never saw it. The test now retires its row.
+* **CHECK constraints and NULL:** all 28 CHECKs in `public` read against `attnotnull` — see ACCEPTANCE 5.69 for the
+  list, the rule ("a closed-code column is NOT NULL, or NULL is a stated state and a further CHECK excludes it
+  where a code is required") and `tests/test_check_constraints_null_rule.py`, which makes a new CHECK on a
+  nullable column fail until it is justified. One candidate recorded, executed: nothing ties a later stage to a
+  non-NULL `decision`.
+* **The migration test now also checks** that `scheduler_state` and `scheduler_enrollment` have
+  `FORCE ROW LEVEL SECURITY` after **every** migration step, up and down one revision at a time, and that
+  `0020`'s `NO FORCE` … `UPDATE` … `FORCE` pair is atomic: it is one `upgrade()` with nothing that commits
+  between, and a failure injected between the two statements leaves the committed schema (revision, constraints,
+  rows, `FORCE`) exactly as it was at 0019. Mutation-checked three ways: `FORCE` never turned back on (the
+  stepwise test and the atomicity test red); `NO FORCE` in an `autocommit_block` (red); a mid-migration `END`,
+  which the source check cannot see (red by behaviour).
+* **One flaky test seen** (`test_graph_queries_stay_fast_on_a_hub_shaped_fixture`, a 5 s statement timeout): found
+  at the time not to be caused by this round; its cause and fix are in §8.2.
+
+### 8.2 Third closeout round
+
+* **Every mutation of the D62 report and the D63 audit re-verified (31).** The question was not "do they go
+  red" but "do they go red *on the assertion*". `scripts/mutation_check.py` now runs a mutation only after the
+  unmutated tests are green, requires the change to compile / import / run, records each failing test and the
+  exception it died of, and calls the mutation valid only if none of the failures is the mutation's own error and
+  the named target tests are among the assertion failures (ACCEPTANCE 5.70). The D62 report §4 has the table
+  with the names and messages. **Result: 31 of 31 valid, none red for a syntax, SQL or import reason** — after
+  four defects were found and removed: three tests that caught their mutation by accident (`ValueError: too many
+  values to unpack`; an `IntegrityError` outside any `pytest.raises`; `ValueError: substring not found`) now assert
+  explicitly, and the tool's own restore of the 0021 mutation left the constraint without its comment. The
+  figures the first reports gave are replaced (they grew with the suite, and M2's "29" was withdrawn). Out of scope
+  and **not** re-run: the mutations 5.56 and 5.58 list (D61, D58-7) — this audit only repeats their counts.
+* **The graph timing test (5.23):** the cause was the planner's statistics, not other engagements' rows. Right after
+  an engagement's ~36k edges are loaded and before `ANALYZE`, the recursive query takes a plan that does not finish
+  in 8 s (0, 1, 3, 6, 9 other engagements present: the same); after `ANALYZE` it takes 0.05–0.07 s — at every one of
+  those counts. The test now analyzes what it loaded, asserts from `EXPLAIN` that the recursive step uses an index
+  condition on `src_node_id` (mutation: indexes dropped — red), and **removes its rows** (the runtime role can only
+  append; the table owner deletes; the edge table is vacuumed first because `dst_node_id`, a foreign key, has no
+  index and deleting a node otherwise scans the table once per node: two minutes instead of two seconds). The
+  production consequence (the first graph query after a bulk load can time out until autovacuum) is recorded in
+  5.23, not fixed.
+* **`action_proposals.decision` (5.69):** the stages where NULL is legal were listed from the code first —
+  `received` only; the hand-built dispatch route that produced `recorded`/`closed` rows with no decision (132 and
+  78 in the development database) is closed too. **Migration 0021** adds `CHECK (decision IS NOT NULL OR
+  pipeline_stage = 'received')`; the decision stage now writes the decision in the same statement that moves the
+  stage (a CHECK cannot be deferred); eight fixtures insert `ALLOW`. Up/down test: the upgrade is blocked by an
+  undecided `recorded` row and leaves nothing behind, goes through once it is corrected, the database then refuses
+  every stage but `received`, the downgrade removes the constraint, and it blocks again. The development
+  database was re-provisioned (it held the hand-built rows; `init_db.sh`, `.env` identical) — a database that
+  holds such rows refuses the migration with the constraint name, and nothing back-fills a decision.
+* **End-of-session residue check (5.71):** active policy layers without an engagement and containers left by the
+  session fail the run; sandbox networks it made are removed and counted. Tested for each kind, through a
+  subprocess session for the wiring, and by three mutations. The Docker host's own leftovers from earlier
+  sessions (seven networks, six created containers from manual experiments) were removed once, by hand, before the
+  run.
+* Full serial run after this round: **1 764 passed** (1 720 after closeout 2). The residue check ran at the end of that run and found nothing; the one active
+  global layer the database held afterwards was a baseline left by an interrupted script of this round's
+  own (not by the suite — it was already there when the session started, so by design it is not residue) and was
+  retired by hand.
+
+### 8.3 Pre-merge round (closeout 4)
+
+The branch carried one production change (the decision stage, `function_api._decide` / `_record_decision`) and one
+migration (0021), the rest tests and documents. Before merging it:
+
+* **The decision-stage change, verified.** What changed: `_record_decision` now moves `received` to the new stage
+  *and* writes the decision in one conditional `UPDATE … WHERE pipeline_stage = 'received' RETURNING`, raising
+  `StageConflict` if it moved nothing; `_decide` calls it instead of `stages.take` followed by an `UPDATE` (two
+  statements fail the 0021 CHECK on the first, and a CHECK cannot be deferred). The five D60 boundary tests pass
+  unchanged under 0021. A new `tests/test_decision_boundaries.py` (16) fails every boundary of the stage and the
+  idempotency paths and finds **no** proposal that leaves `received` undecided (ACCEPTANCE 5.69).
+* **Older mutations re-verified** with the same tool and rule: D60's six, D61's six re-derivation mutations, D58-7's
+  four and its follow-up's three — all valid; the counts are corrected in those reports, including one wrong
+  description in D60 (ACCEPTANCE 5.70). Four tests that caught a mutation only by an unexpected exception now
+  assert explicitly. Everything before D62 not in that list is stated as not re-verified.
+* **A structural guard for image literals** (`tests/test_image_literals.py`, ACCEPTANCE 5.73), after the second time
+  a test named an image CI did not have.
+* **Recorded, not fixed:** the node-delete cost (ACCEPTANCE 5.23) and the sandbox networks that nothing in
+  production removes (5.72, an input to D58-9).

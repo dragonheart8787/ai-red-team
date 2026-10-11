@@ -3,9 +3,11 @@
 > **Revision 2 (after review).** Changes A, B, C and the `action` finding supersede the text they touch;
 > they are collected in **§11** and the affected tables (§3.1, §6, §10) have been edited to match.
 
-Status: **proposed — nothing here is built.** Items marked ⚑ need your decision before
-implementation. Everything below was checked against the tree at `HEAD` (D58-8 closeout, CI 145
-green) and each factual claim says how: **[R]** read in the source, **[E]** executed.
+Status: **built (D62) and merged; every decision in §10 is final.** This note is kept as written at the
+design checkpoints — the ⚑ markers are the questions as they were asked, the answers are in §10 and §11 —
+with the three later corrections applied in place (D-9: single-IP scopes are skipped, §1/§10/§11). Everything
+below was checked against the tree at `HEAD` at the time (D58-8 closeout, CI 145 green) and each factual claim
+says how: **[R]** read in the source, **[E]** executed.
 
 ## 0. D58-7 — status
 
@@ -467,7 +469,7 @@ stays manual.)
 | D-4 | `credential_id`: none in v0; `security_invoker` view when needed | approved |
 | D-5 | `decision_reasons`: not granted; **candidate: D58-12 needs it to tell `policy_engine_unavailable` apart — add a CHECK or vocabulary test first** | approved + candidate |
 | D-6 | audit vocabulary (§6); `dispatched` = "decided to attempt" | approved, wording fixed (C) |
-| D-7 | previous disposition in `scheduler_state` (closed vocabulary); writer = new `scheduler_state_writer` | revised (A) — **needs your confirmation** |
+| D-7 | previous disposition in `scheduler_state` (closed vocabulary); writer = new `scheduler_state_writer` | **approved** (revised by A) |
 | D-8 | failure table; known Docker-close gap; infra labelling and why-not-`approved` added | approved |
 | D-9 | execution step derives `network_allowlist` from the authorized scope: a `cidr` scope as-is if it is a /29 or wider; **an `ip` scope is never run and never widened** (`scope_narrower_than_sandbox_minimum`); other scope types and IPv6 skip with their own codes; a single-IP target on the network, gateway or broadcast address of the scope is skipped (`target_is_reserved_address`). Five skip codes, closed in the database (0019, narrowed by 0020) | **final** (no block derivation, no /27 cap) |
 
