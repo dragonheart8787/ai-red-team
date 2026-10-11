@@ -18,6 +18,8 @@ DISPATCH = "control_plane/orchestrator/dispatch.py"
 LATE = ("tests/test_dispatch_late_result.py",)
 M0017 = "db/migrations/versions/0017_approval_stages.py"
 M0021 = "db/migrations/versions/0021_decision_past_received.py"
+CEILING = ("tests/test_duration_ceiling.py",)
+AUTHZ = "control_plane/policy/rego/authz.rego"
 RLS_WRITES = ("tests/test_migrations_rls_writes.py", "tests/test_migrations_roundtrip.py")
 
 CATALOGUE = [
@@ -100,6 +102,23 @@ CATALOGUE = [
         "D64-2-e", "a migration gains a data statement nobody listed", RLS_WRITES,
         edits=(Edit(M0021, "def upgrade() -> None:\n", "def upgrade() -> None:\n    op.execute(\"UPDATE action_proposals SET updated_at = updated_at;\")\n"),),
         targets=("test_every_data_statement_in_a_migration_is_known",)),
+    # ---- step 3: the duration ceiling (D58-16). The Rego-only mutations were run with `opa test`
+    # (scripts cannot target OPA tests): ceiling 1800 -> 86400, `>` -> `>=`, the missing / invalid /
+    # exceeds rules neutralised -- each failed 1 to 3 of the 58 policy tests.
+    Mutation(
+        "D64-3-a", "the Python ceiling drifts from the Rego one", CEILING,
+        edits=(Edit("control_plane/policy/ceiling.py", "MAX_DURATION_CEILING_SECONDS = 1800", "MAX_DURATION_CEILING_SECONDS = 3600"),),
+        targets=("test_the_python_constant_and_the_rego_ceiling_are_one_number",)),
+    Mutation(
+        "D64-3-b", "the policy stops denying a duration above the ceiling", CEILING,
+        edits=(Edit(AUTHZ, "\trequested_max_duration > max_duration_ceiling_seconds\n", "\trequested_max_duration > 86400000\n"),
+               Edit(AUTHZ, "max_duration_ceiling_seconds := 1800", "max_duration_ceiling_seconds := 1800"),),
+        targets=("test_a_request_above_the_ceiling_is_denied_and_nothing_is_minted_or_run",)),
+    Mutation(
+        "D64-3-c", "a default duration in the code goes above the ceiling", CEILING,
+        edits=(Edit("control_plane/api/function_api.py", "budget or Budget(max_duration_seconds=120)", "budget or Budget(max_duration_seconds=7200)"),),
+        targets=("test_no_budget_the_code_builds_is_one_the_policy_would_refuse",),
+        allowed_errors=("AssertionError",)),
 ]
 
 

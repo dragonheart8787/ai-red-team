@@ -33,7 +33,7 @@ base_request := {
 	# One address, one target: within budget, so nothing here is about the
 	# §4.6 capability budget. These tests are about the constraint algebra and
 	# a budget deny would mask what they assert.
-	"capability_request": {"max_targets": 1},
+	"capability_request": {"max_duration_seconds": 120, "max_targets": 1},
 	"authorization_resolution": {"authorized": true, "scope_object_id": "SCOPE-2"},
 	"resource_metadata": {
 		"known": true,
