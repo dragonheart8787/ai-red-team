@@ -521,3 +521,27 @@ def unresolved_reconciler_intents(conn: Connection) -> list[UnresolvedIntent]:
     """)).mappings().all()
     return [UnresolvedIntent(r["audit_id"], r["ts"], r["kind"], r["subject_id"], r["reason_code"])
             for r in rows]
+
+
+#: The two audit events that say a **proposal** ended with an outcome nobody can state (D64 item 5).
+#: ``dispatch.unknown_outcome`` is the older one, written by ``reconcile_stale_dispatches``;
+#: ``reconciler.dispatch_unknown_outcome`` is the reconciler's own, whose payload is held to ids and
+#: closed codes. A reader that wants "which proposals ended with an unknown outcome" has to ask for
+#: both -- this tuple is where it says so, and a test keeps any other module from naming either
+#: event by its literal. (``tool_run.unknown_outcome`` is a third name and a different thing: it is
+#: about one *run*, written when the sandbox itself was unreachable.)
+UNKNOWN_OUTCOME_EVENTS = ("dispatch.unknown_outcome", "reconciler.dispatch_unknown_outcome")
+
+
+def unknown_outcome_events(
+    conn: Connection, *, proposal_id: str | None = None, limit: int = 500
+) -> list[AuditEvent]:
+    """Every event saying a proposal's outcome is unknown, from either writer, oldest first
+    (RLS-scoped to the connection's engagement)."""
+    sql = _SELECT + " WHERE event_type = ANY(:types)"
+    params: dict[str, Any] = {"types": list(UNKNOWN_OUTCOME_EVENTS), "limit": limit}
+    if proposal_id is not None:
+        sql += " AND subject_id = :sid"
+        params["sid"] = proposal_id
+    return [_to_event(r) for r in conn.execute(
+        text(sql + " ORDER BY audit_id LIMIT :limit"), params).mappings().all()]

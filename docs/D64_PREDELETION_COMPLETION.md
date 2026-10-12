@@ -303,3 +303,54 @@ record ignored; the writer returning instead of raising; a kill without its inte
 decline; an unwritable intent ignored; a file unlinked without its intent; the unresolved-intents query accepting any later
 event; the hold-back off; a proposal event written twice; `emit` taking a proposal event again; `emit_in_transaction` taking
 any event; another module importing the in-transaction writer), all valid.
+
+---
+
+## 5. The two "unknown outcome" events, and where the older one's text comes from (item 5) — **built**
+
+The step-6 report said the older event, `dispatch.unknown_outcome`, "has booleans and free text" and that this is why the
+reconciler writes its own, `reconciler.dispatch_unknown_outcome`. That was imprecise, and the sentence deserved checking.
+
+### 5.1 Where the text comes from
+
+`control_plane/orchestrator/dispatch.py:reconcile_stale_dispatches` writes, for a proposal it takes over:
+
+```
+event_type  dispatch.unknown_outcome        reasons  ("interrupted_before_result",)
+payload     {"requires_human_review": True,
+             "note": "not retried: the action may already have executed"}
+```
+
+* `note` is **one string literal in the source**. Nothing is interpolated into it, and nothing from outside can reach it:
+  two proposals with nothing in common (a different target, a run with a 400-character note, a different error) get
+  byte-identical payloads — a test runs the sweeper on both and compares them, and a second test reads the call's syntax
+  tree and requires every payload value to be a constant.
+* So the older event is **not free text in the sense that matters** (text taken from an exception, a document or a
+  person). What it is: a boolean and a sentence, neither of which is an id, a closed code or a count — which is all the
+  reconciler's whitelist admits. A test shows the older payload is refused by `emit.validate`. That, and nothing about
+  the text's origin, is the reason the reconciler's event has its own name.
+* The events that **do** carry what an exception said are different ones, and a census test names them:
+  `tool_run.unknown_outcome` (the sandbox itself was unreachable, `{"error": str(exc)}`) and `tool_run.refused`
+  (`{"error": str(exc)}`, the sandbox's message, which names the requested range). Those are run-level events, not the
+  proposal-level pair, and they are not touched here.
+
+### 5.2 The readers
+
+Searching the product code and the scripts for a reader of either name finds exactly one place, `audit/query.py`, and it
+already mapped both to the `execution` stage of a proposal's chain. There was no reader that asked for one name only; the
+risk the step-6 report named was a future one. What is now in place:
+
+* `UNKNOWN_OUTCOME_EVENTS` — the pair, in one tuple — and `unknown_outcome_events(conn, proposal_id=None)`, which asks
+  for both, oldest first. (`tool_run.unknown_outcome` is deliberately not in it: a different fact about a different
+  subject.)
+* A structural test: no module of `control_plane`, `tool_gateway`, `agents` or `scripts` names either event by its string
+  literal except the two writers and `audit/query.py`. A reader that hard-coded one name would fail it.
+* Consumer tests, for **each** name: a proposal ended unknown by the older writer (the sweeper) and by the newer (the
+  reconciler's act half, with its in-transaction record) appears in `reconstruct_decision` in the execution stage with
+  the right event, and in `unknown_outcome_events`; both together come back oldest first; every proposal event the
+  reconciler writes is mapped to a stage (none falls into `other`).
+
+### 5.3 Mutations
+
+`D64-P5-a`…`d`, all valid: the query asking for the older name only; the reconciler's event unmapped; the older
+sentence built from the proposal's id; another module hard-coding the older name.

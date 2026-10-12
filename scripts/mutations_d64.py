@@ -1030,5 +1030,34 @@ CATALOGUE += [
 ]
 
 
+UNKNOWN_TESTS = ("tests/test_unknown_outcome_events.py",)
+
+CATALOGUE += [
+    # ---- pre-deletion item 5 (ACCEPTANCE 5.87): the two unknown-outcome event names and their readers
+    Mutation(
+        "D64-P5-a", "the unknown-outcome query asks for the older name only", UNKNOWN_TESTS,
+        edits=(Edit(QUERY_PY, 'UNKNOWN_OUTCOME_EVENTS = ("dispatch.unknown_outcome", "reconciler.dispatch_unknown_outcome")',
+                    'UNKNOWN_OUTCOME_EVENTS = ("dispatch.unknown_outcome", "dispatch.unknown_outcome")'),),
+        targets=("test_the_query_module_exposes_the_pair_in_one_place",
+                 "test_the_query_returns_both_writers_events_oldest_first")),
+    Mutation(
+        "D64-P5-b", "the reconciler's event drops out of the proposal's chain (stage 'other')",
+        UNKNOWN_TESTS,
+        edits=(Edit(QUERY_PY, '    "reconciler.dispatch_unknown_outcome": "execution",\n', ''),),
+        targets=("test_both_names_are_in_the_execution_stage_of_a_proposals_chain",)),
+    Mutation(
+        "D64-P5-c", "the older event's sentence is built from the proposal", UNKNOWN_TESTS,
+        edits=(Edit("control_plane/orchestrator/dispatch.py", '"note": "not retried: the action may already have executed"},',
+                    '"note": f"not retried: the action {proposal_id} may already have executed"},'),),
+        targets=("test_the_older_events_payload_is_the_same_whatever_the_proposal_was",
+                 "test_the_sentence_is_one_string_literal_in_the_writer_and_nothing_is_interpolated")),
+    Mutation(
+        "D64-P5-d", "a reader outside the query module hard-codes the older name", UNKNOWN_TESTS,
+        edits=(Edit("control_plane/reconciler/lock.py", "from __future__ import annotations\n",
+                    "from __future__ import annotations\n\n_SEEN = \"dispatch.unknown_outcome\"\n"),),
+        targets=("test_no_module_names_either_event_by_its_literal_except_the_writers_and_the_one_reader",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})
