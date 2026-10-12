@@ -1071,6 +1071,8 @@ def _load_0024():
 
 
 _M24 = _load_0024()
+CONC_TESTS = ("tests/test_reconciler_concurrency.py",)
+NEGATIVE_TESTS = ("tests/test_reconciler_negative.py",)
 PAGING_TESTS = ("tests/test_reconciler_paging.py", "tests/test_reconciler_reader.py",
                 "tests/test_reconciler_structure.py")
 OBSERVE_PY2 = "control_plane/reconciler/observe.py"
@@ -1143,6 +1145,49 @@ CATALOGUE += [
         edits=(Edit(SERVICE_PY2, "clock_us=self._wall_clock_us, max_pages=self.th.max_pages)", "clock_us=self._wall_clock_us, max_pages=1)"),),
         targets=("test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap",
                  "test_a_truncated_read_is_reported_by_the_pass")),
+    Mutation(
+        "D64-P7-a", "an unlisted Docker verb (container.logs) is added to observe", STRUCT_TESTS,
+        edits=(Edit(OBSERVE_PY, "            seen[container.id] = container\n",
+                    "            seen[container.id] = container\n            container.logs()\n"),),
+        targets=("test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list",)),
+    Mutation(
+        "D64-P7-b", "act_docker calls an unlisted verb through an alias of the container", STRUCT_TESTS,
+        edits=(Edit(DOCKER_PY, "        container.kill()\n    except APIError:",
+                    "        alias = container\n        alias.pause()\n        container.kill()\n    except APIError:"),),
+        targets=("test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list",)),
+    Mutation(
+        "D64-P7-c", "stages.advance accepts abandoned as a destination", VOCAB,
+        edits=(Edit(STAGES_PY, "    if new == ABANDONED:\n        raise ValueError(", "    if False:\n        raise ValueError("),),
+        targets=("test_st4_the_generic_helpers_refuse_to_write_abandoned_whatever_the_caller_computes",)),
+    Mutation(
+        "D64-P7-d", "dispatch imports stages.abandon under another name", VOCAB,
+        edits=(Edit(DISPATCH, "from control_plane.audit.logger import record_audit\n",
+                    "from control_plane.audit.logger import record_audit\nfrom control_plane.orchestrator.stages import abandon as _quietly\n"),),
+        targets=("test_st4_abandoned_is_written_by_stages_abandon_and_nothing_else",)),
+    Mutation(
+        "D64-P7-e", "the reconciler's close does not compare the stage or the timestamp", CONC_TESTS,
+        edits=(Edit(ACT_PY, "    WHERE proposal_id = :pid AND pipeline_stage = :expected AND stage_updated_at = :planned\n    RETURNING proposal_id\n\"\"\"\nMARK_UNKNOWN_SQL",
+                    "    WHERE proposal_id = :pid\n    RETURNING proposal_id\n\"\"\"\nMARK_UNKNOWN_SQL"),),
+        targets=("test_rt3_the_dispatch_takes_the_stage_first_and_the_reconciler_moves_nothing",
+                 "test_rt3_genuinely_concurrent_the_reconciler_waits_on_the_dispatchs_row_lock")),
+    Mutation(
+        "D64-P7-f", "a container removed by someone else while we removed it is a failure", CONC_TESTS,
+        edits=(Edit(DOCKER_PY, "        try:\n            container.reload()\n        except NotFound:\n            return Result(action, GONE)\n        if not proxy",
+                    "        container.reload()\n        if not proxy"),),
+        targets=("test_rt8_scripted_a_refusal_followed_by_not_found_is_gone",)),
+    Mutation(
+        "D64-P7-g", "Docker's 409 (removal in progress) on a removal is a failure", CONC_TESTS,
+        edits=(Edit(DOCKER_PY, "        if exc.status_code == 409 and _wait_until(gone, th, sleep, clock):", "        if False:"),),
+        targets=("test_rt8_scripted_a_409_that_resolves_within_the_wait_is_gone",
+                 "test_rt8_both_at_once_never_ends_in_a_failure")),
+    Mutation(
+        "D64-P7-h", "a start refused for a network that is gone is not typed as not started", CONC_TESTS,
+        edits=(Edit("tool_gateway/sandbox.py", "            if not never_ran:\n                raise\n", "            if True:\n                raise\n"),),
+        targets=("test_rt9_a_network_removed_between_ensure_and_create_is_a_not_started_and_the_retry_works",)),
+    Mutation(
+        "D64-P7-i", "the observation lists every container that wears an owner label", NEGATIVE_TESTS,
+        edits=(Edit(OBSERVE_PY, "    for label in (RUN_LABEL, PROXY_LABEL):", "    for label in (RUN_LABEL, PROXY_LABEL, OWNER_LABEL):"),),
+        targets=("test_e24_a_whole_host_pass_removes_the_forgers_container_and_touches_nothing_else",)),
 ]
 
 

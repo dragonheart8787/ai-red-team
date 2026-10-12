@@ -13,7 +13,7 @@ number chosen without a measurement. Experiments are numbered from E22 (E1–E21
 | 4 | change and record in one transaction; intent before an irreversible act | §4 here, ACCEPTANCE 5.86 |
 | 5 | the two "unknown outcome" event names: consumers, and where the free text came from | §5 here, ACCEPTANCE 5.87 |
 | 6 | more than 5,000 stuck rows: paging, a bound on a pass, back-off | §6 here, ACCEPTANCE 5.88 |
-| 7 | four open questions answered (verb allow-list, negative experiments, `ABANDON_CALLERS`, concurrency) | §7 here, ACCEPTANCE 5.89 |
+| 7 | four open questions answered (verb allow-list, negative experiments, `ABANDON_CALLERS`, concurrency); one defect found and fixed | §7 here, ACCEPTANCE 5.89 |
 
 ---
 
@@ -413,3 +413,108 @@ not passed on).
   them, at the price of holding a transaction open across Docker calls. Left as it is.
 * Truncation is a report in the plan and a log line, not an audit event of its own: the audit vocabulary is closed and a
   persistent backlog is already visible as `report:result_truncated` in `reconciler.started` and as the pass's cadence.
+
+---
+
+## 7. Four open questions, answered (item 7)
+
+The four were left open by the step-6 reports: *does the Docker deny-list cover a verb nobody listed?*, *what has the
+reconciler been shown **not** to do, all at once?*, *is "only `act.py` reaches `stages.abandon`" a fact or a spelling?*, and
+*which of the race tests the design promised (RT1–RT9) exist?* (The original wording of the four was not in the files I could
+read; these are the four the item's own title names, and I say so rather than pretend I had the text.)
+
+### 7.1 The Docker verb allow-list **[R][E]**
+
+The deny-list tests of step 6 name verbs that must not appear (`exec_run`, `run`, `create`, `stop`, `prune` …). That cannot
+notice a verb nobody thought of and is walked round by an alias. `test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list`
+starts from the other end: every method called on anything that came from the Docker client — directly, or through any
+variable assigned from it, a loop over it or a comprehension — must be on the list for its module, and each module must use
+**all** it is allowed (no padding):
+
+| module | verbs it may call on Docker, in full |
+|---|---|
+| `observe` | `containers.list`, `networks.list`, `reload`, `attrs.get`, `name.startswith` |
+| `act_docker` | `containers.get`, `containers.list`, `networks.get`, `reload`, `kill`, `remove`, `attrs.get`, `name.startswith` |
+
+The walker has a positive control (it must flag an aliased `exec_run`, a `prune` on a loop variable, a `stop` inside a
+comprehension). Mutations: `D64-P7-a` (a `container.logs()` added to `observe`) and `D64-P7-b` (`alias = container;
+alias.pause()` in `act_docker`) are both caught by that test and by nothing else. **What it does not see, stated:** a handle
+passed to a function whose parameter has another name, a handle stored in a dict and called through the dict, and
+`getattr(handle, name)` with a computed name. None of these exists; a person adding one would have to do it on purpose, and
+the structure tests also forbid the modules from importing anything that would hand them such a helper.
+
+### 7.2 Negative experiments, all at once **[E]**
+
+Every act test shows one refusal. `tests/test_reconciler_negative.py::test_e24_…` puts them on a real Docker daemon together,
+with the deletion flag on (tests only) and the plan made from the **real observation** of the host:
+
+| object | what it is | what happened |
+|---|---|---|
+| victim | running, no labels at all | not in the observation, not touched |
+| lab script | running, only `cyberorch.owner` | not in the observation, not touched |
+| forged live | running, the labels of a run the database says is **live** | in the observation, no action (the run is live) |
+| forged unknown | exited, labels naming a run the database has never heard of, older than the retention window | **removed**, verified gone, one `action_intended` event — the forger's own container, the worst a forgery can do (D64 §2.4) |
+| lookalike network | the name prefix, no label | not selected |
+
+Afterwards: one container gone, every other object as it was. Two corrections the experiment made to what I expected:
+(a) I had written that the lab script's container would be *reported* (`no_run_id_label`); it is not even *seen* — the
+observation lists containers by run label or proxy label — which is the stronger result; (b) my first version moved the
+host clock three days forward to make the forged container old, and the plan then **killed the live run** as overdue —
+correct for that clock, wrong for the test; the fix was a one-second retention window, not a clock jump. Mutation `D64-P7-i`
+(the observation also lists owner-labelled containers) turns the test red. The single-refusal negatives are in
+`test_reconciler_act.py` (changed labels, short id/name/upper-case handle, a container that took over a removed one's name, a
+running container not removed, a network with a `created` container kept, a symlink left with its target).
+
+### 7.3 `ABANDON_CALLERS` is now a fact about routes, not about a spelling **[R][E]**
+
+The earlier scan looked for the text `stages.abandon(` — an alias or `from … import abandon as a` walked round it. The check now
+resolves imports: the module under its name or an alias, the function imported by name or under another name, `import *`,
+`getattr(stages, "abandon")`, and naming it without calling it. It has a positive-control test (eight routes flagged, four
+namesakes not). Separately, `stages.advance` (and so `take`) **raises `ValueError`** if `new` is `abandoned`, whatever the
+caller computed — the scan reads spellings, this refuses at run time (`D64-P7-c` removes the refusal; `D64-P7-d` adds an aliased
+import to `dispatch.py` and is caught by the scan). The set is still `{control_plane/reconciler/act.py}` and the test fails both
+when a module is added and when `act.py` stops being a caller.
+
+### 7.4 Concurrency: RT1–RT9 **[E]**
+
+| # | race | where | status |
+|---|---|---|---|
+| RT1 | reconciler marks a dispatch unknown while it runs, result late | `test_reconciler_concurrency.py` | built in step 6d |
+| RT2 | result first, planned action matches no row | same | built in step 6d |
+| **RT3** | `capability_issued`, lease lapsed: dispatch takes the stage / reconciler first / genuinely concurrent / late heartbeat | same | **built now** (4 tests) |
+| **RT4** | `received → abandoned` while the caller is in its decision stage | `test_stage_vocabulary.py::test_a7_*` (both orders and a real row-lock wait) | built at step 5a; cited, not duplicated |
+| RT5 | killed engagement, either order | same | built in step 6d |
+| RT6 | two passes, one action | same | built in step 6d |
+| RT7 | pause between plan and act | — | **moot, argued**: nothing the plan decides depends on pause or on the kill switch being off; the compare-and-set on stage and timestamp is the only guard that matters, and RT2/RT3/RT5 exercise it |
+| **RT8** | reconciler and control plane remove/kill the same container | same | **built now; found a bug** (below) |
+| **RT9** | network removed between `ensure_network` and `containers.create` | same | **built now** |
+
+* **RT3.** The design asked about a heartbeat renewing the lease between plan and act. It cannot: `renew_capability` treats a
+  heartbeat after the lease lapsed as evidence of a fault, revokes (`lease_expired`) and extends nothing (tested). So the real
+  race is the dispatch taking the stage: dispatch first → the reconciler moves 0 rows (`lost_race`), no event; reconciler first →
+  the dispatch's claim fails (`not_claimable`), no run; and with the dispatch's transaction **open**, the reconciler waits on the
+  row lock and then loses. `D64-P7-e` (the close compares neither stage nor timestamp) turns the first and third red.
+* **RT8 found a real defect.** Forty rounds of `remove_proxy` against a control-plane `remove(force=True)` started on a barrier:
+  **26 ended `failed / daemon_error`** — the loser of a Docker removal gets a 409 ("removal already in progress"), `reload()`
+  then raises `NotFound`, and `NotFound` is an `APIError`, so it fell into the outer handler. A failure would have produced an
+  `action_failed` event and a hold-back for something that was simply gone. Fixed in `act_docker`: after a refused remove or
+  kill, a `reload()` that finds nothing is `gone`; a 409 on a removal waits (the verification wait) and, if the container is
+  gone, is `gone` — never `done`, because it was not ours. After the fix: 0 failures in 40 rounds (28 `gone`, 12 `done`), and
+  the test repeats 12 rounds for `remove_proxy` and for `kill_container`. `D64-P7-f` and `D64-P7-g` undo the two halves; the
+  race is probabilistic, so each half also has a scripted, deterministic test (a fake container whose removal Docker refuses with
+  a 409 and which is then gone / is still there / vanishes within the wait): my first `D64-P7-f` was **not** caught by the real
+  race in 12 rounds, which is why.
+* **RT9.** The reconciler sweeps the (empty, ours) network between `ensure_network` and `containers.create`. What Docker does is
+  not what the design guessed: `create` against a network that is gone **succeeds**, and the refusal comes at `start` ("failed to
+  set up container networking: network … not found"). The sandbox types that from Docker's own record of the container (still
+  `created`, no PID, `StartedAt` zero) as **`ContainerStartRefused`, a `NotStarted`** — nothing of the run executed, so a
+  retry is safe — and the teardown removes the container. The retry re-creates the network and succeeds. (I had first
+  assumed the error came from `create` and `DaemonUnreachable`; the experiment said otherwise, and the first mutation I wrote
+  for it, aimed at `create`, was not caught — which is how I found out.) `D64-P7-h` stops `_start_container` typing the
+  refusal. The design's own mutation for RT9 ("remove a network that still has a `created` container") is
+  `test_real_a_network_with_a_container_of_any_state_is_kept`'s, where it already was.
+
+### 7.5 Numbers
+
+New tests: 13 concurrency (RT3 ×4, RT8 ×8 — two real-Docker orders, two parametrised races, four scripted — and RT9 ×1), 1 whole-host negative, the verb allow-list (2),
+the `abandon` walker (2) and the run-time refusal (2). Mutations `D64-P7-a`…`i`: nine.

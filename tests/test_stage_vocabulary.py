@@ -252,6 +252,59 @@ def test_st3_every_module_that_names_a_stage_is_registered_with_its_reason():
 #: it only as a compare-and-set on the stage and on the ``stage_updated_at`` the plan observed.
 ABANDON_CALLERS: set[str] = {"control_plane/reconciler/act.py"}
 
+STAGES_PACKAGE, STAGES_MODULE = "control_plane.orchestrator", "control_plane.orchestrator.stages"
+
+
+def refers_to_abandon(tree: ast.AST) -> bool:
+    """Does this module reach ``stages.abandon`` by any route a person would write? Through the
+    module under its own name or under an alias (``from control_plane.orchestrator import stages
+    as st``; ``import control_plane.orchestrator.stages as s``), through the function imported by
+    name or under another (``from ...stages import abandon as a``, used or not), through
+    ``getattr``, or by naming it without calling it (``fn = stages.abandon``). The earlier check
+    looked for the spelling ``stages.abandon(`` and nothing else, which an alias walks round (D64
+    pre-deletion item 7)."""
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == STAGES_PACKAGE:
+                module_names |= {a.asname or a.name for a in node.names if a.name == "stages"}
+            elif node.module == STAGES_MODULE:
+                # importing it at all is a route, called or not: nothing else needs it by name
+                if any(a.name in ("abandon", "*") for a in node.names):
+                    return True
+        elif isinstance(node, ast.Import):
+            module_names |= {a.asname or a.name for a in node.names if a.name == STAGES_MODULE}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "abandon" \
+                and ast.unparse(node.value) in module_names:
+            return True
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "getattr"
+                and len(node.args) >= 2 and ast.unparse(node.args[0]) in module_names
+                and isinstance(node.args[1], ast.Constant) and node.args[1].value == "abandon"):
+            return True
+    return False
+
+
+def test_st4_the_walker_sees_every_route_to_abandon_and_not_a_namesake():
+    flagged = [
+        "from control_plane.orchestrator import stages\nstages.abandon(c, p, stage_updated_at=t)",
+        "from control_plane.orchestrator import stages as st\nst.abandon(c, p, stage_updated_at=t)",
+        "import control_plane.orchestrator.stages as s\ns.abandon(c, p, stage_updated_at=t)",
+        "from control_plane.orchestrator.stages import abandon\nabandon(c, p, stage_updated_at=t)",
+        "from control_plane.orchestrator.stages import abandon as a\na(c, p, stage_updated_at=t)",
+        "from control_plane.orchestrator import stages\nfn = stages.abandon",
+        "from control_plane.orchestrator import stages\ngetattr(stages, 'abandon')(c, p)",
+        "from control_plane.orchestrator.stages import *\nabandon(c, p)",
+        "from control_plane.orchestrator.stages import abandon as _unused",      # never used
+    ]
+    for source in flagged:
+        assert refers_to_abandon(ast.parse(source)), source
+    for source in (
+            "thing.abandon()", "def abandon(): pass",
+            "from control_plane.orchestrator import stages\nstages.advance()",
+            "import control_plane.orchestrator.dispatch as d\nd.abandon()"):
+        assert not refers_to_abandon(ast.parse(source)), source
+
 
 def test_st4_abandoned_is_written_by_stages_abandon_and_nothing_else():
     writers, callers = [], set()
@@ -261,11 +314,9 @@ def test_st4_abandoned_is_written_by_stages_abandon_and_nothing_else():
         for line, value in _strings(tree):
             if "abandoned" in value and re.search(r"SET\s+pipeline_stage", value, re.I):
                 writers.append(f"{relative}:{line}")
+        if relative != "control_plane/orchestrator/stages.py" and refers_to_abandon(tree):
+            callers.add(relative)
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "abandon"
-                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "stages"):
-                callers.add(relative)
             # a move written through the generic helpers
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in ("advance", "take")):
@@ -276,8 +327,30 @@ def test_st4_abandoned_is_written_by_stages_abandon_and_nothing_else():
     assert len(writers) == 1 and writers[0].startswith("control_plane/orchestrator/stages.py:"), (
         f"`abandoned` is written in {writers}; stages.abandon is the one writer (A3)")
     assert callers <= ABANDON_CALLERS, (
-        f"modules that call stages.abandon: {sorted(callers - ABANDON_CALLERS)}; the writer of "
+        f"modules that reach stages.abandon: {sorted(callers - ABANDON_CALLERS)}; the writer of "
         "`abandoned` is the reconciler's alone (A3) -- add a module here only deliberately")
+    assert callers == ABANDON_CALLERS, "ABANDON_CALLERS lists a module that no longer calls it"
+
+
+@pytest.mark.parametrize("helper", ["advance", "take"])
+def test_st4_the_generic_helpers_refuse_to_write_abandoned_whatever_the_caller_computes(
+        engagement_id, helper):
+    """The scan above reads spellings; this refuses at run time, so a ``new`` that is computed
+    (``new=target``, ``new=STAGE_OF[x]``) cannot reach the stage."""
+    from control_plane.state.db import engagement_scope
+    from tests.reconciler_support import _proposal
+    pid = _proposal(engagement_id, "received")
+    outcome = "no exception"
+    with engagement_scope(engagement_id) as conn:
+        try:
+            getattr(stages, helper)(conn, pid, expected=stages.RECEIVED, new="aband" + "oned")
+        except ValueError as exc:
+            outcome = "refused" if "abandon" in str(exc) else f"ValueError: {exc}"
+        except Exception as exc:                  # noqa: BLE001  (the database's CHECK is next)
+            outcome = f"reached the database: {type(exc).__name__}"
+    assert outcome == "refused", outcome
+    with engagement_scope(engagement_id) as conn:
+        assert stages.stage_of(conn, pid)[0] == "received"
 
 
 # ---------------------------------------------------------------------------

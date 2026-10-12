@@ -798,7 +798,7 @@ being acted on one pass later.
 
 **Implemented (D64 step 6d, ACCEPTANCE 5.83).** `scripts/run_reconciler.py` is the separate process; its lock key is its own
 (`0x0D64_5EC0_0000_0001`), the scheduler's is untouched, and a test holds both at once. **Run `--once` before the scheduler
-starts: that is the convention, and it is a convention only.** CT1–CT5 and RT1/RT2/RT5/RT6 are written
+starts: that is the convention, and it is a convention only.** CT1–CT5 and RT1–RT3, RT5, RT6, RT8, RT9 are written (RT4 is `test_stage_vocabulary.py::test_a7_*`; 5.89)
 (`tests/test_reconciler_concurrency.py`); RT7 is moot (nothing the plan decides depends on pause), the rest are covered from the
 other end by 5.74/5.78.
 

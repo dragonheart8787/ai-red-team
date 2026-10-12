@@ -121,7 +121,13 @@ def advance(
 
     One conditional UPDATE. Reading the stage and then writing it would let two drivers both read
     ``decided`` and both proceed.
+
+    ``abandoned`` is not a stage this can move to: it has one writer, :func:`abandon` (D64, A3),
+    which also compares the timestamp the reconciler planned from. A scan of the source says who
+    calls what; this refuses at run time, so a caller that computes ``new`` cannot get round it.
     """
+    if new == ABANDONED:
+        raise ValueError("`abandoned` is written by stages.abandon alone")
     stages = [expected] if isinstance(expected, str) else list(expected)
     moved = conn.execute(
         text("""

@@ -551,3 +551,108 @@ def test_the_service_hands_observe_the_configured_page_count_and_the_act_half_th
     sliced = [n for n in ast.walk(pass_once) if isinstance(n, ast.Subscript)
               and "max_actions_per_pass" in ast.unparse(n)]
     assert sliced, "pass_once does not bound the actions it carries out by max_actions_per_pass"
+
+
+# =============================================================================================
+# the Docker verbs: an allow-list, not only a deny-list (D64-1; pre-deletion item 7)
+# =============================================================================================
+#
+# The deny-list tests above name verbs that must not appear. That cannot notice a verb nobody
+# thought of (``exec_run`` was on the list; ``export``, ``top`` or ``update`` might not be), and it
+# is fooled by an alias. This one starts from the other end: every method called on anything that
+# came from the Docker client -- directly or through any variable assigned from it -- must be on
+# the list for its module. The list is what the reconciler may ask of Docker, in full.
+
+DOCKER_ROOTS = {"client", "container", "network"}      # the names the Docker handles arrive by
+OBSERVE_VERBS = {"containers.list", "networks.list", "reload", "attrs.get", "name.startswith"}
+ACT_DOCKER_VERBS = {"containers.get", "containers.list", "networks.get", "reload", "kill", "remove",
+                    "attrs.get", "name.startswith"}
+ALLOWED_DOCKER_VERBS = {"observe": OBSERVE_VERBS, "act_docker": ACT_DOCKER_VERBS}
+
+
+def _root_and_path(node: ast.AST) -> tuple[str | None, str]:
+    path = []
+    while isinstance(node, ast.Attribute):
+        path.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Call):                   # f(x).y -- the root is whatever f(x) is
+        inner_root, inner_path = _root_and_path(node.func)
+        # the result of a producer (``client.containers.get(x)``) is a handle: ``.kill()`` on it is
+        # a verb on the same root. The result of any other call (``attrs.get(...)``) is data.
+        return (inner_root if inner_path in HANDLE_PRODUCERS else None), ".".join(reversed(path))
+    return (node.id if isinstance(node, ast.Name) else None), ".".join(reversed(path))
+
+
+#: the calls whose result is again a Docker handle (or a list of them); anything else a handle
+#: gives back -- ``.attrs``, ``.labels``, ``.name``, ``.id`` -- is plain data
+HANDLE_PRODUCERS = {"containers.get", "containers.list", "networks.get", "networks.list"}
+
+
+def _is_handle_source(source: ast.AST, tainted: set[str]) -> bool:
+    root, path = _root_and_path(source.func if isinstance(source, ast.Call) else source)
+    if root not in tainted:
+        return False
+    if isinstance(source, ast.Call):
+        return path in HANDLE_PRODUCERS            # a method that hands back a handle
+    return not path                                 # an alias (``c = container``), not ``c.labels``
+
+
+def docker_verbs_used(tree: ast.Module) -> set[str]:
+    """Every ``root.path()`` call whose root is (or was assigned from) a Docker handle."""
+    verbs: set[str] = set()
+    for function in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.Lambda)):
+        tainted = set(DOCKER_ROOTS) & ({a.arg for a in function.args.args} | DOCKER_ROOTS)
+        body = ast.walk(function)
+        changed = True
+        while changed:                                # assignments and loops, to a fixed point
+            changed = False
+            for node in ast.walk(function):
+                targets, source = [], None
+                if isinstance(node, ast.Assign):
+                    targets, source = node.targets, node.value
+                elif isinstance(node, ast.AnnAssign | ast.NamedExpr) and node.value is not None:
+                    targets, source = [node.target], node.value
+                elif isinstance(node, ast.For):
+                    targets, source = [node.target], node.iter
+                elif isinstance(node, ast.comprehension):
+                    targets, source = [node.target], node.iter
+                if source is None or not _is_handle_source(source, tainted):
+                    continue
+                for target in targets:
+                    # a name, or a tuple of names; not ``seen[container.id] = container``, which
+                    # makes a dict of handles and not a handle
+                    plain = ([target] if isinstance(target, ast.Name) else
+                             [e for e in getattr(target, "elts", []) if isinstance(e, ast.Name)])
+                    for name in plain:
+                        if name.id not in tainted:
+                            tainted.add(name.id)
+                            changed = True
+        for node in body:
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                root, path = _root_and_path(node.func)
+                if root in tainted and path:
+                    verbs.add(path)
+    return verbs
+
+
+def test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list():
+    for name in EVERY:
+        used = docker_verbs_used(_tree(name))
+        allowed = ALLOWED_DOCKER_VERBS.get(name, set())
+        assert used <= allowed, (name, sorted(used - allowed))
+    # the lists are not padded: each module uses all it is allowed
+    assert docker_verbs_used(_tree("observe")) == OBSERVE_VERBS
+    assert docker_verbs_used(_tree("act_docker")) == ACT_DOCKER_VERBS
+
+
+def test_the_allow_list_walker_sees_an_aliased_and_an_unlisted_verb():
+    """A positive control: the walker must flag what it exists to flag."""
+    sample = ast.parse(
+        "def f(client):\n"
+        "    c = client.containers.get('x')\n"
+        "    c.exec_run('rm -rf /')\n"
+        "    for n in client.networks.list():\n"
+        "        n.prune()\n"
+        "    return [k.stop() for k in client.containers.list()]\n")
+    assert docker_verbs_used(sample) == {"containers.get", "exec_run", "networks.list", "prune",
+                                         "containers.list", "stop"}
