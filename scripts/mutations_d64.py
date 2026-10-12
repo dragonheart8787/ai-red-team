@@ -861,5 +861,85 @@ CATALOGUE += [
 ]
 
 
+AUTHORITY_TESTS = ("tests/test_database_authority.py",)
+ROLES_SQL = "db/roles.sql"
+
+CATALOGUE += [
+    # ---- pre-deletion item 1 (ACCEPTANCE 5.84): the whole database's memberships and definer objects
+    Mutation(
+        "D64-P1-a", "a login role is made a member of another role (an unlisted membership)",
+        AUTHORITY_TESTS,
+        prepare=_superuser_prepare("GRANT cyberorch_app TO ui_reader WITH INHERIT FALSE, SET FALSE"),
+        cleanup_sql=("REVOKE cyberorch_app FROM ui_reader",),
+        targets=("test_the_complete_list_of_role_memberships_is_the_pinned_one",)),
+    Mutation(
+        "D64-P1-b", "the listed membership is granted with the default INHERIT (in roles.sql)",
+        AUTHORITY_TESTS,
+        edits=(Edit(ROLES_SQL, "GRANT reconciler_fn_owner TO migration_owner WITH INHERIT FALSE, SET TRUE;",
+                    "GRANT reconciler_fn_owner TO migration_owner WITH SET TRUE;"),),
+        targets=("test_a_membership_statement_without_inherit_false_is_refused",)),
+    Mutation(
+        "D64-P1-c", "the listed membership is changed to INHERIT TRUE in the live database",
+        AUTHORITY_TESTS,
+        prepare=_superuser_prepare("GRANT reconciler_fn_owner TO migration_owner WITH INHERIT TRUE"),
+        cleanup_sql=("GRANT reconciler_fn_owner TO migration_owner WITH INHERIT FALSE, SET TRUE",),
+        targets=("test_the_complete_list_of_role_memberships_is_the_pinned_one",)),
+    Mutation(
+        "D64-P1-d", "a role becomes a member of a built-in role", AUTHORITY_TESTS,
+        prepare=_superuser_prepare("GRANT pg_read_all_data TO ui_reader"),
+        cleanup_sql=("REVOKE pg_read_all_data FROM ui_reader",),
+        targets=("test_no_role_of_the_repository_is_a_member_of_a_built_in_role",)),
+    Mutation(
+        "D64-P1-e", "a new SECURITY DEFINER function nobody listed (default ACL: PUBLIC may call it)",
+        AUTHORITY_TESTS,
+        sql_up=("CREATE FUNCTION public.authority_probe() RETURNS int LANGUAGE sql SECURITY DEFINER "
+                "SET search_path = pg_catalog, pg_temp AS 'SELECT 1'",),
+        sql_down=("DROP FUNCTION public.authority_probe()",),
+        targets=("test_the_complete_list_of_security_definer_functions_is_the_pinned_one",)),
+    Mutation(
+        "D64-P1-f", "a definer function's search_path pin is taken off", AUTHORITY_TESTS,
+        sql_up=("ALTER FUNCTION public.policy_freeze_point() RESET search_path",),
+        sql_down=("ALTER FUNCTION public.policy_freeze_point() SET search_path = public, pg_temp",),
+        targets=("test_each_definer_function_has_its_pinned_owner_search_path_and_callers",)),
+    Mutation(
+        "D64-P1-g", "pg_temp comes first on a definer function's search_path", AUTHORITY_TESTS,
+        sql_up=("ALTER FUNCTION public.policy_freeze_point() SET search_path = pg_temp, public",),
+        sql_down=("ALTER FUNCTION public.policy_freeze_point() SET search_path = public, pg_temp",),
+        targets=("test_each_definer_function_has_its_pinned_owner_search_path_and_callers",)),
+    Mutation(
+        "D64-P1-h", "EXECUTE on a callable definer function is left with PUBLIC", AUTHORITY_TESTS,
+        sql_up=("GRANT EXECUTE ON FUNCTION public.policy_freeze_point() TO PUBLIC",),
+        sql_down=("REVOKE EXECUTE ON FUNCTION public.policy_freeze_point() FROM PUBLIC",),
+        targets=("test_each_definer_function_has_its_pinned_owner_search_path_and_callers",)),
+    Mutation(
+        "D64-P1-i", "the scheduler's view is readable by PUBLIC", AUTHORITY_TESTS,
+        sql_up=("GRANT SELECT ON scheduler_proposals TO PUBLIC",),
+        sql_down=("REVOKE SELECT ON scheduler_proposals FROM PUBLIC",),
+        targets=("test_the_complete_list_of_views_is_the_pinned_one_with_its_owner_and_grantees",)),
+    Mutation(
+        "D64-P1-j", "a role is given BYPASSRLS", AUTHORITY_TESTS,
+        prepare=_superuser_prepare("ALTER ROLE ui_reader BYPASSRLS"),
+        cleanup_sql=("ALTER ROLE ui_reader NOBYPASSRLS",),
+        targets=("test_no_role_but_the_bootstrap_superuser_has_a_powerful_attribute",)),
+    Mutation(
+        "D64-P1-k", "a default privilege is set for future objects", AUTHORITY_TESTS,
+        sql_up=("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ui_reader",),
+        sql_down=("ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM ui_reader",),
+        targets=("test_the_catalog_has_no_object_that_changes_authority_behind_a_grant",)),
+    Mutation(
+        "D64-P1-l", "PUBLIC may create objects in schema public again", AUTHORITY_TESTS,
+        prepare=_superuser_prepare("GRANT CREATE ON SCHEMA public TO PUBLIC"),
+        cleanup_sql=("REVOKE CREATE ON SCHEMA public FROM PUBLIC",),
+        targets=("test_search_path_schemas_cannot_be_written_by_public",)),
+    Mutation(
+        "D64-P1-m", "a migration adds a SECURITY DEFINER function without being listed",
+        AUTHORITY_TESTS,
+        edits=(Edit("db/migrations/versions/0021_decision_past_received.py",
+                    '"""A proposal past ``received`` has a decision (D63).',
+                    '"""A proposal past ``received`` has a decision (D63). SECURITY DEFINER'),),
+        targets=("test_only_the_migrations_that_were_reviewed_contain_a_security_definer_function",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})
