@@ -601,6 +601,162 @@ CATALOGUE += [
         targets=("test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere",)),
 ]
 
+ACT_PY = "control_plane/reconciler/act.py"
+DOCKER_PY = "control_plane/reconciler/act_docker.py"
+FILES_PY = "control_plane/reconciler/act_files.py"
+ACT_TESTS = ("tests/test_reconciler_act.py",)
+ACT_STRUCT = ("tests/test_reconciler_structure.py",)
+_CAS = "WHERE proposal_id = :pid AND pipeline_stage = :expected AND stage_updated_at = :planned"
+
+CATALOGUE += [
+    # ---- step 6c: the act half -- state changes by compare-and-set, deletions behind a flag
+    Mutation(
+        "D64-6c-a", "CLOSE no longer compares the stage_updated_at the plan observed", ACT_TESTS,
+        edits=(Edit(ACT_PY, _CAS + "\n    RETURNING proposal_id\n\"\"\"\nMARK_UNKNOWN_SQL",
+                    "WHERE proposal_id = :pid AND pipeline_stage = :expected\n"
+                    "    RETURNING proposal_id\n\"\"\"\nMARK_UNKNOWN_SQL"),),
+        targets=("test_every_transition_is_a_compare_and_set_on_the_observed_timestamp",)),
+    Mutation(
+        "D64-6c-b", "MARK_UNKNOWN no longer requires the stage the plan observed", ACT_TESTS,
+        edits=(Edit(ACT_PY, _CAS + "\n    RETURNING proposal_id\n\"\"\"\nRUNS_SQL",
+                    "WHERE proposal_id = :pid AND stage_updated_at = :planned\n"
+                    "    RETURNING proposal_id\n\"\"\"\nRUNS_SQL"),),
+        targets=("test_every_transition_needs_the_stage_the_plan_saw",)),
+    Mutation(
+        "D64-6c-c", "a dispatch declared unknown leaves its runs in flight", ACT_TESTS,
+        edits=(Edit(ACT_PY, "    if moved:                       # the runs of a proposal declared unknown are unknown too\n"
+                    "        conn.execute(text(RUNS_SQL), {\"pid\": pid})\n", ""),),
+        targets=("test_a_dispatch_declared_unknown_takes_its_runs_with_it",)),
+    Mutation(
+        "D64-6c-d", "the stage is not read back after the update", ACT_TESTS,
+        edits=(Edit(ACT_PY, "            if stages.stage_of(conn, action.subject_id) != (new, detail):",
+                    "            if False:"),),
+        targets=("test_an_update_that_does_not_stick_is_failed_not_done",)),
+    Mutation(
+        "D64-6c-e", "the timestamp is compared to the millisecond only", ACT_TESTS,
+        edits=(Edit(ACT_PY, "    return _EPOCH + timedelta(microseconds=microseconds)",
+                    "    return _EPOCH + timedelta(microseconds=microseconds // 1000 * 1000)"),),
+        targets=("test_the_compare_and_set_matches_the_timestamp_to_the_last_microsecond",)),
+    Mutation(
+        "D64-6c-f", "the deletion flag defaults to on", ACT_TESTS + ACT_STRUCT,
+        edits=(Edit(ACT_PY, "    allow_deletions: bool = False", "    allow_deletions: bool = True"),),
+        targets=("test_the_flag_defaults_to_off_and_a_dry_run_cannot_carry_it",
+                 "test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on")),
+    Mutation(
+        "D64-6c-g", "state-only mode carries out deletions", ACT_TESTS,
+        edits=(Edit(ACT_PY, "    if not settings.allow_deletions:\n        return Result(action, SKIPPED_OFF)",
+                    "    if False:\n        return Result(action, SKIPPED_OFF)"),),
+        targets=("test_state_only_skips_every_deletion_and_never_touches_docker_or_the_filesystem",)),
+    Mutation(
+        "D64-6c-h", "a dry run acts", ACT_TESTS,
+        edits=(Edit(ACT_PY, "    if settings.mode is Mode.DRY_RUN:\n        return Result(action, DRY_RUN)",
+                    "    if False:\n        return Result(action, DRY_RUN)"),),
+        targets=("test_a_dry_run_opens_no_connection_makes_no_call_and_says_what_it_would_do",)),
+    Mutation(
+        "D64-6c-i", "a container may be addressed by a short id or a name", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if client is None or not FULL_ID.fullmatch(action.subject_id):",
+                    "    if client is None:"),),
+        targets=("test_real_only_a_full_id_is_a_handle",)),
+    Mutation(
+        "D64-6c-j", "the labels are not checked again before acting", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if (labels.get(RUN_LABEL) != action.run_id or labels.get(OWNER_LABEL) != action.expected_owner\n"
+                    "            or (PROXY_LABEL in labels) != wants_proxy):\n"
+                    "        return Result(action, CHANGED, LABELS_CHANGED)\n", ""),),
+        targets=("test_real_labels_that_are_not_what_the_plan_saw_stop_the_action",
+                 "test_real_a_proxy_label_is_part_of_what_the_plan_saw")),
+    Mutation(
+        "D64-6c-k", "a running tool container is removed by force", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if not proxy and _state(container) in LIVE_STATES:\n"
+                    "        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n", ""),
+                Edit(DOCKER_PY, "        container.remove(force=proxy)      # a tool container is removed only if it is at rest",
+                     "        container.remove(force=True)"),),
+        targets=("test_real_a_container_at_rest_is_removed_and_seen_gone_a_running_one_is_not",)),
+    Mutation(
+        "D64-6c-l", "a network is removed with a container attached", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if client.containers.list(all=True, filters={\"network\": network.name}):\n"
+                    "        return Result(action, CHANGED, IN_USE)\n", ""),),
+        targets=("test_real_a_network_with_a_container_of_any_state_is_kept",)),
+    Mutation(
+        "D64-6c-m", "a kill is not verified", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if _wait_until(stopped, th, sleep, clock):\n        return Result(action, DONE)\n"
+                    "    return Result(action, FAILED, STILL_RUNNING_AFTER_KILL)",
+                    "    return Result(action, DONE)"),),
+        targets=("test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",)),
+    Mutation(
+        "D64-6c-n", "a removal is verified by get alone, not by the listing", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "        return not client.containers.list(all=True, filters={\"id\": action.subject_id})",
+                    "        return True"),),
+        targets=("test_a_container_listed_after_get_says_not_found_is_still_not_gone",)),
+    Mutation(
+        "D64-6c-o", "a network removal is not verified", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    if _wait_until(gone, th, sleep, clock):\n        return Result(action, DONE)\n"
+                    "    return Result(action, FAILED, NOT_GONE_AFTER_REMOVAL)\n\n\ndef live_mount_sources",
+                    "    return Result(action, DONE)\n\n\ndef live_mount_sources"),),
+        targets=("test_a_network_removal_that_does_nothing_is_failed_not_done",)),
+    Mutation(
+        "D64-6c-p", "the verification wait ignores the configured time", ACT_TESTS,
+        edits=(Edit(DOCKER_PY, "    deadline = clock() + th.verify_wait_s", "    deadline = clock() + 1"),),
+        targets=("test_the_verification_waits_the_configured_time_and_not_more",)),
+    Mutation(
+        "D64-6c-q", "a symlink is unlinked like a file", ACT_TESTS,
+        edits=(Edit(FILES_PY, "    if not stat.S_ISREG(info.st_mode):", "    if False:"),),
+        targets=("test_a_symlink_is_not_unlinked_and_its_target_is_untouched",)),
+    Mutation(
+        "D64-6c-r", "a file is unlinked whatever its age", ACT_TESTS,
+        edits=(Edit(FILES_PY, "    if wall_clock_us() - info.st_mtime_ns // 1000 < th.file_age_s() * US:\n"
+                    "        return Result(action, CHANGED, TOO_YOUNG)\n", ""),),
+        targets=("test_a_file_is_judged_again_on_the_spot",)),
+    Mutation(
+        "D64-6c-s", "a file a container mounts is unlinked", ACT_TESTS,
+        edits=(Edit(FILES_PY, "    if os.path.join(directory, name) in act_docker.live_mount_sources(client):\n"
+                    "        return Result(action, CHANGED, MOUNTED)\n", ""),),
+        targets=("test_a_file_is_judged_again_on_the_spot",)),
+    Mutation(
+        "D64-6c-t", "a file of another owner is unlinked", ACT_TESTS,
+        edits=(Edit(FILES_PY, "    if info.st_uid != expected_uid:\n        return Result(action, CHANGED, FOREIGN_OWNER)\n", ""),),
+        targets=("test_a_file_is_judged_again_on_the_spot",)),
+    Mutation(
+        "D64-6c-u", "an unlink is not verified", ACT_TESTS,
+        edits=(Edit(FILES_PY, "    os.unlink(name, dir_fd=fd)\n    try:\n        os.lstat(name, dir_fd=fd)\n"
+                    "    except FileNotFoundError:\n        return Result(action, DONE)\n"
+                    "    return Result(action, FAILED, NOT_GONE_AFTER_REMOVAL)",
+                    "    os.unlink(name, dir_fd=fd)\n    return Result(action, DONE)"),),
+        targets=("test_an_unlink_that_leaves_the_file_is_failed_not_done",)),
+    Mutation(
+        "D64-6c-v", "the audit hook runs for results that were not verified", ACT_TESTS,
+        edits=(Edit(ACT_PY, "        if result.outcome == DONE and on_verified is not None:",
+                    "        if on_verified is not None:"),),
+        targets=("test_a_proposal_touched_since_the_plan_is_lost_race_and_left_alone",)),
+    Mutation(
+        "D64-6c-w", "the act half gains a DELETE statement", ACT_STRUCT,
+        edits=(Edit(ACT_PY, "_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)",
+                    "PURGE_SQL = \"DELETE FROM capabilities WHERE revoked\"\n_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)"),),
+        targets=("test_the_act_half_has_exactly_four_sql_statements_each_of_a_known_shape",)),
+    Mutation(
+        "D64-6c-x", "the act half imports the plan", ACT_STRUCT,
+        edits=(Edit(ACT_PY, "from control_plane.reconciler import act_docker, act_files, vocab",
+                    "from control_plane.reconciler import act_docker, act_files, plan, vocab"),),
+        targets=("test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan",)),
+    Mutation(
+        "D64-6c-y", "the act half can dispatch", ACT_STRUCT,
+        edits=(Edit(ACT_PY, "from control_plane.orchestrator import stages\n",
+                    "from control_plane.orchestrator import stages\n"
+                    "from control_plane.orchestrator.dispatch import dispatch_collection\n"),),
+        targets=("test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan",
+                 "test_the_act_half_never_names_what_would_run_something_again_or_open_another_door")),
+    Mutation(
+        "D64-6c-z", "act_docker gains a way to start a container", ACT_STRUCT,
+        edits=(Edit(DOCKER_PY, "def _state(container: Any) -> str:",
+                    "def _oops(client):\n    return client.containers.run(\"x\")\n\n\ndef _state(container: Any) -> str:"),),
+        targets=("test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",)),
+    Mutation(
+        "D64-6c-za", "an operator's mode name switches deletions on", ACT_TESTS + ACT_STRUCT,
+        edits=(Edit(ACT_PY, "        return Settings(MODE_NAMES[name])",
+                    "        return Settings(MODE_NAMES[name], allow_deletions=True)"),),
+        targets=("test_the_operator_can_choose_two_modes_and_neither_allows_deletions",
+                 "test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on")),
+]
+
 
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

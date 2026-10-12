@@ -350,6 +350,10 @@ call report success without doing it and require `action_failed`, not `*_removed
 | remove a **host file** | `lstat` through a directory fd: must be a regular file, not a symlink, owned by the expected uid, name matching the pattern, older than the bound; `unlink(name, dir_fd=…)` | `lstat` again → `FileNotFoundError` `[E: E14-V3]`; a symlink is *skipped and reported*, its target untouched | `action_failed` `not_gone_after_removal` |
 | the **pass as a whole** | — | the plan is recomputed after acting and must not contain anything acted on in this pass | `reconciler.stopped` is not affected; the leftover set is counted in the next `reconciler.started` |
 
+**Implemented (D64 step 6c, ACCEPTANCE 5.82).** The table above is `act.py`, `act_docker.py`, `act_files.py`; the waits are
+`verify_wait_s`. Deletions (kill, remove, unlink) exist and are tested, and are behind `Settings.allow_deletions`, which is off
+and unreachable from the operator's modes (`dry-run`, `state-only`) until it is turned on deliberately.
+
 A failed action is retried on the next pass; to keep a stuck object from filling the audit log, a given
 `(object, reason_code)` is audited once per process lifetime and counted thereafter (a restart reports once
 more — stated, not hidden; D64-11).

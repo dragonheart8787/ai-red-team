@@ -14,6 +14,19 @@ around:
 * nothing in the package opens the engagement-scoped connection or the runtime engine: the reader
   role's scope is the only database door, and it is handed in, not imported;
 * every configured threshold is used by the plan (or is named as used by something else).
+
+And the act half (step 6c), the other side of the same wall:
+
+* the act modules import from ``control_plane.state.db`` exactly ``engagement_scope``, from the
+  orchestrator exactly ``stages``, and nothing of the plan, the observation, the API, the audit
+  trail, the vault, the tool gateway or the agents -- and never name ``propose_action``,
+  ``dispatch_*`` or ``dispatch_approved`` (I7: it re-runs nothing);
+* its SQL is exactly four statements of known shape (a conditional ``UPDATE`` of a proposal, the
+  ``UPDATE`` of its in-flight runs, and one ``SELECT``): none deletes, inserts or names a table
+  the reconciler has no business with;
+* ``kill`` and ``remove`` are called only in ``act_docker``, ``unlink`` only in ``act_files``, and
+  nothing in the package creates, runs, starts, stops or prunes anything;
+* the deletion flag is ``False`` by default and no source file outside the tests sets it.
 """
 
 from __future__ import annotations
@@ -29,7 +42,8 @@ REPO = Path(__file__).resolve().parents[1]
 PKG = REPO / "control_plane" / "reconciler"
 
 PURE = ("model", "vocab", "plan")
-ALL = ("config", "model", "observe", "plan", "vocab")
+ALL = ("config", "model", "observe", "plan", "vocab")          # the plan half
+ACT = ("act", "act_docker", "act_files", "outcome")            # the act half (step 6c)
 
 FORBIDDEN_EVERYWHERE = (
     "control_plane.state", "control_plane.orchestrator", "control_plane.api", "control_plane.audit",
@@ -76,14 +90,16 @@ def _starts(module: str, prefixes) -> bool:
     return any(module == p or module.startswith(p + ".") for p in prefixes)
 
 
-def test_the_package_is_exactly_the_files_this_step_made():
-    assert sorted(p.stem for p in PKG.glob("*.py")) == sorted(["__init__", *ALL])
+def test_the_package_is_exactly_the_files_the_steps_made():
+    assert sorted(p.stem for p in PKG.glob("*.py")) == sorted(["__init__", *ALL, *ACT])
 
 
-def test_nothing_in_the_package_reaches_the_database_the_orchestrator_docker_or_the_audit_trail():
+def test_the_plan_half_reaches_neither_the_database_nor_the_orchestrator_nor_docker_nor_the_audit():
     for name in ALL:
         bad = [m for m in _modules(name) if _starts(m, FORBIDDEN_EVERYWHERE)]
         assert bad == [], (name, bad)
+        assert not [m for m in _modules(name) if m.split(".")[-1] in ACT
+                    and m.startswith("control_plane.reconciler")], name      # and not the act half
 
 
 def test_the_pure_modules_import_nothing_that_does_io_or_tells_the_time():
@@ -179,8 +195,9 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
 
 # --- every configured number matters ---------------------------------------------------------
 
-#: configured here, used by a later step: the sweep's period belongs to the service (6d)
-USED_ELSEWHERE = {"network_sweep_period_s"}
+#: configured here, used by a later step: the sweep's period belongs to the service (6d), the
+#: verification wait to the act half (6c)
+USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s"}
 
 
 def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():
@@ -205,3 +222,159 @@ def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():
     unused = fields - reached - USED_ELSEWHERE
     assert unused == set(), f"configured and never used by the plan: {sorted(unused)}"
     assert USED_ELSEWHERE <= fields
+
+
+# =============================================================================================
+# the act half
+# =============================================================================================
+
+FORBIDDEN_IN_ACT = (
+    "control_plane.api", "control_plane.audit", "control_plane.capability", "control_plane.vault",
+    "control_plane.tls", "control_plane.scheduler", "control_plane.policy",
+    "control_plane.orchestrator.dispatch", "control_plane.orchestrator.engagement",
+    "tool_gateway", "agents", "subprocess", "socket", "requests",
+    "control_plane.reconciler.plan", "control_plane.reconciler.observe",
+)
+FORBIDDEN_NAMES_IN_ACT = {"propose_action", "dispatch_approved", "reconcile_stale_dispatches",
+                          "record_audit", "audit_scope", "get_engine", "create_engine",
+                          "reconciler_reader_scope", "scheduler_reader_scope"}
+
+
+def _imported(name: str) -> dict[str, set[str]]:
+    """``from <module> import <names>`` -> {module: names}."""
+    out: dict[str, set[str]] = {}
+    for node in ast.walk(_tree(name)):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            out.setdefault(node.module, set()).update(a.name for a in node.names)
+    return out
+
+
+def test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan():
+    for name in ACT:
+        modules = _modules(name)
+        bad = [m for m in modules if _starts(m, FORBIDDEN_IN_ACT)]
+        assert bad == [], (name, bad)
+    assert _imported("act")["control_plane.state.db"] == {"engagement_scope"}
+    assert _imported("act")["control_plane.orchestrator"] == {"stages"}
+    for name in ("act_docker", "act_files", "outcome"):
+        assert not [m for m in _modules(name) if m.startswith("control_plane.state")], name
+        assert not [m for m in _modules(name) if m.startswith("control_plane.orchestrator")], name
+
+
+def test_the_act_half_never_names_what_would_run_something_again_or_open_another_door():
+    for name in ACT:
+        tree = _tree(name)
+        names = {a.attr if isinstance(a, ast.Attribute) else a.id
+                 for a in ast.walk(tree) if isinstance(a, ast.Attribute | ast.Name)}
+        names |= {alias.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+                  for alias in n.names}                       # `from x import dispatch_something`
+        assert not names & FORBIDDEN_NAMES_IN_ACT, (name, names & FORBIDDEN_NAMES_IN_ACT)
+        assert not [n for n in names if n.startswith("dispatch_")], (name, names)
+
+
+STATEMENTS = {
+    "CLOSE_SQL": re.compile(
+        r"UPDATE action_proposals SET pipeline_stage = :new, stage_detail = :detail, "
+        r"stage_updated_at = now\(\), updated_at = now\(\) WHERE proposal_id = :pid "
+        r"AND pipeline_stage = :expected AND stage_updated_at = :planned "
+        r"RETURNING proposal_id"),
+    "MARK_UNKNOWN_SQL": re.compile(
+        r"UPDATE action_proposals SET pipeline_stage = :new, stage_detail = :detail, "
+        r"dispatch_state = 'unknown_outcome', stage_updated_at = now\(\), updated_at = now\(\) "
+        r"WHERE proposal_id = :pid AND pipeline_stage = :expected "
+        r"AND stage_updated_at = :planned RETURNING proposal_id"),
+    "RUNS_SQL": re.compile(
+        r"UPDATE tool_runs SET status = 'unknown_outcome' WHERE proposal_id = :pid "
+        r"AND status IN \('dispatching', 'running'\)"),
+    "RUNS_LEFT_SQL": re.compile(
+        r"SELECT count\(\*\) FROM tool_runs WHERE proposal_id = :pid "
+        r"AND status IN \('dispatching', 'running'\)"),
+}
+SQL_WORD = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|CREATE|ALTER|GRANT)\b")
+NOT_FOR_THE_RECONCILER = re.compile(
+    r"\b(DELETE|INSERT|DROP|TRUNCATE|CREATE|ALTER|GRANT|capabilities|approvals|credential_material"
+    r"|audit_log|scope_registry|engagements)\b")
+
+
+def _sql_constants() -> dict[str, tuple[str, str]]:
+    found: dict[str, tuple[str, str]] = {}
+    for name in ACT:
+        for node in ast.walk(_tree(name)):
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str) and SQL_WORD.search(node.value.value)):
+                found[node.targets[0].id] = (name, " ".join(node.value.value.split()))
+    return found
+
+
+def test_the_act_half_has_exactly_four_sql_statements_each_of_a_known_shape():
+    found = _sql_constants()
+    assert set(found) == set(STATEMENTS), set(found) ^ set(STATEMENTS)
+    for constant, (_module, statement) in found.items():
+        assert STATEMENTS[constant].fullmatch(statement), (constant, statement)
+        assert not NOT_FOR_THE_RECONCILER.search(statement), (constant, statement)
+    # and no other string in the act modules is SQL: nothing is built or hidden elsewhere
+    for name in ACT:
+        tree = _tree(name)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                      if isinstance(n, ast.Module | ast.FunctionDef | ast.ClassDef) and n.body
+                      and isinstance(n.body[0], ast.Expr)
+                      and isinstance(n.body[0].value, ast.Constant)}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and id(node) not in docstrings \
+                    and SQL_WORD.search(node.value) and len(node.value.split()) > 6:
+                assert " ".join(node.value.split()) in {s for _, s in found.values()}, node.value
+
+
+def _attribute_calls(name: str) -> set[str]:
+    return {n.func.attr for n in ast.walk(_tree(name))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+
+
+def test_kill_and_remove_are_called_in_act_docker_only_and_unlink_in_act_files_only():
+    for verb in ("kill", "remove"):
+        assert {n for n in ALL + ACT if verb in _attribute_calls(n)} == {"act_docker"}, verb
+    assert {n for n in ALL + ACT if "unlink" in _attribute_calls(n)} == {"act_files"}
+
+
+def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
+    forbidden = {"create", "run", "exec_run", "prune", "put_archive", "start", "restart", "stop",
+                 "pause", "unpause", "commit", "build", "pull", "push", "load", "update", "rename",
+                 "connect", "disconnect", "exec_create", "exec_start", "rmtree", "removedirs",
+                 "rmdir", "mkdir", "symlink", "link", "chmod", "chown", "truncate", "write",
+                 "write_text", "write_bytes", "replace", "executemany"}
+    for name in ALL + ACT:
+        assert not _attribute_calls(name) & forbidden, (name, _attribute_calls(name) & forbidden)
+
+
+def test_stages_abandon_is_called_in_act_py_alone():
+    assert {n for n in ALL + ACT if "abandon" in _attribute_calls(n)} == {"act"}
+
+
+# --- the deletion flag ---------------------------------------------------------------------------
+
+def test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on():
+    from control_plane.reconciler import act
+    fields = {f.name: f for f in dataclasses.fields(act.Settings)}
+    assert fields["allow_deletions"].default is False
+    assert set(act.MODE_NAMES) == {"dry-run", "state-only"}
+    assert not [k for k in config.KEYS if "DELET" in k or "ALLOW" in k]      # not configurable
+    offenders = []
+    for top in ("control_plane", "scripts", "agents", "tool_gateway"):
+        for path in (REPO / top).rglob("*.py"):
+            if path.name.startswith("mutations_"):
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.keyword) and node.arg == "allow_deletions" \
+                        and not (isinstance(node.value, ast.Constant)
+                                 and node.value.value is False):
+                    offenders.append(f"{path.relative_to(REPO)}:{node.value.lineno}")
+                if isinstance(node, ast.Assign | ast.AnnAssign) and any(
+                        isinstance(t, ast.Name | ast.Attribute)
+                        and getattr(t, "id", getattr(t, "attr", "")) == "allow_deletions"
+                        for t in (node.targets if isinstance(node, ast.Assign) else [node.target])):
+                    if isinstance(node, ast.Assign) or node.value is not None:
+                        value = node.value
+                        if not (isinstance(value, ast.Constant) and value.value is False):
+                            offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
+    assert offenders == [], f"something other than False reaches allow_deletions: {offenders}"

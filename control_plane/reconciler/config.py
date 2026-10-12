@@ -70,6 +70,9 @@ class Thresholds:
     network_idle_s: int
     #: the sweep of idle networks runs this often (6d); recorded here so that it is configured too
     network_sweep_period_s: int
+    #: after a kill, a removal or an unlink, how long the act half waits for the change to be seen
+    #: before it calls the action failed (the act half, 6c)
+    verify_wait_s: int
 
     # -- derived bounds (D64 §1.2): functions of the configured terms, never configured themselves
     # --

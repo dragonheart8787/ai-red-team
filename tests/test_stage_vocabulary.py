@@ -213,6 +213,9 @@ FILE_REGISTRY = {
         "reads the stage; `approved` only; any other stage is reported from the rows",
     "control_plane/api/approvals.py":
         "`awaiting_approval -> approved/closed`; none expects `abandoned`",
+    "control_plane/reconciler/act.py":
+        "the one caller of `stages.abandon`; closes and records by compare-and-set on the stage "
+        "and `stage_updated_at` the plan saw; verifies the stage afterwards",
     "control_plane/reconciler/model.py":
         "plain data the plan hands on (`expected_stage`, `pipeline_stage`); decides no stage",
     "control_plane/reconciler/observe.py":
@@ -245,9 +248,9 @@ def test_st3_every_module_that_names_a_stage_is_registered_with_its_reason():
 # ST4 -- one writer
 # ---------------------------------------------------------------------------
 
-#: Modules allowed to call ``stages.abandon``. The reconciler (step 6) joins this list when it is
-#: written; until then nothing in the product abandons a proposal.
-ABANDON_CALLERS: set[str] = set()
+#: Modules allowed to call ``stages.abandon``: the reconciler's act half (D64 step 6c), which does
+#: it only as a compare-and-set on the stage and on the ``stage_updated_at`` the plan observed.
+ABANDON_CALLERS: set[str] = {"control_plane/reconciler/act.py"}
 
 
 def test_st4_abandoned_is_written_by_stages_abandon_and_nothing_else():
