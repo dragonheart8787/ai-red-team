@@ -85,6 +85,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_state_writer') THEN
         CREATE ROLE scheduler_state_writer LOGIN;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reconciler_reader') THEN
+        CREATE ROLE reconciler_reader LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'reconciler_fn_owner') THEN
+        CREATE ROLE reconciler_fn_owner NOLOGIN;
+    END IF;
 END
 $$;
 
@@ -170,3 +176,30 @@ ALTER ROLE scheduler_admin
 ALTER ROLE scheduler_state_writer
     WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
     PASSWORD :'scheduler_state_writer_password';
+
+-- The reconciler's read side (D64, migration 0023). Two roles, one job each:
+--
+--   reconciler_reader    the plan side's login. It can do exactly one thing: EXECUTE the two
+--                        read functions of migration 0023. No grant on any table, view or
+--                        sequence; no TEMP on the database; no CREATE on the schema. Its writes
+--                        are not here at all: the act side uses engagement_scope() (D64-1).
+--   reconciler_fn_owner  the owner of those two SECURITY DEFINER functions. NOLOGIN, so nobody
+--                        can connect as it; NOSUPERUSER and NOBYPASSRLS, so the functions run
+--                        under row policies and cannot see more than the migration granted it;
+--                        owns no table, schema or other object. A SECURITY DEFINER function
+--                        runs as its owner: a superuser or BYPASSRLS owner would turn a read
+--                        function into a read of everything (D64 section 2.3, S1').
+-- migration_owner becomes a member of reconciler_fn_owner so that the migration can hand the
+-- functions over (ALTER FUNCTION ... OWNER TO needs the right to SET ROLE to the new owner); it
+-- cannot create roles itself. The membership is WITH INHERIT FALSE, and that is load-bearing: a
+-- policy written TO reconciler_fn_owner applies to every role that has that role's privileges, and
+-- migration_owner owns the tables and the scheduler's view. With the default (INHERIT TRUE) the
+-- owner of those tables saw every stuck proposal of every engagement, and so did scheduler_reader
+-- through the view it owns -- found by the scheduler's own isolation test the first time the
+-- policies existed (D64 6a, ACCEPTANCE 5.80).
+ALTER ROLE reconciler_reader
+    WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION
+    PASSWORD :'reconciler_reader_password';
+ALTER ROLE reconciler_fn_owner
+    WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION;
+GRANT reconciler_fn_owner TO migration_owner WITH INHERIT FALSE, SET TRUE;

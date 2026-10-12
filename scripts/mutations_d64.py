@@ -34,6 +34,57 @@ def _load_0022():
 
 
 _M22 = _load_0022()
+M0023 = "db/migrations/versions/0023_reconciler_reader.py"
+
+
+def _load_0023():
+    """Migration 0023's own function texts, so a live-database mutation changes one line of the real
+    definition and the SQL that undoes it is the real definition, not a retyped copy."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("m0023", Path(__file__).resolve().parents[1] / M0023)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_M23 = _load_0023()
+READER_TESTS = ("tests/test_reconciler_reader.py",)
+_OR_REPLACE = ("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION")
+
+
+def _as_function_owner(*statements: str) -> tuple[str, ...]:
+    """Run ``statements`` as ``reconciler_fn_owner``. migration_owner is a member WITH INHERIT FALSE
+    (db/roles.sql: otherwise the policies written TO the owner would widen what the table owner
+    sees), so it may SET ROLE but does not hold the function owner's privileges. Replacing a
+    function needs CREATE on the schema; it is granted for the length of the statement."""
+    return ("GRANT CREATE ON SCHEMA public TO reconciler_fn_owner",
+            "SET LOCAL ROLE reconciler_fn_owner", *statements, "RESET ROLE",
+            "REVOKE CREATE ON SCHEMA public FROM reconciler_fn_owner")
+
+
+def _stuck_sql(*changes: tuple[str, str]) -> str:
+    """The stuck-proposals function as a CREATE OR REPLACE, with each (old, new) applied once."""
+    text = _M23._stuck_function("public").replace(*_OR_REPLACE, 1)
+    for old, new in changes:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
+def _superuser_prepare(sql: str):
+    """A ``prepare`` hook that runs one superuser statement (the mutation's undo is ``cleanup_sql``)."""
+    def prepare() -> dict[str, str]:
+        from mutation_check import _superuser_sql
+        _superuser_sql(sql)
+        return {}
+    return prepare
+
+
+_STAGE_FILTER = f"WHERE p.pipeline_stage IN ({_M23._stages()})"
+_GUARDED_CAST = """CASE WHEN jsonb_typeof(c.budget -> 'max_duration_seconds') = 'number'
+                         AND (c.budget ->> 'max_duration_seconds') ~ '^[1-9][0-9]{0,8}$'
+                        THEN (c.budget ->> 'max_duration_seconds')::integer END"""
+_SIGNATURES = ("public.reconciler_stuck_proposals()", "public.reconciler_run_states(text[])")
 STAGES_PY = "control_plane/orchestrator/stages.py"
 FUNCTION_API = "control_plane/api/function_api.py"
 SNAPSHOT_PY = "control_plane/state/schema_snapshot.py"
@@ -321,6 +372,75 @@ CATALOGUE = [
                   "(engagement_id, pipeline_stage, stage_updated_at) WHERE pipeline_stage NOT IN "
                   "('recorded', 'closed', 'abandoned') OR provenance_complete IS FALSE"),
         targets=("test_st2_the_open_stage_index_leaves_out_exactly_the_terminal_stages",)),
+]
+
+CATALOGUE += [
+    # ---- step 6a (ACCEPTANCE 5.80): the four mistakes of a SECURITY DEFINER read function (E20)
+    Mutation(
+        "D64-6a-a", "S2: the function has no stage filter of its own (a GUC then widens the owner)",
+        READER_TESTS,
+        sql_up=_as_function_owner(_stuck_sql((_STAGE_FILTER, "WHERE true"))),
+        sql_down=_as_function_owner(_stuck_sql()),
+        targets=("test_s2_the_stage_filter_is_in_the_function_body",
+                 "test_s2_a_guc_set_by_the_caller_does_not_widen_the_result")),
+    Mutation(
+        "D64-6a-b", "S3: EXECUTE on both functions is left with PUBLIC", READER_TESTS,
+        sql_up=_as_function_owner(*(f"GRANT EXECUTE ON FUNCTION {sig} TO PUBLIC" for sig in _SIGNATURES))[1:-1],
+        sql_down=_as_function_owner(*(f"REVOKE ALL ON FUNCTION {sig} FROM PUBLIC" for sig in _SIGNATURES))[1:-1],
+        targets=("test_s3_execute_is_granted_to_the_reader_and_the_owner_alone",
+                 "test_s3_an_unrelated_role_is_refused")),
+    Mutation(
+        "D64-6a-c", "S4: the search_path pin is taken off the stuck-proposals function", READER_TESTS,
+        sql_up=_as_function_owner("ALTER FUNCTION public.reconciler_stuck_proposals() RESET search_path")[1:-1],
+        sql_down=_as_function_owner("ALTER FUNCTION public.reconciler_stuck_proposals() "
+                                    "SET search_path = pg_catalog, public, pg_temp")[1:-1],
+        targets=("test_s4_the_search_path_is_pinned_in_the_definition",)),
+    Mutation(
+        "D64-6a-d", "S4: a relation in the stuck-proposals function is no longer schema-qualified",
+        READER_TESTS,
+        sql_up=_as_function_owner(_stuck_sql(("FROM public.action_proposals p", "FROM action_proposals p"))),
+        sql_down=_as_function_owner(_stuck_sql()),
+        targets=("test_s4_every_relation_in_the_body_is_schema_qualified",)),
+    Mutation(
+        "D64-6a-e", "S5: the budget cast is unguarded (one bad budget blinds the call)", READER_TESTS,
+        sql_up=_as_function_owner(_stuck_sql((_GUARDED_CAST, "(c.budget ->> 'max_duration_seconds')::integer"))),
+        sql_down=_as_function_owner(_stuck_sql()),
+        targets=("test_s5_one_unreadable_budget_neither_blinds_the_call_nor_is_echoed",)),
+    Mutation(
+        "D64-6a-f", "S5: the cast accepts a JSON string as well as a number", READER_TESTS,
+        sql_up=_as_function_owner(_stuck_sql(("jsonb_typeof(c.budget -> 'max_duration_seconds') = 'number'\n"
+                                              "                         AND ", ""))),
+        sql_down=_as_function_owner(_stuck_sql()),
+        targets=("test_s5_one_unreadable_budget_neither_blinds_the_call_nor_is_echoed",)),
+    Mutation(
+        "D64-6a-g", "the reader is given SELECT on action_proposals", READER_TESTS,
+        sql_up=("GRANT SELECT ON action_proposals TO reconciler_reader",),
+        sql_down=("REVOKE SELECT ON action_proposals FROM reconciler_reader",),
+        targets=("test_the_reader_has_no_privilege_on_any_table_view_or_sequence",
+                 "test_a_direct_select_as_the_reader_is_permission_denied")),
+    Mutation(
+        "D64-6a-h", "the owner is given table-wide SELECT on capabilities (its budget document)",
+        READER_TESTS,
+        sql_up=("GRANT SELECT ON capabilities TO reconciler_fn_owner",),
+        sql_down=("REVOKE SELECT ON capabilities FROM reconciler_fn_owner",
+                  "GRANT SELECT (" + ", ".join(_M23.OWNER_COLUMNS["capabilities"])
+                  + ") ON capabilities TO reconciler_fn_owner"),
+        targets=("test_the_owner_has_column_select_on_exactly_the_listed_columns_and_nothing_else",)),
+    Mutation(
+        "D64-6a-i", "the owner's stuck-stage policy on action_proposals admits every stage",
+        READER_TESTS,
+        sql_up=(f"ALTER POLICY {_M23.POLICY} ON action_proposals USING (true)",),
+        sql_down=(f"ALTER POLICY {_M23.POLICY} ON action_proposals "
+                  f"USING (pipeline_stage IN ({_M23._stages()}))",),
+        targets=("test_the_owner_sees_no_recorded_proposal_without_a_guc_and_no_row_of_a_table_"
+                 "that_is_not_listed",)),
+    Mutation(
+        "D64-6a-j", "migration_owner inherits the function owner's privileges (the default GRANT)",
+        READER_TESTS,
+        prepare=_superuser_prepare("GRANT reconciler_fn_owner TO migration_owner WITH INHERIT TRUE"),
+        cleanup_sql=("GRANT reconciler_fn_owner TO migration_owner WITH INHERIT FALSE, SET TRUE",),
+        targets=("test_only_the_migration_role_is_a_member_of_the_owner_without_inheriting_it",
+                 "test_the_table_owner_and_the_schedulers_view_are_not_widened_by_the_owner_s_policies")),
 ]
 
 

@@ -588,6 +588,26 @@ What a role needs to read them, found by trying it in a transaction that was rol
 | + `SELECT (budget)` on `capabilities` and a policy | works, but **the whole `budget` document is readable**, including `budget.tool` (the adapter-specific dimension, `broker.py`) `[E: E11-B3]` — column privileges cannot reach inside a `jsonb` |
 | **a `SECURITY DEFINER` function owned by a no-login role that holds the policies and column grants; the reader has `EXECUTE` and nothing else** | the reader gets exactly the function's columns — `max_duration_seconds` as an integer, `lease_expires_at`, run status, approval validity, engagement status/kill — for stuck rows only (a `recorded` proposal is not returned); a direct `SELECT` on each of the five tables is **`permission denied`** `[E: E11-F]` |
 
+**Implemented (D64 step 6a, migration 0023, ACCEPTANCE 5.80).** Two functions, `reconciler_stuck_proposals()` and
+`reconciler_run_states(text[])`; the checklist below is the test list (`tests/test_reconciler_reader.py`, 48 tests)
+and S2–S5 each have a mutation (`D64-6a-a`…`j`). Where the build differs from, or adds to, this section:
+
+* **Role membership leaked the policies (found by running it).** `migration_owner` has to be able to `SET ROLE` to the
+  function owner to hand the functions over. With the default `INHERIT TRUE`, the policies written `TO
+  reconciler_fn_owner` applied to `migration_owner` — which owns every table and the scheduler's view — and
+  `scheduler_reader` saw 8,202 stuck proposals of engagements it never named. The membership is `WITH INHERIT FALSE,
+  SET TRUE` (db/roles.sql); the hand-over is the migration's last step because `migration_owner` cannot touch the
+  functions afterwards.
+* **Indexes.** The first version took 18 s on this database (a sequential scan of `capabilities`, `approvals` and
+  `tool_runs` per stuck row); four indexes bring it to 0.15 s `[E21]`.
+* **Output.** Time is the database's clock, as epoch microseconds, with `db_now_us` in every row; booleans (kill flag,
+  enrolled, revoked) are two-value enums. The result is capped at 5,000 oldest rows: **a full page means "truncated"** and
+  the plan must say so. Whether the budget is a proxy run's is not exposed (the allowlist is an array); the plan uses
+  the proxy-run bound for every run, which is the longer one.
+* **`reconciler_run_states`** refuses a NULL and more than 2,000 ids with a fixed error text, because an absent id
+  means *orphan*.
+* **Not built:** the conflict-driven network removal of D64-8 (a CIDR cannot be returned under "ids, enums, integers").
+
 **Recommendation (D64-2): the function.** It is the narrowest of the four: no table is readable, the budget
 leaves the database as one integer, and the function is the one place that says what the reconciler may know.
 

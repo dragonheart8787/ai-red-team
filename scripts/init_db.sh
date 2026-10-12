@@ -15,6 +15,7 @@
 #   scheduler_reader / scheduler_admin / scheduler_state_writer  the scheduler's
 #                    three narrow roles (D62): read its decision inputs, write the
 #                    enrollment list (operator CLI), write its closed-vocabulary state
+#   reconciler_reader the reconciler's plan side (D64): EXECUTE on two read functions, nothing else
 #
 # Passwords are never hardcoded here. They are taken from the environment, or
 # from a gitignored .env, or generated randomly on first run and written to
@@ -68,6 +69,7 @@ gen_vault_key() {
 : "${SCHEDULER_READER_PASSWORD:=$(gen_password)}"
 : "${SCHEDULER_ADMIN_PASSWORD:=$(gen_password)}"
 : "${SCHEDULER_STATE_WRITER_PASSWORD:=$(gen_password)}"
+: "${RECONCILER_READER_PASSWORD:=$(gen_password)}"
 : "${VAULT_MASTER_KEY:=$(gen_vault_key)}"
 
 # Run psql as the superuser. Arguments are passed through verbatim.
@@ -108,6 +110,7 @@ super_psql \
     -v "scheduler_reader_password=$SCHEDULER_READER_PASSWORD" \
     -v "scheduler_admin_password=$SCHEDULER_ADMIN_PASSWORD" \
     -v "scheduler_state_writer_password=$SCHEDULER_STATE_WRITER_PASSWORD" \
+    -v "reconciler_reader_password=$RECONCILER_READER_PASSWORD" \
     -f "$root/db/roles.sql" >/dev/null
 
 echo "==> creating database $DB_NAME owned by migration_owner"
@@ -135,6 +138,7 @@ GLOBAL_POLICY_ADMIN_PASSWORD=${GLOBAL_POLICY_ADMIN_PASSWORD}
 SCHEDULER_READER_PASSWORD=${SCHEDULER_READER_PASSWORD}
 SCHEDULER_ADMIN_PASSWORD=${SCHEDULER_ADMIN_PASSWORD}
 SCHEDULER_STATE_WRITER_PASSWORD=${SCHEDULER_STATE_WRITER_PASSWORD}
+RECONCILER_READER_PASSWORD=${RECONCILER_READER_PASSWORD}
 VAULT_MASTER_KEY=${VAULT_MASTER_KEY}
 MIGRATION_DATABASE_URL=postgresql+psycopg://migration_owner:${MIGRATION_OWNER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 DATABASE_URL=postgresql+psycopg://cyberorch_app:${CYBERORCH_APP_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
@@ -146,6 +150,7 @@ GLOBAL_POLICY_ADMIN_DATABASE_URL=postgresql+psycopg://global_policy_admin:${GLOB
 SCHEDULER_READER_DATABASE_URL=postgresql+psycopg://scheduler_reader:${SCHEDULER_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 SCHEDULER_ADMIN_DATABASE_URL=postgresql+psycopg://scheduler_admin:${SCHEDULER_ADMIN_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 SCHEDULER_STATE_WRITER_DATABASE_URL=postgresql+psycopg://scheduler_state_writer:${SCHEDULER_STATE_WRITER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+RECONCILER_READER_DATABASE_URL=postgresql+psycopg://reconciler_reader:${RECONCILER_READER_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 EOF
 chmod 600 "$env_file"
 

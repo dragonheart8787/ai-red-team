@@ -661,8 +661,8 @@ def test_0022_up_and_down_with_a_row_at_every_stage_and_every_comment_restored(s
     assert set(scratch.force_rls()) == SCHEDULER_TABLES and all(scratch.force_rls().values())
 
     # --- and up again: identical to the first time
-    scratch.alembic("upgrade", "head")
-    assert scratch.revision() == _head()
+    scratch.alembic("upgrade", "0022")
+    assert scratch.revision() == "0022"
     assert not snapshot_diff(s22, scratch.snapshot()), "\n".join(
         snapshot_diff(s22, scratch.snapshot()))
     assert _all_stages(scratch, eid, ids)["abandoned"] == ("received", None)
@@ -695,3 +695,66 @@ def test_0022_downgrade_moves_every_abandoned_row_not_only_one(scratch):
     stages_now = _all_stages(scratch, eid, ids)
     assert [v for k, v in stages_now.items() if k.startswith("a")] == [("received", None)] * 5
     assert stages_now["decided"] == ("decided", None)
+
+
+# ---------------------------------------------------------------------------------------------
+# 0023: the reconciler's read side -- functions, policies, grants and indexes come and go whole
+# ---------------------------------------------------------------------------------------------
+
+READER_FUNCTIONS = ("reconciler_stuck_proposals()", "reconciler_run_states(p_run_ids text[])")
+STUCK_SHAPES = {"received", "decided", "approved", "capability_issued", "dispatching"}
+
+
+def _temp_privilege(scratch: Scratch) -> bool:
+    """Whether PUBLIC may create temporary tables in this database (a cluster-wide fact)."""
+    with scratch.admin.begin() as conn:
+        return conn.execute(text(
+            "SELECT has_database_privilege('reconciler_reader', current_database(), 'TEMPORARY')"
+        )).scalar_one()
+
+
+def test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all(scratch):
+    scratch.alembic("upgrade", "0022")
+    eid, ids = _seed_stages(scratch, {**SHAPES_0021, "abandoned": ABANDONED_SHAPE})
+    s22 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0023")
+    s23 = scratch.snapshot()
+    added = {line.split(": ", 1)[1].split("  [")[0].strip()
+             for line in snapshot_diff(s22, s23) if line.startswith("+ new")}
+    assert {f"function:{f}" for f in READER_FUNCTIONS} <= added, added
+    assert {f"policy:{t}.reconciler_owner_select" for t in (
+        "action_proposals", "capabilities", "approvals", "engagements", "scheduler_enrollment",
+        "tool_runs")} <= added, added
+    assert {f"index:{n}" for n in (
+        "capabilities_by_proposal", "approvals_by_proposal", "tool_runs_by_proposal",
+        "action_proposals_reconciler_stuck")} <= added, added
+    functions = [v for k, v in s23.items() if k.startswith("function:reconciler_")]
+    assert len(functions) == 2
+    for definition in functions:
+        assert ("owner=reconciler_fn_owner secdef=true "
+                'config={"search_path=pg_catalog, <schema>, pg_temp"}') in definition
+    assert not _temp_privilege(scratch), "TEMP was not revoked from PUBLIC"
+
+    # --- the functions work in the schema the migration ran in, and see the stuck rows only
+    with scratch.engine.begin() as conn:
+        conn.execute(text("SET LOCAL ROLE reconciler_fn_owner"))     # it is not inherited
+        rows = conn.execute(text(
+            f"SELECT proposal_id, pipeline_stage FROM {scratch.name}.reconciler_stuck_proposals()"
+        )).all()
+    assert {r[1] for r in rows} == STUCK_SHAPES
+    assert {r[0] for r in rows} == {ids[n] for n in STUCK_SHAPES}
+
+    # --- down: nothing of 0023 is left, TEMP is back, the rows are untouched
+    scratch.alembic("downgrade", "0022")
+    assert scratch.revision() == "0022"
+    assert not snapshot_diff(s22, scratch.snapshot()), "\n".join(
+        snapshot_diff(s22, scratch.snapshot()))
+    assert _temp_privilege(scratch), "TEMP was not given back by the downgrade"
+    assert _all_stages(scratch, eid, ids)["abandoned"] == ("abandoned", "undecided_past_grace")
+
+    # --- and up again: identical, and the database ends the test as the migrations leave it
+    scratch.alembic("upgrade", "0023")
+    assert not snapshot_diff(s23, scratch.snapshot()), "\n".join(
+        snapshot_diff(s23, scratch.snapshot()))
+    assert not _temp_privilege(scratch)
