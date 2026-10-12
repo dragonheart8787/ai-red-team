@@ -172,6 +172,11 @@ Two different judgements use the bounds, and they must not share a threshold:
 If the budget cannot be read (no capability row for the proposal; a value ≤ 0; a value the function's guarded
 cast could not read, §2.3), the plan **does not guess**: it reports the row and does nothing to it.
 
+**Implemented (D64 step 6b, ACCEPTANCE 5.81).** The thresholds are *configuration*, not constants: `P_S`/`Q_S` of the
+ordinary run are not configured at all (the proxy bound, the longer, is used for every run, because the database does not say
+which a run is), and `config.load()` refuses to start with any key missing or below the least the code implies. The kill bound
+for a container whose proposal has already left `dispatching` is `StartedAt + B_cap + K`.
+
 **Closing a dispatch is one conditional UPDATE, a compare-and-set on what the plan observed.** The plan hands the
 act side `(engagement_id, proposal_id, planned stage_updated_at)`; the act side, in a transaction scoped to that
 one engagement, runs

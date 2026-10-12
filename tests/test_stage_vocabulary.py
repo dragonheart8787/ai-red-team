@@ -213,6 +213,14 @@ FILE_REGISTRY = {
         "reads the stage; `approved` only; any other stage is reported from the rows",
     "control_plane/api/approvals.py":
         "`awaiting_approval -> approved/closed`; none expects `abandoned`",
+    "control_plane/reconciler/model.py":
+        "plain data the plan hands on (`expected_stage`, `pipeline_stage`); decides no stage",
+    "control_plane/reconciler/observe.py":
+        "reads `pipeline_stage` from `reconciler_stuck_proposals()` and refuses a stage outside "
+        "the five stuck ones",
+    "control_plane/reconciler/plan.py":
+        "decides, per stuck stage, whether and how to move a proposal (the residue table); never "
+        "writes",
     "control_plane/scheduler/decide.py":
         "counts `approved`, `dispatching`, `capability_issued`; `abandoned` is invisible to it",
     "control_plane/state/models.py":

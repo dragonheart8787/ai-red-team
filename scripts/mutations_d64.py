@@ -443,6 +443,164 @@ CATALOGUE += [
                  "test_the_table_owner_and_the_schedulers_view_are_not_widened_by_the_owner_s_policies")),
 ]
 
+PLAN_PY = "control_plane/reconciler/plan.py"
+CONFIG_PY = "control_plane/reconciler/config.py"
+OBSERVE_PY = "control_plane/reconciler/observe.py"
+PLAN_TESTS = ("tests/test_reconciler_plan.py",)
+CONFIG_TESTS = ("tests/test_reconciler_config.py",)
+OBSERVE_TESTS = ("tests/test_reconciler_observe.py",)
+STRUCT_TESTS = ("tests/test_reconciler_structure.py",)
+
+CATALOGUE += [
+    # ---- step 6b: the plan, class by class (tables), the configuration, the observation
+    Mutation(
+        "D64-6b-a", "R6: a received proposal is abandoned only strictly after the grace",
+        PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "        if now - row.stage_updated_us >= th.stage_grace_s * US:\n"
+                    "            return _move(row, vocab.ABANDON, vocab.UNDECIDED_PAST_GRACE)",
+                    "        if now - row.stage_updated_us > th.stage_grace_s * US:\n"
+                    "            return _move(row, vocab.ABANDON, vocab.UNDECIDED_PAST_GRACE)"),),
+        targets=("test_r6_received_and_decided_are_acted_on_at_the_grace_and_not_before",)),
+    Mutation(
+        "D64-6b-b", "R6: a decided proposal is judged by a typed-in hour, not the configured grace",
+        PLAN_TESTS + STRUCT_TESTS,
+        edits=(Edit(PLAN_PY, "        if now - row.stage_updated_us >= th.stage_grace_s * US:\n"
+                    "            return _move(row, vocab.CLOSE, vocab.ABANDONED_AFTER_DECISION)",
+                    "        if now - row.stage_updated_us >= 3600 * US:\n"
+                    "            return _move(row, vocab.CLOSE, vocab.ABANDONED_AFTER_DECISION)"),),
+        targets=("test_r6_the_grace_is_the_configured_one",
+                 "test_plan_py_has_no_numeric_literal_but_zero_and_one")),
+    Mutation(
+        "D64-6b-c", "R3: the lease grace is ignored", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "        if now >= row.lease_expires_us + th.lease_grace_s * US:",
+                    "        if now >= row.lease_expires_us:"),),
+        targets=("test_r3_a_lapsed_lease_is_closed_after_the_grace_and_not_before",)),
+    Mutation(
+        "D64-6b-d", "R4: an approved proposal of an enrolled engagement is closed too", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if row.enrolled:\n        return None\n    if row.approval_id is None:",
+                    "    if row.approval_id is None:"),),
+        targets=("test_r4_r5_approved_rows",)),
+    Mutation(
+        "D64-6b-e", "R5: a killed engagement is no longer recognised", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, '    if row.kill_switch_engaged is True or row.engagement_status == "killed":',
+                    "    if False:"),),
+        targets=("test_r4_r5_approved_rows",)),
+    Mutation(
+        "D64-6b-f", "R1: the budget is not capped in the unknown-outcome bound", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "th.unknown_after_s(row.max_duration_s) * US",
+                    "(row.max_duration_s + th.p_proxy_s + th.q_proxy_s) * US"),),
+        targets=("test_r1_a_dispatch_is_unknown_at_budget_plus_p_plus_q_capped",
+                 "test_r1_a_budget_above_the_cap_is_judged_by_the_cap")),
+    Mutation(
+        "D64-6b-g", "R2: the budget is not capped in the kill bound", PLAN_TESTS + CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        return min(max_duration_s, self.b_cap_s)",
+                    "        return max_duration_s"),),
+        targets=("test_r2_the_margin_and_the_cap_are_the_configured_ones",
+                 "test_the_derived_bounds_are_functions_of_the_configured_terms_only")),
+    Mutation(
+        "D64-6b-h", "R2: a container with no owner label is judged like any other", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if c.owner is None:\n        return Report(\"container\", c.container_id, vocab.NO_OWNER_LABEL)\n",
+                    ""),),
+        targets=("test_a_container_that_is_not_ours_to_judge_is_reported_and_never_touched",)),
+    Mutation(
+        "D64-6b-i", "R2: a running container of a run the database does not know is killed",
+        PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if run_status is None:\n        return Report(\"container\", c.container_id, vocab.RUN_UNKNOWN, c.owner)\n"
+                    "    if c.started_us is None:",
+                    "    if c.started_us is None:"),),
+        targets=("test_r2_nothing_is_killed_on_a_budget_that_cannot_be_read_or_a_run_nobody_knows",)),
+    Mutation(
+        "D64-6b-j", "R2: a container at rest is removed while its run may still be recording",
+        PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    return None        # the run may still be recording: the proposal's own bound decides",
+                    "    return _docker_action(c, vocab.REMOVE_CONTAINER, vocab.RUN_FINISHED)"),),
+        targets=("test_r2_a_container_at_rest_whose_run_may_still_be_recording_is_kept",)),
+    Mutation(
+        "D64-6b-k", "R2: the retention window is not applied", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if obs.host_now_us - since < th.retention_s * US:\n        return None\n", ""),),
+        targets=("test_r2_a_container_at_rest_is_removed_after_the_retention_and_not_before",)),
+    Mutation(
+        "D64-6b-l", "R8: a network with a container attached is removed", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if n.attached:\n        return False\n", ""),),
+        targets=("test_r8_a_container_of_any_state_attached_keeps_the_network",)),
+    Mutation(
+        "D64-6b-m", "R8: the name prefix alone makes a network ours", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if not (n.name.startswith(NETWORK_PREFIX) and n.has_allowlist_label):",
+                    "    if not n.name.startswith(NETWORK_PREFIX):"),),
+        targets=("test_r8_a_network_that_is_not_ours_is_never_touched",)),
+    Mutation(
+        "D64-6b-n", "R9: a file a live container mounts is removed", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if f.mounted_by_live_container:\n        return None\n", ""),),
+        targets=("test_r9_neither_condition_alone_is_enough",)),
+    Mutation(
+        "D64-6b-o", "R9: the age of a file is not checked", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if obs.host_now_us - f.mtime_us < th.file_age_s() * US:\n        return None\n", ""),),
+        targets=("test_r9_neither_condition_alone_is_enough",
+                 "test_r9_a_file_is_removed_when_unmounted_and_older_than_cap_plus_p_plus_q")),
+    Mutation(
+        "D64-6b-p", "R9: a symlink is treated as a regular file", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if not f.is_regular:", "    if False:"),),
+        targets=("test_r9_what_is_not_a_regular_file_of_ours_with_its_name_is_reported_not_removed",)),
+    Mutation(
+        "D64-6b-q", "R9: a file of another owner is removed", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    if f.uid != obs.expected_uid:", "    if False:"),),
+        targets=("test_r9_what_is_not_a_regular_file_of_ours_with_its_name_is_reported_not_removed",)),
+    Mutation(
+        "D64-6b-r", "R9: a name with a trailing newline matches the pattern", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "if CRED_NAME.fullmatch(f.name):", "if CRED_NAME.match(f.name):"),),
+        targets=("test_r9_what_is_not_a_regular_file_of_ours_with_its_name_is_reported_not_removed",)),
+    Mutation(
+        "D64-6b-s", "plan: the actions are not put in execution order", PLAN_TESTS,
+        edits=(Edit(PLAN_PY, "    actions.sort(key=lambda a: (EXECUTION_ORDER.index(a.kind), a.subject_id, a.reason_code))\n",
+                    ""),),
+        targets=("test_the_plan_is_in_the_execution_order_kills_first_files_last",)),
+    Mutation(
+        "D64-6b-t", "config: a missing key falls back to a default", CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        raw = env.get(key)\n", "        raw = env.get(key, \"60\")\n"),),
+        targets=("test_a_missing_key_is_refused_and_named",
+                 "test_with_nothing_set_every_key_is_listed_not_just_the_first")),
+    Mutation(
+        "D64-6b-u", "config: the least-the-code-implies check is gone", CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        if number < floors.get(f.name, 1):", "        if False:"),),
+        targets=("test_a_value_below_what_the_code_implies_is_refused_and_the_least_is_accepted",)),
+    Mutation(
+        "D64-6b-v", "config: a number is accepted with a sign or a unit", CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        if not text.isascii() or not text.isdigit():", "        if False:"),),
+        targets=("test_an_unusable_value_is_refused_and_named",)),
+    Mutation(
+        "D64-6b-w", "observe: a stage the function should never return is accepted", OBSERVE_TESTS,
+        edits=(Edit(OBSERVE_PY, '    if values["pipeline_stage"] not in vocab.STUCK_STAGES:', "    if False:"),),
+        targets=("test_a_value_the_contract_does_not_allow_is_refused",)),
+    Mutation(
+        "D64-6b-x", "observe: a changed column list is not noticed", OBSERVE_TESTS,
+        edits=(Edit(OBSERVE_PY, "    if columns != STUCK_COLUMNS:", "    if False:"),),
+        targets=("test_a_function_that_returns_other_columns_is_refused",)),
+    Mutation(
+        "D64-6b-y", "observe: a symlink is followed when the file is stat'ed", OBSERVE_TESTS,
+        edits=(Edit(OBSERVE_PY, "os.lstat(name, dir_fd=fd)", "os.stat(name, dir_fd=fd)"),),
+        targets=("test_files_are_listed_with_lstat_and_a_symlink_is_not_followed",)),
+    Mutation(
+        "D64-6b-z", "plan.py reads the clock", STRUCT_TESTS,
+        edits=(Edit(PLAN_PY, "import re\n\nfrom control_plane.reconciler import vocab",
+                    "import re\nimport time\n\nfrom control_plane.reconciler import vocab"),),
+        targets=("test_the_pure_modules_import_nothing_that_does_io_or_tells_the_time",)),
+    Mutation(
+        "D64-6b-za", "observe.py gains a verb that deletes a file", STRUCT_TESTS,
+        edits=(Edit(OBSERVE_PY, "def list_files(directory: str, mounted",
+                    "def _oops(path):\n    os.unlink(path)\n\n\ndef list_files(directory: str, mounted"),),
+        targets=("test_observe_calls_no_verb_that_changes_anything",)),
+    Mutation(
+        "D64-6b-zb", "observe.py gains a write to the database", STRUCT_TESTS,
+        edits=(Edit(OBSERVE_PY, "def read_run_states(conn: Any, run_ids: Iterable[str])",
+                    "def _oops(conn):\n    conn.execute(text(\"DELETE FROM tool_runs\"))\n\n\n"
+                    "def read_run_states(conn: Any, run_ids: Iterable[str])"),),
+        targets=("test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads",)),
+    Mutation(
+        "D64-6b-zc", "a threshold is configured and the plan never uses it", STRUCT_TESTS,
+        edits=(Edit(PLAN_PY, "th.retention_s * US", "86400 * US"),),
+        targets=("test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere",)),
+]
+
 
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})
