@@ -44,6 +44,7 @@ EXPECTED = {
     ("0017_approval_stages.py", "upgrade"): {"action_proposals", "approvals", "audit_log"},
     ("0017_approval_stages.py", "downgrade"): {"action_proposals"},
     ("0020_scheduler_state_narrow.py", "upgrade"): {"scheduler_state"},
+    ("0022_abandoned_stage.py", "downgrade"): {"action_proposals"},
 }
 
 

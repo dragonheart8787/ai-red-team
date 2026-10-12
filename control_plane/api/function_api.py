@@ -97,6 +97,9 @@ ALLOW = "ALLOW"
 DENY = "DENY"
 HUMAN_APPROVAL = "HUMAN_APPROVAL"
 
+#: The deny reason an abandoned proposal reports (D64): not a refusal, a proposal nobody decided.
+ABANDONED_REASONS = ("abandoned_before_decision",)
+
 
 @dataclass(frozen=True)
 class ActionOutcome:
@@ -674,9 +677,9 @@ def _drive(run: _Run, proposal_id: str) -> ActionOutcome:
         elif stage == stages.CAPABILITY_ISSUED:
             out = _dispatch(run, proposal_id)
         else:
-            # awaiting_approval / approved / dispatching / recorded / closed: nothing left for
-            # this call to do. Reached by a resumed proposal; a fresh one returns from the stage
-            # that finished it.
+            # awaiting_approval / approved / dispatching / recorded / closed / abandoned: nothing
+            # left for this call to do. Reached by a resumed proposal; a fresh one returns from
+            # the stage that finished it.
             return _outcome_from_rows(run, proposal_id)
         if out is not None and out is not _RELOAD:
             return out
@@ -1024,7 +1027,11 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
     decision, failure = row["decision"] or DENY, None
     deny, approval = (reasons if decision == DENY else ()), (
         reasons if decision == HUMAN_APPROVAL else ())
-    if stage == stages.DISPATCHING:
+    if stage == stages.ABANDONED:
+        # Never decided (D64, A8): not a refusal, and not something to retry with the same key. The
+        # caller is told which, so that "refused" and "never decided" are not the same answer.
+        decision, deny, approval, failure = DENY, ABANDONED_REASONS, (), "abandoned"
+    elif stage == stages.DISPATCHING:
         failure = "dispatch_in_progress_or_unknown_outcome"
     elif detail.startswith("approval_revalidation_failed:"):
         decision, deny, failure = DENY, tuple(detail.split(":", 1)[1].split(",")), \
@@ -1038,7 +1045,7 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
             run_row = detail.removeprefix("dedup_hit:")
     elif stage == stages.RECORDED and detail not in ("succeeded", "failed"):
         failure = detail or None
-    if stage in stages.TERMINAL:
+    if stage in stages.TERMINAL and stage != stages.ABANDONED:
         _record_provenance(run, proposal_id)
     return ActionOutcome(
         decision=decision, proposal_id=proposal_id, deny_reasons=deny,

@@ -28,8 +28,13 @@ NULL_IS_A_STATE = {
         "NULL until the decision stage: a `received` proposal has no decision yet. Every later "
         "stage is tied to a non-NULL decision by action_proposals_decision_past_received (0021).",
     ("action_proposals", "action_proposals_decision_past_received"):
-        "the stage rule itself: `decision IS NOT NULL OR pipeline_stage = 'received'` -- NULL is "
-        "legal at `received` and at no other stage (tested in test_migrations_roundtrip and "
+        "the stage rule itself: `decision IS NOT NULL OR pipeline_stage IN ('received', "
+        "'abandoned')` -- NULL is legal at those two stages and at no other (tested in "
+        "test_migrations_roundtrip and test_action_proposals_decision_stage).",
+    ("action_proposals", "action_proposals_abandoned_is_undecided"):
+        "NULL decision is the point of `abandoned` (never decided) and is tested `IS NULL`; the "
+        "reason is tested `IS NOT NULL AND = 'undecided_past_grace'`, so a NULL detail is refused "
+        "explicitly (D64 0022; a NULL-detail row is inserted and refused in "
         "test_action_proposals_decision_stage).",
     ("findings", "findings_verifier_state_check"):
         "NULL = not verified yet; the verifier states are the closed set once it has run.",

@@ -20,7 +20,7 @@ merge audit:
 | D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2). **Design checkpoint written (revision 3), decisions open (D63 → D64):** scope, identity/permissions, relation to the scheduler, audit; thirteen decisions D64-1…13. **Prerequisite and first in order: D65-A, a deadline inside the tool container (design written, decisions open).** Two defects found while designing it are ACCEPTANCE 5.74 and 5.75 | `D64_RECONCILER_DESIGN.md`, `D65A_CONTAINER_DEADLINE_DESIGN.md`, 5.72, 5.74, 5.75 |
 | D58-10 recording the defects X1–X16 | **done** (D63 closeout): X1–X5, X8, X11, X12 as they were closed (5.52, 5.53, 5.56–5.58); X6 residual, X7, X9, X10, X13, X14, X15, X16 as open rows 5.60–5.67 | ACCEPTANCE 5.60–5.67 |
 | D58-11 priority basis | not needed yet (serial scheduler) | — |
-| D58-12 planning / closed-directions ledger | **NOT built** | — |
+| D58-12 planning / closed-directions ledger | **NOT built.** Its input vocabulary is now fixed: how each pipeline stage maps to "a direction the engagement closed" is entered below (D64 step 5) | the D58-12 entry under "A recency window is not a memory" (below), ACCEPTANCE 5.78 |
 | D58-13 resource quotas | **NOT built** (the scheduler is serial: concurrency 1) | — |
 | D58-14 network isolation | **built** (D59) | `D59_NETWORK_ISOLATION_REPORT.md`, 5.52 |
 | D58-15 who selects `credential_id` | **NOT built**; an approved `ad.collect` still cannot run | 5.57 |
@@ -812,6 +812,27 @@ could not exhibit:
    `ADR_TASK_IDENTITY.md` already defines "the same work").
 2. **Transient infrastructure errors must not enter that set** (§3.2 link 2): `engine_unavailable` and
    `capability_refused`-for-lease reasons are *not* directions the engagement has closed.
+
+   **D58-12 entry for the stage `abandoned` (D64 migration 0022, ACCEPTANCE 5.78).** A proposal that was
+   received and **never decided** is a third kind of "not a direction the engagement closed": nothing was
+   refused, so the ledger must not read it as a `DENY` (the old `_outcome_from_rows` did, with no reason).
+   The ledger derives from `(pipeline_stage, stage_detail, decision)`; the mapping it must use, for the stages
+   that exist now:
+
+   | stage / detail | a closed direction? |
+   |---|---|
+   | `closed` / `decision_DENY` | yes — terminal-for-now |
+   | `closed` / `approval_denied` | yes — a person said no |
+   | `closed` / `capability_refused:*`, `approval_revalidation_failed:*` | only for reasons that are not transient (item 2) |
+   | `closed` / `dedup_hit:*` | no — it was served from an earlier run |
+   | `recorded` / `succeeded` | done, not "closed" |
+   | `recorded` / `failed` | a failed attempt, the failure ladder's (D58-6) |
+   | `recorded` / `unknown_outcome` | no — a person's (I7) |
+   | `awaiting_approval`, `approved`, `dispatching`, `capability_issued`, `decided`, `received` | open |
+   | **`abandoned` / `undecided_past_grace`** | **no — open, re-proposable under a new idempotency key** (the old key keeps answering `abandoned_before_decision`) |
+
+   A new stage is a new row here: `tests/test_stage_vocabulary.py` (ST5) fails until the stage is classified,
+   and this table is where the planner's classification is written down.
 3. **Planning must be change-triggered.** In D40's rounds 3 and 4 the Supervisor spent a real model call to
    conclude "nothing left to do" — fine once; with N engagements × a tick every 30 s it is a standing
    cost and, per Finding #4, a categorical assessment that flips under a frozen state cannot serve as the

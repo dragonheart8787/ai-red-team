@@ -53,6 +53,9 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from control_plane.state.schema_snapshot import diff as snapshot_diff
+from control_plane.state.schema_snapshot import snapshot_schema
+
 REPO = Path(__file__).resolve().parents[1]
 RETIRED = "no_usable_block_for_address"
 REWRITTEN_TO = "scope_narrower_than_sandbox_minimum"
@@ -176,6 +179,12 @@ class Scratch:
             return {k: [tuple(r) for r in conn.execute(text(q), s).all()]
                     for k, q in queries.items()}
 
+    def snapshot(self) -> dict[str, str]:
+        """Everything ``snapshot_schema`` covers (COMMENTs, ACLs, RLS flags, function attributes),
+        which ``fingerprint`` above does not."""
+        with self.engine.begin() as conn:
+            return snapshot_schema(conn, self.name)
+
     def drop(self) -> None:
         self.engine.dispose()
         with self.admin.begin() as conn:
@@ -211,6 +220,7 @@ def test_an_empty_schema_upgrades_to_the_script_head(scratch):
 def test_the_chain_goes_down_to_0015_and_to_base_and_comes_back_identical(scratch):
     scratch.alembic("upgrade", "head")
     first = scratch.fingerprint()
+    first_snapshot = scratch.snapshot()
 
     # --- down to 0015: what 0016-0020 added is gone, what was there before is not
     scratch.alembic("downgrade", "0015")
@@ -222,6 +232,8 @@ def test_the_chain_goes_down_to_0015_and_to_base_and_comes_back_identical(scratc
     assert {"proposal_id", "action", "target"} <= proposals           # the table itself is intact
     scratch.alembic("upgrade", "head")
     assert scratch.fingerprint() == first, "head -> 0015 -> head changed the schema"
+    assert not snapshot_diff(first_snapshot, scratch.snapshot()), snapshot_diff(
+        first_snapshot, scratch.snapshot())
 
     # --- and the whole way down
     scratch.alembic("downgrade", "base")
@@ -229,6 +241,10 @@ def test_the_chain_goes_down_to_0015_and_to_base_and_comes_back_identical(scratc
     scratch.alembic("upgrade", "head")
     assert scratch.revision() == _head()
     assert scratch.fingerprint() == first, "head -> base -> head changed the schema"
+    assert not snapshot_diff(first_snapshot, scratch.snapshot()), (
+        "head -> base -> head changed something the fingerprint does not look at (a COMMENT, an "
+        "ACL, an RLS flag, a function attribute):\n"
+        + "\n".join(snapshot_diff(first_snapshot, scratch.snapshot())))
 
 
 def _bind(conn, engagement_id: str) -> None:
@@ -413,7 +429,9 @@ def test_0021_blocks_on_an_undecided_proposal_past_received_and_leaves_nothing_b
     scratch.alembic("upgrade", "0021")
     assert scratch.revision() == "0021"
 
-    for stage in STAGES:                                         # every stage, no decision
+    for stage in STAGES:                                         # every stage 0021 knows
+        if stage == "abandoned":                                 # (0022's: not legal here yet)
+            continue
         if stage == RECEIVED:
             _set_stage(scratch, eid, pid, stage, None)
             continue
@@ -524,3 +542,156 @@ def test_0017_backfills_the_right_proposals_and_its_downgrade_works_with_rows(sc
             "AND relkind = 'r' AND relrowsecurity AND NOT relforcerowsecurity"),
             {"s": scratch.name})]
     assert off == [], f"FORCE ROW LEVEL SECURITY is off after the migrations for: {off}"
+
+
+# ---------------------------------------------------------------------------------------------
+# 0022: the stage `abandoned` -- every stage has a row, and the COMMENTs come back (ST7)
+# ---------------------------------------------------------------------------------------------
+
+#: name -> (stage, detail, decision) for every stage 0021 knows; `abandoned` joins at 0022.
+SHAPES_0021 = {
+    "received": ("received", None, None),
+    "decided": ("decided", None, "ALLOW"),
+    "awaiting_approval": ("awaiting_approval", None, "HUMAN_APPROVAL"),
+    "approved": ("approved", "APPR-X", "HUMAN_APPROVAL"),
+    "capability_issued": ("capability_issued", None, "ALLOW"),
+    "dispatching": ("dispatching", None, "ALLOW"),
+    "recorded": ("recorded", "succeeded", "ALLOW"),
+    "closed": ("closed", "decision_DENY", "DENY"),
+}
+ABANDONED_SHAPE = ("abandoned", "undecided_past_grace", None)
+
+#: What 0022 changes, as snapshot keys -- and nothing else may change.
+CHANGED_BY_0022 = {
+    "constraint:action_proposals.action_proposals_pipeline_stage_check",
+    "constraint:action_proposals.action_proposals_decision_past_received",
+    "constraint:action_proposals.action_proposals_abandoned_is_undecided",       # (new)
+    "index:action_proposals_open_stage",
+    "column:action_proposals.pipeline_stage",                                    # its COMMENT
+}
+
+
+def _seed_stages(scratch: Scratch, shapes: dict) -> tuple[str, dict[str, str]]:
+    eid = f"ENG-MIG-{uuid.uuid4().hex[:8]}"
+    ids: dict[str, str] = {}
+    with scratch.engine.begin() as conn:
+        _bind(conn, eid)
+        conn.execute(text("INSERT INTO engagements (engagement_id, customer_id, "
+                          "policy_snapshot_version) VALUES (:e, 'CUST', 1)"), {"e": eid})
+        for name, (stage, detail, decision) in shapes.items():
+            ids[name] = _add_proposal(conn, eid)
+            conn.execute(text(
+                "UPDATE action_proposals SET pipeline_stage = :s, stage_detail = :d, "
+                "decision = :x WHERE proposal_id = :p"),
+                {"s": stage, "d": detail, "x": decision, "p": ids[name]})
+    return eid, ids
+
+
+def _all_stages(scratch: Scratch, eid: str, ids: dict[str, str]) -> dict[str, tuple]:
+    return {name: _stage_of(scratch, eid, pid) for name, pid in ids.items()}
+
+
+def _force_off(scratch: Scratch) -> list[str]:
+    with scratch.engine.begin() as conn:
+        return [r[0] for r in conn.execute(text(
+            "SELECT relname FROM pg_class WHERE relnamespace = CAST(:s AS regnamespace) "
+            "AND relkind = 'r' AND relrowsecurity AND NOT relforcerowsecurity"),
+            {"s": scratch.name})]
+
+
+def test_0022_up_and_down_with_a_row_at_every_stage_and_every_comment_restored(scratch):
+    scratch.alembic("upgrade", "0021")
+    eid, ids = _seed_stages(scratch, SHAPES_0021)
+    before_rows = _all_stages(scratch, eid, ids)
+    s21 = scratch.snapshot()
+    assert len(before_rows) == 8
+
+    # --- up: only the named objects change, no row moves, and the new stage is legal
+    scratch.alembic("upgrade", "0022")
+    assert scratch.revision() == "0022"
+    s22 = scratch.snapshot()
+    changed = {line.split(": ", 1)[1].split("  [")[0].strip() for line in snapshot_diff(s21, s22)
+               if not line.startswith(("~ changed:       alembic", "~ changed:       relation"))}
+    assert changed >= CHANGED_BY_0022, (changed, snapshot_diff(s21, s22))
+    unexpected = {k for k in changed if k not in CHANGED_BY_0022 and not k.startswith("alembic:")}
+    assert not unexpected, f"0022 changed something it does not name: {unexpected}"
+    assert _all_stages(scratch, eid, ids) == before_rows
+    assert "abandoned" in s22["constraint:action_proposals.action_proposals_pipeline_stage_check"]
+    assert "abandoned" in s22[
+        "constraint:action_proposals.action_proposals_decision_past_received"]
+    assert "comment=NULL decision is legal at `received`" in s22[
+        "constraint:action_proposals.action_proposals_decision_past_received"]
+    assert "comment=An abandoned proposal was never decided" in s22[
+        "constraint:action_proposals.action_proposals_abandoned_is_undecided"]
+    assert "'abandoned'" in s22["index:action_proposals_open_stage"]
+
+    # --- a row at the new stage too, written the way the application writes it
+    try:
+        with scratch.engine.begin() as conn:
+            _bind(conn, eid)
+            ids["abandoned"] = _add_proposal(conn, eid)
+            conn.execute(text(
+                "UPDATE action_proposals SET pipeline_stage = 'abandoned', "
+                "stage_detail = 'undecided_past_grace' WHERE proposal_id = :p"),
+                {"p": ids["abandoned"]})
+    except IntegrityError as refused:
+        pytest.fail(f"after 0022 the database refuses an abandoned proposal with its one reason: "
+                    f"{str(refused.orig).splitlines()[0]}")
+    with_abandoned = _all_stages(scratch, eid, ids)
+    assert with_abandoned["abandoned"] == ("abandoned", "undecided_past_grace")
+    # the database refuses an abandoned row with no reason, and one with a decision
+    for detail, decision in ((None, None), ("undecided_past_grace", "ALLOW"), ("other", None)):
+        with pytest.raises(IntegrityError):
+            with scratch.engine.begin() as conn:
+                _bind(conn, eid)
+                conn.execute(text(
+                    "UPDATE action_proposals SET pipeline_stage = 'abandoned', stage_detail = :d, "
+                    "decision = :x WHERE proposal_id = :p"),
+                    {"d": detail, "x": decision, "p": ids["decided"]})
+
+    # --- down: the abandoned row is moved back to `received`, and everything else is left alone
+    scratch.alembic("downgrade", "0021")
+    assert scratch.revision() == "0021"
+    after_down = _all_stages(scratch, eid, ids)
+    assert after_down["abandoned"] == ("received", None), "the abandoned proposal was not moved"
+    assert {k: v for k, v in after_down.items() if k != "abandoned"} == before_rows
+    assert not snapshot_diff(s21, scratch.snapshot()), "\n".join(
+        snapshot_diff(s21, scratch.snapshot()))
+    assert _force_off(scratch) == [], "FORCE ROW LEVEL SECURITY was left off by the downgrade"
+    assert set(scratch.force_rls()) == SCHEDULER_TABLES and all(scratch.force_rls().values())
+
+    # --- and up again: identical to the first time
+    scratch.alembic("upgrade", "head")
+    assert scratch.revision() == _head()
+    assert not snapshot_diff(s22, scratch.snapshot()), "\n".join(
+        snapshot_diff(s22, scratch.snapshot()))
+    assert _all_stages(scratch, eid, ids)["abandoned"] == ("received", None)
+
+
+def test_0022_downgrade_fails_cleanly_if_it_cannot_move_the_rows(scratch):
+    """The downgrade's data statement runs inside its transaction. A failure between the move and
+    the end leaves the committed schema exactly as it was at 0022, FORCE included."""
+    scratch.alembic("upgrade", "0022")
+    eid, ids = _seed_stages(scratch, {**SHAPES_0021, "abandoned": ABANDONED_SHAPE})
+    before = scratch.snapshot()
+    broken = Path(scratch.ini).parent / "migrations" / "versions" / "0022_abandoned_stage.py"
+    source = broken.read_text()
+    marker = '    op.execute(f"ALTER TABLE action_proposals DROP CONSTRAINT {ABANDONED_CHECK};")\n'
+    assert source.count(marker) == 1
+    broken.write_text(source.replace(marker, '    op.execute("SELECT 1/0;")\n' + marker))
+
+    scratch.alembic_fails("downgrade", "0021")
+
+    assert scratch.revision() == "0022"
+    assert not snapshot_diff(before, scratch.snapshot())              # incl. FORCE RLS and COMMENTs
+    assert _stage_of(scratch, eid, ids["abandoned"]) == ("abandoned", "undecided_past_grace")
+
+
+def test_0022_downgrade_moves_every_abandoned_row_not_only_one(scratch):
+    scratch.alembic("upgrade", "0022")
+    shapes = {f"a{i}": ABANDONED_SHAPE for i in range(5)} | {"decided": SHAPES_0021["decided"]}
+    eid, ids = _seed_stages(scratch, shapes)
+    scratch.alembic("downgrade", "0021")
+    stages_now = _all_stages(scratch, eid, ids)
+    assert [v for k, v in stages_now.items() if k.startswith("a")] == [("received", None)] * 5
+    assert stages_now["decided"] == ("decided", None)

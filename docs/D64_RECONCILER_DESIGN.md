@@ -351,6 +351,14 @@ more — stated, not hidden; D64-11).
 
 ### 1.8 R6 — the terminal stage `abandoned`, migration 0022, and the grace period
 
+**Implemented (D64 implementation step 5, ACCEPTANCE 5.78).** A1–A9 below were confirmed as the definition, with
+three additions that are built: **A7** has a coherence check (`assert_coherent` refuses an abandoned proposal that
+has a capability, a run, an approval or a `policy.decided` record) and race tests in both orders plus a genuinely
+concurrent one; **A5** has a registered vocabulary (`stages.ABANDON_REASONS`, held equal to the database CHECK by a
+test); and the planner's side is entered as the **D58-12** mapping in the ADR. `stages.abandon()` is the one writer
+(compare-and-set on `received` and on the `stage_updated_at` the reconciler planned from). The text below is the
+design as confirmed; where the migration differs from it, the migration's docstring is the record.
+
 *Why a new stage, not a looser `closed`.* Migration 0021 made `closed` (and every stage past `received`) require
 a decision. A proposal stuck at `received` has none, and "closed" would say a decision was made. Revision 1 left
 them alone; a terminal stage of their own makes **"undecided" and "abandoned" visible in the stage while the
@@ -924,6 +932,11 @@ run is started and has its own tests; with it, the reconciler's container kill b
 are written for the world in which it exists.
 
 ## 9. Shared test utilities: `snapshot_schema()` and the template database
+
+**Implemented (step 5):** `control_plane/state/schema_snapshot.py` (`snapshot_schema(conn, schema)`, `diff()`); the
+round-trip tests in `test_migrations_roundtrip.py` compare it after every step, and `tests/test_schema_snapshot.py`
+shows with 18 positive controls that each kind of change (a COMMENT, an ACL, a FORCE flag, a function's
+`SECURITY DEFINER` or `search_path`, a trigger's state, …) is seen. The template-database helper is not built yet.
 
 **The problem, from two incidents.** A restore that compared constraint *definitions* but not their COMMENTs lost
 a COMMENT (D63-j, and again in revision 2 of this document, caught by the next full-suite run). The existing
