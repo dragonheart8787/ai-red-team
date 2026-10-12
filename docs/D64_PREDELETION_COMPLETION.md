@@ -15,9 +15,6 @@ number chosen without a measurement. Experiments are numbered from E22 (E1–E21
 | 6 | more than 5,000 stuck rows: paging, a bound on a pass, back-off | §6 here, ACCEPTANCE 5.88 |
 | 7 | four open questions answered (verb allow-list, negative experiments, `ABANDON_CALLERS`, concurrency) | §7 here, ACCEPTANCE 5.89 |
 
-Sections 2 and 3 are in this commit (documentation only: a report, a measurement and a design); sections 4 to 7 are added by
-the commits that build what they describe.
-
 ---
 
 ## 2. The development-database cleanup of 2026-10-12 (item 2)
@@ -218,3 +215,91 @@ Experiments, all on this machine, all read-only against the database and with re
   conflict window. If that matters at build time the alternative is a small `sandbox_networks` registry maintained by the
   dispatcher; not needed at the sizes measured here.
 
+---
+
+## 4. The order of change and record (item 4) — **built**
+
+### 4.1 The gap, as 6d left it
+
+For a proposal transition the sequence was: commit the conditional `UPDATE` → read it back in a new transaction → write
+the audit record on its own connection. A `kill -9` between the first commit and the third left a state change with
+no record. 6d could only bound it ("at most the number of kills", CT3). That is *under-recording*, the direction
+`control_plane/audit/logger.py` calls the dangerous one. For a Docker object or a file the same gap was wider and less
+visible: the object was gone and nothing said it had been about to be.
+
+### 4.2 Proposal transitions: change and record are one transaction
+
+```
+engagement_scope(engagement)  ──  BEGIN
+  UPDATE action_proposals ... WHERE stage = :expected AND stage_updated_at = :planned     (compare-and-set)
+  [UPDATE tool_runs ...                                              only for mark_unknown_outcome]
+  INSERT INTO audit_log (...)   reconciler.proposal_abandoned | _closed | dispatch_unknown_outcome
+COMMIT                                                                                   -- both rows, or neither
+```
+
+* **One new writer**, `record_audit_in_transaction(conn, ...)` in `control_plane/audit/logger.py`: the same validation, the
+  same CRITICAL log line as `record_audit`, but on the caller's connection. `record_audit` still takes no `conn`. The
+  reason it takes none — a *refusal* has to be recorded even if the caller then rolls back — is the opposite of this case:
+  the record says "this transition committed", so it has to roll back with it. The logger's docstring now says so.
+* **Pinned callers.** `record_audit_in_transaction` is imported by `reconciler/emit.py` and nothing else in the product
+  (an AST scan of `control_plane`, `tool_gateway`, `agents`, `scripts`); `emit.emit_in_transaction` is called by the service
+  alone; `emit.emit` now **refuses** the three proposal events, so a future code path cannot write them on the audit path's
+  own connection by accident. The act half still imports no audit module: the service hands it a `record(conn, action)`
+  hook, called once, inside the `with engagement_scope` block that contains the `UPDATE` (a structural test pins both).
+* **If the insert fails** the transaction rolls back, the result is `failed / audit_failed`, nothing was changed, and the
+  service stops with `audit_failed` at the end of the pass as before. A record the *database* refuses (row-level security on
+  another engagement's id) takes the same road; a writer that swallowed that error would leave the transaction aborted,
+  PostgreSQL would answer `COMMIT` with a rollback without an error, and the act half would believe it had moved the row —
+  mutation `D64-P4-c` shows the tests catch it.
+* **The read-back stays**, as detection: a transition that is no longer visible afterwards is `failed /
+  not_changed_after_update`. It does not retract the record, which says the transition committed — true.
+* **What a record now means for these three events: if and only if.** The caveat in the logger's docstring ("an entry can
+  outlive the transaction it describes") does not apply to them. Shown with a real `kill -9` of a child process at three
+  points (`tests/test_reconciler_order.py`): before the record is written, after it is written and before the commit, and
+  after the commit — the first two leave neither row, the third both.
+
+### 4.3 Docker objects and host files: intent, then act, then verify
+
+A kill, a removal or an unlink cannot join a database transaction, and a removed container cannot be un-removed. What can
+be done is to make *the intention* durable before the irreversible call:
+
+```
+fresh inspect (full id, labels, state, mounts, age)        changed_since_plan / already_gone  →  no event at all
+  ↓ still ours, still removable
+INSERT audit  reconciler.action_intended {kind, subject_id, reason_code}     -- own connection, COMMITTED
+  ↓ if this write fails: no call is made, result failed / audit_failed
+the irreversible call (kill / remove / unlink)
+  ↓
+verification by a second observation (as in 6c)
+  ↓ verified                                       ↓ not verified
+reconciler.container_removed | _killed | …         reconciler.action_failed
+```
+
+* The intent is written **after** the last check that can decline and **immediately before** the call, in the same function
+  (a structural test checks that every `CHANGED`/`already_gone` exit comes before `declared(...)` and `declared(...)` before
+  the call). A declined action leaves no intent, so *an intent always means "the call was about to be made"*.
+* Every attempt that reaches the call ends in exactly one of: a result event, `action_failed`, or — if the process died
+  between the call and its verification — **nothing**. The third case was invisible before; it is now an intent with no
+  later result or failure for the same kind and subject, and `control_plane/audit/query.py::unresolved_reconciler_intents`
+  lists it. Shown with a real container: a child process removes it for real and is `SIGKILL`ed the instant the removal
+  returns; the container is gone, the trail holds exactly one event (the intent), and the query returns it with kind,
+  subject and reason. **Not self-healing and not made to look so**: the next pass plans from what exists (an object still
+  there gets a new intent; one that is gone needs nothing), and a person reads the list.
+* **Files: one result event per file** (`reconciler.files_removed {kind, count: 1}`, the file name as the row's `subject_id`)
+  instead of one count per pass, so an unlink intent has a result to be paired with. A random temporary file name is an id
+  under the payload whitelist; it is not a path.
+* **Bounded volume.** The plan re-plans a failing action every pass; with an intent per attempt that would be an event per
+  minute per object for ever. So after a *failed* attempt the same `(kind, subject)` is not attempted again by this
+  process for `RECONCILER_RETRY_AFTER_FAILURE_S` (new, required, no default; `.env.example` says 1,800 s `[N]`). A pass that
+  holds an action back says so (`PassReport.held_back`). The failure is still reported once per object and reason.
+* **Not done:** a two-phase protocol between Docker and PostgreSQL. There is none to be had; the intent record is the
+  honest alternative, and the flag that would let any of this run is still off.
+
+### 4.4 Tests and mutations
+
+`tests/test_reconciler_order.py` (31 tests), new cases in `test_reconciler_emit.py`, `test_reconciler_service.py` and
+`test_reconciler_structure.py`; 13 mutations `D64-P4-a`…`m` (the record after the commit in a second transaction; a failing
+record ignored; the writer returning instead of raising; a kill without its intent; the intent before the check that can
+decline; an unwritable intent ignored; a file unlinked without its intent; the unresolved-intents query accepting any later
+event; the hold-back off; a proposal event written twice; `emit` taking a proposal event again; `emit_in_transaction` taking
+any event; another module importing the in-transaction writer), all valid.

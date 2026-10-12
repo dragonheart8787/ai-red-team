@@ -615,7 +615,7 @@ and S2–S5 each have a mutation (`D64-6a-a`…`j`). Where the build differs fro
   the proxy-run bound for every run, which is the longer one.
 * **`reconciler_run_states`** refuses a NULL and more than 2,000 ids with a fixed error text, because an absent id
   means *orphan*.
-* **Not built:** the conflict-driven network removal of D64-8 (a CIDR cannot be returned under "ids, enums, integers").
+* **Not built:** the conflict-driven network removal of D64-8 (a CIDR cannot be returned under "ids, enums, integers"). **Designed since** (name hash + last use + conflict count, no range crosses; `docs/D64_PREDELETION_COMPLETION.md` §3, ACCEPTANCE 5.85); one decision open (D64-N1).
 
 **Recommendation (D64-2): the function.** It is the narrowest of the four: no table is readable, the budget
 leaves the database as one integer, and the function is the one place that says what the reconciler may know.
@@ -813,6 +813,8 @@ other end by 5.74/5.78.
 | CT5 | real Docker: the reconciler runs a pass while a real run (the `nmap` image) is inside its deadline | the live run's container is not touched |
 
 ## 4. Audit
+
+> **Revised at the pre-deletion completion (item 4, ACCEPTANCE 5.86; `docs/D64_PREDELETION_COMPLETION.md` §4).** Where this section says an action is audited *after* it was verified, that is now true of the Docker and file result events only. A proposal transition and its event are one database transaction; a kill, a removal or an unlink is preceded by `reconciler.action_intended`, and an intent with no result is listed by `audit.query.unresolved_reconciler_intents`. The event list below gains `reconciler.action_intended`; `reconciler.files_removed` is one event per file (`count` 1) instead of one per pass.
 
 Same rules as D62 `[D: D62 report]`: a **closed list** of events; payloads of **ids, closed reason codes and
 counts only** (no target, CIDR, command or path); each event has a schema and `emit` refuses anything else;

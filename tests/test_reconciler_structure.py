@@ -198,8 +198,10 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
 # --- every configured number matters ---------------------------------------------------------
 
 #: configured here, used by a later step: the sweep's period belongs to the service (6d), the
-#: verification wait to the act half (6c), the failure summary's period to the service (6d)
-USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s", "summary_period_s"}
+#: verification wait to the act half (6c), the failure summary's period and the retry-after-failure
+#: wait to the service (6d, item 4)
+USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s", "summary_period_s",
+                  "retry_after_failure_s"}
 
 
 def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():
@@ -431,3 +433,109 @@ def test_only_emit_writes_the_audit_trail_and_only_through_its_whitelist():
                    and n.name == "emit")
     first_call = next(c for c in ast.walk(emit_fn) if isinstance(c, ast.Call))
     assert getattr(first_call.func, "id", "") == "validate"
+
+
+# =============================================================================================
+# the order of change and record (D64 pre-deletion item 4, ACCEPTANCE 5.86)
+# =============================================================================================
+
+def _product_files():
+    yield from (REPO / "control_plane").rglob("*.py")
+    for top in ("tool_gateway", "agents", "scripts"):
+        if (REPO / top).exists():
+            yield from (REPO / top).rglob("*.py")
+
+
+def _names_used(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text())
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    names |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
+    return names
+
+
+def test_the_in_transaction_audit_writer_is_used_by_the_reconcilers_emit_alone():
+    """It writes on the caller's connection, so it commits and rolls back with the caller. That is
+    right for a record that says "this change committed" and wrong for a refusal that must survive
+    a rollback; the other writer exists for that, and takes no connection."""
+    users = {str(p.relative_to(REPO)) for p in _product_files()
+             if "record_audit_in_transaction" in _names_used(p)}
+    assert users == {"control_plane/reconciler/emit.py"}, users       # (logger.py only defines it)
+
+
+def test_record_audit_still_takes_no_connection():
+    import inspect
+
+    from control_plane.audit.logger import record_audit, record_audit_in_transaction
+    assert "conn" not in inspect.signature(record_audit).parameters
+    assert list(inspect.signature(record_audit_in_transaction).parameters)[:1] == ["conn"]
+
+
+def test_the_in_transaction_event_writer_is_called_by_the_service_alone():
+    users = {n for n in EVERY if "emit_in_transaction" in _names_used(PKG / f"{n}.py")}
+    assert users == {"service"}, users                    # (emit.py only defines it)
+
+
+def _function(name: str, function: str) -> ast.FunctionDef:
+    return next(n for n in ast.walk(_tree(name)) if isinstance(n, ast.FunctionDef)
+                and n.name == function)
+
+
+def _calls(node: ast.AST, name: str) -> list[ast.Call]:
+    out = []
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            f = n.func
+            if (isinstance(f, ast.Name) and f.id == name) or (
+                    isinstance(f, ast.Attribute) and f.attr == name):
+                out.append(n)
+    return out
+
+
+IRREVERSIBLE_CALLS = [
+    ("act_docker", "_kill", "kill"), ("act_docker", "_remove_container", "remove"),
+    ("act_docker", "_remove_network", "remove"), ("act_files", "_unlink", "unlink")]
+
+
+def test_every_irreversible_call_comes_after_the_intent_in_the_same_function():
+    for module, function, verb in IRREVERSIBLE_CALLS:
+        node = _function(module, function)
+        destructive = [c for c in _calls(node, verb)]
+        intents = _calls(node, "declared")
+        assert destructive and intents, (module, function)
+        assert min(c.lineno for c in destructive) > max(c.lineno for c in intents), (
+            f"{module}.{function}: the irreversible `{verb}` is not after `declared`")
+        # and every way of declining before the call comes before the intent: an intent always
+        # means "the call was about to be made"
+        first_call = min(c.lineno for c in destructive)
+        declines = [
+            r for r in ast.walk(node) if isinstance(r, ast.Return)
+            and isinstance(r.value, ast.Call) and getattr(r.value.func, "id", "") == "Result"
+            and len(r.value.args) > 1
+            and getattr(r.value.args[1], "id", "") in ("CHANGED", "GONE")
+            and r.lineno < first_call]
+        assert declines, (module, function)
+        assert all(r.lineno < min(c.lineno for c in intents) for r in declines), (
+            f"{module}.{function}: a decline comes after the intent was written")
+
+
+def test_the_transitions_record_is_written_inside_its_transaction_block():
+    """The record hook is called once, inside the very ``with engagement_scope`` block that makes
+    the change -- not in a second block after it, which would be a second transaction."""
+    node = _function("act", "_transition")
+    blocks = [w for w in ast.walk(node) if isinstance(w, ast.With)
+              and any(getattr(i.context_expr.func, "id", "") == "engagement_scope"
+                      for i in w.items if isinstance(i.context_expr, ast.Call))
+              and _calls(w, "_move")]
+    assert len(blocks) == 1, "the change is made in one engagement_scope block"
+    inside = _calls(blocks[0], "record")
+    assert len(inside) == 1, "the record hook is called once, in the block that makes the change"
+    assert min(c.lineno for c in _calls(blocks[0], "_move")) < inside[0].lineno
+    assert len(_calls(node, "record")) == 1, "and nowhere else"
+
+
+def test_the_service_hands_the_act_half_both_hooks():
+    calls = [c for c in _calls(_tree("service"), "carry_out")]
+    assert len(calls) == 1
+    assert {k.arg for k in calls[0].keywords} >= {"record", "intend", "on_verified"}
+

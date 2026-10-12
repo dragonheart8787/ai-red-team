@@ -68,7 +68,8 @@ REPO = Path(__file__).resolve().parents[1]
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
-    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600)
+    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
+    retry_after_failure_s=1800)
 SCHED_CIDR = "10.96.62.0/24"
 
 
@@ -388,7 +389,8 @@ def test_rt6_two_passes_acting_on_the_same_action_move_one_row_and_write_one_eve
     def act_once(r):
         def go_():
             barrier.wait(10)
-            results.extend(act.carry_out([same], r.settings, on_verified=r._audit))
+            results.extend(act.carry_out([same], r.settings, record=r._record,
+                                          on_verified=r._audit))
         return go_
 
     run_threads(act_once(one), act_once(two))

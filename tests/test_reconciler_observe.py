@@ -34,7 +34,8 @@ from tests.test_reconciler_reader import STUCK_COLUMNS, M
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
-    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600)
+    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
+    retry_after_failure_s=1800)
 
 
 # ---------------------------------------------------------------------------------------------

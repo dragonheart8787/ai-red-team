@@ -33,6 +33,7 @@ from control_plane.reconciler.outcome import (
     SKIPPED_OFF,
     Result,
 )
+from control_plane.state.db import engagement_scope
 from tests.helpers import committing_scope
 
 DESIGN_EVENTS = {
@@ -40,7 +41,8 @@ DESIGN_EVENTS = {
     "reconciler.proposal_abandoned", "reconciler.proposal_closed",
     "reconciler.dispatch_unknown_outcome", "reconciler.container_killed",
     "reconciler.container_removed", "reconciler.proxy_removed", "reconciler.network_removed",
-    "reconciler.files_removed", "reconciler.action_failed", "reconciler.failure_summary",
+    "reconciler.files_removed", "reconciler.action_intended", "reconciler.action_failed",
+    "reconciler.failure_summary",
 }
 
 GOOD = {
@@ -55,7 +57,9 @@ GOOD = {
     emit.CONTAINER_REMOVED: {"run_id": "RUN-1", "reason_code": "run_finished"},
     emit.PROXY_REMOVED: {"run_id": "RUN-1", "reason_code": "owner_run_ended"},
     emit.NETWORK_REMOVED: {"network_id": "0123456789ab", "reason_code": "idle_sweep"},
-    emit.FILES_REMOVED: {"kind": "tls_leaf", "count": 2},
+    emit.FILES_REMOVED: {"kind": "tls_leaf", "count": 1},
+    emit.ACTION_INTENDED: {"kind": "remove_container", "subject_id": "RUN-1",
+                           "reason_code": "run_finished"},
     emit.ACTION_FAILED: {"kind": "kill_container", "subject_id": "RUN-1",
                          "reason_code": "still_running_after_kill"},
     emit.FAILURE_SUMMARY: {"instance_id": "RECON-abc", "passes": 12,
@@ -134,9 +138,34 @@ def test_an_event_of_another_name_is_refused_even_with_a_valid_payload():
 
 
 def test_an_engagement_scoped_event_needs_an_engagement_and_a_global_one_ignores_it():
-    for event in ENGAGEMENT_SCOPED:
+    for event in ENGAGEMENT_SCOPED - set(emit.TRANSACTIONAL_EVENTS):
         with pytest.raises(PayloadRejected):
             emit.emit(event, GOOD[event])
+
+
+def test_a_proposal_event_is_never_written_on_the_audit_paths_own_connection():
+    """These three say "this transition committed": written apart from it, a crash could leave the
+    change without its record or the record without its change."""
+    assert set(emit.TRANSACTIONAL_EVENTS) == {
+        emit.PROPOSAL_ABANDONED, emit.PROPOSAL_CLOSED, emit.DISPATCH_UNKNOWN_OUTCOME}
+    for event in emit.TRANSACTIONAL_EVENTS:
+        with pytest.raises(PayloadRejected):
+            emit.emit(event, GOOD[event], engagement_id="ENG-1")
+
+
+def test_the_in_transaction_writer_takes_proposal_events_only_and_needs_an_engagement(
+        engagement_id):
+    with engagement_scope(engagement_id) as conn:
+        for event in set(emit.EVENTS) - set(emit.TRANSACTIONAL_EVENTS):
+            with pytest.raises(PayloadRejected):
+                emit.emit_in_transaction(conn, event, GOOD[event], engagement_id=engagement_id)
+        with pytest.raises(PayloadRejected):
+            emit.emit_in_transaction(conn, emit.PROPOSAL_CLOSED, GOOD[emit.PROPOSAL_CLOSED],
+                                     engagement_id="")
+        with pytest.raises(PayloadRejected):          # and the whitelist applies here too
+            emit.emit_in_transaction(
+                conn, emit.PROPOSAL_CLOSED,
+                {**GOOD[emit.PROPOSAL_CLOSED], "target": "10.0.0.5"}, engagement_id=engagement_id)
 
 
 def test_the_reason_codes_of_events_are_the_plans_and_acts_vocabularies():
@@ -148,7 +177,8 @@ def test_the_reason_codes_of_events_are_the_plans_and_acts_vocabularies():
         for candidate in (*vocab.REASONS["close"], *vocab.REASONS["abandon"],
                           *vocab.REASONS["mark_unknown_outcome"], *vocab.REASONS["kill_container"],
                           *vocab.REASONS["remove_container"], *vocab.REASONS["remove_proxy"],
-                          *vocab.REASONS["remove_network"], *DETAIL_CODES):
+                          *vocab.REASONS["remove_network"], *vocab.REASONS["unlink_file"],
+                          *DETAIL_CODES):
             try:
                 check(candidate)
                 accepted.add(candidate)
@@ -164,6 +194,9 @@ def test_the_reason_codes_of_events_are_the_plans_and_acts_vocabularies():
     assert codes(emit.PROXY_REMOVED) == set(vocab.REASONS["remove_proxy"])
     assert codes(emit.NETWORK_REMOVED) == set(vocab.REASONS["remove_network"])
     assert codes(emit.ACTION_FAILED) == set(DETAIL_CODES)
+    irreversible = {r for k in (*vocab.DOCKER_ACTIONS, vocab.UNLINK_FILE)
+                    for r in vocab.REASONS[k]}
+    assert codes(emit.ACTION_INTENDED) == irreversible
 
 
 # --- from a verified result to an event -------------------------------------------------------
@@ -204,9 +237,14 @@ def test_a_verified_result_becomes_exactly_its_event_and_validates(action, event
     assert emit.validate(made[0], made[1]) == payload
 
 
-def test_a_removed_file_has_no_event_of_its_own_it_is_counted():
-    a = act(vocab.UNLINK_FILE, "tls_leaf", subject_id="cyberorch-tls-abcd1234.pem")
-    assert emit.for_result(Result(a, DONE)) is None
+def test_a_removed_file_is_one_event_with_the_name_as_its_subject():
+    a = act(vocab.UNLINK_FILE, "tls_leaf", subject_id="cyberorch-tls-abcd1234.pem",
+            name="cyberorch-tls-abcd1234.pem")
+    event, payload, engagement, subject_type, subject_id = emit.for_result(Result(a, DONE))
+    assert (event, payload, engagement, subject_type, subject_id) == (
+        emit.FILES_REMOVED, {"kind": "tls_leaf", "count": 1}, None, "host_file",
+        "cyberorch-tls-abcd1234.pem")
+    assert emit.validate(event, payload) == payload
 
 
 @pytest.mark.parametrize("outcome", [DRY_RUN, LOST_RACE, SKIPPED_OFF, GONE, CHANGED, FAILED])
@@ -244,19 +282,28 @@ def _written(engagement_id: str | None, event: str):
                             {"e": event}).mappings().one()
 
 
+def _write(event, payload, engagement_id, **kw):
+    """Write ``event`` the way the service does: a proposal event inside the transaction of the
+    engagement's connection, every other one on the audit path's own connection."""
+    if event in emit.TRANSACTIONAL_EVENTS:
+        with engagement_scope(engagement_id) as conn:
+            emit.emit_in_transaction(conn, event, payload, engagement_id=engagement_id, **kw)
+    else:
+        emit.emit(event, payload, engagement_id=engagement_id, **kw)
+
+
 @pytest.mark.parametrize("event", sorted(DESIGN_EVENTS))
 def test_each_event_is_written_with_the_right_scope_and_exactly_its_payload(event, engagement_id):
     scoped = event in ENGAGEMENT_SCOPED
     payload = GOOD[event]
-    if event == emit.ACTION_FAILED:                  # either: with an engagement it is theirs
+    if event in (emit.ACTION_FAILED, emit.ACTION_INTENDED):   # either: theirs, with an engagement
         emit.emit(event, payload, engagement_id=engagement_id, subject_type="x", subject_id="S-1")
         row = _written(engagement_id, event)
         assert row["scope"] == "engagement" and row["engagement_id"] == engagement_id
         emit.emit(event, payload, subject_type="x", subject_id="S-1")
         assert _written(None, event)["scope"] == "global"
         return
-    emit.emit(event, payload, engagement_id=engagement_id if scoped else None,
-              subject_type="x", subject_id="S-1")
+    _write(event, payload, engagement_id if scoped else None, subject_type="x", subject_id="S-1")
     row = _written(engagement_id if scoped else None, event)
     assert row["actor"] == "reconciler"
     assert row["payload"] == payload
@@ -264,3 +311,37 @@ def test_each_event_is_written_with_the_right_scope_and_exactly_its_payload(even
     assert row["engagement_id"] == (engagement_id if scoped else None)
     if "reason_code" in payload:
         assert list(row["reasons"]) == [payload["reason_code"]]
+
+
+# --- the intent: announced before an irreversible call, paired with its result -----------------
+
+IRREVERSIBLE = [c for c in CASES if c[0].kind in emit.IRREVERSIBLE_KINDS] + [
+    (act(vocab.UNLINK_FILE, "tls_leaf", subject_id="cyberorch-tls-abcd1234.pem",
+         name="cyberorch-tls-abcd1234.pem", directory="/tmp"), emit.FILES_REMOVED,
+     {"kind": "tls_leaf", "count": 1}, None)]
+
+
+@pytest.mark.parametrize("action, event, payload, engagement", IRREVERSIBLE)
+def test_an_intent_names_the_same_subject_as_the_result_that_will_close_it(
+        action, event, payload, engagement):
+    intent = emit.intent_for(action)
+    result = emit.for_result(Result(action, DONE))
+    assert intent[0] == emit.ACTION_INTENDED
+    assert intent[1] == {"kind": action.kind, "subject_id": intent[4],
+                         "reason_code": action.reason_code}
+    assert emit.validate(intent[0], intent[1]) == intent[1]
+    # the pairing key: same engagement, same subject type, same subject id
+    assert (intent[2], intent[3], intent[4]) == (result[2], result[3], result[4])
+    assert emit.RESULT_EVENT_OF_KIND[action.kind] == result[0] == event
+
+
+def test_a_proposal_action_has_no_intent():
+    for action, *_ in CASES[:3]:
+        with pytest.raises(ValueError):
+            emit.intent_for(action)
+
+
+def test_the_kind_to_result_table_covers_every_irreversible_kind_and_the_query_agrees():
+    from control_plane.audit.query import RECONCILER_RESULT_EVENT_OF_KIND
+    assert set(emit.RESULT_EVENT_OF_KIND) == set(emit.IRREVERSIBLE_KINDS)
+    assert emit.RESULT_EVENT_OF_KIND == RECONCILER_RESULT_EVENT_OF_KIND

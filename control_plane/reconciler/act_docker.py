@@ -12,7 +12,12 @@ real Docker and, where Docker cannot be made to misbehave, on a fake that does:
    attached is no longer idle. Otherwise ``changed_since_plan`` and nothing is touched.
 3. **Docker's refusal is respected, not worked around.** A running container is not removed
    without ``force`` unless the plan asked for a proxy or a kill; a network with an endpoint stays.
-4. **Verify afterwards, independently of the call's own reply.** A killed container must be seen not
+4. **Say what is about to happen, then do it.** After the last check that can decline and right
+   before the irreversible call, ``intend(action)`` is called; the service writes
+   ``reconciler.action_intended`` and commits it. If that cannot be written, no call is made
+   (``failed / audit_failed``). A declined action (``changed_since_plan``, ``already_gone``) leaves
+   no intent, so an intent always means "the call was about to be made".
+5. **Verify afterwards, independently of the call's own reply.** A killed container must be seen not
    running; a removed one must be gone from ``get`` *and* from ``list(all=True,
    filters={"id": ...})`` (E14-V2); a removed network must be gone from ``get``. The wait is
    ``verify_wait_s``.
@@ -22,6 +27,7 @@ real Docker and, where Docker cannot be made to misbehave, on a fake that does:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from typing import Any
@@ -32,6 +38,7 @@ from control_plane.reconciler import vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
+    AUDIT_FAILED,
     CHANGED,
     DAEMON_ERROR,
     DONE,
@@ -48,6 +55,8 @@ from control_plane.reconciler.outcome import (
     Result,
 )
 
+log = logging.getLogger("cyberorch.reconciler")
+
 RUN_LABEL = "cyberorch.run_id"
 OWNER_LABEL = "cyberorch.owner"
 PROXY_LABEL = "cyberorch.egress_proxy"
@@ -60,21 +69,36 @@ POLL_S = 0.2
 
 
 def perform(action: Action, *, client: Any, th: Thresholds,
-            sleep: Callable[[float], None], clock: Callable[[], float]) -> Result:
+            sleep: Callable[[float], None], clock: Callable[[], float],
+            intend: Callable[[Action], None] | None = None) -> Result:
     """Kill or remove what ``action`` names; every path ends in a ``Result``."""
     if client is None or not FULL_ID.fullmatch(action.subject_id):
         return Result(action, FAILED, INVALID_ACTION)
     try:
         if action.kind == vocab.REMOVE_NETWORK:
-            return _remove_network(action, client, th, sleep, clock)
+            return _remove_network(action, client, th, sleep, clock, intend)
         container = _inspected(client, action)
         if isinstance(container, Result):
             return container
         if action.kind == vocab.KILL_CONTAINER:
-            return _kill(action, container, th, sleep, clock)
-        return _remove_container(action, container, client, th, sleep, clock)
+            return _kill(action, container, th, sleep, clock, intend)
+        return _remove_container(action, container, client, th, sleep, clock, intend)
     except APIError:
         return Result(action, FAILED, DAEMON_ERROR)
+
+
+def declared(action: Action, intend: Callable[[Action], None] | None) -> Result | None:
+    """Write the intent just before an irreversible call. ``None``: go ahead. A ``Result``: the
+    intent could not be written, so the call must not be made."""
+    if intend is None:
+        return None
+    try:
+        intend(action)
+    except Exception as exc:                                  # noqa: BLE001
+        log.error("reconciler: intent not written (%s) for %s; nothing was done",
+                  type(exc).__name__, action.kind)
+        return Result(action, FAILED, AUDIT_FAILED)
+    return None
 
 
 def _wait_until(check: Callable[[], bool], th: Thresholds, sleep, clock) -> bool:
@@ -111,9 +135,11 @@ def _state(container: Any) -> str:
     return str(container.attrs.get("State", {}).get("Status", ""))
 
 
-def _kill(action: Action, container: Any, th: Thresholds, sleep, clock) -> Result:
+def _kill(action: Action, container: Any, th: Thresholds, sleep, clock, intend=None) -> Result:
     if _state(container) not in LIVE_STATES:
         return Result(action, CHANGED, NOT_RUNNING)
+    if (blocked := declared(action, intend)) is not None:
+        return blocked
     try:
         container.kill()
     except APIError:
@@ -135,10 +161,12 @@ def _kill(action: Action, container: Any, th: Thresholds, sleep, clock) -> Resul
 
 
 def _remove_container(action: Action, container: Any, client: Any, th: Thresholds,
-                      sleep, clock) -> Result:
+                      sleep, clock, intend=None) -> Result:
     proxy = action.kind == vocab.REMOVE_PROXY
     if not proxy and _state(container) in LIVE_STATES:
         return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked
+    if (blocked := declared(action, intend)) is not None:
+        return blocked
     try:
         container.remove(force=proxy)      # a tool container is removed only if it is at rest
     except NotFound:
@@ -164,7 +192,8 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
 
 # --- networks --------------------------------------------------------------------------------
 
-def _remove_network(action: Action, client: Any, th: Thresholds, sleep, clock) -> Result:
+def _remove_network(action: Action, client: Any, th: Thresholds, sleep, clock,
+                    intend=None) -> Result:
     try:
         network = client.networks.get(action.subject_id)
         network.reload()
@@ -177,6 +206,8 @@ def _remove_network(action: Action, client: Any, th: Thresholds, sleep, clock) -
     # Docker refuses only for running and paused containers; ours is the stricter rule (§1.5)
     if client.containers.list(all=True, filters={"network": network.name}):
         return Result(action, CHANGED, IN_USE)
+    if (blocked := declared(action, intend)) is not None:
+        return blocked
     try:
         network.remove()
     except NotFound:

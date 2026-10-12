@@ -9,9 +9,17 @@ ladder exists:
   cannot write, a lost connection, an unreachable Docker, a lost lock or any unexpected exception,
   each with its own exit code; nothing is retried or reconnected. ``dry-run`` takes no lock, writes
   nothing -- not even an audit record -- and only says what it would do;
-* **an action is audited after it was verified, never before** (act's ``on_verified`` hook), and an
-  audit record that fails to write makes the service stop at the end of the pass: the action it
-  describes happened, and the stop is what says so;
+* **a proposal transition is audited in the transaction that makes it** (act's ``record`` hook): the
+  record exists exactly when the change committed. **A kill, a removal or an unlink is announced
+  first** (act's ``intend`` hook: ``reconciler.action_intended``, committed before the call) and
+  audited after it was verified (``on_verified``), never before; an intent with no result is a
+  process that died in between and is listed by ``audit.query.unresolved_reconciler_intents``. An
+  audit record that fails to write makes the service stop at the end of the pass: for a proposal
+  nothing was changed; for an irreversible act no call was made, or the action happened and the stop
+  is what says so;
+* an irreversible action that **failed** is not tried again on the same object by this process for
+  ``retry_after_failure_s``, so a persistently failing object costs one intent and one call per
+  period, not per pass;
 * a failed action is audited once per ``(object, kind, reason)`` per process lifetime and counted
   after that; every ``summary_period_s`` a **failure summary** says how many of what failed, if any
   did. A restart reports once more -- stated, not hidden (D64-11);
@@ -95,6 +103,8 @@ class PassReport:
     results: list[Result] = field(default_factory=list)
     reports: int = 0
     truncated: bool = False
+    #: actions left alone this pass: the same object failed less than ``retry_after_failure_s`` ago
+    held_back: int = 0
 
 
 def _planned(plan) -> dict[str, int]:
@@ -127,7 +137,7 @@ class Reconciler:
         self._window_passes = 0
         self._window_started = monotonic()
         self._audit_failed = False
-        self._files_removed: Counter = Counter()
+        self._failed_at: dict[tuple[str, str], float] = {}
 
     @property
     def audits(self) -> bool:
@@ -205,10 +215,13 @@ class Reconciler:
             if self.audits:
                 self._assert_lock()
             plan = make_plan(self._observe(), self.th)
+            actions, held_back = self._not_recently_failed(plan.actions)
             results = act.carry_out(
-                plan.actions, self.settings, th=self.th, client=self.client,
+                actions, self.settings, th=self.th, client=self.client,
                 directory=self.directory, expected_uid=self.expected_uid,
                 on_verified=self._audit if self.audits else None,
+                record=self._record if self.audits else None,
+                intend=self._intend if self.audits else None,
                 wall_clock_us=self._wall_clock_us)
             if self.audits:
                 self._after(results)
@@ -216,8 +229,30 @@ class Reconciler:
         except BaseException as exc:
             raise _translate(exc) from exc
         report = PassReport(planned=_planned(plan), outcomes=Counter(r.outcome for r in results),
-                            results=results, reports=len(plan.reports))
+                            results=results, reports=len(plan.reports), held_back=held_back)
         return report
+
+    def _not_recently_failed(self, actions) -> tuple[tuple, int]:
+        """Drop the irreversible actions whose object this process failed on less than
+        ``retry_after_failure_s`` ago (a dry run writes nothing and makes no call: nothing to
+        hold)."""
+        if not self.audits:
+            return tuple(actions), 0
+        now = self._monotonic()
+        kept, held = [], 0
+        for action in actions:
+            failed = self._failed_at.get(self._attempt_key(action))
+            if (action.kind in emit.IRREVERSIBLE_KINDS and failed is not None
+                    and now - failed < self.th.retry_after_failure_s):
+                held += 1
+                continue
+            kept.append(action)
+        return tuple(kept), held
+
+    @staticmethod
+    def _attempt_key(action) -> tuple[str, str]:
+        return (action.kind, emit.intent_for(action)[4]) if action.kind in emit.IRREVERSIBLE_KINDS \
+            else (action.kind, action.subject_id)
 
     def _assert_lock(self) -> None:
         if not self.lock.held():
@@ -246,14 +281,35 @@ class Reconciler:
             networks=(), files=())
 
     # ------------------------------------------------------------------ audit
-    def _audit(self, result: Result) -> None:
-        """The hook ``act.carry_out`` calls for a verified result, and for no other."""
+    def _record(self, conn, action) -> None:
+        """The hook ``act.carry_out`` calls inside a proposal transition's transaction: the
+        transition's own record, committed or rolled back with it."""
         try:
-            event = emit.for_result(result)
-            if event is None:
-                self._files_removed[result.action.reason_code] += 1
-                return
-            event_type, payload, engagement_id, subject_type, subject_id = event
+            event_type, payload, engagement_id, subject_type, subject_id = (
+                emit.for_proposal_action(action))
+            emit.emit_in_transaction(conn, event_type, payload, engagement_id=engagement_id,
+                                     subject_type=subject_type, subject_id=subject_id)
+        except Exception:
+            self._audit_failed = True
+            raise
+
+    def _intend(self, action) -> None:
+        """The hook called right before an irreversible call: the intent, committed first."""
+        try:
+            event_type, payload, engagement_id, subject_type, subject_id = emit.intent_for(action)
+            emit.emit(event_type, payload, engagement_id=engagement_id,
+                      subject_type=subject_type, subject_id=subject_id)
+        except Exception:
+            self._audit_failed = True
+            raise
+
+    def _audit(self, result: Result) -> None:
+        """The hook ``act.carry_out`` calls for a verified result, and for no other. A proposal
+        transition was already recorded in its own transaction."""
+        if result.audited:
+            return
+        try:
+            event_type, payload, engagement_id, subject_type, subject_id = emit.for_result(result)
             emit.emit(event_type, payload, engagement_id=engagement_id,
                       subject_type=subject_type, subject_id=subject_id)
         except Exception:
@@ -265,13 +321,12 @@ class Reconciler:
         each), the summary (when its period has passed). An audit record that cannot be written
         stops the service -- after the pass, so the rest of it is not left half-reported."""
         try:
-            for kind, count in sorted(self._files_removed.items()):
-                emit.emit(emit.FILES_REMOVED, {"kind": kind, "count": count})
-            self._files_removed.clear()
             self._window_passes += 1
             for result in results:
                 if result.outcome != FAILED:
                     continue
+                if result.action.kind in emit.IRREVERSIBLE_KINDS:
+                    self._failed_at[self._attempt_key(result.action)] = self._monotonic()
                 event_type, payload, engagement_id, subject_type = emit.failure(result)
                 self._window[f"{payload['kind']}:{payload['reason_code']}"] += 1
                 key = (payload["subject_id"], payload["kind"], payload["reason_code"])

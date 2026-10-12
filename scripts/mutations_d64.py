@@ -941,5 +941,94 @@ CATALOGUE += [
 ]
 
 
+ORDER_TESTS = ("tests/test_reconciler_order.py", "tests/test_reconciler_structure.py",
+               "tests/test_reconciler_service.py", "tests/test_reconciler_emit.py")
+ACT_DOCKER_PY = "control_plane/reconciler/act_docker.py"
+ACT_FILES_PY = "control_plane/reconciler/act_files.py"
+EMIT_PY = "control_plane/reconciler/emit.py"
+LOGGER_PY = "control_plane/audit/logger.py"
+QUERY_PY = "control_plane/audit/query.py"
+SERVICE_PY2 = "control_plane/reconciler/service.py"
+
+CATALOGUE += [
+    # ---- pre-deletion item 4 (ACCEPTANCE 5.86): the order of change and record
+    Mutation(
+        "D64-P4-a", "the transition's record is written after the commit, in a second transaction",
+        ORDER_TESTS,
+        edits=(Edit(ACT_PY, "            if moved and record is not None:\n                try:\n                    record(conn, action)          # the change's own record: same transaction\n                except Exception as exc:          # noqa: BLE001\n                    log.error(\"reconciler: audit record failed (%s) before %s\",\n                              type(exc).__name__, action.kind)\n                    raise _RecordFailed from exc\n",
+                    "            pass\n"),
+               Edit(ACT_PY, "        if not moved:\n            return Result(action, LOST_RACE)\n        # After the commit",
+                    "        if not moved:\n            return Result(action, LOST_RACE)\n        if record is not None:\n            with engagement_scope(action.engagement_id) as conn2:\n                record(conn2, action)\n        # After the commit")),
+        targets=("test_the_record_is_written_inside_the_transition_and_is_visible_only_with_it",
+                 "test_a_kill_9_leaves_the_change_and_its_record_together_or_neither",
+                 "test_the_transitions_record_is_written_inside_its_transaction_block")),
+    Mutation(
+        "D64-P4-b", "a record that fails is ignored: the transition commits without it", ORDER_TESTS,
+        edits=(Edit(ACT_PY, "                    raise _RecordFailed from exc\n", "                    pass\n"),),
+        targets=("test_a_record_that_raises_rolls_the_transition_back",)),
+    Mutation(
+        "D64-P4-c", "the in-transaction writer returns instead of raising when the insert fails",
+        ORDER_TESTS,
+        edits=(Edit(LOGGER_PY, "        raise AuditWriteError(\n            f\"could not write audit record {event_type!r} for \"\n            f\"{subject_type}:{subject_id}: {exc}\"\n        ) from exc\n",
+                    "        return -1\n", count=2),),
+        targets=("test_a_record_the_database_itself_refuses_rolls_the_transition_back",)),
+    Mutation(
+        "D64-P4-d", "a kill is made without its intent", ORDER_TESTS,
+        edits=(Edit(ACT_DOCKER_PY, "def _kill(action: Action, container: Any, th: Thresholds, sleep, clock, intend=None) -> Result:\n    if _state(container) not in LIVE_STATES:\n        return Result(action, CHANGED, NOT_RUNNING)\n    if (blocked := declared(action, intend)) is not None:",
+                    "def _kill(action: Action, container: Any, th: Thresholds, sleep, clock, intend=None) -> Result:\n    if _state(container) not in LIVE_STATES:\n        return Result(action, CHANGED, NOT_RUNNING)\n    if (blocked := declared(action, None)) is not None:"),),
+        targets=("test_real_every_kind_of_irreversible_action_calls_intend_once_right_before_its_call",
+                 "test_real_an_intent_that_cannot_be_written_means_no_call_is_made")),
+    Mutation(
+        "D64-P4-e", "the intent of a removal is written before the check that can decline it",
+        ORDER_TESTS,
+        edits=(Edit(ACT_DOCKER_PY, "    proxy = action.kind == vocab.REMOVE_PROXY\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n    if (blocked := declared(action, intend)) is not None:\n        return blocked\n",
+                    "    proxy = action.kind == vocab.REMOVE_PROXY\n    if (blocked := declared(action, intend)) is not None:\n        return blocked\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n"),),
+        targets=("test_real_an_action_that_is_declined_writes_no_intent",
+                 "test_every_irreversible_call_comes_after_the_intent_in_the_same_function")),
+    Mutation(
+        "D64-P4-f", "an intent that cannot be written is ignored: the call is made anyway",
+        ORDER_TESTS,
+        edits=(Edit(ACT_DOCKER_PY, "        return Result(action, FAILED, AUDIT_FAILED)\n    return None\n", "        return None\n    return None\n"),),
+        targets=("test_real_an_intent_that_cannot_be_written_means_no_call_is_made",
+                 "test_an_intent_that_cannot_be_written_means_no_unlink")),
+    Mutation(
+        "D64-P4-g", "a file is unlinked without its intent", ORDER_TESTS,
+        edits=(Edit(ACT_FILES_PY, "    if (blocked := act_docker.declared(action, intend)) is not None:", "    if (blocked := act_docker.declared(action, None)) is not None:"),),
+        targets=("test_a_file_is_announced_before_it_is_unlinked_and_not_when_it_is_declined",
+                 "test_an_intent_that_cannot_be_written_means_no_unlink")),
+    Mutation(
+        "D64-P4-h", "the unresolved-intents query accepts any later reconciler event as the result",
+        ORDER_TESTS,
+        edits=(Edit(QUERY_PY, "                AND (r.event_type = CASE i.payload ->> 'kind' {cases} END", "                AND (r.event_type <> 'reconciler.action_intended'"),),
+        targets=("test_an_intent_alone_is_unresolved_and_a_result_or_a_failure_after_it_closes_it",)),
+    Mutation(
+        "D64-P4-i", "a failed object is attempted again at once (the hold-back is off)", ORDER_TESTS,
+        edits=(Edit(SERVICE_PY2, "                    and now - failed < self.th.retry_after_failure_s):", "                    and False):"),),
+        targets=("test_a_failed_irreversible_action_is_not_attempted_again_until_the_wait_has_passed",)),
+    Mutation(
+        "D64-P4-j", "the service writes a proposal's event a second time, and the writer would take it",
+        ORDER_TESTS,
+        edits=(Edit(SERVICE_PY2, "        if result.audited:\n            return\n        try:\n            event_type, payload, engagement_id, subject_type, subject_id = emit.for_result(result)",
+                    "        try:\n            event_type, payload, engagement_id, subject_type, subject_id = emit.for_result(result)"),
+               Edit(EMIT_PY, "    if event_type in TRANSACTIONAL_EVENTS:\n        raise PayloadRejected(f\"{event_type!r:.40} is written in the transaction of its change\")\n    clean = validate(event_type, payload)\n    scope, _ = SCHEMAS[event_type]",
+                    "    clean = validate(event_type, payload)\n    scope, _ = SCHEMAS[event_type]")),
+        targets=("test_a_state_only_pass_moves_the_rows_audits_each_and_a_second_pass_does_nothing",)),
+    Mutation(
+        "D64-P4-k", "emit() writes a proposal event on its own connection again", ORDER_TESTS,
+        edits=(Edit(EMIT_PY, "    if event_type in TRANSACTIONAL_EVENTS:\n        raise PayloadRejected(f\"{event_type!r:.40} is written in the transaction of its change\")\n    clean = validate(event_type, payload)\n    scope, _ = SCHEMAS[event_type]",
+                    "    clean = validate(event_type, payload)\n    scope, _ = SCHEMAS[event_type]"),),
+        targets=("test_a_proposal_event_is_never_written_on_the_audit_paths_own_connection",)),
+    Mutation(
+        "D64-P4-l", "emit_in_transaction takes any event", ORDER_TESTS,
+        edits=(Edit(EMIT_PY, "    if event_type not in TRANSACTIONAL_EVENTS:\n        raise PayloadRejected(f\"{event_type!r:.40} is not written inside a transaction\")\n", ""),),
+        targets=("test_the_in_transaction_writer_takes_proposal_events_only_and_needs_an_engagement",)),
+    Mutation(
+        "D64-P4-m", "another reconciler module imports the in-transaction audit writer", ORDER_TESTS,
+        edits=(Edit("control_plane/reconciler/lock.py", "from __future__ import annotations\n",
+                    "from __future__ import annotations\n\nfrom control_plane.audit.logger import record_audit_in_transaction  # noqa: F401\n"),),
+        targets=("test_the_in_transaction_audit_writer_is_used_by_the_reconcilers_emit_alone",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

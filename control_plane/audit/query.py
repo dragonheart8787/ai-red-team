@@ -468,3 +468,56 @@ def audited_event_types(conn: Connection) -> set[str]:
     return set(
         conn.execute(text("SELECT DISTINCT event_type FROM audit_log")).scalars().all()
     )
+
+
+#: The event that closes a reconciler intent, by the kind of action it announced. A failed attempt
+#: closes it too (``reconciler.action_failed`` for the same kind and subject). The reconciler's own
+#: table is ``control_plane.reconciler.emit.RESULT_EVENT_OF_KIND``; a test holds the two equal.
+RECONCILER_RESULT_EVENT_OF_KIND = {
+    "kill_container": "reconciler.container_killed",
+    "remove_container": "reconciler.container_removed",
+    "remove_proxy": "reconciler.proxy_removed",
+    "remove_network": "reconciler.network_removed",
+    "unlink_file": "reconciler.files_removed",
+}
+
+
+@dataclass(frozen=True)
+class UnresolvedIntent:
+    audit_id: int
+    ts: datetime
+    kind: str
+    subject_id: str
+    reason_code: str
+
+
+def unresolved_reconciler_intents(conn: Connection) -> list[UnresolvedIntent]:
+    """Irreversible reconciler actions that were announced and never reported (D64 item 4).
+
+    The reconciler writes ``reconciler.action_intended`` right before a kill, a removal or an
+    unlink, and afterwards either the result event (``container_removed`` ...) or
+    ``reconciler.action_failed``. An intent with neither, later in the trail, for the same kind and
+    subject, is a process that died between the call and its verification: the object may or may
+    not be gone. It is listed here, oldest first, for a person to read; nothing repairs it, and the
+    next pass plans from what exists.
+
+    Rows are those the connection can see: an engagement-scoped connection sees that engagement's
+    containers and proxies, the ``global_auditor`` connection sees networks and files.
+    """
+    cases = " ".join(f"WHEN '{kind}' THEN '{event}'"
+                     for kind, event in RECONCILER_RESULT_EVENT_OF_KIND.items())
+    rows = conn.execute(text(f"""
+        SELECT i.audit_id, i.ts, i.payload ->> 'kind' AS kind, i.subject_id,
+               i.payload ->> 'reason_code' AS reason_code
+        FROM audit_log i
+        WHERE i.event_type = 'reconciler.action_intended'
+          AND NOT EXISTS (
+              SELECT 1 FROM audit_log r
+              WHERE r.audit_id > i.audit_id AND r.subject_id = i.subject_id
+                AND (r.event_type = CASE i.payload ->> 'kind' {cases} END
+                     OR (r.event_type = 'reconciler.action_failed'
+                         AND r.payload ->> 'kind' = i.payload ->> 'kind')))
+        ORDER BY i.audit_id
+    """)).mappings().all()
+    return [UnresolvedIntent(r["audit_id"], r["ts"], r["kind"], r["subject_id"], r["reason_code"])
+            for r in rows]

@@ -12,14 +12,19 @@ What this half adds is **safety at the moment of acting**:
   (the request that opened this step: report first, then enable);
 * **a state change is one conditional ``UPDATE``** inside ``engagement_scope(engagement_id)``, a
   compare-and-set on the stage *and* on the ``stage_updated_at`` the plan observed. Zero rows moved
-  means someone else got there first: ``lost_race``, nothing is audited, nothing is retried;
+  means someone else got there first: ``lost_race``, nothing is audited, nothing is retried. When
+  the caller hands in ``record`` (the service always does), the change's own audit record is
+  written **in the same transaction**: both commit or neither does, so there is no state change
+  without its record and no record without its change (D64 item 4);
 * **verification, independent of the call's own reply** (§1.7): after the commit a new transaction
   re-reads the stage; after a kill the container is inspected; after a removal the object must be
   gone. Only a verified action is ``done``, and only a verified action reaches ``on_verified`` --
   the hook the audit trail is written from (6d). A reply of "done" that did not do it is ``failed``;
 * **deletions act by full id, after a fresh inspect** (``act_docker``, ``act_files``): the id, the
   owner and run labels, and the object's kind must still be what the plan saw, or the action is
-  ``changed_since_plan`` and nothing is touched.
+  ``changed_since_plan`` and nothing is touched. When the caller hands in ``intend``, the intent is
+  written **after** that last check and **immediately before** the irreversible call; if it cannot
+  be written, no call is made (``failed / audit_failed``).
 
 One action failing never stops the others. The reason a failure is reported is a fixed code, never
 the text of an exception (which can carry ids, paths or document content). The module never calls
@@ -44,6 +49,7 @@ from control_plane.reconciler import act_docker, act_files, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
+    AUDIT_FAILED,
     DB_ERROR,
     DONE,
     DRY_RUN,
@@ -120,10 +126,16 @@ def _timestamp(microseconds: int) -> datetime:
     return _EPOCH + timedelta(microseconds=microseconds)
 
 
+class _RecordFailed(Exception):  # noqa: N818 - internal: the transition's own audit record
+    """The audit record of a transition could not be written; the transaction rolls back."""
+
+
 def carry_out(
     actions: Iterable[Action], settings: Settings, *, th: Thresholds | None = None,
     client: Any = None, directory: str | None = None, expected_uid: int | None = None,
     on_verified: Callable[[Result], None] | None = None,
+    record: Callable[[Any, Action], None] | None = None,
+    intend: Callable[[Action], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     wall_clock_us: Callable[[], int] = lambda: time.time_ns() // 1000,
@@ -132,11 +144,17 @@ def carry_out(
 
     ``on_verified`` is called once, after verification, for each ``done`` result and for none
     other; if it raises, the failure is logged by type and the pass goes on.
+
+    ``record(conn, action)`` is called for a proposal transition **inside its transaction**, after
+    the conditional ``UPDATE`` moved a row and before the commit; if it raises, the transaction
+    rolls back and the result is ``failed / audit_failed`` (the proposal is unchanged).
+    ``intend(action)`` is called for a kill, a removal or an unlink right before the call; if it
+    raises, no call is made.
     """
     results: list[Result] = []
     for action in actions:
         result = _one(action, settings, th, client, directory, expected_uid, sleep, clock,
-                      wall_clock_us)
+                      wall_clock_us, record, intend)
         results.append(result)
         if result.outcome == DONE and on_verified is not None:
             try:
@@ -147,27 +165,29 @@ def carry_out(
     return results
 
 
-def _one(action, settings, th, client, directory, expected_uid, sleep, clock, wall_clock_us):
+def _one(action, settings, th, client, directory, expected_uid, sleep, clock, wall_clock_us,
+         record=None, intend=None):
     if action.kind not in vocab.ACTION_KINDS or action.reason_code not in vocab.REASONS.get(
             action.kind, ()):
         return Result(action, FAILED, INVALID_ACTION)
     if settings.mode is Mode.DRY_RUN:
         return Result(action, DRY_RUN)
     if action.kind in vocab.PROPOSAL_ACTIONS:
-        return _transition(action)
+        return _transition(action, record)
     if not settings.allow_deletions:
         return Result(action, SKIPPED_OFF)
     if th is None:
         return Result(action, FAILED, INVALID_ACTION)
     if action.kind == vocab.UNLINK_FILE:
         return act_files.sweep(action, directory=directory, expected_uid=expected_uid, th=th,
-                                client=client, wall_clock_us=wall_clock_us)
-    return act_docker.perform(action, client=client, th=th, sleep=sleep, clock=clock)
+                                client=client, wall_clock_us=wall_clock_us, intend=intend)
+    return act_docker.perform(action, client=client, th=th, sleep=sleep, clock=clock,
+                              intend=intend)
 
 
 # --- proposals -----------------------------------------------------------------------------------
 
-def _transition(action: Action) -> Result:
+def _transition(action: Action, record: Callable[[Any, Action], None] | None = None) -> Result:
     transition = vocab.PROPOSAL_TRANSITIONS.get((action.kind, action.reason_code))
     if (transition is None or action.engagement_id is None
             or action.planned_stage_updated_us is None or action.expected_stage != transition[0]):
@@ -177,6 +197,13 @@ def _transition(action: Action) -> Result:
     try:
         with engagement_scope(action.engagement_id) as conn:
             moved = _move(conn, action, expected, new, detail, planned)
+            if moved and record is not None:
+                try:
+                    record(conn, action)          # the change's own record: same transaction
+                except Exception as exc:          # noqa: BLE001
+                    log.error("reconciler: audit record failed (%s) before %s",
+                              type(exc).__name__, action.kind)
+                    raise _RecordFailed from exc
         if not moved:
             return Result(action, LOST_RACE)
         # After the commit, a new transaction: the stage and its reason are what was asked for.
@@ -186,9 +213,11 @@ def _transition(action: Action) -> Result:
             if action.kind == vocab.MARK_UNKNOWN_OUTCOME and conn.execute(
                     text(RUNS_LEFT_SQL), {"pid": action.subject_id}).scalar_one():
                 return Result(action, FAILED, NOT_CHANGED_AFTER_UPDATE)
+    except _RecordFailed:
+        return Result(action, FAILED, AUDIT_FAILED)       # rolled back: nothing was changed
     except SQLAlchemyError:
         return Result(action, FAILED, DB_ERROR)
-    return Result(action, DONE)
+    return Result(action, DONE, audited=record is not None)
 
 
 def _move(conn, action: Action, expected: str, new: str, detail: str, planned: datetime) -> bool:

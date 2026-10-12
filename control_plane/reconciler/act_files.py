@@ -10,6 +10,7 @@ The only module in the package that unlinks anything. Every condition the plan j
   expected uid, older than ``B_cap + P + Q``;
 * no container that could still read it -- ``created``, ``running``, ``paused``, ``restarting`` --
   has it as a mount source, asked of Docker *now*;
+* the intent is written (``intend``, D64 item 4) and, if that cannot be done, nothing is unlinked;
 * then ``unlink(name, dir_fd=fd)``, and the verification is a second ``lstat`` that must say the
   name is gone (E14-V3).
 
@@ -52,7 +53,8 @@ NAMES = {
 
 
 def sweep(action: Action, *, directory: str | None, expected_uid: int | None, th: Thresholds,
-           client: Any, wall_clock_us: Callable[[], int]) -> Result:
+           client: Any, wall_clock_us: Callable[[], int],
+           intend: Callable[[Action], None] | None = None) -> Result:
     pattern = NAMES.get(action.reason_code)
     if (pattern is None or action.name is None or not pattern.fullmatch(action.name)
             or directory is None or expected_uid is None or client is None
@@ -63,14 +65,14 @@ def sweep(action: Action, *, directory: str | None, expected_uid: int | None, th
     except OSError:
         return Result(action, FAILED, FILE_ERROR)
     try:
-        return _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us)
+        return _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us, intend)
     except OSError:
         return Result(action, FAILED, FILE_ERROR)
     finally:
         os.close(fd)
 
 
-def _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us) -> Result:
+def _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us, intend=None) -> Result:
     name = action.name
     try:
         info = os.lstat(name, dir_fd=fd)
@@ -86,6 +88,8 @@ def _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us) -> R
         return Result(action, CHANGED, MOUNTED)
     if action.reason_code not in vocab.REASONS[vocab.UNLINK_FILE]:
         return Result(action, CHANGED, NOT_OURS)
+    if (blocked := act_docker.declared(action, intend)) is not None:
+        return blocked
     os.unlink(name, dir_fd=fd)
     try:
         os.lstat(name, dir_fd=fd)

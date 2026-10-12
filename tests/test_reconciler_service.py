@@ -52,7 +52,8 @@ REPO = Path(__file__).resolve().parents[1]
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
-    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600)
+    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
+    retry_after_failure_s=1800)
 STATE_ONLY = Settings(Mode.STATE_ONLY)
 DRY_RUN = Settings(Mode.DRY_RUN)
 
@@ -156,18 +157,23 @@ def test_a_state_only_pass_moves_the_rows_audits_each_and_a_second_pass_does_not
     assert [s["payload"]["reason_code"] for s in stopped] == ["signal"]
 
 
-def test_an_event_is_written_after_its_action_happened_never_before(engagement_id, emptydir,
-                                                                    monkeypatch):
+def test_a_transitions_event_is_written_in_the_transaction_that_makes_it(
+        engagement_id, emptydir, monkeypatch):
+    """At the moment the event is written the change is visible on the writing connection and *not*
+    on any other (it is not committed): they commit together or not at all."""
     world = residue_world(engagement_id)
     seen = {}
-    real_emit = emit.emit
+    real = emit.emit_in_transaction
 
-    def watching(event_type, payload, **kw):
-        if "proposal_id" in payload:
-            seen[payload["proposal_id"]] = state(kw["engagement_id"], payload["proposal_id"])
-        return real_emit(event_type, payload, **kw)
+    def watching(conn, event_type, payload, **kw):
+        pid = payload["proposal_id"]
+        here = tuple(conn.execute(text(
+            "SELECT pipeline_stage, stage_detail FROM action_proposals WHERE proposal_id = :p"),
+            {"p": pid}).one())
+        seen[pid] = (here, state(kw["engagement_id"], pid))       # `state` opens another connection
+        return real(conn, event_type, payload, **kw)
 
-    monkeypatch.setattr(service.emit, "emit", watching)
+    monkeypatch.setattr(service.emit, "emit_in_transaction", watching)
     r = reconciler(engagement_id, tmp_path=emptydir)
     r.begin()
     try:
@@ -175,8 +181,12 @@ def test_an_event_is_written_after_its_action_happened_never_before(engagement_i
     finally:
         r.finish("signal")
     for name, pid in world.items():
-        stage, detail, _ = EXPECTED[name]
-        assert seen[pid] == (stage, detail), f"{name}: the event was written before the move"
+        stage, detail, event = EXPECTED[name]
+        here, elsewhere = seen[pid]
+        assert here == (stage, detail), f"{name}: the writer does not see its own change"
+        assert elsewhere[0] != stage, f"{name}: the change was committed before its event"
+        assert state(engagement_id, pid)[:2] == (stage, detail)
+    assert len(events(engagement_id)) == 5
 
 
 def test_a_pass_limited_to_an_engagement_leaves_every_other_engagements_rows_alone(
@@ -241,21 +251,25 @@ def test_a_second_reconciler_is_refused_with_exit_2_and_says_so(engagement_id, e
     assert global_events(r.instance_id, emit.STARTED) == []
 
 
-def test_an_audit_record_that_cannot_be_written_stops_the_service_after_the_action_happened(
+def test_a_transition_whose_record_cannot_be_written_is_not_made_and_the_service_stops(
         engagement_id, emptydir, monkeypatch):
     world = residue_world(engagement_id)
-    real_emit = emit.emit
 
-    def failing(event_type, payload, **kw):
-        if event_type in (emit.PROPOSAL_ABANDONED, emit.PROPOSAL_CLOSED):
-            raise AuditWriteError("cannot write")
-        return real_emit(event_type, payload, **kw)
+    def failing(conn, event_type, payload, **kw):
+        raise AuditWriteError("cannot write")
 
-    monkeypatch.setattr(service.emit, "emit", failing)
+    monkeypatch.setattr(service.emit, "emit_in_transaction", failing)
     r = reconciler(engagement_id, tmp_path=emptydir)
     assert r.serve(max_passes=3, interval=0) == service.EXIT_AUDIT_FAILED == 3
-    # the move had happened by the time the audit failed: the stop is what says so
-    assert state(engagement_id, world["received"]) == ("abandoned", "undecided_past_grace")
+    # nothing is changed and unrecorded: the transaction rolled back with the record
+    original = {"received": "received", "decided": "decided", "lapsed": "capability_issued",
+                "approved": "approved", "dispatching": "dispatching"}
+    for name, pid in world.items():
+        assert state(engagement_id, pid)[0] == original[name], name
+    assert events(engagement_id, *emit.TRANSACTIONAL_EVENTS) == []     # no record of a change
+    failures = events(engagement_id, emit.ACTION_FAILED)                # but each attempt is told
+    assert len(failures) == 5
+    assert {f["payload"]["reason_code"] for f in failures} == {"audit_failed"}
     stopped = global_events(r.instance_id, emit.STOPPED)
     assert [s["payload"]["reason_code"] for s in stopped] == ["audit_failed"]
 

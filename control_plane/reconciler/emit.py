@@ -5,13 +5,23 @@ a validator for each: **ids, closed reason codes and counts** -- never a target,
 a path or text taken from a document. An event with another type, an extra or missing key, or a
 value its validator does not accept is a bug and is **refused** (``PayloadRejected``), not written.
 
-The events that report an action are written **only after the action was verified** (D64 §1.7): the
-text of ``reconciler.container_removed`` is "this container was seen gone". They are produced by
-:func:`for_result`, the one place that turns an act ``Result`` into an event, and only for a
-``done`` result.
+How an event relates to the change it describes (D64 item 4,
+``docs/D64_PREDELETION_COMPLETION.md``):
 
-Audit failure is fail-closed for the service (it stops with ``audit_failed``); the act half has
-already done what it did, which is why an action is audited at all.
+* a **proposal transition** (``proposal_abandoned``, ``proposal_closed``,
+  ``dispatch_unknown_outcome``) is written *in the same database transaction* as the change
+  (:func:`emit_in_transaction`): the event exists exactly when the change committed;
+* an **irreversible act on a Docker object or a host file** is preceded by
+  ``reconciler.action_intended`` (:func:`intent_for`, written on its own connection and committed
+  *before* the call) and followed by the result event, written **only after the action was
+  verified** (D64 §1.7: ``reconciler.container_removed`` means "this container was seen gone"), or
+  by ``reconciler.action_failed``. An intent with neither is a process that died in between, and
+  ``audit.query.unresolved_reconciler_intents`` lists it.
+
+Result events are produced by :func:`for_result`, the one place that turns an act ``Result`` into an
+event, and only for a ``done`` result. Audit failure is fail-closed for the service (it stops with
+``audit_failed``); where the change and its record are one transaction, nothing is left changed
+and unrecorded.
 """
 
 from __future__ import annotations
@@ -20,8 +30,9 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from control_plane.audit.logger import record_audit
+from control_plane.audit.logger import record_audit, record_audit_in_transaction
 from control_plane.reconciler import vocab
+from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
     DETAIL_CODES,
     DONE,
@@ -44,12 +55,16 @@ CONTAINER_REMOVED = "reconciler.container_removed"
 PROXY_REMOVED = "reconciler.proxy_removed"
 NETWORK_REMOVED = "reconciler.network_removed"
 FILES_REMOVED = "reconciler.files_removed"
+ACTION_INTENDED = "reconciler.action_intended"
 ACTION_FAILED = "reconciler.action_failed"
 FAILURE_SUMMARY = "reconciler.failure_summary"
 
 EVENTS = (STARTED, STOPPED, START_REFUSED, PROPOSAL_ABANDONED, PROPOSAL_CLOSED,
           DISPATCH_UNKNOWN_OUTCOME, CONTAINER_KILLED, CONTAINER_REMOVED, PROXY_REMOVED,
-          NETWORK_REMOVED, FILES_REMOVED, ACTION_FAILED, FAILURE_SUMMARY)
+          NETWORK_REMOVED, FILES_REMOVED, ACTION_INTENDED, ACTION_FAILED, FAILURE_SUMMARY)
+
+#: the proposal events: written in the transaction that makes the change
+TRANSACTIONAL_EVENTS = (PROPOSAL_ABANDONED, PROPOSAL_CLOSED, DISPATCH_UNKNOWN_OUTCOME)
 
 # --- reason codes of the service's own events -------------------------------------------------
 STOP_SIGNAL = "signal"
@@ -98,6 +113,15 @@ def _one_of(allowed: tuple[str, ...]) -> Callable[[Any], str]:
 
 FAILURE_CODES = tuple(c for c in DETAIL_CODES)
 FILE_KINDS = tuple(vocab.REASONS[vocab.UNLINK_FILE])
+#: the actions that cannot be undone, and every reason one of them can carry
+IRREVERSIBLE_KINDS = vocab.DOCKER_ACTIONS + (vocab.UNLINK_FILE,)
+INTENT_REASONS = tuple(sorted({r for k in IRREVERSIBLE_KINDS for r in vocab.REASONS[k]}))
+#: the event that says an irreversible action was carried out and verified, by kind
+RESULT_EVENT_OF_KIND = {
+    vocab.KILL_CONTAINER: CONTAINER_KILLED, vocab.REMOVE_CONTAINER: CONTAINER_REMOVED,
+    vocab.REMOVE_PROXY: PROXY_REMOVED, vocab.REMOVE_NETWORK: NETWORK_REMOVED,
+    vocab.UNLINK_FILE: FILES_REMOVED,
+}
 
 #: event -> (scope, {payload key: validator}).
 SCHEMAS: dict[str, tuple[str, dict[str, Callable[[Any], Any]]]] = {
@@ -119,6 +143,9 @@ SCHEMAS: dict[str, tuple[str, dict[str, Callable[[Any], Any]]]] = {
     NETWORK_REMOVED: ("global", {
         "network_id": _id, "reason_code": _one_of(vocab.REASONS[vocab.REMOVE_NETWORK])}),
     FILES_REMOVED: ("global", {"kind": _one_of(FILE_KINDS), "count": _count}),
+    ACTION_INTENDED: ("either", {
+        "kind": _one_of(IRREVERSIBLE_KINDS), "subject_id": _id,
+        "reason_code": _one_of(INTENT_REASONS)}),
     ACTION_FAILED: ("either", {
         "kind": _one_of(vocab.ACTION_KINDS), "subject_id": _id,
         "reason_code": _one_of(FAILURE_CODES)}),
@@ -140,7 +167,10 @@ def validate(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def emit(event_type: str, payload: Mapping[str, Any], *, engagement_id: str | None = None,
          subject_type: str | None = None, subject_id: str | None = None) -> int:
-    """Write one reconciler event. Raises ``PayloadRejected`` or ``AuditWriteError``."""
+    """Write one reconciler event on the audit path's own connection. Raises ``PayloadRejected`` or
+    ``AuditWriteError``. A proposal event is refused: :func:`emit_in_transaction` writes it."""
+    if event_type in TRANSACTIONAL_EVENTS:
+        raise PayloadRejected(f"{event_type!r:.40} is written in the transaction of its change")
     clean = validate(event_type, payload)
     scope, _ = SCHEMAS[event_type]
     reasons = tuple(v for k, v in clean.items() if k == "reason_code")
@@ -157,6 +187,24 @@ def emit(event_type: str, payload: Mapping[str, Any], *, engagement_id: str | No
         subject_type=subject_type, subject_id=subject_id, reasons=reasons, payload=clean)
 
 
+def emit_in_transaction(conn: Any, event_type: str, payload: Mapping[str, Any], *,
+                        engagement_id: str, subject_type: str | None = None,
+                        subject_id: str | None = None) -> int:
+    """Write one **proposal** event on ``conn``, the transaction that makes the change it describes.
+
+    Only the events in ``TRANSACTIONAL_EVENTS`` may be written this way: they say "this transition
+    committed", so they must commit and roll back with it. Raises ``PayloadRejected`` or
+    ``AuditWriteError``; either way the caller's transaction must roll back.
+    """
+    if event_type not in TRANSACTIONAL_EVENTS:
+        raise PayloadRejected(f"{event_type!r:.40} is not written inside a transaction")
+    clean = validate(event_type, payload)
+    reasons = tuple(v for k, v in clean.items() if k == "reason_code")
+    return record_audit_in_transaction(
+        conn, engagement_id=_id(engagement_id), actor=ACTOR, event_type=event_type,
+        subject_type=subject_type, subject_id=subject_id, reasons=reasons, payload=clean)
+
+
 # --- from a verified result to its event -------------------------------------------------------
 
 _PROPOSAL_EVENT = {
@@ -169,28 +217,63 @@ _CONTAINER_EVENT = {
 }
 
 
+def for_proposal_action(
+    action: Action,
+) -> tuple[str, dict[str, Any], str | None, str, str]:
+    """``(event type, payload, engagement id, subject type, subject id)`` of the event a proposal
+    action is recorded as. The same value serves the in-transaction write and :func:`for_result`."""
+    if action.kind not in _PROPOSAL_EVENT:
+        raise ValueError("not a proposal action")
+    return (_PROPOSAL_EVENT[action.kind],
+            {"proposal_id": action.subject_id, "reason_code": action.reason_code},
+            action.engagement_id, "action_proposal", action.subject_id)
+
+
+def _subject_of(action: Action) -> tuple[str | None, str, str]:
+    """``(engagement id, subject type, subject id)`` as the intent and the result both name it."""
+    if action.kind in _CONTAINER_EVENT:
+        run = action.run_id or ""
+        return action.expected_owner, "tool_run", run
+    if action.kind == vocab.REMOVE_NETWORK:
+        network = (action.name or "").rsplit("-", 1)[-1]
+        return None, "sandbox_network", network
+    if action.kind == vocab.UNLINK_FILE:
+        return None, "host_file", action.name or ""
+    raise ValueError("not an irreversible action")
+
+
+def intent_for(
+    action: Action,
+) -> tuple[str, dict[str, Any], str | None, str, str]:
+    """``(event type, payload, engagement id, subject type, subject id)`` of
+    ``reconciler.action_intended`` for an irreversible action: written before the call is made."""
+    engagement, subject_type, subject_id = _subject_of(action)
+    return (ACTION_INTENDED,
+            {"kind": action.kind, "subject_id": subject_id, "reason_code": action.reason_code},
+            engagement, subject_type, subject_id)
+
+
 def for_result(
     result: Result,
 ) -> tuple[str, dict[str, Any], str | None, str | None, str | None] | None:
-    """``(event type, payload, engagement id, subject type, subject id)`` for a **done** result,
-    ``None`` for one that has no event of its own (a removed file is counted, not reported alone).
+    """``(event type, payload, engagement id, subject type, subject id)`` for a **done** result.
     Raises ``ValueError`` for a result that is not done: an unverified action is never an event."""
     if result.outcome != DONE:
         raise ValueError("only a verified result becomes an event")
     action = result.action
     if action.kind in _PROPOSAL_EVENT:
-        return (_PROPOSAL_EVENT[action.kind],
-                {"proposal_id": action.subject_id, "reason_code": action.reason_code},
-                action.engagement_id, "action_proposal", action.subject_id)
+        return for_proposal_action(action)
+    engagement, subject_type, subject_id = _subject_of(action)
     if action.kind in _CONTAINER_EVENT:
-        run = action.run_id or ""
-        return (_CONTAINER_EVENT[action.kind], {"run_id": run, "reason_code": action.reason_code},
-                action.expected_owner, "tool_run", run)
+        return (_CONTAINER_EVENT[action.kind],
+                {"run_id": subject_id, "reason_code": action.reason_code},
+                engagement, subject_type, subject_id)
     if action.kind == vocab.REMOVE_NETWORK:
-        network = (action.name or "").rsplit("-", 1)[-1]
-        return (NETWORK_REMOVED, {"network_id": network, "reason_code": action.reason_code},
-                None, "sandbox_network", network)
-    return None
+        return (NETWORK_REMOVED, {"network_id": subject_id, "reason_code": action.reason_code},
+                None, subject_type, subject_id)
+    # one event per file, so that the file's intent has a result to be paired with
+    return (FILES_REMOVED, {"kind": action.reason_code, "count": 1}, None, subject_type,
+            subject_id)
 
 
 def failure(result: Result) -> tuple[str, dict[str, Any], str | None, str]:

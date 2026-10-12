@@ -76,6 +76,10 @@ class Thresholds:
     #: the failure summary is written at most this often, and only if something failed (the
     #: service, 6d)
     summary_period_s: int
+    #: a kill, a removal or an unlink that failed is not tried again on the same object by this
+    #: process for this long (the service, D64 item 4): each attempt writes an intent and makes a
+    #: Docker call, and a persistently failing object would otherwise do both every pass
+    retry_after_failure_s: int
 
     # -- derived bounds (D64 §1.2): functions of the configured terms, never configured themselves
     # --
