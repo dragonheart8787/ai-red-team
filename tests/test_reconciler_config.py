@@ -30,7 +30,8 @@ VALID = {
     "RECONCILER_KILL_MARGIN_S": "60", "RECONCILER_RETENTION_S": "86400",
     "RECONCILER_NETWORK_IDLE_S": "3600", "RECONCILER_NETWORK_SWEEP_PERIOD_S": "86400",
     "RECONCILER_VERIFY_WAIT_S": "10", "RECONCILER_SUMMARY_PERIOD_S": "3600",
-    "RECONCILER_RETRY_AFTER_FAILURE_S": "1800",
+    "RECONCILER_RETRY_AFTER_FAILURE_S": "1800", "RECONCILER_MAX_PAGES": "20",
+    "RECONCILER_MAX_ACTIONS_PER_PASS": "500", "RECONCILER_BACKOFF_MAX_S": "900",
 }
 
 
@@ -145,7 +146,7 @@ def test_the_derived_bounds_are_functions_of_the_configured_terms_only():
 def _example() -> dict[str, str]:
     values = {}
     for line in (REPO / ".env.example").read_text().splitlines():
-        match = re.fullmatch(r"(RECONCILER_[A-Z_]+_S)=(\S+)", line)
+        match = re.fullmatch(r"(RECONCILER_(?!READER)[A-Z_]+)=(\S+)", line)
         if match:
             values[match.group(1)] = match.group(2)
     return values

@@ -1059,5 +1059,92 @@ CATALOGUE += [
 ]
 
 
+M0024 = "db/migrations/versions/0024_reconciler_paging.py"
+
+
+def _load_0024():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("m0024", Path(__file__).resolve().parents[1] / M0024)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_M24 = _load_0024()
+PAGING_TESTS = ("tests/test_reconciler_paging.py", "tests/test_reconciler_reader.py",
+                "tests/test_reconciler_structure.py")
+OBSERVE_PY2 = "control_plane/reconciler/observe.py"
+_AFTER_SIG = "public.reconciler_stuck_proposals_after(bigint, text)"
+
+
+def _after_sql(*changes: tuple[str, str]) -> str:
+    """The next-page function as a CREATE OR REPLACE, with each (old, new) applied once."""
+    text = _M24._function("public").replace(*_OR_REPLACE, 1)
+    for old, new in changes:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
+_GUARD = "              AND p_after_us IS NOT NULL AND p_after_id IS NOT NULL\n"
+
+CATALOGUE += [
+    # ---- pre-deletion item 6 (ACCEPTANCE 5.88): more than 5,000 stuck rows
+    Mutation(
+        "D64-P6-a", "the next page returns rows for a cursor with a missing half", PAGING_TESTS,
+        sql_up=_as_function_owner(_after_sql((_GUARD, ""))),
+        sql_down=_as_function_owner(_after_sql()),
+        targets=("test_a_cursor_with_a_missing_half_returns_nothing",)),
+    Mutation(
+        "D64-P6-b", "the next page starts at the cursor row instead of after it", PAGING_TESTS,
+        sql_up=_as_function_owner(_after_sql(("                  > ROW(timestamptz", "                  >= ROW(timestamptz"))),
+        sql_down=_as_function_owner(_after_sql()),
+        targets=("test_the_cursor_is_strictly_after_the_row_it_names_and_before_the_next",
+                 "test_rows_with_the_same_timestamp_are_ordered_by_id_and_the_cursor_splits_them")),
+    Mutation(
+        "D64-P6-c", "the next page has no stage filter of its own", PAGING_TESTS,
+        sql_up=_as_function_owner(_after_sql((f"WHERE p.pipeline_stage IN ({_M23._stages()})", "WHERE true"))),
+        sql_down=_as_function_owner(_after_sql()),
+        targets=("test_the_next_page_has_the_same_stage_filter_order_and_limit_as_the_first",
+                 "test_s2_the_caller_s_guc_does_not_widen_the_next_page_either")),
+    Mutation(
+        "D64-P6-d", "a page that does not move past the one before is not an error", PAGING_TESTS,
+        edits=(Edit(OBSERVE_PY2, "        if cursor is not None and moved <= cursor:", "        if False:"),),
+        targets=("test_a_page_that_does_not_move_past_the_one_before_is_an_error_not_a_loop",)),
+    Mutation(
+        "D64-P6-e", "a proposal seen on two pages is counted twice", PAGING_TESTS,
+        edits=(Edit(OBSERVE_PY2, "            seen[row.proposal_id] = row", "            seen[(row.proposal_id, row.stage_updated_us)] = row"),),
+        targets=("test_a_row_seen_on_two_pages_counts_once_and_the_later_reading_wins",)),
+    Mutation(
+        "D64-P6-f", "a read that stopped at max_pages never says it was truncated", PAGING_TESTS,
+        edits=(Edit(OBSERVE_PY2, "    return tuple(seen.values()), True\n", "    return tuple(seen.values()), False\n"),),
+        targets=("test_reading_stops_after_max_pages_and_says_truncated",)),
+    Mutation(
+        "D64-P6-g", "max_pages is ignored: only the first page is ever read", PAGING_TESTS,
+        edits=(Edit(OBSERVE_PY2, "    for _ in range(max(1, max_pages)):", "    for _ in range(1):"),),
+        targets=("test_e23_five_thousand_rows_the_reconciler_leaves_alone_hide_one_it_must_close",
+                 "test_reading_stops_after_max_pages_and_says_truncated")),
+    Mutation(
+        "D64-P6-h", "a pass carries out every planned action, whatever the cap", PAGING_TESTS,
+        edits=(Edit(SERVICE_PY2, "            actions = actions[:self.th.max_actions_per_pass]\n", ""),),
+        targets=("test_a_pass_carries_out_at_most_the_configured_actions_and_the_next_does_the_rest",
+                 "test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap")),
+    Mutation(
+        "D64-P6-i", "the back-off has no ceiling", PAGING_TESTS,
+        edits=(Edit(SERVICE_PY2, "            return min(interval * 2 ** self._backoff_steps, max(interval, self.th.backoff_max_s))\n",
+                    "            return interval * 2 ** self._backoff_steps\n"),),
+        targets=("test_the_wait_doubles_after_a_backlog_that_got_nothing_done_up_to_the_cap",)),
+    Mutation(
+        "D64-P6-j", "a pass that got something done is also made to wait longer", PAGING_TESTS,
+        edits=(Edit(SERVICE_PY2, "        if backlog and report.outcomes.get(DONE, 0) == 0:", "        if backlog:"),),
+        targets=("test_a_pass_that_did_something_never_slows_down_and_resets_the_wait",)),
+    Mutation(
+        "D64-P6-k", "the service reads one page whatever RECONCILER_MAX_PAGES says", PAGING_TESTS,
+        edits=(Edit(SERVICE_PY2, "clock_us=self._wall_clock_us, max_pages=self.th.max_pages)", "clock_us=self._wall_clock_us, max_pages=1)"),),
+        targets=("test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap",
+                 "test_a_truncated_read_is_reported_by_the_pass")),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

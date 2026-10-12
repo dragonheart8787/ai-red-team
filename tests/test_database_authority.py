@@ -79,6 +79,12 @@ EXPECTED_DEFINERS = {
         "search_path": ["pg_catalog", "public", "pg_temp"],
         "why": "the reconciler's cross-engagement read (5.80)",
     },
+    "reconciler_stuck_proposals_after(p_after_us bigint, p_after_id text)": {
+        "owner": "reconciler_fn_owner", "returns": "record",
+        "execute": {"reconciler_fn_owner", "reconciler_reader"},
+        "search_path": ["pg_catalog", "public", "pg_temp"],
+        "why": "the next page of the reconciler's cross-engagement read (5.88)",
+    },
     "reconciler_run_states(p_run_ids text[])": {
         "owner": "reconciler_fn_owner", "returns": "record",
         "execute": {"reconciler_fn_owner", "reconciler_reader"},
@@ -97,7 +103,8 @@ EXPECTED_VIEWS = {
 
 #: Migration files that may contain a SECURITY DEFINER function. A new one must be added here, which
 #: is the moment a person looks at it.
-DEFINER_MIGRATIONS = {"0015_baseline_freeze.py", "0023_reconciler_reader.py"}
+DEFINER_MIGRATIONS = {"0015_baseline_freeze.py", "0023_reconciler_reader.py",
+                      "0024_reconciler_paging.py"}
 
 #: Privilege keywords: ``GRANT <one of these> ...`` is an object grant, not a role membership.
 PRIVILEGES = {

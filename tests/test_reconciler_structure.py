@@ -176,7 +176,7 @@ def test_observe_calls_no_verb_that_changes_anything():
         assert not called & CHANGING_VERBS, (name, called & CHANGING_VERBS)
 
 
-def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
+def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_three_reads():
     tree = _tree("observe")
     flags = [n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
              and n.attr.startswith("O_")]
@@ -186,11 +186,12 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
                   and re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|CREATE|ALTER)\b",
                                 n.value)]
     reads = [s for s in statements if s.startswith("SELECT")]
-    assert len(reads) == len(statements) == 2, statements
+    assert len(reads) == len(statements) == 3, statements
     for statement in reads:
         assert re.fullmatch(
-            r"SELECT (\*|run_id, status) FROM reconciler_(stuck_proposals\(\)|run_states\("
-            r"CAST\(:ids AS text\[\]\)\))", statement), statement
+            r"SELECT (\*|run_id, status) FROM reconciler_(stuck_proposals\(\)"
+            r"|stuck_proposals_after\(:after_us, :after_id\)"
+            r"|run_states\(CAST\(:ids AS text\[\]\)\))", statement), statement
     assert not [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(
         n.func, "id", "") in {"open", "exec", "eval"}]
 
@@ -201,7 +202,7 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
 #: verification wait to the act half (6c), the failure summary's period and the retry-after-failure
 #: wait to the service (6d, item 4)
 USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s", "summary_period_s",
-                  "retry_after_failure_s"}
+                  "retry_after_failure_s", "max_pages", "max_actions_per_pass", "backoff_max_s"}
 
 
 def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():
@@ -539,3 +540,14 @@ def test_the_service_hands_the_act_half_both_hooks():
     assert len(calls) == 1
     assert {k.arg for k in calls[0].keywords} >= {"record", "intend", "on_verified"}
 
+
+
+def test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap():
+    observe_calls = _calls(_function("service", "_observe"), "observe")
+    assert observe_calls
+    given = {k.arg: ast.unparse(k.value) for k in observe_calls[0].keywords}
+    assert given.get("max_pages") == "self.th.max_pages", given
+    pass_once = _function("service", "pass_once")
+    sliced = [n for n in ast.walk(pass_once) if isinstance(n, ast.Subscript)
+              and "max_actions_per_pass" in ast.unparse(n)]
+    assert sliced, "pass_once does not bound the actions it carries out by max_actions_per_pass"

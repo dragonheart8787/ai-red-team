@@ -1,4 +1,4 @@
-"""The reconciler's read side: two SECURITY DEFINER functions, one reader role (D64, 0023).
+"""The reconciler's read side: three SECURITY DEFINER functions, one reader role (D64, 0023, 0024).
 
 A ``SECURITY DEFINER`` function runs under its owner's row policies -- it does not bypass them --
 and four mistakes were measured on the way to this design (E20). Each has a structural test here
@@ -56,8 +56,9 @@ spec.loader.exec_module(M)
 
 OWNER, READER = RECONCILER_FN_OWNER_ROLE, RECONCILER_READER_ROLE
 STUCK = "reconciler_stuck_proposals"
+AFTER = "reconciler_stuck_proposals_after"             # the next page (migration 0024)
 RUNS = "reconciler_run_states"
-FUNCTIONS = {f"{STUCK}()": STUCK, f"{RUNS}(text[])": RUNS}
+FUNCTIONS = {f"{STUCK}()": STUCK, f"{AFTER}(bigint, text)": AFTER, f"{RUNS}(text[])": RUNS}
 
 #: The columns of ``reconciler_stuck_proposals()``, in order, with their types. The complete list.
 STUCK_COLUMNS = [
@@ -119,7 +120,7 @@ def test_the_owner_owns_nothing_but_the_two_functions(db_available):
             "SELECT proname FROM pg_proc WHERE proowner = CAST(:r AS regrole)", r=OWNER)),
     }
     assert owned["relations"] == [] and owned["schemas"] == [] and owned["types"] == [], owned
-    assert owned["functions"] == sorted([STUCK, RUNS])
+    assert owned["functions"] == sorted([STUCK, AFTER, RUNS])
 
 
 def test_only_the_migration_role_is_a_member_of_the_owner_without_inheriting_it(db_available):
@@ -544,9 +545,97 @@ def test_the_row_limit_and_the_order_are_in_the_definition(db_available):
     assert re.search(rf"ORDER BY p\.stage_updated_at, p\.proposal_id\s+LIMIT {M.LIMIT_ROWS}\b", src)
 
 
-def test_there_are_exactly_two_reconciler_functions(db_available):
+def test_there_are_exactly_three_reconciler_functions(db_available):
     names = sorted(r[0] for r in _catalog(
         "SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace "
         "AND proname LIKE 'reconciler\\_%'"))
-    assert names == sorted([STUCK, RUNS])
+    assert names == sorted([STUCK, AFTER, RUNS])
     assert stages.ABANDONED not in M.STUCK_STAGES
+
+
+# ---------------------------------------------------------------------------------------------
+# the next page (migration 0024): the same rows, strictly after a keyset cursor
+# ---------------------------------------------------------------------------------------------
+
+def _after(us, pid, conn=None):
+    sql = text(f"SELECT * FROM {AFTER}(:u, :i)")
+    params = {"u": us, "i": pid}
+    try:
+        if conn is None:
+            with reconciler_reader_scope() as c:
+                return [dict(r) for r in c.execute(sql, params).mappings().all()]
+        return [dict(r) for r in conn.execute(sql, params).mappings().all()]
+    except DBAPIError as exc:
+        pytest.fail(f"the call did not answer: {str(exc.orig)[:100]}")
+
+
+def test_the_next_page_returns_exactly_the_columns_of_the_first(db_available):
+    columns = _result_columns(f"{AFTER}(bigint, text)")
+    assert columns == STUCK_COLUMNS == _result_columns(f"{STUCK}()")
+
+
+def test_the_next_page_has_the_same_stage_filter_order_and_limit_as_the_first(db_available):
+    src = _proc(f"{AFTER}(bigint, text)")[4]
+    match = re.search(r"WHERE\s+p\.pipeline_stage IN \(([^)]*)\)", src)
+    assert match and re.findall(r"'([a-z_]+)'", match.group(1)) == list(M.STUCK_STAGES)
+    assert re.search(rf"ORDER BY p\.stage_updated_at, p\.proposal_id\s+LIMIT {M.LIMIT_ROWS}\b", src)
+
+
+def test_the_cursor_is_strictly_after_the_row_it_names_and_before_the_next(db_available,
+                                                                          engagement_id):
+    ids = [_proposal(engagement_id, "dispatching", age_s=n) for n in (10, 20, 30)]
+    first = _stuck()
+    a, b, c = (first[p] for p in ids)
+    after_a = {r["proposal_id"] for r in _after(a["stage_updated_us"], a["proposal_id"])}
+    assert a["proposal_id"] not in after_a and {b["proposal_id"], c["proposal_id"]} <= after_a
+    after_b = {r["proposal_id"] for r in _after(b["stage_updated_us"], b["proposal_id"])}
+    assert b["proposal_id"] not in after_b and a["proposal_id"] not in after_b
+    assert c["proposal_id"] in after_b
+    after_c = {r["proposal_id"] for r in _after(c["stage_updated_us"], c["proposal_id"])}
+    assert not {a["proposal_id"], b["proposal_id"], c["proposal_id"]} & after_c
+
+
+def test_rows_with_the_same_timestamp_are_ordered_by_id_and_the_cursor_splits_them(
+        db_available, engagement_id):
+    same = sorted(_proposal(engagement_id, "dispatching", age_s=500) for _ in range(3))
+    first = _stuck()
+    us = {first[p]["stage_updated_us"] for p in same}
+    assert len(us) == 1
+    (us,) = us
+    page = _after(us, same[0])
+    ids = [r["proposal_id"] for r in page]
+    assert same[0] not in ids and ids.index(same[1]) < ids.index(same[2])
+    page = _after(us, same[1])
+    ids = {r["proposal_id"] for r in page}
+    assert same[2] in ids and same[0] not in ids and same[1] not in ids
+
+
+@pytest.mark.parametrize("us, pid", [(None, "x"), (5, None), (None, None)])
+def test_a_cursor_with_a_missing_half_returns_nothing(db_available, us, pid):
+    """SQL compares rows left to right, so ROW(a, b) > ROW(x, NULL) is true whenever a > x; found by
+    calling it with (5, NULL), which returned every stuck row. The function says it in a WHERE."""
+    assert _after(us, pid) == []
+
+
+def test_the_cursor_text_is_data_and_not_sql(db_available):
+    _after(0, "'; DROP TABLE action_proposals; --")       # answers (rows or none), raises nothing
+    with get_engine().connect() as conn:                 # and the table is still there
+        assert conn.execute(text("SELECT to_regclass('public.action_proposals')")).scalar_one()
+
+
+def test_s2_the_caller_s_guc_does_not_widen_the_next_page_either(db_available, engagement_id):
+    recorded = _proposal(engagement_id, "recorded")
+    stuck = _proposal(engagement_id, "dispatching")
+    with reconciler_reader_scope() as conn:
+        conn.execute(text("SELECT set_config('cyberorch.engagement_id', :e, true)"),
+                     {"e": engagement_id})
+        seen = {r["proposal_id"] for r in _after(0, "", conn)}
+    assert stuck in seen and recorded not in seen
+
+
+def test_the_next_page_is_refused_to_every_role_but_the_reader(db_available):
+    for role in ("cyberorch_app", "ui_reader", "scheduler_reader", "global_auditor"):
+        assert not _catalog(
+            "SELECT has_function_privilege(:r, "
+            "'public.reconciler_stuck_proposals_after(bigint, text)'::regprocedure, 'EXECUTE')",
+            r=role)[0][0], role

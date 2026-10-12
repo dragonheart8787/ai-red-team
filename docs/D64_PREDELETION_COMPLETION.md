@@ -354,3 +354,62 @@ risk the step-6 report named was a future one. What is now in place:
 
 `D64-P5-a`…`d`, all valid: the query asking for the older name only; the reconciler's event unmapped; the older
 sentence built from the proposal's id; another module hard-coding the older name.
+
+---
+
+## 6. More than 5,000 stuck proposals (item 6) — **built**
+
+### 6.1 The problem, reproduced (E23)
+
+`reconciler_stuck_proposals()` returns the **oldest** 5,000 stuck rows (5.80). The reconciler leaves some stuck rows alone
+on purpose: an `approved` proposal with no approval row is *reported* (`approval_missing`), not closed. So if the oldest
+5,000 are all of that kind, a proposal behind them that does need closing is never seen, pass after pass. The step-6 report
+said only that a full page "reports `result_truncated`"; it did not say that the truncation could hide work for ever.
+
+`tests/test_reconciler_paging.py::test_e23_…` builds exactly that on the real database: 5,100 `approved` proposals with no
+approval, the oldest rows in the table, and one `decided` proposal behind them. Read as before (one page) the result is full,
+every row in it is one of the 5,100, and the `decided` proposal is **absent** — the starvation. Read with two pages it is
+found, nothing is repeated, and the plan asks for `close / abandoned_after_decision` for it and for none of the 5,100.
+(The development database makes this a live risk, not a thought experiment: a full run of the suite leaves about 600
+proposals in a stuck stage, §2.1.)
+
+### 6.2 What was built
+
+* **Migration 0024: `reconciler_stuck_proposals_after(p_after_us bigint, p_after_id text)`** — the next page: the same
+  rows, columns, order and limit, strictly after a keyset cursor (the `stage_updated_us` and `proposal_id` of the last row
+  of the page before). A keyset, not an `OFFSET`: the partial index on `(stage_updated_at, proposal_id)` serves it as a range
+  scan, and rows that leave the stuck set between two pages cannot make the next one skip. `SECURITY DEFINER`, the same
+  owner, `search_path`, stage filter, `REVOKE ALL FROM PUBLIC`, `EXECUTE` for the reader alone — item 1's audit covers it and
+  `EXPECTED_DEFINERS` has a fifth entry. The zero-argument function is untouched: it is the first page.
+* **A bug found by calling it:** with the cursor `(5, NULL)` the function returned **every** stuck row. SQL compares rows
+  left to right, so `ROW(a, b) > ROW(x, NULL)` is true whenever `a > x` and the missing half is never looked at. A cursor
+  with a `NULL` half now returns nothing, stated in the `WHERE` and tested for each of the three shapes (mutation `D64-P6-a`).
+* **`observe.read_stuck(conn, max_pages)`** reads page after page. It stops at the first page that is not full — or after
+  `max_pages`, and then says **truncated**. A page that does not move past the cursor is an `ObservationError`, not a loop. A
+  proposal whose timestamp moved while the pages were being read can appear twice (it moved later); it counts once and the
+  later reading wins — the act half's compare-and-set is on whatever it saw.
+* **A bound on a pass.** `max_pages` (20 → 100,000 rows) and `max_actions_per_pass` (500): a backlog after an outage is
+  worked off in passes of bounded size that can be stopped between, not in one long one; what is left is planned again by
+  the next pass (level-triggered, as everywhere). `PassReport` says how many actions it did not carry out (`limited`) and
+  whether its read was truncated; a backlog is also logged at WARNING by count (no ids).
+* **A wait that backs off.** After a pass that was truncated or limited **and got nothing done**, the wait before the next
+  doubles, up to `backoff_max_s` (900 s), never below the interval; any pass that did something, or had no backlog, resets
+  it. A pass that is making progress never slows down; a pass that sees a backlog it cannot touch (the 5,100 above) stops
+  re-reading it every minute. The three new settings are required and have no default, like every other
+  (`RECONCILER_MAX_PAGES`, `RECONCILER_MAX_ACTIONS_PER_PASS`, `RECONCILER_BACKOFF_MAX_S`).
+
+### 6.3 Tests and mutations
+
+15 tests in `test_reconciler_paging.py`, 10 in `test_reconciler_reader.py` (the new function's columns, filter, order, limit,
+strictness at the cursor, ties on the timestamp, a missing half, an injection-shaped cursor, the caller's GUC, who may call
+it), structure and config tests; 11 mutations `D64-P6-a`…`k`, all valid (a missing cursor half accepted; the cursor row
+repeated; no stage filter on the new page; a non-moving page accepted; duplicates counted; truncation never reported; one page
+whatever `max_pages` says; the action cap ignored; no ceiling on the back-off; a busy pass slowed; the configured page count
+not passed on).
+
+### 6.4 Not done
+
+* A page is read with plain `READ COMMITTED`; a snapshot across pages would remove the duplicates rather than tolerate
+  them, at the price of holding a transaction open across Docker calls. Left as it is.
+* Truncation is a report in the plan and a log line, not an audit event of its own: the audit vocabulary is closed and a
+  persistent backlog is already visible as `report:result_truncated` in `reconciler.started` and as the pass's cadence.

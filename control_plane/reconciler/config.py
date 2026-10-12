@@ -48,7 +48,8 @@ DECISION_STAGE_FLOOR_S = 150
 
 @dataclass(frozen=True)
 class Thresholds:
-    """Seconds, all of them. Field order is the documentation order."""
+    """Whole numbers: seconds, except ``max_pages`` and ``max_actions_per_pass``, which are counts.
+    Field order is the documentation order."""
 
     #: ``received`` / ``decided`` for this long -> abandoned / closed (``abandoned_after_decision``)
     stage_grace_s: int
@@ -80,6 +81,16 @@ class Thresholds:
     #: process for this long (the service, D64 item 4): each attempt writes an intent and makes a
     #: Docker call, and a persistently failing object would otherwise do both every pass
     retry_after_failure_s: int
+    #: the most pages of ``reconciler_stuck_proposals`` one pass reads (5,000 rows each); when the
+    #: last is still full the pass says its read was truncated and leaves the rest for the next one
+    max_pages: int
+    #: the most actions one pass carries out; the rest is planned again by the next pass. A backlog
+    #: (after an outage, or a development database) is worked off in bounded passes that can be
+    #: stopped between, not in one long one
+    max_actions_per_pass: int
+    #: after a pass that was truncated or limited and still got nothing done, the wait before the
+    #: next doubles, up to this; any pass that is neither resets it
+    backoff_max_s: int
 
     # -- derived bounds (D64 §1.2): functions of the configured terms, never configured themselves
     # --
@@ -139,7 +150,7 @@ def load(env: Mapping[str, str]) -> Thresholds:
             continue
         text = raw.strip()
         if not text.isascii() or not text.isdigit():
-            problems.append(f"{key}: not a whole number of seconds")
+            problems.append(f"{key}: not a whole number")
             continue
         number = int(text)
         if number < 1:

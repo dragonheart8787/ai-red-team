@@ -611,7 +611,7 @@ and S2–S5 each have a mutation (`D64-6a-a`…`j`). Where the build differs fro
   `tool_runs` per stuck row); four indexes bring it to 0.15 s `[E21]`.
 * **Output.** Time is the database's clock, as epoch microseconds, with `db_now_us` in every row; booleans (kill flag,
   enrolled, revoked) are two-value enums. The result is capped at 5,000 oldest rows: **a full page means "truncated"** and
-  the plan must say so. Whether the budget is a proxy run's is not exposed (the allowlist is an array); the plan uses
+  the plan must say so. *(Since migration 0024 the reader pages past the first page with `reconciler_stuck_proposals_after`, up to `RECONCILER_MAX_PAGES`; `docs/D64_PREDELETION_COMPLETION.md` §6, ACCEPTANCE 5.88.)* Whether the budget is a proxy run's is not exposed (the allowlist is an array); the plan uses
   the proxy-run bound for every run, which is the longer one.
 * **`reconciler_run_states`** refuses a NULL and more than 2,000 ids with a fixed error text, because an absent id
   means *orphan*.

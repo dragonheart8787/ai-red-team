@@ -20,6 +20,11 @@ ladder exists:
 * an irreversible action that **failed** is not tried again on the same object by this process for
   ``retry_after_failure_s``, so a persistently failing object costs one intent and one call per
   period, not per pass;
+* **a backlog is worked off in bounded passes** (D64 pre-deletion item 6): a pass reads at most
+  ``max_pages`` pages of stuck proposals and carries out at most ``max_actions_per_pass`` actions;
+  what is left is planned again by the next pass. A pass that was truncated or limited and still
+  got nothing done makes the wait before the next one double, up to ``backoff_max_s``; any other
+  pass resets it. A pass that gets something done never slows down;
 * a failed action is audited once per ``(object, kind, reason)`` per process lifetime and counted
   after that; every ``summary_period_s`` a **failure summary** says how many of what failed, if any
   did. A restart reports once more -- stated, not hidden (D64-11);
@@ -47,11 +52,11 @@ from docker.errors import DockerException
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from control_plane.audit.logger import AuditWriteError
-from control_plane.reconciler import act, emit, observe
+from control_plane.reconciler import act, emit, observe, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
 from control_plane.reconciler.model import Observation
-from control_plane.reconciler.outcome import FAILED, Result
+from control_plane.reconciler.outcome import DONE, FAILED, Result
 from control_plane.reconciler.plan import plan as make_plan
 from control_plane.state.db import reconciler_reader_scope
 
@@ -105,6 +110,8 @@ class PassReport:
     truncated: bool = False
     #: actions left alone this pass: the same object failed less than ``retry_after_failure_s`` ago
     held_back: int = 0
+    #: actions planned and not carried out this pass because ``max_actions_per_pass`` was reached
+    limited: int = 0
 
 
 def _planned(plan) -> dict[str, int]:
@@ -138,6 +145,7 @@ class Reconciler:
         self._window_started = monotonic()
         self._audit_failed = False
         self._failed_at: dict[tuple[str, str], float] = {}
+        self._backoff_steps = 0
 
     @property
     def audits(self) -> bool:
@@ -200,7 +208,7 @@ class Reconciler:
                     on_pass(report)
                 passes += 1
                 if max_passes is None or passes < max_passes:
-                    stop_event.wait(interval)
+                    stop_event.wait(self.next_wait(report, interval))
         except BaseException as exc:  # noqa: BLE001
             stop = _translate(exc)
             self.finish(stop.reason)
@@ -216,6 +224,8 @@ class Reconciler:
                 self._assert_lock()
             plan = make_plan(self._observe(), self.th)
             actions, held_back = self._not_recently_failed(plan.actions)
+            limited = max(0, len(actions) - self.th.max_actions_per_pass)
+            actions = actions[:self.th.max_actions_per_pass]
             results = act.carry_out(
                 actions, self.settings, th=self.th, client=self.client,
                 directory=self.directory, expected_uid=self.expected_uid,
@@ -228,9 +238,25 @@ class Reconciler:
                 self._assert_lock()
         except BaseException as exc:
             raise _translate(exc) from exc
-        report = PassReport(planned=_planned(plan), outcomes=Counter(r.outcome for r in results),
-                            results=results, reports=len(plan.reports), held_back=held_back)
+        report = PassReport(
+            planned=_planned(plan), outcomes=Counter(r.outcome for r in results), results=results,
+            reports=len(plan.reports), held_back=held_back, limited=limited,
+            truncated=any(r.reason_code == vocab.RESULT_TRUNCATED for r in plan.reports))
+        if report.truncated or report.limited:
+            log.warning("reconciler: a backlog (read truncated: %s, actions not carried out: %d)",
+                        report.truncated, report.limited)
         return report
+
+    def next_wait(self, report: PassReport, interval: float) -> float:
+        """The wait before the next pass: ``interval``, or -- after a pass that was truncated or
+        limited and got nothing done -- twice the last wait, up to ``backoff_max_s``. A pass that
+        got something done, or had no backlog, resets it."""
+        backlog = report.truncated or report.limited > 0
+        if backlog and report.outcomes.get(DONE, 0) == 0:
+            self._backoff_steps += 1
+            return min(interval * 2 ** self._backoff_steps, max(interval, self.th.backoff_max_s))
+        self._backoff_steps = 0
+        return interval
 
     def _not_recently_failed(self, actions) -> tuple[tuple, int]:
         """Drop the irreversible actions whose object this process failed on less than
@@ -262,7 +288,7 @@ class Reconciler:
         with reconciler_reader_scope() as conn:
             obs = observe.observe(conn, self.client, directory=self.directory,
                                   expected_uid=self.expected_uid,
-                                  clock_us=self._wall_clock_us)
+                                  clock_us=self._wall_clock_us, max_pages=self.th.max_pages)
         # This process's memory of how long each network has been idle: first seen idle *now* if
         # it has not been seen before, so nothing is removed in the first idle period.
         idle_now = {n.network_id for n in obs.networks if not n.attached}

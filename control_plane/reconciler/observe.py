@@ -37,7 +37,7 @@ ALLOWLIST_LABEL = "cyberorch.allowlist"
 NETWORK_PREFIX = "cyberorch-allow-"
 FILE_PREFIXES = ("cyberorch-cred-", "cyberorch-tls-")
 
-#: Held equal to migration 0023 by a test.
+#: Held equal to migrations 0023 and 0024 by a test.
 STUCK_ROW_LIMIT = 5000
 RUN_IDS_PER_CALL = 2000
 
@@ -65,14 +65,48 @@ class ObservationError(Exception):
 # the database
 # ---------------------------------------------------------------------------------------------
 
-def read_stuck(conn: Any) -> tuple[tuple[StuckRow, ...], bool]:
-    """``reconciler_stuck_proposals()``: the rows, and whether the result filled its page."""
-    result = conn.execute(text("SELECT * FROM reconciler_stuck_proposals()"))
+FIRST_PAGE_SQL = "SELECT * FROM reconciler_stuck_proposals()"
+NEXT_PAGE_SQL = "SELECT * FROM reconciler_stuck_proposals_after(:after_us, :after_id)"
+
+
+def _read_page(conn: Any, cursor: tuple[int, str] | None) -> tuple[StuckRow, ...]:
+    if cursor is None:
+        result = conn.execute(text(FIRST_PAGE_SQL))
+    else:
+        result = conn.execute(text(NEXT_PAGE_SQL), {"after_us": cursor[0], "after_id": cursor[1]})
     columns = tuple(result.keys())
     if columns != STUCK_COLUMNS:
-        raise ObservationError(f"reconciler_stuck_proposals() returned columns {columns}")
-    rows = tuple(_stuck_row(dict(zip(columns, values, strict=True))) for values in result)
-    return rows, len(rows) >= STUCK_ROW_LIMIT
+        raise ObservationError(f"the stuck-proposals function returned columns {columns}")
+    return tuple(_stuck_row(dict(zip(columns, values, strict=True))) for values in result)
+
+
+def read_stuck(conn: Any, *, max_pages: int = 1) -> tuple[tuple[StuckRow, ...], bool]:
+    """The stuck proposals, page after page, and whether rows may remain unread.
+
+    Each page is the next ``STUCK_ROW_LIMIT`` rows of ``reconciler_stuck_proposals()`` in
+    ``(stage_updated_us, proposal_id)`` order; the next page starts strictly after the last row of
+    the one before (a keyset, never an offset). Reading stops at the first page that is not full --
+    nothing more -- or after ``max_pages``, and then ``truncated`` is True: the pass says so and
+    leaves the rest for the next one (level-triggered). Without paging the oldest 5,000 rows are the
+    only ones ever seen, and a row behind 5,000 that the reconciler leaves alone is never reached.
+
+    A page that does not advance the cursor is an error, not a loop. A proposal whose stage
+    timestamp moved while the pages were being read can appear twice (it moved later); the later
+    reading wins, and the act half's compare-and-set is on whatever it saw.
+    """
+    seen: dict[str, StuckRow] = {}
+    cursor: tuple[int, str] | None = None
+    for _ in range(max(1, max_pages)):
+        page = _read_page(conn, cursor)
+        for row in page:
+            seen[row.proposal_id] = row
+        if len(page) < STUCK_ROW_LIMIT:
+            return tuple(seen.values()), False
+        moved = (page[-1].stage_updated_us, page[-1].proposal_id)
+        if cursor is not None and moved <= cursor:
+            raise ObservationError("a page of stuck proposals did not move past the one before")
+        cursor = moved
+    return tuple(seen.values()), True
 
 
 def _stuck_row(values: dict[str, Any]) -> StuckRow:
@@ -213,11 +247,12 @@ def list_files(directory: str, mounted: frozenset[str]) -> tuple[FileObs, ...]:
 # ---------------------------------------------------------------------------------------------
 
 def observe(conn: Any, client: Any, *, directory: str, expected_uid: int,
-            clock_us: Callable[[], int],
-            idle_seen: dict[str, int] | None = None) -> Observation:
+            clock_us: Callable[[], int], idle_seen: dict[str, int] | None = None,
+            max_pages: int = 1) -> Observation:
     """One pass's reading. The database connection is only used here, and the caller closes it
-    before the act half opens its own."""
-    rows, truncated = read_stuck(conn)
+    before the act half opens its own. ``max_pages`` is ``RECONCILER_MAX_PAGES`` (the service
+    always passes it)."""
+    rows, truncated = read_stuck(conn, max_pages=max_pages)
     containers = list_containers(client)
     host_now = clock_us()
     run_ids = {c.run_id for c in containers if c.run_id}

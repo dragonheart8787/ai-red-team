@@ -35,7 +35,8 @@ TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
-    retry_after_failure_s=1800)
+    retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
+    backoff_max_s=900)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -136,9 +137,11 @@ def test_a_well_formed_row_is_read_into_the_model():
 
 
 def test_a_full_page_is_reported_as_truncated():
-    rows, truncated = observe.read_stuck(FakeConn(rows=[good()] * observe.STUCK_ROW_LIMIT))
+    page = [good(proposal_id=f"P{i:05d}", stage_updated_us=i)
+            for i in range(observe.STUCK_ROW_LIMIT)]
+    rows, truncated = observe.read_stuck(FakeConn(rows=page))
     assert truncated is True and len(rows) == observe.STUCK_ROW_LIMIT
-    _, truncated = observe.read_stuck(FakeConn(rows=[good()] * (observe.STUCK_ROW_LIMIT - 1)))
+    _, truncated = observe.read_stuck(FakeConn(rows=page[:-1]))
     assert truncated is False
 
 

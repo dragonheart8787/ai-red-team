@@ -53,7 +53,8 @@ TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
-    retry_after_failure_s=1800)
+    retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
+    backoff_max_s=900)
 STATE_ONLY = Settings(Mode.STATE_ONLY)
 DRY_RUN = Settings(Mode.DRY_RUN)
 
@@ -395,7 +396,7 @@ def test_a_period_without_a_failure_writes_no_summary(engagement_id, emptydir):
 
 def test_a_network_is_not_planned_for_removal_in_the_first_idle_period_of_a_new_process(
         engagement_id, emptydir, monkeypatch):
-    monkeypatch.setattr(service.observe, "read_stuck", lambda conn: ((), False))
+    monkeypatch.setattr(service.observe, "read_stuck", lambda conn, **kw: ((), False))
     clock = {"us": 1_800_000_000 * 1_000_000}
 
     class Net:
