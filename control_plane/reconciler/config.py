@@ -73,6 +73,9 @@ class Thresholds:
     #: after a kill, a removal or an unlink, how long the act half waits for the change to be seen
     #: before it calls the action failed (the act half, 6c)
     verify_wait_s: int
+    #: the failure summary is written at most this often, and only if something failed (the
+    #: service, 6d)
+    summary_period_s: int
 
     # -- derived bounds (D64 §1.2): functions of the configured terms, never configured themselves
     # --

@@ -44,6 +44,8 @@ PKG = REPO / "control_plane" / "reconciler"
 PURE = ("model", "vocab", "plan")
 ALL = ("config", "model", "observe", "plan", "vocab")          # the plan half
 ACT = ("act", "act_docker", "act_files", "outcome")            # the act half (step 6c)
+SERVICE = ("service", "emit", "lock")                          # the process around them (step 6d)
+EVERY = ALL + ACT + SERVICE
 
 FORBIDDEN_EVERYWHERE = (
     "control_plane.state", "control_plane.orchestrator", "control_plane.api", "control_plane.audit",
@@ -91,7 +93,7 @@ def _starts(module: str, prefixes) -> bool:
 
 
 def test_the_package_is_exactly_the_files_the_steps_made():
-    assert sorted(p.stem for p in PKG.glob("*.py")) == sorted(["__init__", *ALL, *ACT])
+    assert sorted(p.stem for p in PKG.glob("*.py")) == sorted(["__init__", *EVERY])
 
 
 def test_the_plan_half_reaches_neither_the_database_nor_the_orchestrator_nor_docker_nor_the_audit():
@@ -196,8 +198,8 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads():
 # --- every configured number matters ---------------------------------------------------------
 
 #: configured here, used by a later step: the sweep's period belongs to the service (6d), the
-#: verification wait to the act half (6c)
-USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s"}
+#: verification wait to the act half (6c), the failure summary's period to the service (6d)
+USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s", "summary_period_s"}
 
 
 def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():
@@ -333,8 +335,8 @@ def _attribute_calls(name: str) -> set[str]:
 
 def test_kill_and_remove_are_called_in_act_docker_only_and_unlink_in_act_files_only():
     for verb in ("kill", "remove"):
-        assert {n for n in ALL + ACT if verb in _attribute_calls(n)} == {"act_docker"}, verb
-    assert {n for n in ALL + ACT if "unlink" in _attribute_calls(n)} == {"act_files"}
+        assert {n for n in EVERY if verb in _attribute_calls(n)} == {"act_docker"}, verb
+    assert {n for n in EVERY if "unlink" in _attribute_calls(n)} == {"act_files"}
 
 
 def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
@@ -342,13 +344,22 @@ def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
                  "pause", "unpause", "commit", "build", "pull", "push", "load", "update", "rename",
                  "connect", "disconnect", "exec_create", "exec_start", "rmtree", "removedirs",
                  "rmdir", "mkdir", "symlink", "link", "chmod", "chown", "truncate", "write",
-                 "write_text", "write_bytes", "replace", "executemany"}
-    for name in ALL + ACT:
+                 "write_text", "write_bytes", "executemany"}
+    for name in EVERY:
+        if name == "lock":        # starts its own watchdog *thread*: nothing in Docker or on disk
+            continue
         assert not _attribute_calls(name) & forbidden, (name, _attribute_calls(name) & forbidden)
+    for name in EVERY:        # and nothing in `os` that changes the filesystem, but act_files
+        os_calls = {n.func.attr for n in ast.walk(_tree(name)) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == "os"}
+        assert not os_calls & {"replace", "rename", "remove", "rmdir", "removedirs", "mkdir",
+                               "makedirs", "chmod", "chown", "symlink", "link", "truncate",
+                               "utime"} - ({"unlink"} if name == "act_files" else set()), name
 
 
 def test_stages_abandon_is_called_in_act_py_alone():
-    assert {n for n in ALL + ACT if "abandon" in _attribute_calls(n)} == {"act"}
+    assert {n for n in EVERY if "abandon" in _attribute_calls(n)} == {"act"}
 
 
 # --- the deletion flag ---------------------------------------------------------------------------
@@ -378,3 +389,45 @@ def test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it
                         if not (isinstance(value, ast.Constant) and value.value is False):
                             offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
     assert offenders == [], f"something other than False reaches allow_deletions: {offenders}"
+
+
+# =============================================================================================
+# the process around them
+# =============================================================================================
+
+def test_the_service_is_the_one_module_that_joins_the_halves():
+    def importers(module: str, name: str | None = None) -> set[str]:
+        out = set()
+        for n in EVERY:
+            for node in ast.walk(_tree(n)):
+                if isinstance(node, ast.ImportFrom) and node.module == module and (
+                        name is None or name in {a.name for a in node.names}):
+                    out.add(n)
+        return out
+
+    assert importers("control_plane.reconciler", "act") == {"service"}
+    assert importers("control_plane.reconciler", "observe") == {"service"}
+    assert importers("control_plane.reconciler.plan") == {"service"}
+    assert importers("control_plane.state.db", "reconciler_reader_scope") == {"service"}
+    assert importers("control_plane.state.db", "engagement_scope") == {"act"}
+    assert importers("control_plane.state.db", "open_reconciler_lock_connection") == {"lock"}
+    assert importers("control_plane.audit.logger", "record_audit") == {"emit"}
+    assert importers("control_plane.reconciler", "emit") == {"service"}
+    assert importers("control_plane.reconciler.emit") <= {"service"}
+
+
+def test_only_emit_writes_the_audit_trail_and_only_through_its_whitelist():
+    for name in EVERY:
+        calls = {n.func.id if isinstance(n.func, ast.Name) else n.func.attr
+                 for n in ast.walk(_tree(name)) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name | ast.Attribute)}
+        if name != "emit":
+            assert "record_audit" not in calls, name
+    emit_calls = [n for n in ast.walk(_tree("emit")) if isinstance(n, ast.Call)
+                  and getattr(n.func, "id", "") == "record_audit"]
+    assert len(emit_calls) == 2                 # the global and the engagement-scoped write
+    # and validation happens before either: `emit()` calls `validate` first
+    emit_fn = next(n for n in _tree("emit").body if isinstance(n, ast.FunctionDef)
+                   and n.name == "emit")
+    first_call = next(c for c in ast.walk(emit_fn) if isinstance(c, ast.Call))
+    assert getattr(first_call.func, "id", "") == "validate"

@@ -757,6 +757,109 @@ CATALOGUE += [
                  "test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on")),
 ]
 
+LOCK_PY = "control_plane/reconciler/lock.py"
+SERVICE_PY = "control_plane/reconciler/service.py"
+EMIT_PY = "control_plane/reconciler/emit.py"
+RUN_PY = "scripts/run_reconciler.py"
+LOCK_TESTS = ("tests/test_reconciler_lock.py",)
+EMIT_TESTS = ("tests/test_reconciler_emit.py",)
+SERVICE_TESTS = ("tests/test_reconciler_service.py",)
+
+CATALOGUE += [
+    # ---- step 6d: the process -- lock, audit vocabulary, stopping, the command line
+    Mutation(
+        "D64-6d-a", "the reconciler's lock key is the scheduler's", LOCK_TESTS,
+        edits=(Edit(LOCK_PY, "LOCK_KEY = 0x0D64_5EC0_0000_0001", "LOCK_KEY = 0x0D62_5C4E_D000_0001"),),
+        targets=("test_the_two_keys_differ_and_neither_is_a_negative_bigint",
+                 "test_the_reconciler_and_the_scheduler_can_both_be_held_and_each_excludes_its_own_copy")),
+    Mutation(
+        "D64-6d-b", "a lost lock is never noticed", LOCK_TESTS + SERVICE_TESTS,
+        edits=(Edit(LOCK_PY, "        if not ok:\n            self.lost.set()\n        return ok",
+                    "        return True"),),
+        targets=("test_a_session_that_is_terminated_has_lost_the_lock_and_says_so",
+                 "test_a_lost_lock_stops_the_service_before_it_acts_exit_6")),
+    Mutation(
+        "D64-6d-c", "a dry run contends for the lock", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if not self.audits:                         # a dry run: no lock, no audit, no state",
+                    "        if False:"),),
+        targets=("test_a_dry_run_takes_no_lock_moves_nothing_and_writes_no_audit_record",)),
+    Mutation(
+        "D64-6d-d", "an unverified result becomes an event", EMIT_TESTS,
+        edits=(Edit(EMIT_PY, "    if result.outcome != DONE:\n        raise ValueError(\"only a verified result becomes an event\")\n", ""),),
+        targets=("test_a_result_that_was_not_verified_has_no_event",)),
+    Mutation(
+        "D64-6d-e", "a failed action is reported on every pass", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "                if key in self._reported:\n                    continue\n", ""),),
+        targets=("test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_summary",)),
+    Mutation(
+        "D64-6d-f", "the failure summary ignores its period", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if now - self._window_started < self.th.summary_period_s:\n            return\n", ""),),
+        targets=("test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_summary",)),
+    Mutation(
+        "D64-6d-g", "an audit failure inside the hook is ignored", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if self._audit_failed:                      # the hook failed inside act.carry_out\n            raise StopService(emit.STOP_AUDIT_FAILED)\n", ""),),
+        targets=("test_an_audit_record_that_cannot_be_written_stops_the_service_after_the_action_happened",)),
+    Mutation(
+        "D64-6d-h", "the lock is not checked before a pass", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "            if self.audits:\n                self._assert_lock()\n            plan = make_plan(",
+                    "            plan = make_plan("),),
+        targets=("test_a_lost_lock_stops_the_service_before_it_acts_exit_6",)),
+    Mutation(
+        "D64-6d-i", "a network is judged idle from its creation, not from when this process saw it",
+        SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "        self._idle_seen = {nid: self._idle_seen.get(nid, obs.host_now_us) for nid in idle_now}",
+                    "        self._idle_seen = {nid: 0 for nid in idle_now}"),),
+        targets=("test_a_network_is_not_planned_for_removal_in_the_first_idle_period_of_a_new_process",)),
+    Mutation(
+        "D64-6d-j", "an event payload may carry an extra key", EMIT_TESTS,
+        edits=(Edit(EMIT_PY, "    if set(payload) != set(schema):", "    if False:"),),
+        targets=("test_an_event_refuses_an_extra_key_a_missing_key_and_a_nested_value",)),
+    Mutation(
+        "D64-6d-k", "an id may be any string", EMIT_TESTS,
+        edits=(Edit(EMIT_PY, "    if not isinstance(value, str) or not _ID.fullmatch(value):\n        raise PayloadRejected(f\"not an id",
+                    "    if not isinstance(value, str):\n        raise PayloadRejected(f\"not an id"),),
+        targets=("test_an_id_is_an_id_and_not_text_a_path_or_a_cidr",)),
+    Mutation(
+        "D64-6d-l", "a boolean is a count", EMIT_TESTS,
+        edits=(Edit(EMIT_PY, "    if isinstance(value, bool) or not isinstance(value, int) or value < 0:",
+                    "    if not isinstance(value, int) or value < 0:"),),
+        targets=("test_a_count_is_a_non_negative_integer_and_not_a_boolean",)),
+    Mutation(
+        "D64-6d-m", "a pass limited to engagements is not limited", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if self.only_engagements is None:\n            return obs\n", "        return obs\n"),),
+        targets=("test_a_pass_limited_to_an_engagement_leaves_every_other_engagements_rows_alone",)),
+    Mutation(
+        "D64-6d-n", "the service writes the audit trail itself", ACT_STRUCT,
+        edits=(Edit(SERVICE_PY, "from control_plane.audit.logger import AuditWriteError",
+                    "from control_plane.audit.logger import AuditWriteError, record_audit"),),
+        targets=("test_the_service_is_the_one_module_that_joins_the_halves",)),
+    Mutation(
+        "D64-6d-o", "the lock-held exit code is another one", SERVICE_TESTS,
+        edits=(Edit(SERVICE_PY, "EXIT_LOCK_HELD = 2", "EXIT_LOCK_HELD = 9"),),
+        targets=("test_a_second_reconciler_is_refused_with_exit_2_and_says_so",
+                 "test_the_exit_codes_are_distinct_and_the_scheduler_s_where_they_overlap")),
+    Mutation(
+        "D64-6d-p", "a refused configuration exits 0", SERVICE_TESTS,
+        edits=(Edit(RUN_PY, "        _audit_refusal(args.mode)\n        return EXIT_CONFIG_REFUSED", "        _audit_refusal(args.mode)\n        return 0"),),
+        targets=("test_a_refused_configuration_is_exit_8_naming_the_keys_and_nothing_else",)),
+    Mutation(
+        "D64-6d-q", "the command line has a default mode", SERVICE_TESTS,
+        edits=(Edit(RUN_PY, "    parser.add_argument(\"--mode\", required=True, choices=sorted(act.MODE_NAMES))",
+                    "    parser.add_argument(\"--mode\", default=\"state-only\", choices=sorted(act.MODE_NAMES))"),),
+        targets=("test_there_is_no_default_mode_and_no_third_one",)),
+    Mutation(
+        "D64-6d-r", "the command line accepts a deletion option", SERVICE_TESTS,
+        edits=(Edit(RUN_PY, "    parser.add_argument(\"--once\", action=\"store_true\", help=\"run one pass and exit\")",
+                    "    parser.add_argument(\"--once\", action=\"store_true\", help=\"run one pass and exit\")\n"
+                    "    parser.add_argument(\"--allow-deletions\", action=\"store_true\")"),),
+        targets=("test_there_is_no_default_mode_and_no_third_one",)),
+    Mutation(
+        "D64-6d-s", "a network event names the whole container-network name", EMIT_TESTS,
+        edits=(Edit(EMIT_PY, "        network = (action.name or \"\").rsplit(\"-\", 1)[-1]\n        return (NETWORK_REMOVED",
+                    "        network = (action.name or \"\")\n        return (NETWORK_REMOVED"),),
+        targets=("test_a_verified_result_becomes_exactly_its_event_and_validates",)),
+]
+
 
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

@@ -29,7 +29,8 @@ from docker.errors import APIError, NotFound
 from sqlalchemy import text
 
 from control_plane.reconciler import act, vocab
-from control_plane.reconciler.act import Mode, Settings, run, settings_for
+from control_plane.reconciler.act import Mode, Settings, settings_for
+from control_plane.reconciler.act import carry_out as run
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
@@ -42,17 +43,12 @@ from control_plane.reconciler.outcome import (
     SKIPPED_OFF,
 )
 from control_plane.state.db import engagement_scope
-from tests.test_reconciler_reader import (
-    _approval,
-    _capability,
-    _proposal,
-    _run,
-)
+from tests.reconciler_support import _approval, _capability, _proposal, _run
 
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
-    network_sweep_period_s=86400, verify_wait_s=10)
+    network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600)
 STATE_ONLY = Settings(Mode.STATE_ONLY)
 DELETIONS = Settings(Mode.STATE_ONLY, allow_deletions=True)       # tests only: no code path sets it
 IMAGE = "python:3.12-slim"

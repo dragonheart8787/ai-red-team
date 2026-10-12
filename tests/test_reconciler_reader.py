@@ -45,6 +45,7 @@ from control_plane.state.db import (
     ui_reader_scope,
 )
 from tests import scheduler_support as sup
+from tests.reconciler_support import _approval, _capability, _proposal, _run
 
 REPO = Path(__file__).resolve().parents[1]
 MIGRATION = REPO / "db" / "migrations" / "versions" / "0023_reconciler_reader.py"
@@ -70,64 +71,6 @@ STUCK_COLUMNS = [
 ]
 RUN_COLUMNS = [("run_id", "text"), ("status", "text")]
 SCALAR_TYPES = {"text", "bigint", "integer", "boolean"}
-EPOCH = "1970-01-02 00:00:00+00"
-
-
-# ---------------------------------------------------------------------------------------------
-# fixtures: proposals at a stage, with whatever hangs off them
-# ---------------------------------------------------------------------------------------------
-
-def _proposal(eid: str, stage: str, *, age_s: int = 0, key: str | None = None) -> str:
-    """A proposal at ``stage`` whose ``stage_updated_at`` is backdated to 1970 (+ ``age_s``)."""
-    pid = f"PROP-{uuid.uuid4().hex[:12]}"
-    decision = None if stage in ("received", "abandoned") else "ALLOW"
-    detail = "undecided_past_grace" if stage == "abandoned" else None
-    with engagement_scope(eid) as conn:
-        conn.execute(text("""
-            INSERT INTO action_proposals (proposal_id, engagement_id, agent_id,
-                request_idempotency_key, action, target, "authorization", discovery, decision,
-                pipeline_stage, stage_detail, stage_updated_at)
-            VALUES (:p, :e, 'agent', :k, 'network.scan', '{}', '{}', '{}', :d, :s, :det,
-                    CAST(:t AS timestamptz) + make_interval(secs => :age)
-            )"""), {"p": pid, "e": eid, "k": key or f"k-{pid}", "d": decision, "s": stage,
-                    "det": detail, "t": EPOCH, "age": age_s})
-    return pid
-
-
-def _capability(eid: str, pid: str, budget: str, *, lease: str = "now() + interval '1 hour'",
-                revoked: bool = False) -> str:
-    cid = f"CAP-{uuid.uuid4().hex[:12]}"
-    with engagement_scope(eid) as conn:
-        conn.execute(text(f"""
-            INSERT INTO capabilities (capability_id, engagement_id, agent_id, proposal_id, action,
-                policy_version, lease_expires_at, budget, revoked)
-            VALUES (:c, :e, 'agent', :p, 'network.scan', 1, {lease}, CAST(:b AS jsonb), :r)"""),
-            {"c": cid, "e": eid, "p": pid, "b": budget, "r": revoked})
-    return cid
-
-
-def _approval(eid: str, pid: str, *, valid: str = "now() + interval '1 hour'") -> str:
-    aid = f"APR-{uuid.uuid4().hex[:12]}"
-    with engagement_scope(eid) as conn:
-        conn.execute(text(f"""
-            INSERT INTO approvals (approval_id, engagement_id, proposal_id, action_class,
-                valid_until, approved_by, approved_scope)
-            VALUES (:a, :e, :p, 'active', {valid}, 'tester', 'this_proposal_only')"""),
-            {"a": aid, "e": eid, "p": pid})
-    return aid
-
-
-def _run(eid: str, pid: str, cid: str | None, status: str = "running") -> str:
-    rid = f"RUN-{uuid.uuid4().hex[:12]}"
-    with engagement_scope(eid) as conn:
-        conn.execute(text("""
-            INSERT INTO tool_runs (run_id, engagement_id, proposal_id, capability_id, tool,
-                tool_version, normalized_target, execution_fingerprint, status)
-            VALUES (:r, :e, :p, :c, 'nmap', '1', 't', 'fp', :s)"""),
-            {"r": rid, "e": eid, "p": pid, "c": cid, "s": status})
-    return rid
-
-
 def _stuck(conn=None) -> dict[str, dict]:
     """The function's rows by proposal id. A database error is a failed expectation: the call must
     answer, whatever the data."""

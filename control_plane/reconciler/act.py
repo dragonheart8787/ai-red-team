@@ -120,7 +120,7 @@ def _timestamp(microseconds: int) -> datetime:
     return _EPOCH + timedelta(microseconds=microseconds)
 
 
-def run(
+def carry_out(
     actions: Iterable[Action], settings: Settings, *, th: Thresholds | None = None,
     client: Any = None, directory: str | None = None, expected_uid: int | None = None,
     on_verified: Callable[[Result], None] | None = None,

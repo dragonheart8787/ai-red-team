@@ -83,6 +83,11 @@ STAGE_OF_EVENT = {
     "scheduler.skipped": "decision",
     "scheduler.deferred": "engagement",
     "scheduler.resumed": "engagement",
+    # D64: what the reconciler did to a proposal joins that proposal's chain. (Its Docker, file and
+    # service-level events are global or belong to a run, and sit in no proposal's chain.)
+    "reconciler.proposal_abandoned": "decision",
+    "reconciler.proposal_closed": "decision",
+    "reconciler.dispatch_unknown_outcome": "execution",
 }
 
 STAGE_ORDER = [

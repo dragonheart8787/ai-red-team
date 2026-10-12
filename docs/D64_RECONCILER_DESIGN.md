@@ -796,7 +796,13 @@ turns the convention into a check, at the cost of a table and a coupling. **Not 
 disjoint states except through the guarded updates, and the harm of the wrong order is bounded to a stale row
 being acted on one pass later.
 
-**Concurrency tests (planned):**
+**Implemented (D64 step 6d, ACCEPTANCE 5.83).** `scripts/run_reconciler.py` is the separate process; its lock key is its own
+(`0x0D64_5EC0_0000_0001`), the scheduler's is untouched, and a test holds both at once. **Run `--once` before the scheduler
+starts: that is the convention, and it is a convention only.** CT1–CT5 and RT1/RT2/RT5/RT6 are written
+(`tests/test_reconciler_concurrency.py`); RT7 is moot (nothing the plan decides depends on pause), the rest are covered from the
+other end by 5.74/5.78.
+
+**Concurrency tests (as planned; see above for what was written):**
 
 | # | Test | Invariant |
 |---|---|---|
@@ -820,6 +826,11 @@ gone*. The only repeating observations are "found, not acted on" (inside its dea
 and failed actions; those are **logged, not audited**, except that a failed action is audited once per
 `(object, reason_code)` per process lifetime (a restart reports once more — stated, not hidden). If an operator
 needs "reported once, ever", that is a `reconciler_state` table like `scheduler_state` (D64-11).
+
+**Implemented (D64 step 6d, ACCEPTANCE 5.83):** `control_plane/reconciler/emit.py` is this table, with two differences:
+`reconciler.dispatch_unknown_outcome` stands where the table says the existing `dispatch.unknown_outcome` is kept (its payload
+has a boolean and free text; the rule is ids and reason codes, so a query for unresolved runs asks for both), and
+`reconciler.failure_summary` is the periodic summary of failures. A dry run writes no audit record at all.
 
 Proposed vocabulary (names are proposals):
 

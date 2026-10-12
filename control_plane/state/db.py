@@ -542,6 +542,22 @@ def scheduler_admin_scope() -> Iterator[Connection]:
         yield conn
 
 
+def open_reconciler_lock_connection() -> Connection:
+    """The reconciler's singleton-lock session (D64-10): unpooled, autocommit, TCP keepalives, as
+    ``reconciler_reader`` -- a login role that holds no table privilege, which is all an advisory
+    lock needs. Its own key (``control_plane/reconciler/lock.py``), so it can be held together with
+    the scheduler's. The caller owns it and closes it."""
+    from sqlalchemy.pool import NullPool
+
+    engine = create_engine(
+        reconciler_reader_url(), poolclass=NullPool, future=True,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2,
+                      "keepalives_count": 3},
+    )
+    return engine.connect()
+
+
 def open_scheduler_lock_connection() -> Connection:
     """One dedicated, unpooled, autocommit connection for the singleton lock (D62, D58-2).
 

@@ -98,6 +98,15 @@ def _a_global_baseline_exists(_nothing_is_left_behind):
         deactivate_global_layer(published, actor="test-session-teardown")
 
 
+@pytest.fixture(autouse=True)
+def _reconciler_test_rows_are_closed_out():
+    """Stuck rows the reconciler's tests made are moved to a terminal stage when the test ends, so
+    a development database does not fill up with them (tests/reconciler_support.py)."""
+    yield
+    from tests.reconciler_support import close_touched
+    close_touched()
+
+
 @pytest.fixture
 def engagement_id(db_available) -> str:
     """Create a throwaway engagement and return its id."""
