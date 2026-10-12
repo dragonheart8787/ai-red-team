@@ -16,6 +16,10 @@ What is shown, and how it can fail:
   record is written has no record -- the test counts those and bounds them by the number of kills.
 * **CT4** is in ``test_reconciler_lock.py``; **CT5** a real run inside its deadline is not touched
   and an overdue one is killed (deletions on, tests only).
+* **RT3/RT8/RT9** (D64 pre-deletion item 7): a lapsed capability lease, a container removed by the
+  reconciler and the control plane at once, a network removed between ``ensure_network`` and
+  ``containers.create``; **RT4** is ``test_stage_vocabulary.py::test_a7_*`` (both orders), **RT7**
+  is moot (see ACCEPTANCE 5.89).
 * **RT1/RT2/RT6** the reconciler marks a dispatch unknown while the container is "running" and the
   result arrives late (E17 with the real reconciler), the result arriving first, and two passes
   acting on the same action; **RT5** the engagement is killed: whichever of the scheduler and the
@@ -24,6 +28,7 @@ What is shown, and how it can fail:
 
 from __future__ import annotations
 
+import ast
 import os
 import signal
 import subprocess
@@ -37,15 +42,17 @@ from types import SimpleNamespace
 
 import docker
 import pytest
+from docker.errors import APIError, NotFound
 from sqlalchemy import text
 
+from control_plane.capability import broker
 from control_plane.orchestrator import dispatch, stages
 from control_plane.reconciler import act, emit
 from control_plane.reconciler.act import Mode, Settings
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
 from control_plane.reconciler.model import Action
-from control_plane.reconciler.outcome import DONE, LOST_RACE
+from control_plane.reconciler.outcome import CHANGED, DONE, FAILED, GONE, LOST_RACE
 from control_plane.reconciler.service import Reconciler
 from control_plane.scheduler import decide
 from control_plane.state.db import engagement_scope
@@ -61,8 +68,10 @@ from tests.reconciler_support import (
     residue_world,
 )
 from tests.test_pipeline_stages import CIDR, FakeSandbox, assert_coherent, go, snapshot
+from tests.test_reconciler_act import DELETIONS, kill_action, net_action
 from tests.test_reconciler_config import VALID
 from tests.test_reconciler_service import MADE, _locks_are_let_go, events  # noqa: F401
+from tool_gateway.sandbox import DockerSandbox, NotStarted
 
 REPO = Path(__file__).resolve().parents[1]
 TH = Thresholds(
@@ -429,3 +438,334 @@ def test_rt5_a_killed_engagement_ends_closed_whichever_goes_first_and_nothing_ru
     assert sandbox.calls == 0
     assert stage_of(eid, pid) == ("closed", "engagement_killed")
     assert [e["subject_id"] for e in events(eid, emit.PROPOSAL_CLOSED)] == [pid]
+
+
+# ---------------------------------------------------------------------------------------------
+# RT3 -- a capability_issued row whose lease has lapsed
+# ---------------------------------------------------------------------------------------------
+
+LAPSED = "TIMESTAMPTZ '1970-01-02 01:00:00+00'"
+
+
+def lapsed_world(eid: str) -> tuple[str, str]:
+    pid = _proposal(eid, "capability_issued")
+    cid = _capability(eid, pid, '{"max_duration_seconds": 60}', lease=LAPSED)
+    return pid, cid
+
+
+def planned_close(eid: str, pid: str) -> Action:
+    with engagement_scope(eid) as conn:
+        us = conn.execute(text(
+            "SELECT (extract(epoch FROM stage_updated_at) * 1000000)::bigint "
+            "FROM action_proposals WHERE proposal_id = :p"), {"p": pid}).scalar_one()
+    return Action(kind="close", reason_code="capability_not_live", subject_id=pid,
+                  engagement_id=eid, expected_stage="capability_issued",
+                  planned_stage_updated_us=us)
+
+
+def dispatch_takes_the_stage(eid: str, pid: str) -> None:
+    """What the dispatch's first stage does to a ``capability_issued`` row, in its transaction."""
+    with engagement_scope(eid) as conn:
+        stages.take(conn, pid, expected=stages.CAPABILITY_ISSUED, new=stages.DISPATCHING)
+
+
+def test_rt3_the_dispatch_takes_the_stage_first_and_the_reconciler_moves_nothing(engagement_id):
+    pid, _ = lapsed_world(engagement_id)
+    planned = planned_close(engagement_id, pid)
+    dispatch_takes_the_stage(engagement_id, pid)
+    (result,) = act.carry_out([planned], Settings(Mode.STATE_ONLY))
+    assert result.outcome == LOST_RACE
+    assert stage_of(engagement_id, pid) == (stages.DISPATCHING, None)
+    assert events(engagement_id, emit.PROPOSAL_CLOSED) == []
+
+
+def test_rt3_genuinely_concurrent_the_reconciler_waits_on_the_dispatchs_row_lock(engagement_id):
+    pid, _ = lapsed_world(engagement_id)
+    planned = planned_close(engagement_id, pid)
+    holding, release = threading.Event(), threading.Event()
+    box: dict = {}
+
+    def dispatch_side():
+        with engagement_scope(engagement_id) as conn:
+            stages.take(conn, pid, expected=stages.CAPABILITY_ISSUED, new=stages.DISPATCHING)
+            holding.set()                                 # updated, not yet committed
+            assert release.wait(30)
+
+    def reconciler_side():
+        box["result"] = act.carry_out([planned], Settings(Mode.STATE_ONLY))[0]
+
+    d = threading.Thread(target=dispatch_side)
+    d.start()
+    assert holding.wait(30)
+    r = threading.Thread(target=reconciler_side)
+    r.start()
+    r.join(timeout=1.5)
+    assert r.is_alive(), "the reconciler's update should be waiting on the dispatch's row lock"
+    release.set()
+    d.join(30)
+    r.join(30)
+    assert box["result"].outcome == LOST_RACE
+    assert stage_of(engagement_id, pid) == (stages.DISPATCHING, None)
+    assert events(engagement_id, emit.PROPOSAL_CLOSED) == []
+
+
+def test_rt3_the_reconciler_first_and_the_dispatch_is_refused_without_a_run(engagement_id):
+    pid, _ = lapsed_world(engagement_id)
+    (result,) = act.carry_out([planned_close(engagement_id, pid)], Settings(Mode.STATE_ONLY))
+    assert result.outcome == DONE
+    claimed = []
+
+    def start(conn):
+        stages.take(conn, pid, expected=stages.CAPABILITY_ISSUED, new=stages.DISPATCHING)
+        claimed.append(True)
+
+    outcome = dispatch._begin(engagement_id, pid, start)
+    assert claimed == [] and outcome.reason == "not_claimable"
+    assert stage_of(engagement_id, pid) == ("closed", "capability_not_live")
+    with engagement_scope(engagement_id) as conn:
+        assert conn.execute(text("SELECT count(*) FROM tool_runs WHERE proposal_id = :p"),
+                            {"p": pid}).scalar_one() == 0
+
+
+def test_rt3_a_late_heartbeat_cannot_bring_a_lapsed_lease_back(engagement_id):
+    """The design asked about a heartbeat renewing the lease between the plan and the act. The
+    broker refuses it: a heartbeat after the lease lapsed revokes (``lease_expired``) and extends
+    nothing, so there is no renewal for the reconciler's close to race."""
+    pid, cid = lapsed_world(engagement_id)
+    planned = planned_close(engagement_id, pid)
+    with committing_scope(engagement_id) as conn:
+        renewal = broker.renew_capability(conn, engagement_id=engagement_id, capability_id=cid,
+                                          actor="heartbeat")
+        assert renewal.renewed is False and broker.LEASE_EXPIRED in renewal.reasons
+    with engagement_scope(engagement_id) as conn:
+        lease, count = conn.execute(text(
+            "SELECT lease_expires_at, renewal_count FROM capabilities WHERE capability_id = :c"),
+            {"c": cid}).one()
+    assert lease.year == 1970 and count == 0
+    assert act.carry_out([planned], Settings(Mode.STATE_ONLY))[0].outcome == DONE
+
+
+# ---------------------------------------------------------------------------------------------
+# RT8 -- a container the reconciler and the control plane both want gone
+# ---------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def docker_client():
+    c = docker.from_env()
+    try:
+        c.ping()
+    except Exception as exc:                                         # noqa: BLE001
+        pytest.fail(f"Docker is required for this test: {exc}")
+    return c
+
+
+@pytest.fixture
+def made():
+    things: list = []
+    yield things
+    for thing in things:
+        try:
+            thing.remove(force=True)
+        except (NotFound, APIError):
+            pass
+
+
+def labelled(client, made, *, proxy=False):
+    labels = {"cyberorch.run_id": f"RUN-{uuid.uuid4().hex[:8]}", "cyberorch.owner": "ENG-RT8"}
+    if proxy:
+        labels["cyberorch.egress_proxy"] = "1"
+    c = client.containers.create("python:3.12-slim", command=["sleep", "300"], labels=labels)
+    made.append(c)
+    c.start()
+    c.reload()
+    return c
+
+
+def test_rt8_the_control_plane_removed_it_first_and_that_is_gone_not_a_failure(
+        docker_client, made):
+    proxy = labelled(docker_client, made, proxy=True)
+    a = kill_action(proxy, kind="remove_proxy", reason="owner_run_ended")
+    proxy.remove(force=True)                              # the control plane's own teardown
+    seen = []
+    (result,) = act.carry_out([a], DELETIONS, th=TH, client=docker_client,
+                              on_verified=seen.append)
+    assert (result.outcome, result.detail) == (GONE, None) and seen == []
+
+
+def test_rt8_the_reconciler_removed_it_first_and_the_control_planes_remove_is_swallowed(
+        docker_client, made):
+    proxy = labelled(docker_client, made, proxy=True)
+    a = kill_action(proxy, kind="remove_proxy", reason="owner_run_ended")
+    assert act.carry_out([a], DELETIONS, th=TH, client=docker_client)[0].outcome == DONE
+    with pytest.raises(NotFound):
+        proxy.remove(force=True)
+    # ...and the sandbox's own removals all sit in a try that swallows exactly that
+    tree = ast.parse((REPO / "tool_gateway" / "sandbox.py").read_text())
+    guarded = {id(n) for t in ast.walk(tree) if isinstance(t, ast.Try)
+               and any(h.type is not None and "NotFound" in ast.unparse(h.type)
+                       for h in t.handlers)
+               for stmt in t.body for n in ast.walk(stmt)}
+    removals = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "remove"
+                and any(k.arg == "force" for k in n.keywords)]
+    assert removals and all(id(n) in guarded for n in removals)
+
+
+class Scripted:
+    """A container whose removal or kill is refused with a status, and which may by then be gone."""
+
+    def __init__(self, *, refuse_with: int, vanished: bool, proxy: bool = True):
+        self.id = "c" * 64
+        self.labels = {"cyberorch.run_id": "RUN-S", "cyberorch.owner": "ENG-S",
+                       **({"cyberorch.egress_proxy": "1"} if proxy else {})}
+        self.attrs = {"State": {"Status": "running", "Running": True}}
+        self.refuse_with, self.vanished, self.reloads = refuse_with, vanished, 0
+
+    def reload(self):
+        self.reloads += 1
+        if self.reloads > 1 and self.vanished:              # the first is the inspection
+            raise NotFound("gone")
+
+    def _refuse(self):
+        raise APIError("refused", response=SimpleNamespace(status_code=self.refuse_with,
+                                                           reason="x", content=b""))
+
+    remove = kill = lambda self, **kw: self._refuse()       # noqa: E731
+
+
+class ScriptedClient:
+    def __init__(self, container, *, gone_for_good: bool):
+        self.container, self.gone_for_good = container, gone_for_good
+        self.containers = SimpleNamespace(get=self._get, list=lambda **kw: [])
+
+    def _get(self, _id):
+        if self.gone_for_good and self.container.reloads > 1:
+            raise NotFound("gone")
+        return self.container
+
+
+SCRIPT_TH = Thresholds(**{**TH.__dict__, "verify_wait_s": 0})
+
+
+def scripted(kind, *, refuse_with, vanished, gone_for_good):
+    c = Scripted(refuse_with=refuse_with, vanished=vanished, proxy=(kind == "remove_proxy"))
+    a = Action(kind=kind, reason_code="owner_run_ended" if kind == "remove_proxy"
+               else "overran_deadline", subject_id=c.id, run_id="RUN-S", expected_owner="ENG-S",
+               engagement_id="ENG-S")
+    return act.carry_out([a], DELETIONS, th=SCRIPT_TH,
+                         client=ScriptedClient(c, gone_for_good=gone_for_good))[0]
+
+
+@pytest.mark.parametrize("kind", ["remove_proxy", "kill_container"])
+def test_rt8_scripted_a_refusal_followed_by_not_found_is_gone(kind):
+    """The branch a real race reaches only sometimes: Docker refuses, and by the next look the
+    container is not there. Before the fix this was `failed / daemon_error`."""
+    result = scripted(kind, refuse_with=409, vanished=True, gone_for_good=True)
+    assert (result.outcome, result.detail) == (GONE, None)
+
+
+def test_rt8_scripted_a_409_that_never_resolves_is_a_failure():
+    result = scripted("remove_proxy", refuse_with=409, vanished=False, gone_for_good=False)
+    # still listed, and stays so: not ours to call gone
+    assert (result.outcome, result.detail) == (FAILED, "daemon_error")
+
+
+def test_rt8_scripted_a_409_that_resolves_within_the_wait_is_gone():
+    c = Scripted(refuse_with=409, vanished=False)
+    client = ScriptedClient(c, gone_for_good=False)
+    looks = []
+
+    def get(_id):
+        looks.append(1)
+        if len(looks) > 1:                       # the inspection, then it is gone
+            raise NotFound("gone")
+        return c
+
+    client.containers = SimpleNamespace(get=get, list=lambda **kw: [])
+    a = Action(kind="remove_proxy", reason_code="owner_run_ended", subject_id=c.id,
+               run_id="RUN-S", expected_owner="ENG-S", engagement_id="ENG-S")
+    (result,) = act.carry_out([a], DELETIONS, th=TH, client=client)
+    assert (result.outcome, result.detail) == (GONE, None)
+
+
+def race_once(action: Action, container_id: str) -> tuple:
+    """The reconciler's action and the control plane's ``remove(force=True)``, started together."""
+    barrier = threading.Barrier(2)
+    box: dict = {}
+
+    def reconciler_side():
+        barrier.wait(10)
+        box["r"] = act.carry_out([action], DELETIONS, th=TH, client=docker.from_env())[0]
+
+    def control_plane_side():
+        barrier.wait(10)
+        try:
+            docker.from_env().containers.get(container_id).remove(force=True)
+        except (NotFound, APIError) as exc:
+            box["cp"] = exc.status_code
+
+    run_threads(reconciler_side, control_plane_side)
+    return box["r"].outcome, box["r"].detail
+
+
+@pytest.mark.parametrize("kind", ["remove_proxy", "kill_container"])
+def test_rt8_both_at_once_never_ends_in_a_failure(docker_client, made, kind):
+    """Barrier-started, repeated, real Docker. Docker answers the loser with a 409 ("removal in
+    progress") or a 404; the reconciler must call it ``gone``, ``done`` or ``changed``, never
+    ``failed``. (Before the fix, 20 and 26 of 40 rounds ended ``failed/daemon_error``.)"""
+    reason = "owner_run_ended" if kind == "remove_proxy" else "overran_deadline"
+    outcomes = []
+    for _ in range(12):
+        c = labelled(docker_client, made, proxy=(kind == "remove_proxy"))
+        outcomes.append(race_once(kill_action(c, kind=kind, reason=reason), c.id))
+        try:
+            docker_client.containers.get(c.id).remove(force=True)    # (kill leaves a corpse)
+        except NotFound:
+            pass
+    assert not [o for o in outcomes if o[0] == FAILED], outcomes
+    assert {o[0] for o in outcomes} <= {DONE, GONE, CHANGED}, outcomes
+
+
+# ---------------------------------------------------------------------------------------------
+# RT9 -- the network is removed between ensure_network and containers.create
+# ---------------------------------------------------------------------------------------------
+
+RT9_CIDR = "10.94.9.0/29"
+
+
+def test_rt9_a_network_removed_between_ensure_and_create_is_a_not_started_and_the_retry_works(
+        docker_client, monkeypatch):
+    sandbox = DockerSandbox()
+    sandbox.ensure_image()
+    sandbox.remove_network([RT9_CIDR])
+    real = sandbox.ensure_network
+    removed = []
+
+    def ensure_then_the_reconciler_sweeps_it(allowlist):
+        net = real(allowlist)
+        net.reload()
+        (result,) = act.carry_out([net_action(net)], DELETIONS, th=TH, client=docker_client)
+        removed.append(result.outcome)                   # empty and ours: it goes
+        return net
+
+    monkeypatch.setattr(sandbox, "ensure_network", ensure_then_the_reconciler_sweeps_it)
+    try:
+        first = "no exception"
+        try:
+            sandbox.run(command=["nmap", "--version"], network_allowlist=[RT9_CIDR],
+                        max_duration_seconds=30, run_id="rt9-first")
+        except Exception as exc:                          # noqa: BLE001
+            first = type(exc).__name__ + (" (NotStarted)" if isinstance(exc, NotStarted) else "")
+        # Docker accepts `create` against a name that is gone and refuses at `start`, with
+        # nothing of the run executed: typed from Docker's own record of the container
+        assert first == "ContainerStartRefused (NotStarted)", first
+        assert removed == [DONE]
+        assert docker_client.containers.list(
+            all=True, filters={"label": "cyberorch.run_id=rt9-first"}) == []
+        monkeypatch.undo()
+        retry = sandbox.run(command=["nmap", "--version"], network_allowlist=[RT9_CIDR],
+                            max_duration_seconds=30, run_id="rt9-retry")
+        assert retry.exit_code == 0 and retry.timed_out is False
+        assert docker_client.networks.get(sandbox.network_name([RT9_CIDR]))      # re-created
+    finally:
+        sandbox.remove_network([RT9_CIDR])

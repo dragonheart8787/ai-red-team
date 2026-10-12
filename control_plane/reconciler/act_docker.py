@@ -143,7 +143,10 @@ def _kill(action: Action, container: Any, th: Thresholds, sleep, clock, intend=N
     try:
         container.kill()
     except APIError:
-        container.reload()
+        try:
+            container.reload()
+        except NotFound:                               # removed by someone else in the meantime
+            return Result(action, GONE)
         if _state(container) not in LIVE_STATES:       # it stopped on its own in the meantime
             return Result(action, CHANGED, NOT_RUNNING)
         raise
@@ -167,15 +170,6 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
         return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked
     if (blocked := declared(action, intend)) is not None:
         return blocked
-    try:
-        container.remove(force=proxy)      # a tool container is removed only if it is at rest
-    except NotFound:
-        return Result(action, GONE)
-    except APIError:
-        container.reload()
-        if not proxy and _state(container) in LIVE_STATES:
-            return Result(action, CHANGED, NOT_AT_REST)
-        raise
 
     def gone() -> bool:
         try:
@@ -184,6 +178,24 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
         except NotFound:
             pass
         return not client.containers.list(all=True, filters={"id": action.subject_id})
+
+    try:
+        container.remove(force=proxy)      # a tool container is removed only if it is at rest
+    except NotFound:
+        return Result(action, GONE)
+    except APIError as exc:
+        # Docker answers 409 while another remover is part-way through ("removal of container X
+        # is already in progress"), and the container is still listed as it was. If it is gone
+        # shortly, someone else removed it: not ours to claim and not a failure (RT8).
+        try:
+            container.reload()
+        except NotFound:
+            return Result(action, GONE)
+        if not proxy and _state(container) in LIVE_STATES:
+            return Result(action, CHANGED, NOT_AT_REST)
+        if exc.status_code == 409 and _wait_until(gone, th, sleep, clock):
+            return Result(action, GONE)
+        raise
 
     if _wait_until(gone, th, sleep, clock):
         return Result(action, DONE)
