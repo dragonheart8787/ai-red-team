@@ -221,6 +221,7 @@ FILE_REGISTRY = {
         "records provenance for `recorded`/`closed` only; an abandoned proposal has no outcome",
     "scripts/mutations_d62_d63.py": "mutation text quoting stage literals",
     "scripts/mutations_d64.py": "mutation text quoting stage literals",
+    "scripts/mutations_d65a.py": "mutation text quoting a `stages.` constant (resumed-call edit)",
 }
 
 

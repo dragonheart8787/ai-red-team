@@ -79,6 +79,7 @@ from control_plane.capability.broker import (
 from control_plane.evidence.redaction import detect_secret_formats
 from control_plane.orchestrator import stages
 from control_plane.orchestrator.dispatch import (
+    TIMED_OUT,
     dispatch_code_scan,
     dispatch_collection,
     dispatch_scan,
@@ -995,6 +996,15 @@ def _record_provenance(run: _Run, proposal_id: str) -> None:
         )
 
 
+def _run_timed_out(engagement_id: str, run_id: str) -> bool:
+    """Whether the run's result record carries the timeout reason (``dispatch.TIMED_OUT``)."""
+    with engagement_scope(engagement_id) as conn:
+        return conn.execute(
+            text("SELECT 1 FROM audit_log WHERE subject_id = :r AND event_type = 'tool_run.failed' "
+                 "AND :code = ANY(reasons) LIMIT 1"),
+            {"r": run_id, "code": TIMED_OUT}).scalar_one_or_none() is not None
+
+
 def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
     """The outcome of a proposal that this call found already past the stages it could drive.
 
@@ -1045,6 +1055,9 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
             run_row = detail.removeprefix("dedup_hit:")
     elif stage == stages.RECORDED and detail not in ("succeeded", "failed"):
         failure = detail or None
+    elif stage == stages.RECORDED and detail == "failed" and run_row and _run_timed_out(
+            run.engagement_id, run_row):
+        failure = TIMED_OUT                           # a resumed call tells it as the first did
     if stage in stages.TERMINAL and stage != stages.ABANDONED:
         _record_provenance(run, proposal_id)
     return ActionOutcome(

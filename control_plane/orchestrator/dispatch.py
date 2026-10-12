@@ -300,6 +300,14 @@ NETWORK_UNAVAILABLE = "network_unavailable"
 #: is ``failed`` (retryable), never ``unknown_outcome``.
 SANDBOX_NOT_STARTED = "sandbox_not_started"
 
+#: The run *started* and was ended by its deadline -- the control plane's own timeout, or the
+#: in-container helper's (D65-A, exit 124 after the container ran as long as its deadline). A
+#: ``failed`` run with whatever output it had, recorded as ``tool_run.failed`` carrying this
+#: reason. It is the opposite of the ``NotStarted`` refusals above (``tool_run.refused``, the
+#: exception's own reason code, no run output, retryable as "never ran"): the two must never share
+#: a code, and ``tests/test_timeout_vs_not_started.py`` keeps it so.
+TIMED_OUT = "tool_run_timed_out"
+
 
 def _refused_before_start(
     conn: Connection, *, engagement_id: str, actor: str, run_id: str,
@@ -516,6 +524,7 @@ def _record_scan_result(
                 engagement_id=engagement_id, actor=actor,
                 event_type=f"tool_run.{status}", subject_type="tool_run",
                 subject_id=started.run_id, decision="ALLOW" if status == SUCCEEDED else None,
+                reasons=(TIMED_OUT,) if result.timed_out else (),
                 payload={**result.as_dict(), "evidence_id": evidence_id, **audit_extra,
                          **_revoked_during_run(conn, started.capability_id),
                          **({"late_result": True} if late else {})},
@@ -544,7 +553,8 @@ def _record_scan_result(
             started.run_id, result.exit_code, path, digest,
         )
         raise
-    return DispatchOutcome(True, started.run_id, status, evidence_id=evidence_id, result=result)
+    return DispatchOutcome(True, started.run_id, status, evidence_id=evidence_id, result=result,
+                           reason=TIMED_OUT if result.timed_out else None)
 
 
 def _scan_start(
