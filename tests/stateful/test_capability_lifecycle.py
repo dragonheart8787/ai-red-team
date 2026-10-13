@@ -116,6 +116,7 @@ from control_plane.policy.merge import EffectivePolicy
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
 from control_plane.state.db import engagement_scope, registry_admin_scope
+from tests import residue
 
 ACTION = "network.scan"
 BUDGET_SECONDS = 300
@@ -193,6 +194,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         a live capability makes the retirement cascade and its precision check
         reachable from step zero. Hypothesis still explores freely on top.
         """
+        residue.CREATED.add(self.engagement_id)        # the session closes its stuck rows (5.71)
         with registry_admin_scope(self.engagement_id) as conn:
             create_engagement(
                 conn, engagement_id=self.engagement_id, customer_id="CUST-SM",

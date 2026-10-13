@@ -103,3 +103,75 @@ def test_a_network_with_something_attached_is_a_failure(client):
     finally:
         container.remove(force=True)
         network.remove()
+
+
+# ---------------------------------------------------------------------------------------------
+# the rows the session made are closed, and the ones nobody registered are found
+# ---------------------------------------------------------------------------------------------
+
+def _stages_and_runs(eid):
+    from sqlalchemy import text
+
+    from control_plane.state.db import engagement_scope
+    with engagement_scope(eid) as conn:
+        stages = dict(conn.execute(text(
+            "SELECT proposal_id, pipeline_stage || '/' || coalesce(stage_detail, '') "
+            "FROM action_proposals")).all())
+        runs = dict(conn.execute(text("SELECT run_id, status FROM tool_runs")).all())
+    return stages, runs
+
+
+def test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed(
+        engagement_id, monkeypatch):
+    from tests.reconciler_support import _capability, _proposal, _run, freshen
+    assert engagement_id in residue.CREATED                      # make_engagement registered it
+    monkeypatch.setattr(residue, "CREATED", {engagement_id})     # (the session's others: not here)
+    before = residue.snapshot()
+    stuck = {stage: _proposal(engagement_id, stage) for stage in
+             ("received", "decided", "approved", "capability_issued", "dispatching")}
+    done = _proposal(engagement_id, "abandoned")
+    cap = _capability(engagement_id, stuck["dispatching"], '{"max_duration_seconds": 60}')
+    live, over = _run(engagement_id, stuck["dispatching"], cap, "running"), _run(
+        engagement_id, done, None, "succeeded")
+    freshen(engagement_id, stuck["approved"])
+
+    closed = residue.close_session_rows(before)
+
+    stages_after, runs_after = _stages_and_runs(engagement_id)
+    assert stages_after[stuck["received"]] == "abandoned/undecided_past_grace"
+    for stage in ("decided", "approved", "capability_issued", "dispatching"):
+        assert stages_after[stuck[stage]] == "closed/test_cleanup", stage
+    assert stages_after[done] == "abandoned/undecided_past_grace"            # untouched
+    assert runs_after[live] == "unknown_outcome" and runs_after[over] == "succeeded"
+    assert closed.proposals == {"received": 1, "decided": 1, "approved": 1,
+                                "capability_issued": 1, "dispatching": 1}
+    assert closed.runs >= 1 and closed.failures() == []
+    assert residue.close_session_rows(before).proposals == {}                # and nothing twice
+
+
+def test_an_engagement_nobody_registered_is_left_alone_and_its_new_stuck_row_is_found(
+        engagement_factory, monkeypatch):
+    from tests.reconciler_support import _proposal, freshen
+    eid, _ = engagement_factory()
+    monkeypatch.setattr(residue, "CREATED", set())     # as if it were made by some other route
+    before = residue.snapshot()
+    old = _proposal(eid, "approved")                   # backdated to 1970: older than the session
+    new = _proposal(eid, "received")
+    freshen(eid, new)                                  # touched now: newer than the session
+    try:
+        found = residue.close_session_rows(before)
+        stages_after, _ = _stages_and_runs(eid)
+        assert stages_after[old] == "approved/" and stages_after[new] == "received/"   # not ours
+        assert found.proposals == {} and found.unregistered == [(eid, "received")]
+        assert found.failures() and "did not register" in found.failures()[0]
+    finally:
+        monkeypatch.setattr(residue, "CREATED", {eid})
+        residue.close_session_rows(before)             # take it back, as the session end would
+
+
+def test_a_session_start_after_a_rows_last_touch_makes_it_not_the_sessions(monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setattr(residue, "CREATED", set())
+    before = residue.snapshot()
+    later = replace(before, started_us=before.started_us + 10 * 60 * 1_000_000)
+    assert residue.close_session_rows(later).unregistered == []

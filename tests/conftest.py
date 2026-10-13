@@ -69,15 +69,21 @@ def _nothing_is_left_behind(request):
         return
     yield
     found = residue.leftovers(before)
-    if found.networks_removed:
-        reporter = request.config.pluginmanager.get_plugin("terminalreporter")
-        if reporter is not None:
+    rows = residue.close_session_rows(before)
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        if found.networks_removed:
             reporter.write_line(
                 f"residue: removed {len(found.networks_removed)} sandbox network(s) the session "
                 f"left behind (the sandbox keeps one per allowlist by design)")
-    if found.failures():
-        pytest.fail("the test session left state behind:\n  " + "\n  ".join(found.failures()),
-                    pytrace=False)
+        if rows.proposals or rows.runs:
+            reporter.write_line(
+                f"residue: closed {sum(rows.proposals.values())} stuck proposal(s) "
+                f"{dict(sorted(rows.proposals.items()))} and {rows.runs} in-flight run(s) the "
+                f"session left in {rows.engagements} engagement(s) it created")
+    if found.failures() or rows.failures():
+        pytest.fail("the test session left state behind:\n  "
+                    + "\n  ".join(found.failures() + rows.failures()), pytrace=False)
 
 
 @pytest.fixture(scope="session", autouse=True)
