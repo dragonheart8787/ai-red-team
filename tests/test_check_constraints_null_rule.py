@@ -36,6 +36,12 @@ NULL_IS_A_STATE = {
         "reason is tested `IS NOT NULL AND = 'undecided_past_grace'`, so a NULL detail is refused "
         "explicitly (D64 0022; a NULL-detail row is inserted and refused in "
         "test_action_proposals_decision_stage).",
+    ("tool_runs", "tool_runs_refusal_code_vocabulary"):
+        "NULL for every run that was not refused before it started (all of them, until 0025); the "
+        "vocabulary is the closed set once a code is present (tested in test_refusal_code).",
+    ("tool_runs", "tool_runs_refusal_code_means_never_ran"):
+        "`refusal_code IS NULL OR (status = 'failed' AND exit_code IS NULL)`: a code is allowed "
+        "only on a run that never ran, and NULL is the state of every run that did.",
     ("findings", "findings_verifier_state_check"):
         "NULL = not verified yet; the verifier states are the closed set once it has run.",
     ("scheduler_state", "scheduler_state_reason_code_check"):

@@ -79,7 +79,8 @@ TH = Thresholds(
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
     retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
-    backoff_max_s=900)
+    backoff_max_s=900, network_conflict_window_s=86400, network_conflict_min_idle_s=3600,
+    network_conflict_daily_cap=3)
 SCHED_CIDR = "10.96.62.0/24"
 
 

@@ -55,10 +55,13 @@ from control_plane.audit.logger import AuditWriteError
 from control_plane.reconciler import act, emit, observe, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
-from control_plane.reconciler.model import Observation
+from control_plane.reconciler.model import US, Observation, name_hash_n
 from control_plane.reconciler.outcome import DONE, FAILED, Result
 from control_plane.reconciler.plan import plan as make_plan
 from control_plane.state.db import reconciler_reader_scope
+
+#: the daily cap on removals for a range conflict counts this long back
+DAY_US = 86_400 * US
 
 log = logging.getLogger("cyberorch.reconciler")
 
@@ -112,6 +115,8 @@ class PassReport:
     held_back: int = 0
     #: actions planned and not carried out this pass because ``max_actions_per_pass`` was reached
     limited: int = 0
+    #: the whole plan, uncapped: what the pass saw (the command line prints it all)
+    plan: Any = None
 
 
 def _planned(plan) -> dict[str, int]:
@@ -146,6 +151,9 @@ class Reconciler:
         self._audit_failed = False
         self._failed_at: dict[tuple[str, str], float] = {}
         self._backoff_steps = 0
+        #: when (host clock, microseconds) this process removed each blocking network, by the
+        #: number its name spells: the daily cap's memory (plan rule 5)
+        self._conflict_removed: dict[int, list[int]] = {}
 
     @property
     def audits(self) -> bool:
@@ -240,7 +248,7 @@ class Reconciler:
             raise _translate(exc) from exc
         report = PassReport(
             planned=_planned(plan), outcomes=Counter(r.outcome for r in results), results=results,
-            reports=len(plan.reports), held_back=held_back, limited=limited,
+            reports=len(plan.reports), held_back=held_back, limited=limited, plan=plan,
             truncated=any(r.reason_code == vocab.RESULT_TRUNCATED for r in plan.reports))
         if report.truncated or report.limited:
             log.warning("reconciler: a backlog (read truncated: %s, actions not carried out: %d)",
@@ -284,18 +292,29 @@ class Reconciler:
         if not self.lock.held():
             raise StopService(emit.STOP_LOCK_LOST)
 
+    def conflict_removals_24h(self, now_us: int) -> dict[int, int]:
+        """Removals of each blocking network (by the number its name spells) this process made in
+        the 24 hours before ``now_us``; older ones are forgotten."""
+        horizon = now_us - DAY_US
+        self._conflict_removed = {h: [t for t in times if t > horizon]
+                                  for h, times in self._conflict_removed.items()}
+        return {h: len(t) for h, t in self._conflict_removed.items() if t}
+
     def _observe(self) -> Observation:
         with reconciler_reader_scope() as conn:
             obs = observe.observe(conn, self.client, directory=self.directory,
                                   expected_uid=self.expected_uid,
-                                  clock_us=self._wall_clock_us, max_pages=self.th.max_pages)
+                                  clock_us=self._wall_clock_us, max_pages=self.th.max_pages,
+                                  conflict_window_s=self.th.network_conflict_window_s)
         # This process's memory of how long each network has been idle: first seen idle *now* if
         # it has not been seen before, so nothing is removed in the first idle period.
         idle_now = {n.network_id for n in obs.networks if not n.attached}
         self._idle_seen = {nid: self._idle_seen.get(nid, obs.host_now_us) for nid in idle_now}
-        obs = dataclasses.replace(obs, networks=tuple(
-            dataclasses.replace(n, idle_seen_since_us=self._idle_seen.get(n.network_id))
-            for n in obs.networks))
+        obs = dataclasses.replace(
+            obs, conflict_removals_24h=self.conflict_removals_24h(obs.host_now_us),
+            networks=tuple(
+                dataclasses.replace(n, idle_seen_since_us=self._idle_seen.get(n.network_id))
+                for n in obs.networks))
         if self.only_engagements is None:
             return obs
         # A pass limited to named engagements (a cautious first run): their proposals and the
@@ -304,7 +323,7 @@ class Reconciler:
         return dataclasses.replace(
             obs, rows=tuple(r for r in obs.rows if r.engagement_id in keep),
             containers=tuple(c for c in obs.containers if c.owner in keep),
-            networks=(), files=())
+            networks=(), files=(), conflicts=())
 
     # ------------------------------------------------------------------ audit
     def _record(self, conn, action) -> None:
@@ -349,6 +368,10 @@ class Reconciler:
         try:
             self._window_passes += 1
             for result in results:
+                if (result.outcome == DONE and result.action.kind == vocab.REMOVE_NETWORK
+                        and result.action.reason_code == vocab.RANGE_CONFLICT
+                        and (blocked := name_hash_n(result.action.name or "")) is not None):
+                    self._conflict_removed.setdefault(blocked, []).append(self._wall_clock_us())
                 if result.outcome != FAILED:
                     continue
                 if result.action.kind in emit.IRREVERSIBLE_KINDS:

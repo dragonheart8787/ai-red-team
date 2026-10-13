@@ -309,6 +309,28 @@ SANDBOX_NOT_STARTED = "sandbox_not_started"
 TIMED_OUT = "tool_run_timed_out"
 
 
+#: The closed vocabulary of ``tool_runs.refusal_code`` (migration 0025): every ``reason`` a
+#: ``NotStarted`` subclass can carry, and every ``deadline_helper_*`` code.
+#: ``tests/test_refusal_code.py`` compares it with the migration's CHECK and with the sandbox, so
+#: none can be added in one place.
+REFUSAL_CODES = (
+    "sandbox_not_started", "docker_unreachable", "tool_image_missing", "container_start_refused",
+    "network_unavailable", "network_in_use_by_another_engagement",
+    "network_range_conflicts_with_another_network", "tool_command_not_executable",
+    "deadline_helper_unavailable", "deadline_helper_unsupported_architecture",
+    "deadline_helper_unpinned", "deadline_helper_unreadable", "deadline_helper_missing",
+    "deadline_helper_hash_mismatch", "deadline_helper_not_executable",
+    "deadline_helper_path_in_use",
+)
+
+
+def refusal_code_of(exc: NotStarted) -> str:
+    """The code the run row records. A reason outside the vocabulary (a new subclass nobody added
+    to it) is ``sandbox_not_started``: the database refuses any other value, and a refusal that
+    could not be recorded because its own reason was new would lose the run's record."""
+    return exc.reason if exc.reason in REFUSAL_CODES else SANDBOX_NOT_STARTED
+
+
 def _refused_before_start(
     conn: Connection, *, engagement_id: str, actor: str, run_id: str,
     proposal_id: str, exc: NotStarted,
@@ -319,7 +341,8 @@ def _refused_before_start(
     by construction name no other engagement; who holds the network is in the
     operator log, not in this engagement's trail.
     """
-    _finish_run(conn, run_id, FAILED, exit_code=None)
+    # The code is state, written by the statement that fails the run, in this transaction (0025).
+    _finish_run(conn, run_id, FAILED, exit_code=None, refusal_code=refusal_code_of(exc))
     _set_state(conn, proposal_id, FAILED)
     record_audit(
         engagement_id=engagement_id, actor=actor,
@@ -1553,6 +1576,7 @@ def _finish_run(
     conn: Connection, run_id: str, status: str, *,
     exit_code: int | None, fresh_for_seconds: int | None = None,
     only_if_status: str | None = None, of_proposal: str | None = None,
+    refusal_code: str | None = None,
 ) -> bool:
     """Set a run's final status. With ``only_if_status`` the update is conditional on the run
     still being in that status, with ``of_proposal`` on the run belonging to that proposal, and
@@ -1561,6 +1585,7 @@ def _finish_run(
         text("""
             UPDATE tool_runs
             SET status = :status, exit_code = :code, finished_at = now(),
+                refusal_code = coalesce(CAST(:refusal AS text), refusal_code),
                 fresh_until = CASE
                     WHEN CAST(:fresh AS double precision) IS NULL THEN NULL
                     ELSE now() + make_interval(secs => CAST(:fresh AS double precision))
@@ -1571,7 +1596,7 @@ def _finish_run(
             RETURNING run_id
         """),
         {"run": run_id, "status": status, "code": exit_code, "fresh": fresh_for_seconds,
-         "only": only_if_status, "prop": of_proposal},
+         "only": only_if_status, "prop": of_proposal, "refusal": refusal_code},
     ).scalar_one_or_none()
     return moved is not None
 

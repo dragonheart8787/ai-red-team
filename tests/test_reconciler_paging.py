@@ -86,7 +86,8 @@ def test_e23_five_thousand_rows_the_reconciler_leaves_alone_hide_one_it_must_clo
     assert len(mine) == BULK + 1
 
     obs = SimpleNamespace(rows=tuple(two_pages), run_states={}, containers=(), networks=(),
-                          files=(), host_now_us=max(r.db_now_us for r in two_pages),
+                          files=(), conflicts=(), conflict_removals_24h={},
+                          host_now_us=max(r.db_now_us for r in two_pages),
                           expected_uid=os.getuid(), rows_truncated=False)
     wanted = [a for a in plan(obs, TH).actions if a.subject_id == behind]
     assert [(a.kind, a.reason_code) for a in wanted] == [

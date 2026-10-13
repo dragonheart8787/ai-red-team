@@ -21,7 +21,9 @@ from sqlalchemy import text
 
 from control_plane.reconciler import vocab
 from control_plane.reconciler.model import (
+    NO_BLOCKER,
     US,
+    ConflictObs,
     ContainerObs,
     FileObs,
     NetworkObs,
@@ -121,6 +123,33 @@ def _stuck_row(values: dict[str, Any]) -> StuckRow:
     if values["pipeline_stage"] not in vocab.STUCK_STAGES:
         raise ObservationError("a stage outside the stuck stages was returned")
     return StuckRow(**values)
+
+
+CONFLICT_SQL = "SELECT * FROM reconciler_network_conflicts(:window_s)"
+CONFLICT_COLUMNS = tuple(f.name for f in fields(ConflictObs))
+
+
+def read_network_conflicts(conn: Any, window_s: int) -> tuple[ConflictObs, ...]:
+    """``reconciler_network_conflicts``: the networks that blocked runs the sandbox refused in the
+    last ``window_s`` seconds, as numbers (migration 0025). Every value must be a plain integer, the
+    count and the times not negative and the hash either ``NO_BLOCKER`` or a 48-bit number; anything
+    else is an error, not a guess."""
+    result = conn.execute(text(CONFLICT_SQL), {"window_s": window_s})
+    columns = tuple(result.keys())
+    if columns != CONFLICT_COLUMNS:
+        raise ObservationError(f"the network-conflicts function returned columns {columns}")
+    rows = []
+    for values in result:
+        row = dict(zip(columns, values, strict=True))
+        for name, value in row.items():
+            if type(value) is not int:
+                raise ObservationError(f"{name} is not an integer")
+        if (row["blocking_hash_n"] != NO_BLOCKER and not 0 <= row["blocking_hash_n"] < 1 << 48) \
+                or min(row["conflicts_n"], row["last_conflict_us"], row["last_used_us"],
+                       row["live_runs_n"], row["db_now_us"]) < 0:
+            raise ObservationError("a network-conflicts row is outside its range")
+        rows.append(ConflictObs(**row))
+    return tuple(rows)
 
 
 def read_run_states(conn: Any, run_ids: Iterable[str]) -> dict[str, str]:
@@ -248,7 +277,7 @@ def list_files(directory: str, mounted: frozenset[str]) -> tuple[FileObs, ...]:
 
 def observe(conn: Any, client: Any, *, directory: str, expected_uid: int,
             clock_us: Callable[[], int], idle_seen: dict[str, int] | None = None,
-            max_pages: int = 1) -> Observation:
+            max_pages: int = 1, conflict_window_s: int | None = None) -> Observation:
     """One pass's reading. The database connection is only used here, and the caller closes it
     before the act half opens its own. ``max_pages`` is ``RECONCILER_MAX_PAGES`` (the service
     always passes it)."""
@@ -257,8 +286,9 @@ def observe(conn: Any, client: Any, *, directory: str, expected_uid: int,
     host_now = clock_us()
     run_ids = {c.run_id for c in containers if c.run_id}
     states = read_run_states(conn, run_ids)
+    conflicts = () if conflict_window_s is None else read_network_conflicts(conn, conflict_window_s)
     return Observation(
         rows=rows, run_states=states, containers=containers,
         networks=list_networks(client, idle_seen=idle_seen),
-        files=list_files(directory, live_mount_sources(client)),
+        files=list_files(directory, live_mount_sources(client)), conflicts=conflicts,
         host_now_us=host_now, expected_uid=expected_uid, rows_truncated=truncated)

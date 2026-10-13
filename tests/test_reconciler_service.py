@@ -20,6 +20,7 @@ would be acting on other people's rows.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import subprocess
 import sys
@@ -54,7 +55,8 @@ TH = Thresholds(
     q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
     retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
-    backoff_max_s=900)
+    backoff_max_s=900, network_conflict_window_s=86400, network_conflict_min_idle_s=3600,
+    network_conflict_daily_cap=3)
 STATE_ONLY = Settings(Mode.STATE_ONLY)
 DRY_RUN = Settings(Mode.DRY_RUN)
 
@@ -479,6 +481,33 @@ def test_dry_run_on_the_command_line_prints_what_it_would_do_and_changes_nothing
     assert {state(engagement_id, p)[0] for p in world.values()} == {
         "received", "decided", "capability_issued", "approved", "dispatching"}
     assert events(engagement_id) == []
+
+
+def test_dry_run_prints_the_whole_plan_not_only_what_the_cap_lets_a_pass_carry_out(
+        engagement_id, tmp_path):
+    """500 results are all a pass carries out; the plan is longer, and a plan someone is asked to
+    read before deletion is switched on has to be the whole of it, with the reports."""
+    world = residue_world(engagement_id)
+    done = cli("--mode", "dry-run", "--once", "--engagement", engagement_id,
+               "--directory", str(tmp_path), env={**VALID, "RECONCILER_MAX_ACTIONS_PER_PASS": "2"})
+    assert done.returncode == 0, done.stderr
+    lines = [json.loads(ln) for ln in done.stdout.splitlines() if ln.startswith("{")]
+    ran = [ln for ln in lines if ln.get("outcome") == "dry_run"]
+    rest = [ln for ln in lines if ln.get("outcome") == "planned_not_carried_out_this_pass"]
+    assert len(ran) == 2 and len(rest) == 3
+    assert {ln["subject_id"] for ln in ran + rest} == set(world.values())     # all five, once each
+    assert lines[-1]["limited"] == 3 and "summary" in lines[-1]
+
+
+def test_dry_run_prints_what_it_saw_and_left_alone_as_report_lines(engagement_id, tmp_path):
+    from tests.reconciler_support import _proposal
+    pid = _proposal(engagement_id, "approved")             # no approval row: reported, not closed
+    done = cli("--mode", "dry-run", "--once", "--engagement", engagement_id,
+               "--directory", str(tmp_path), env=VALID)
+    lines = [json.loads(ln) for ln in done.stdout.splitlines() if ln.startswith("{")]
+    assert {"report": "approval_missing", "subject": "proposal", "subject_id": pid,
+            "engagement_id": engagement_id} in lines
+    assert not [ln for ln in lines if ln.get("outcome") == "dry_run"]       # and nothing acted on
 
 
 def test_state_only_on_the_command_line_moves_the_rows_and_audits(engagement_id, tmp_path):

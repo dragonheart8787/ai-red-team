@@ -32,6 +32,9 @@ VALID = {
     "RECONCILER_VERIFY_WAIT_S": "10", "RECONCILER_SUMMARY_PERIOD_S": "3600",
     "RECONCILER_RETRY_AFTER_FAILURE_S": "1800", "RECONCILER_MAX_PAGES": "20",
     "RECONCILER_MAX_ACTIONS_PER_PASS": "500", "RECONCILER_BACKOFF_MAX_S": "900",
+    "RECONCILER_NETWORK_CONFLICT_WINDOW_S": "86400",
+    "RECONCILER_NETWORK_CONFLICT_MIN_IDLE_S": "3600",
+    "RECONCILER_NETWORK_CONFLICT_DAILY_CAP": "3",
 }
 
 
@@ -163,3 +166,40 @@ def test_env_example_explains_each_key():
         position = text.index(f"\n{key}=")
         comment = text[:position].rsplit("\n\n", 1)[-1]
         assert comment.lstrip().startswith("#") and len(comment) > 40, key
+
+
+# --- the network-conflict keys (migration 0025) ----------------------------------------------
+
+def test_the_conflict_window_is_at_most_what_the_database_function_accepts():
+    over = {**VALID, "RECONCILER_NETWORK_CONFLICT_WINDOW_S": str(31 * 86400 + 1)}
+    with pytest.raises(ConfigError) as caught:
+        config.load(over)
+    assert any("NETWORK_CONFLICT_WINDOW_S" in p and "most the database" in p
+               for p in caught.value.problems)
+    assert config.load({**VALID, "RECONCILER_NETWORK_CONFLICT_WINDOW_S": str(31 * 86400)})
+
+
+def test_the_minimum_idle_time_is_never_below_b_cap_plus_p_plus_q():
+    least = 1800 + 915 + 300
+    with pytest.raises(ConfigError) as caught:
+        config.load({**VALID, "RECONCILER_NETWORK_CONFLICT_MIN_IDLE_S": str(least - 1)})
+    assert any("NETWORK_CONFLICT_MIN_IDLE_S" in p and str(least) in p
+               for p in caught.value.problems)
+    assert config.load({**VALID, "RECONCILER_NETWORK_CONFLICT_MIN_IDLE_S": str(least)})
+    # the floor follows the configured terms, not constants: a larger B_CAP raises it
+    with pytest.raises(ConfigError):
+        config.load({**VALID, "RECONCILER_B_CAP_S": "3000",
+                     "RECONCILER_NETWORK_CONFLICT_MIN_IDLE_S": "3600"})
+
+
+@pytest.mark.parametrize("key", ["RECONCILER_NETWORK_CONFLICT_WINDOW_S",
+                                 "RECONCILER_NETWORK_CONFLICT_MIN_IDLE_S",
+                                 "RECONCILER_NETWORK_CONFLICT_DAILY_CAP"])
+@pytest.mark.parametrize("value", [None, "", "0", "-1", "1.5", "three"])
+def test_each_conflict_key_is_required_and_a_positive_whole_number(key, value):
+    env = {k: v for k, v in VALID.items() if k != key}
+    if value is not None:
+        env[key] = value
+    with pytest.raises(ConfigError) as caught:
+        config.load(env)
+    assert any(key in p for p in caught.value.problems)

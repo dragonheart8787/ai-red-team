@@ -176,7 +176,7 @@ def test_observe_calls_no_verb_that_changes_anything():
         assert not called & CHANGING_VERBS, (name, called & CHANGING_VERBS)
 
 
-def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_three_reads():
+def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_four_reads():
     tree = _tree("observe")
     flags = [n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
              and n.attr.startswith("O_")]
@@ -186,11 +186,12 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_three_reads()
                   and re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|CREATE|ALTER)\b",
                                 n.value)]
     reads = [s for s in statements if s.startswith("SELECT")]
-    assert len(reads) == len(statements) == 3, statements
+    assert len(reads) == len(statements) == 4, statements
     for statement in reads:
         assert re.fullmatch(
             r"SELECT (\*|run_id, status) FROM reconciler_(stuck_proposals\(\)"
             r"|stuck_proposals_after\(:after_us, :after_id\)"
+            r"|network_conflicts\(:window_s\)"
             r"|run_states\(CAST\(:ids AS text\[\]\)\))", statement), statement
     assert not [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(
         n.func, "id", "") in {"open", "exec", "eval"}]
@@ -202,7 +203,8 @@ def test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_three_reads()
 #: verification wait to the act half (6c), the failure summary's period and the retry-after-failure
 #: wait to the service (6d, item 4)
 USED_ELSEWHERE = {"network_sweep_period_s", "verify_wait_s", "summary_period_s",
-                  "retry_after_failure_s", "max_pages", "max_actions_per_pass", "backoff_max_s"}
+                  "retry_after_failure_s", "max_pages", "max_actions_per_pass", "backoff_max_s",
+                  "network_conflict_window_s"}
 
 
 def test_every_threshold_is_used_by_the_plan_or_named_as_used_elsewhere():

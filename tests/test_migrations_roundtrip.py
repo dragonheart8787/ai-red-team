@@ -758,3 +758,57 @@ def test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_a
     assert not snapshot_diff(s23, scratch.snapshot()), "\n".join(
         snapshot_diff(s23, scratch.snapshot()))
     assert not _temp_privilege(scratch)
+
+
+# ---------------------------------------------------------------------------------------------
+# 0025: tool_runs.refusal_code and the network-conflict read come and go whole, rows kept
+# ---------------------------------------------------------------------------------------------
+
+def test_0025_adds_the_column_its_two_checks_the_index_and_the_function_and_takes_them_back(
+        scratch):
+    scratch.alembic("upgrade", "0024")
+    eid, _ids = _seed_stages(scratch, {"decided": SHAPES_0021["decided"]})
+    with scratch.engine.begin() as conn:  # bound: row security
+        _bind(conn, eid)
+        conn.execute(text("""
+            INSERT INTO tool_runs (run_id, engagement_id, tool, tool_version, normalized_target,
+                execution_fingerprint, status, network_allowlist)
+            VALUES ('RUN-RT25', :e, 'nmap', '1', 't', 'fp', 'failed', '{10.1.0.0/24}')"""),
+            {"e": eid})
+    s24 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0025")
+    s25 = scratch.snapshot()
+    added = {line.split(": ", 1)[1].split("  [")[0].strip()
+             for line in snapshot_diff(s24, s25) if line.startswith("+ new")}
+    assert "column:tool_runs.refusal_code" in added, added
+    assert {"constraint:tool_runs.tool_runs_refusal_code_vocabulary",
+            "constraint:tool_runs.tool_runs_refusal_code_means_never_ran",
+            "index:tool_runs_refused",
+            "function:reconciler_network_conflicts(p_window_s integer)"} <= added, added
+    definition = s25["function:reconciler_network_conflicts(p_window_s integer)"]
+    assert ("owner=reconciler_fn_owner secdef=true "
+            'config={"search_path=pg_catalog, <schema>, pg_temp"}') in definition
+    with scratch.engine.begin() as conn:                          # works in the migration's schema
+        conn.execute(text("SET LOCAL ROLE reconciler_fn_owner"))
+        assert conn.execute(text(
+            f"SELECT count(*) FROM {scratch.name}.reconciler_network_conflicts(60)")).scalar() == 0
+    with scratch.engine.begin() as conn:                          # the old row has no code
+        _bind(conn, eid)
+        assert conn.execute(text("SELECT refusal_code FROM tool_runs "
+                                 "WHERE run_id = 'RUN-RT25'")).scalar_one() is None
+        conn.execute(text("UPDATE tool_runs SET refusal_code = 'docker_unreachable' "
+                          "WHERE run_id = 'RUN-RT25'"))
+
+    scratch.alembic("downgrade", "0024")
+    assert scratch.revision() == "0024"
+    assert not snapshot_diff(s24, scratch.snapshot()), "\n".join(
+        snapshot_diff(s24, scratch.snapshot()))
+    with scratch.engine.begin() as conn:                          # the row is kept, the code is not
+        _bind(conn, eid)
+        assert conn.execute(text("SELECT status FROM tool_runs "
+                                 "WHERE run_id = 'RUN-RT25'")).scalar_one() == "failed"
+
+    scratch.alembic("upgrade", "0025")
+    assert not snapshot_diff(s25, scratch.snapshot()), "\n".join(
+        snapshot_diff(s25, scratch.snapshot()))

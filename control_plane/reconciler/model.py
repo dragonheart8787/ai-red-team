@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 
 US = 1_000_000
 
+#: ``ConflictObs.blocking_hash_n`` of the one row that counts refusals with no blocker among the
+#: allowlists this database has run (a lab's network, another deployment on the same daemon)
+NO_BLOCKER = -1
+#: the name of a sandbox network is this prefix and the first 12 hex digits of a sha256: 48 bits
+NETWORK_NAME_PREFIX = "cyberorch-allow-"
+NETWORK_HASH_DIGITS = 12
+
 
 # ---------------------------------------------------------------------------------------------
 # observations
@@ -69,6 +76,30 @@ class NetworkObs:
     idle_seen_since_us: int | None = None
 
 
+def name_hash_n(name: str) -> int | None:
+    """The number a sandbox network's name suffix spells, or ``None`` for any other name. The
+    database names the networks that blocked a refused run by this number (migration 0025)."""
+    suffix = name.removeprefix(NETWORK_NAME_PREFIX)
+    if suffix == name or len(suffix) != NETWORK_HASH_DIGITS:
+        return None
+    if not all(c in "0123456789abcdef" for c in suffix):
+        return None
+    return int(suffix, 16)
+
+
+@dataclass(frozen=True)
+class ConflictObs:
+    """One row of ``reconciler_network_conflicts()``: a network that blocked refused runs. Integers
+    only; the database's clock (``db_now_us``) is the one every comparison on it uses."""
+
+    blocking_hash_n: int              # name_hash_n() of the blocking network, or NO_BLOCKER
+    conflicts_n: int                  # refusals it caused inside the window
+    last_conflict_us: int
+    last_used_us: int                 # the latest run on its allowlist
+    live_runs_n: int                  # runs on its allowlist not yet over
+    db_now_us: int
+
+
 @dataclass(frozen=True)
 class FileObs:
     """A directory entry in the temporary directory, from ``lstat`` through a directory fd."""
@@ -92,6 +123,11 @@ class Observation:
     containers: tuple[ContainerObs, ...] = ()
     networks: tuple[NetworkObs, ...] = ()
     files: tuple[FileObs, ...] = ()
+    #: the networks that blocked runs the sandbox refused, from the database (0025)
+    conflicts: tuple[ConflictObs, ...] = ()
+    #: removals for a range conflict this process made in the last 24 h, by ``name_hash_n``: its own
+    #: memory, so a pair of overlapping allowlists cannot make it remove and re-create for ever
+    conflict_removals_24h: dict[int, int] = field(default_factory=dict)
     #: the host's clock, in microseconds, when the containers were listed
     host_now_us: int = 0
     #: the file owner the sweeper expects (the control plane's uid)

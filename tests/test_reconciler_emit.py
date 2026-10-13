@@ -116,7 +116,7 @@ def test_a_reason_code_outside_its_events_list_is_refused():
         (emit.PROPOSAL_ABANDONED, "reason_code", "capability_not_live"),
         (emit.CONTAINER_KILLED, "reason_code", "run_finished"),
         (emit.CONTAINER_REMOVED, "reason_code", "overran_deadline"),
-        (emit.NETWORK_REMOVED, "reason_code", "range_conflict"),            # not built in v1
+        (emit.NETWORK_REMOVED, "reason_code", "range_conflict_guess"),
         (emit.STOPPED, "reason_code", "because"),
         (emit.START_REFUSED, "reason_code", "grace_below_floor"),
         (emit.ACTION_FAILED, "reason_code", "free text"),

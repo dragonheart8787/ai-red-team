@@ -42,13 +42,17 @@ DOCKER_CALLS_BEFORE_PROXY = 15
 PROXY_READINESS_S = 15
 DOCKER_CALLS_AFTER_PROXY = 5
 
+#: ``reconciler_network_conflicts`` refuses a window longer than this (migration 0025)
+MAX_CONFLICT_WINDOW_S = 31 * 86400
+
 #: The longest an honest decision stage takes (reviewer 120 s + OPA 30 s) -- D64 §1.8.
 DECISION_STAGE_FLOOR_S = 150
 
 
 @dataclass(frozen=True)
 class Thresholds:
-    """Whole numbers: seconds, except ``max_pages`` and ``max_actions_per_pass``, which are counts.
+    """Whole numbers: seconds, except ``max_pages``, ``max_actions_per_pass`` and
+    ``network_conflict_daily_cap``, which are counts.
     Field order is the documentation order."""
 
     #: ``received`` / ``decided`` for this long -> abandoned / closed (``abandoned_after_decision``)
@@ -91,6 +95,15 @@ class Thresholds:
     #: after a pass that was truncated or limited and still got nothing done, the wait before the
     #: next doubles, up to this; any pass that is neither resets it
     backoff_max_s: int
+    #: a refusal for an overlapping range counts for this long (and no longer) when deciding whether
+    #: the network that blocked it should go (migration 0025; at most 31 days)
+    network_conflict_window_s: int
+    #: a network that blocked a refused run is removed only if its allowlist has had no run for at
+    #: least this long -- never less than ``B_cap + P + Q``, so no dispatch between
+    #: ``ensure_network`` and ``start`` can be reached (E21-N3)
+    network_conflict_min_idle_s: int
+    #: the most removals of one blocking network this process makes in 24 h (a count)
+    network_conflict_daily_cap: int
 
     # -- derived bounds (D64 §1.2): functions of the configured terms, never configured themselves
     # --
@@ -161,6 +174,17 @@ def load(env: Mapping[str, str]) -> Thresholds:
                 f"{key}: {number} is below {floors[f.name]}, the least the code implies")
             continue
         values[f.name] = number
+    if not problems:
+        window = values["network_conflict_window_s"]
+        if window > MAX_CONFLICT_WINDOW_S:
+            problems.append(f"{PREFIX}NETWORK_CONFLICT_WINDOW_S: {window} is above "
+                            f"{MAX_CONFLICT_WINDOW_S}, the most the database function accepts")
+        least_idle = values["b_cap_s"] + values["p_proxy_s"] + values["q_proxy_s"]
+        if values["network_conflict_min_idle_s"] < least_idle:
+            problems.append(
+                f"{PREFIX}NETWORK_CONFLICT_MIN_IDLE_S: {values['network_conflict_min_idle_s']} is "
+                f"below {least_idle} (B_CAP_S + P_PROXY_S + Q_PROXY_S), the longest a dispatch "
+                "can be between creating its network and starting its container")
     if problems:
         raise ConfigError(problems)
     return Thresholds(**values)

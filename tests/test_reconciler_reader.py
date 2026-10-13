@@ -54,11 +54,18 @@ spec = importlib.util.spec_from_file_location("m0023", MIGRATION)
 M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 
+spec25 = importlib.util.spec_from_file_location(
+    "m0025", REPO / "db" / "migrations" / "versions" / "0025_tool_run_refusal_code.py")
+M25 = importlib.util.module_from_spec(spec25)
+spec25.loader.exec_module(M25)
+
 OWNER, READER = RECONCILER_FN_OWNER_ROLE, RECONCILER_READER_ROLE
+CONFLICTS = "reconciler_network_conflicts"             # which networks blocked refused runs (0025)
 STUCK = "reconciler_stuck_proposals"
 AFTER = "reconciler_stuck_proposals_after"             # the next page (migration 0024)
 RUNS = "reconciler_run_states"
-FUNCTIONS = {f"{STUCK}()": STUCK, f"{AFTER}(bigint, text)": AFTER, f"{RUNS}(text[])": RUNS}
+FUNCTIONS = {f"{STUCK}()": STUCK, f"{AFTER}(bigint, text)": AFTER, f"{RUNS}(text[])": RUNS,
+             f"{CONFLICTS}(integer)": CONFLICTS}
 
 #: The columns of ``reconciler_stuck_proposals()``, in order, with their types. The complete list.
 STUCK_COLUMNS = [
@@ -108,7 +115,7 @@ def test_the_reader_is_an_ordinary_login_role(db_available):
     assert tuple(row) == (False, False, False, False, False, True), row
 
 
-def test_the_owner_owns_nothing_but_the_two_functions(db_available):
+def test_the_owner_owns_nothing_but_the_reconciler_functions(db_available):
     owned = {
         "relations": _catalog("SELECT relname FROM pg_class WHERE relowner = CAST(:r AS regrole)",
                               r=OWNER),
@@ -120,7 +127,7 @@ def test_the_owner_owns_nothing_but_the_two_functions(db_available):
             "SELECT proname FROM pg_proc WHERE proowner = CAST(:r AS regrole)", r=OWNER)),
     }
     assert owned["relations"] == [] and owned["schemas"] == [] and owned["types"] == [], owned
-    assert owned["functions"] == sorted([STUCK, AFTER, RUNS])
+    assert owned["functions"] == sorted([STUCK, AFTER, RUNS, CONFLICTS])
 
 
 def test_only_the_migration_role_is_a_member_of_the_owner_without_inheriting_it(db_available):
@@ -229,7 +236,9 @@ def test_the_owner_has_column_select_on_exactly_the_listed_columns_and_nothing_e
                 assert not conn.execute(text(
                     "SELECT has_column_privilege(:r, CAST(:o AS regclass), :c, 'UPDATE')"),
                     {"r": OWNER, "o": rel, "c": col}).scalar_one(), (rel, col)
-    assert found == {t: set(c) for t, c in M.OWNER_COLUMNS.items()}
+    expected = {t: set(c) for t, c in M.OWNER_COLUMNS.items()}
+    expected["tool_runs"] |= set(M25.NEW_OWNER_COLUMNS)              # 0025: the conflicts read
+    assert found == expected
 
 
 def test_the_owner_has_one_select_only_policy_on_each_of_the_six_tables(db_available):
@@ -289,8 +298,10 @@ def test_s4_the_search_path_is_pinned_in_the_definition(db_available, signature)
 def test_s4_every_relation_in_the_body_is_schema_qualified(db_available, signature):
     src = _proc(signature)[4]
     # `extract(epoch FROM p.col)` and `FROM now()` are not relations: `.` or `(` follows them.
-    unqualified = re.findall(
+    ctes = set(re.findall(r"(?:\bWITH|,)\s*([a-z_][a-z_0-9]*)\s+AS\s*\(", src))   # not relations
+    unqualified = [name for name in re.findall(
         r"\b(?:FROM|JOIN)\s+(?!public\.|LATERAL\b|\()([a-z_][a-z_0-9]*)\b(?![.(])", src)
+        if name not in ctes]
     assert unqualified == [], unqualified
     assert "public." in src
 
@@ -545,11 +556,11 @@ def test_the_row_limit_and_the_order_are_in_the_definition(db_available):
     assert re.search(rf"ORDER BY p\.stage_updated_at, p\.proposal_id\s+LIMIT {M.LIMIT_ROWS}\b", src)
 
 
-def test_there_are_exactly_three_reconciler_functions(db_available):
+def test_there_are_exactly_four_reconciler_functions(db_available):
     names = sorted(r[0] for r in _catalog(
         "SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace "
         "AND proname LIKE 'reconciler\\_%'"))
-    assert names == sorted([STUCK, AFTER, RUNS])
+    assert names == sorted([STUCK, AFTER, RUNS, CONFLICTS])
     assert stages.ABANDONED not in M.STUCK_STAGES
 
 

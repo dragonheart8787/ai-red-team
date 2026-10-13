@@ -52,6 +52,7 @@ RUN_FINISHED = "run_finished"
 NO_RUN_ROW_PAST_GRACE = "no_run_row_past_grace"
 OWNER_RUN_ENDED = "owner_run_ended"
 IDLE_SWEEP = "idle_sweep"
+RANGE_CONFLICT = "range_conflict"
 
 REASONS: dict[str, tuple[str, ...]] = {
     ABANDON: (UNDECIDED_PAST_GRACE,),
@@ -61,7 +62,7 @@ REASONS: dict[str, tuple[str, ...]] = {
     KILL_CONTAINER: (OVERRAN_DEADLINE,),
     REMOVE_CONTAINER: (RUN_FINISHED, NO_RUN_ROW_PAST_GRACE),
     REMOVE_PROXY: (OWNER_RUN_ENDED, OVERRAN_DEADLINE),
-    REMOVE_NETWORK: (IDLE_SWEEP,),
+    REMOVE_NETWORK: (IDLE_SWEEP, RANGE_CONFLICT),
     UNLINK_FILE: ("credential_mount", "tls_leaf"),
 }
 
@@ -90,10 +91,13 @@ NOT_A_REGULAR_FILE = "not_a_regular_file"
 FOREIGN_OWNER = "foreign_owner"
 NAME_MISMATCH = "name_mismatch"
 RESULT_TRUNCATED = "result_truncated"
+NETWORK_CONFLICT_FOREIGN = "network_conflict_foreign"
+NETWORK_CONFLICT_UNRESOLVED = "network_conflict_unresolved"
 
 REPORT_REASONS = (BUDGET_UNREADABLE, CAPABILITY_MISSING, APPROVAL_MISSING, NO_OWNER_LABEL,
                   NO_RUN_ID_LABEL, RUN_UNKNOWN, UNEXPECTED_STATE, NOT_A_REGULAR_FILE,
-                  FOREIGN_OWNER, NAME_MISMATCH, RESULT_TRUNCATED)
+                  FOREIGN_OWNER, NAME_MISMATCH, RESULT_TRUNCATED,
+                  NETWORK_CONFLICT_FOREIGN, NETWORK_CONFLICT_UNRESOLVED)
 
 #: what a report is about
 SUBJECTS = ("proposal", "container", "network", "file", "result")

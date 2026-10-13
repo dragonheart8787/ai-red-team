@@ -50,12 +50,30 @@ from control_plane.reconciler.service import (  # noqa: E402
 
 
 def _print(report: PassReport) -> None:
+    """Every result, then -- uncapped -- every planned action this pass did not carry out (the cap
+    ``RECONCILER_MAX_ACTIONS_PER_PASS`` or a hold-back) and every report (what was seen and left
+    alone), then one summary line. Ids and closed codes only; nothing else is ever in a plan."""
     for result in report.results:
         print(json.dumps({"kind": result.action.kind, "reason_code": result.action.reason_code,
-                          "subject_id": result.action.subject_id, "outcome": result.outcome,
+                          "subject_id": result.action.subject_id,
+                          "engagement_id": result.action.engagement_id, "outcome": result.outcome,
                           "detail": result.detail}, sort_keys=True))
+    if report.plan is not None:
+        carried = {(r.action.kind, r.action.subject_id) for r in report.results}
+        for a in report.plan.actions:
+            if (a.kind, a.subject_id) not in carried:
+                print(json.dumps({"kind": a.kind, "reason_code": a.reason_code,
+                                  "subject_id": a.subject_id, "engagement_id": a.engagement_id,
+                                  "outcome": "planned_not_carried_out_this_pass", "detail": None},
+                                 sort_keys=True))
+        for r in report.plan.reports:
+            print(json.dumps({"report": r.reason_code, "subject": r.subject,
+                              "subject_id": r.subject_id, "engagement_id": r.engagement_id},
+                             sort_keys=True))
     print(json.dumps({"summary": report.planned, "outcomes": dict(report.outcomes),
-                      "reports": report.reports}, sort_keys=True))
+                      "reports": report.reports, "limited": report.limited,
+                      "held_back": report.held_back, "truncated": report.truncated},
+                     sort_keys=True))
 
 
 def main(argv: list[str] | None = None) -> int:

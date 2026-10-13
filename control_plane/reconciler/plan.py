@@ -16,7 +16,8 @@ R4/R5     ``approved``: engagement killed / approval expired    close (the sched
           or revoked and the engagement not enrolled            left to the scheduler)
 R6        ``received`` / ``decided`` past the grace             abandon / close
 R7        orphan egress proxy                                   remove
-R8        idle network                                          remove
+R8        idle network; a network whose range blocked a         remove
+          refused run and is not in use (migration 0025)
 R9        credential and TLS files                              unlink
 ========  ====================================================  =================================
 
@@ -34,8 +35,10 @@ import re
 from control_plane.reconciler import vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import (
+    NO_BLOCKER,
     US,
     Action,
+    ConflictObs,
     ContainerObs,
     FileObs,
     NetworkObs,
@@ -43,6 +46,7 @@ from control_plane.reconciler.model import (
     Plan,
     Report,
     StuckRow,
+    name_hash_n,
 )
 
 #: container states in which a container can still do something (D64 §1.5)
@@ -257,11 +261,52 @@ def _proxy(c: ContainerObs, obs: Observation, th: Thresholds, run_status: str | 
 
 def _networks(obs: Observation, th: Thresholds) -> tuple[list[Action], list[Report]]:
     actions: list[Action] = []
+    reports: list[Report] = []
+    blockers = {c.blocking_hash_n: c for c in obs.conflicts if c.blocking_hash_n != NO_BLOCKER}
     for n in sorted(obs.networks, key=lambda n: n.network_id):
         if _idle_network(n, obs, th):
             actions.append(Action(kind=vocab.REMOVE_NETWORK, reason_code=vocab.IDLE_SWEEP,
                                   subject_id=n.network_id, name=n.name))
-    return actions, []
+            continue
+        decided = _conflict_blocker(n, blockers.get(name_hash_n(n.name)), obs, th)
+        if isinstance(decided, Action):
+            actions.append(decided)
+        elif isinstance(decided, Report):
+            reports.append(decided)
+    # refusals no network of ours in this database's history explains: a lab's network, or another
+    # deployment on the same daemon. Seen and left alone -- we never remove what we cannot name.
+    if any(c.blocking_hash_n == NO_BLOCKER and c.conflicts_n >= 1 for c in obs.conflicts):
+        reports.append(Report(subject="result", subject_id="network_conflicts",
+                              reason_code=vocab.NETWORK_CONFLICT_FOREIGN))
+    return actions, reports
+
+
+def _conflict_blocker(n: NetworkObs, c: ConflictObs | None, obs: Observation,
+                      th: Thresholds) -> Action | Report | None:
+    """A network of ours that blocked a refused run (D64 pre-deletion §3.3). Removed only if every
+    one of these holds; if the first three do and a later one does not, the conflict is
+    *unresolved* and reported, because the next refusal will come again.
+
+    1. it is ours (prefix **and** allowlist label) and the database names it as a blocker;
+    2. the latest refusal is *after* the allowlist's last use (a later run means it is in use);
+    3. no run on its allowlist is unfinished, and none for ``network_conflict_min_idle_s``;
+    4. no container of any state is attached (the act half asks Docker again on the spot);
+    5. this process has removed it fewer than ``network_conflict_daily_cap`` times in 24 h.
+    """
+    if c is None or not (n.name.startswith(NETWORK_PREFIX) and n.has_allowlist_label):
+        return None
+    if c.conflicts_n < 1 or c.last_conflict_us <= c.last_used_us:
+        return None
+    unresolved = Report(subject="network", subject_id=n.network_id,
+                        reason_code=vocab.NETWORK_CONFLICT_UNRESOLVED)
+    if c.live_runs_n or c.db_now_us - c.last_used_us < th.network_conflict_min_idle_s * US:
+        return unresolved
+    if n.attached:
+        return unresolved
+    if obs.conflict_removals_24h.get(c.blocking_hash_n, 0) >= th.network_conflict_daily_cap:
+        return unresolved
+    return Action(kind=vocab.REMOVE_NETWORK, reason_code=vocab.RANGE_CONFLICT,
+                  subject_id=n.network_id, name=n.name)
 
 
 def _idle_network(n: NetworkObs, obs: Observation, th: Thresholds) -> bool:
