@@ -90,7 +90,10 @@ def _unlink(action, fd, directory, expected_uid, th, client, wall_clock_us, inte
         return Result(action, CHANGED, NOT_OURS)
     if (blocked := act_docker.declared(action, intend)) is not None:
         return blocked
-    os.unlink(name, dir_fd=fd)
+    try:
+        os.unlink(name, dir_fd=fd)
+    except FileNotFoundError:             # whoever made it unlinked it between the look and now
+        return Result(action, GONE)
     try:
         os.lstat(name, dir_fd=fd)
     except FileNotFoundError:

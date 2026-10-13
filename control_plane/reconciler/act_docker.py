@@ -220,19 +220,24 @@ def _remove_network(action: Action, client: Any, th: Thresholds, sleep, clock,
         return Result(action, CHANGED, IN_USE)
     if (blocked := declared(action, intend)) is not None:
         return blocked
-    try:
-        network.remove()
-    except NotFound:
-        return Result(action, GONE)
-    except APIError:
-        return Result(action, FAILED, IN_USE)
-
     def gone() -> bool:
         try:
             client.networks.get(action.subject_id)
             return False
         except NotFound:
             return True
+
+    try:
+        network.remove()
+    except NotFound:
+        return Result(action, GONE)
+    except APIError:
+        # Docker refuses a removal while another remover is part-way through, and the network is
+        # gone by the next look: not ours to claim, and not "in use" (RT8, item 4). A refusal that
+        # leaves the network there is the real one.
+        if gone():
+            return Result(action, GONE)
+        return Result(action, FAILED, IN_USE)
 
     if _wait_until(gone, th, sleep, clock):
         return Result(action, DONE)
