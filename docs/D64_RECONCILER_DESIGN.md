@@ -615,7 +615,7 @@ and S2–S5 each have a mutation (`D64-6a-a`…`j`). Where the build differs fro
   the proxy-run bound for every run, which is the longer one.
 * **`reconciler_run_states`** refuses a NULL and more than 2,000 ids with a fixed error text, because an absent id
   means *orphan*.
-* **Not built:** the conflict-driven network removal of D64-8 (a CIDR cannot be returned under "ids, enums, integers"). **Designed since** (name hash + last use + conflict count, no range crosses; `docs/D64_PREDELETION_COMPLETION.md` §3, ACCEPTANCE 5.85); one decision open (D64-N1).
+* **Not built:** the conflict-driven network removal of D64-8 (a CIDR cannot be returned under "ids, enums, integers"). **Designed since, and the read function and plan side built (5.90)** (name hash + last use + conflict count, no range crosses; `docs/D64_PREDELETION_COMPLETION.md` §3, ACCEPTANCE 5.85); D64-N1 decided and built (5.90).
 
 **Recommendation (D64-2): the function.** It is the narrowest of the four: no table is readable, the budget
 leaves the database as one integer, and the function is the one place that says what the reconciler may know.

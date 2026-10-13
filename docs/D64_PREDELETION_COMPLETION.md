@@ -14,6 +14,7 @@ number chosen without a measurement. Experiments are numbered from E22 (E1–E21
 | 5 | the two "unknown outcome" event names: consumers, and where the free text came from | §5 here, ACCEPTANCE 5.87 |
 | 6 | more than 5,000 stuck rows: paging, a bound on a pass, back-off | §6 here, ACCEPTANCE 5.88 |
 | 7 | four open questions answered (verb allow-list, negative experiments, `ABANDON_CALLERS`, concurrency); one defect found and fixed | §7 here, ACCEPTANCE 5.89 |
+| round 2 | D64-N1 built (`tool_runs.refusal_code`, the conflict read, the plan side); the 18,123 corrected; the session cleans up its own rows; races x40; the first dry run | §8 here, ACCEPTANCE 5.90–5.91, `D64_DRY_RUN_2026-10-13.md` |
 
 ---
 
@@ -56,8 +57,8 @@ count, **18,123**. What can be reconstructed now, read-only, as the superuser **
 | what | rows | how known |
 |---|---|---|
 | closed, `stage_detail = 'dev_db_cleanup'` | **17,716** | counted directly: the tag is unique to this statement |
-| abandoned by the same statement | **407** | by subtraction (18,123 − 17,716), **not observed**: 1,677 rows now carry `abandoned / undecided_past_grace`, but that is also the reconciler's own reason code and the reconciler tests produce it |
-| original stage of each row | **unrecoverable** | the `UPDATE` overwrote `pipeline_stage` and `stage_updated_at` (set to `now()`); nothing else recorded them |
+| abandoned by the same statement | **407** | **observed (2026-10-13)**, not by subtraction: every row the statement changed carries the same `stage_updated_at` (the transaction's `now()`, 2026-10-12 07:43:47.361263+00), and exactly 18,123 rows carry it: 17,716 `closed / dev_db_cleanup` + 407 `abandoned / undecided_past_grace` (§2.2). The other 1,270 rows with that abandoned reason are the reconciler's own tests |
+| original stage of each row | **unrecoverable** as a stage; its class is not | the `UPDATE` overwrote `pipeline_stage` and `stage_updated_at`. The untouched `decision` column still says: 407 were undecided (so `received`), 9,572 `ALLOW` and 8,144 `HUMAN_APPROVAL` (so one of `decided`, `approved`, `capability_issued`, `dispatching`) |
 | `audit_log` events for these transitions | **none** | the statement bypassed `stages.*` and the audit path |
 | the rows' `tool_runs` | **left as they were** | 601 `tool_runs` are `running`/`dispatching` while their proposal is `closed`, `abandoned` or `recorded`; some of those predate the cleanup, and which ones cannot be told. The reconciler's own path (`mark_unknown_outcome`) closes proposal and runs together; this statement did not |
 
@@ -78,7 +79,7 @@ count, **18,123**. What can be reconstructed now, read-only, as the superuser **
 
 5.23 is about measurement, and every measurement on the development database is a measurement of whatever the tests
 left in it. Nothing the suite creates is removed: the tables are under `FORCE ROW LEVEL SECURITY` and the runtime role
-has no `DELETE`, so rows only ever accumulate, and the one-off in §2 above is the only time anything was cleared.
+has no `DELETE`, so rows only ever accumulate -- apart from the closings of §2 and §2.2 (a state change, not a deletion).
 
 **Measured** (a snapshot of row counts before and after each of two complete runs of the suite, 2,650 tests, 13 min
 each, the second 12:08–12:21 UTC and the third 12:24–12:37 UTC on 2026-10-12 `[E]`):
@@ -101,9 +102,9 @@ too: about 1,470 proposals between the 11:48 snapshot and the start of run A.)
 
 1. *The reconciler's read page.* `reconciler_stuck_proposals()` returns the oldest 5,000 stuck rows. A full run leaves
    about 600 proposals in a stuck stage (mostly `received` and `approved`, from tests that stop a proposal part-way), so
-   about eight runs fill the page and rows beyond it are invisible until the older ones are closed. That is how the
-   development database had come to hold 18,123 of them (§2) — and why item 6 pages through them instead of assuming the
-   first 5,000 are the whole of it.
+   about eight runs fill the page and rows beyond it are invisible until the older ones are closed. That is why
+   item 6 pages through them instead of assuming the first 5,000 are the whole of it. (An earlier version of this paragraph
+   said this was *how* the development database came to hold 18,123 of them; that was an inference, corrected in §2.2.)
 2. *Plans that depend on table size.* The first version of that function took 18 s here and 0.15 s with four indexes
    (5.80); the figure is a property of this database's size on that day, and so is every other timing taken on it.
 3. *Run time.* A full run took 11 min at about 1,800 tests and 13 min at 2,650; the growth in the database is not
@@ -119,6 +120,41 @@ documented reset of the development database (drop and re-create through `script
 
 
 ---
+
+
+### 2.2 Correction (2026-10-13): where the 18,123 came from
+
+§2 and §2.1 said, or implied, three things about the 18,123 rows that were closed by hand. Each is checked now, read-only,
+as the superuser **[E]**, and two were wrong.
+
+| claim | verdict | what the database says |
+|---|---|---|
+| "407 abandoned, by subtraction" | **now observed** | one statement leaves one timestamp: 18,123 rows carry `stage_updated_at = 2026-10-12 07:43:47.361263+00`; `closed / dev_db_cleanup` 17,716 + `abandoned / undecided_past_grace` 407 = 18,123 |
+| "that is how the database had come to hold 18,123" (about 600 stuck rows per full run, 8 runs to fill the page) | **an inference, and not the whole story** | see below |
+| "the one-off in §2 is the only time anything was cleared" | **false** | `make_room_in_the_page()` (a test helper) closes every stuck row older than an hour in the whole database, in one statement; its footprints are on 2026-10-12: 07:51:24 (565 rows), 08:00:30 (383), 11:43:26 (2,156), 12:34:04 (88), 12:50:45 (527), each with one timestamp and `test_cleanup` |
+
+**What the 18,123 are.** Every one belongs to a test agent: `worker-1` 8,110 rows (8,052 engagements), `fake-worker` 7,786
+(2,803), `agent` 1,714, `worker` 465, `a` 34, `w` 10, `crash-child` 4. None belongs to a real agent or a real engagement.
+By decision: `ALLOW` 9,572, `HUMAN_APPROVAL` 8,144, none 407. By engagement family: **`ENG-SM-*` 7,650 rows in 2,667 engagements — the Hypothesis state machine
+`tests/stateful/test_capability_lifecycle.py`, one engagement per generated example** — and `ENG-TEST-*` 10,473 rows in 9,497
+engagements (the ordinary tests). They were created between 2026-10-11 02:00 and 2026-10-12
+07:4x UTC — 14,870 on the 11th, 3,253 on the 12th — and the busiest hour alone (the 11th, 03:00) made 6,042.
+
+**What that does and does not show.**
+
+* ~600 stuck proposals per **full** run is measured (605 and 632, §2.1) and so is the arithmetic that eight of them fill the
+  reconciler's 5,000-row page. That part stands.
+* It does **not** show that the 18,123 were ~29 full runs. A full run takes 11–13 minutes, so at most ~5 an hour and ~3,000
+  rows an hour; 6,042 in one hour is about twice that. The bulk therefore came from something that leaves more rows per
+  minute than a full run: **repeated runs of narrower test sets** — the mutation campaigns of that day re-run the target test
+  files once per mutation, the scheduler and approval tests (`worker-1`, one stuck proposal per test) are among them, and the
+  state machine is the other: it makes hundreds of engagements per run (the dry run of 2026-10-13 found 326 of its
+  engagements still holding stuck rows).
+  That is "consistent with", not established **[N]**; how many runs of what there were is not recoverable, and §2's own
+  point stands: the state before 07:43 on the 12th cannot be reconstructed.
+* The two cleanups were not the same kind of act. §2 was a manual statement outside any procedure; `make_room_in_the_page()` is
+  committed test code that does the same thing (row security off for one statement) every time a test needs a fresh row within
+  the first page. §8 replaces the habit with something narrower: each session closes **its own** rows.
 
 ## 3. The network-conflict trigger (item 3) — designed, **not built**
 
@@ -518,3 +554,52 @@ when a module is added and when `act.py` stops being a caller.
 
 New tests: 13 concurrency (RT3 ×4, RT8 ×8 — two real-Docker orders, two parametrised races, four scripted — and RT9 ×1), 1 whole-host negative, the verb allow-list (2),
 the `abandon` walker (2) and the run-time refusal (2). Mutations `D64-P7-a`…`i`: nine.
+
+
+---
+
+## 8. Completion round 2 (the flags are still off)
+
+### 8.0 What round 1 (items 1–5) found, in a few lines
+
+The role audit found one membership (`migration_owner` in `reconciler_fn_owner`, `INHERIT FALSE`) and four definer functions,
+and now pins them as a whole (5.84). The dev-DB cleanup had **no usable before/after snapshot** (the table owner's counts under
+`FORCE` are blind) and test data accumulates at ~600 stuck rows per full run (5.23; corrected below). A proposal transition and its
+audit record are now one transaction, and an irreversible Docker or file action is announced by an intent record before the call
+(5.86). The "free text" in the legacy unknown-outcome event is one string literal and the two event names have one reader (5.87).
+More than 5,000 stuck rows are paged, bounded per pass and backed off (5.88) -- the paging bug being a cursor with a NULL half
+that returned every row.
+
+### 8.1 D64-N1 decided and built (option B) -- the plan side of the network-conflict trigger
+
+`tool_runs.refusal_code` (migration 0025): the refusal is **state**, written in the statement that fails the run and the
+transaction of the stage take; the audit trail stays unreadable by every function. Two CHECKs (vocabulary, and "a code means the
+run never ran"), a closed list kept equal in the migration, `dispatch` and the sandbox by a test. `reconciler_network_conflicts`
+returns **integers only**; the blocking network is named by the number its name suffix spells. The plan removes a blocking network
+only when five conditions hold and reports the rest; the cap on removals is the service's own memory. Details, tests and the four
+bugs the tests found: ACCEPTANCE 5.90. Not built, said before: the flag; and the act half has no conflict-specific end-to-end run
+because nothing may delete yet.
+
+### 8.2 The 18,123, corrected; and the session cleans up after itself
+
+§2.2 above. `tests/residue.py` (the 5.71 check) now closes the session's own stuck proposals and in-flight runs at the end and
+fails on stuck rows in an engagement it did not register. Rows are closed, never deleted.
+
+### 8.3 What the reconciler does not see
+
+An owner-only labelled container is not observed (5.91): by design, with the reason.
+
+### 8.4 Someone else moved first -- forty times each
+
+Proxy, file, network: removed by the other party first, then by the reconciler; and both at once. Real rounds were clean; scripted
+branches found a file `FileNotFoundError` and a network refusal that were both classified as failures. Fixed; both pinned.
+
+### 8.5 The first dry run
+
+`D64_DRY_RUN_2026-10-13.md`: 1,403 planned proposal transitions, 12 reports, no Docker or file action; all of the data is the
+test suite's, because that is the only data this container has. It also showed the command line hiding 903 of the 1,403 actions;
+fixed.
+
+### 8.6 Next, and not started
+
+The classification flag and phase 1 wait for a person to read the plan.

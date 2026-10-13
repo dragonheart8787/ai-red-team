@@ -1191,5 +1191,199 @@ CATALOGUE += [
 ]
 
 
+# ---------------------------------------------------------------------------------------------
+# completion round 2 (D64-N1: tool_runs.refusal_code, the network-conflict read and plan; the
+# session's own rows; someone-else-first races) -- ACCEPTANCE 5.90
+# ---------------------------------------------------------------------------------------------
+
+M0025 = "db/migrations/versions/0025_tool_run_refusal_code.py"
+
+
+def _load_0025():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("m0025", Path(__file__).resolve().parents[1] / M0025)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_M25 = _load_0025()
+REFUSAL_TESTS = ("tests/test_refusal_code.py",)
+CONFLICT_READ_TESTS = ("tests/test_network_conflicts_read.py",)
+PLAN_CONFLICT_TESTS = ("tests/test_reconciler_plan_conflicts.py",)
+CONFLICT_OBSERVE_TESTS = ("tests/test_reconciler_conflict_observe.py",)
+RESIDUE_TESTS = ("tests/test_residue_check.py",)
+RACE_TESTS = ("tests/test_reconciler_races.py",)
+PLAN_PY2 = "control_plane/reconciler/plan.py"
+FILES_PY = "control_plane/reconciler/act_files.py"
+RESIDUE_PY = "tests/residue.py"
+HELPERS_PY = "tests/helpers.py"
+_UNDO_CODES = ("UPDATE tool_runs SET refusal_code = NULL WHERE refusal_code IS NOT NULL AND "
+               f"(refusal_code NOT IN ({_M25._codes()}) OR status <> 'failed' OR exit_code IS NOT NULL)",)
+
+
+def _conflicts_sql(*changes: tuple[str, str, int]) -> tuple[str, ...]:
+    """The conflicts function as a CREATE OR REPLACE with each (old, new, occurrences) applied."""
+    text = _M25._function("public").replace(*_OR_REPLACE, 1)
+    for old, new, count in changes:
+        assert text.count(old) == count, (old, text.count(old))
+        text = text.replace(old, new)
+    return _as_function_owner(text)
+
+
+_CONFLICTS_ORIGINAL = _as_function_owner(_M25._function("public").replace(*_OR_REPLACE, 1))
+
+
+def _function_mutation(id_, summary, targets, *changes, tests=CONFLICT_READ_TESTS):
+    return Mutation(id_, summary, tests, sql_up=_conflicts_sql(*changes),
+                    sql_down=_CONFLICTS_ORIGINAL, targets=targets)
+
+
+def _check_mutation(id_, summary, constraint, definition, targets):
+    return Mutation(
+        id_, summary, REFUSAL_TESTS,
+        sql_up=(f"ALTER TABLE tool_runs DROP CONSTRAINT {constraint}",),
+        sql_down=_UNDO_CODES + (f"ALTER TABLE tool_runs ADD CONSTRAINT {constraint} CHECK ({definition})",),
+        cleanup_sql=_UNDO_CODES, targets=targets)
+
+
+CATALOGUE += [
+    Mutation(
+        "D64-C2-a", "a refused run's code is not written", REFUSAL_TESTS,
+        edits=(Edit(DISPATCH, "_finish_run(conn, run_id, FAILED, exit_code=None, refusal_code=refusal_code_of(exc))",
+                    "_finish_run(conn, run_id, FAILED, exit_code=None)"),),
+        targets=("test_a_real_refusal_writes_the_exceptions_code_in_the_runs_own_row",
+                 "test_the_network_conflict_refusal_is_the_code_the_trigger_reads")),
+    Mutation(
+        "D64-C2-b", "a reason outside the vocabulary is written as it is and the refusal is lost", REFUSAL_TESTS,
+        edits=(Edit(DISPATCH, "    return exc.reason if exc.reason in REFUSAL_CODES else SANDBOX_NOT_STARTED",
+                    "    return exc.reason"),),
+        targets=("test_a_reason_nobody_added_still_records_the_refusal_with_the_general_code",
+                 "test_an_unknown_reason_is_recorded_as_sandbox_not_started_so_the_refusal_is_not_lost")),
+    _check_mutation(
+        "D64-C2-c", "the database's never-ran rule is dropped", _M25.NULL_RULE_CHECK,
+        "refusal_code IS NULL OR (status = 'failed' AND exit_code IS NULL)",
+        ("test_the_database_enforces_the_vocabulary_and_the_never_ran_rule",
+         "test_a_late_rewrite_of_a_refused_runs_status_cannot_leave_the_code_behind")),
+    _check_mutation(
+        "D64-C2-d", "the database's vocabulary check is dropped", _M25.VOCAB_CHECK,
+        f"refusal_code IS NULL OR refusal_code IN ({_M25._codes()})",
+        ("test_the_database_enforces_the_vocabulary_and_the_never_ran_rule",
+         "test_the_check_in_the_database_lists_exactly_that_vocabulary")),
+    _function_mutation(
+        "D64-C2-e", "a refused range counts as history, so it can block",
+        ("test_a_refused_range_never_ran_so_it_cannot_block_another_refusal",),
+        ("WHERE t.refusal_code IS NULL AND cardinality(t.network_allowlist) > 0",
+         "WHERE cardinality(t.network_allowlist) > 0", 1)),
+    _function_mutation(
+        "D64-C2-f", "the window is ignored", ("test_a_refusal_outside_the_window_does_not_count",),
+        ("AND t.finished_at >= now() - make_interval(secs => p_window_s)", "AND true", 2)),
+    _function_mutation(
+        "D64-C2-g", "every run on a blocker counts as unfinished",
+        ("test_runs_that_are_not_over_are_counted_apart_from_those_that_are",),
+        ("count(*) FILTER (WHERE t.status IN ('queued', 'dispatching', 'running'))",
+         "count(*) FILTER (WHERE true)", 1)),
+    _function_mutation(
+        "D64-C2-h", "the allowlist is hashed in the order it was stored, not sorted",
+        ("test_an_allowlist_equal_to_the_refused_one_is_not_its_own_blocker",),
+        ("string_agg(e, '|' ORDER BY e COLLATE \"C\")", "string_agg(e, '|')", 2)),
+    _function_mutation(
+        "D64-C2-i", "the aggregate runs even when no refusal is in the window",
+        ("test_the_aggregate_sits_behind_a_gate_and_an_index_serves_it",),
+        ("IF NOT EXISTS (SELECT 1 FROM public.tool_runs t", "IF false AND NOT EXISTS (SELECT 1 FROM public.tool_runs t", 1)),
+    _function_mutation(
+        "D64-C2-j", "a malformed allowlist element is cast without a check",
+        ("test_a_malformed_element_in_the_history_is_skipped_not_raised_on",),
+        ("WHERE pg_input_is_valid(a, 'inet') AND pg_input_is_valid(b, 'inet')\n                      AND a::inet && b::inet)",
+         "WHERE a::inet && b::inet)", 1),
+        # only this test: without the guard one malformed row blinds every other test of the
+        # function too (that is the defect), and those would read as the mutation's own errors
+        tests=("tests/test_network_conflicts_read.py::test_a_malformed_element_in_the_history_is_skipped_not_raised_on",)),
+    _function_mutation(
+        "D64-C2-k", "refusals with no blocker are not counted",
+        ("test_a_refusal_with_no_blocker_among_the_allowlists_run_here_is_counted_apart",),
+        ("FROM unblocked u\n", "FROM unblocked u WHERE false\n", 1)),
+    Mutation(
+        "D64-C2-l", "plan: a conflict older than the last use still removes the network", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if c.conflicts_n < 1 or c.last_conflict_us <= c.last_used_us:", "    if c.conflicts_n < 1:"),),
+        targets=("test_2_only_a_refusal_after_the_last_use_counts",)),
+    Mutation(
+        "D64-C2-m", "plan: a run still in flight does not block the removal", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if c.live_runs_n or c.db_now_us - c.last_used_us < th.network_conflict_min_idle_s * US:",
+                    "    if c.db_now_us - c.last_used_us < th.network_conflict_min_idle_s * US:"),),
+        targets=("test_3_a_run_on_the_allowlist_that_is_not_over_blocks_it_however_old_the_last_one_is",)),
+    Mutation(
+        "D64-C2-n", "plan: the idle time is judged on the host's clock, not the database's", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if c.live_runs_n or c.db_now_us - c.last_used_us < th.network_conflict_min_idle_s * US:",
+                    "    if c.live_runs_n or obs.host_now_us - c.last_used_us < th.network_conflict_min_idle_s * US:"),),
+        targets=("test_3_the_idle_time_is_the_configured_one_and_the_database_clock_is_the_one_used",)),
+    Mutation(
+        "D64-C2-o", "plan: a container attached to the blocking network does not keep it", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if n.attached:\n        return unresolved\n", ""),),
+        targets=("test_4_a_container_of_any_state_attached_keeps_the_network",)),
+    Mutation(
+        "D64-C2-p", "plan: the daily cap is not applied", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if obs.conflict_removals_24h.get(c.blocking_hash_n, 0) >= th.network_conflict_daily_cap:\n        return unresolved\n", ""),),
+        targets=("test_5_a_blocking_network_is_removed_at_most_the_daily_cap_of_times",)),
+    Mutation(
+        "D64-C2-q", "plan: foreign refusals are not reported", PLAN_CONFLICT_TESTS,
+        edits=(Edit(PLAN_PY2, "    if any(c.blocking_hash_n == NO_BLOCKER and c.conflicts_n >= 1 for c in obs.conflicts):", "    if False:"),),
+        targets=("test_refusals_no_network_of_ours_explains_are_reported_as_foreign_and_nothing_is_removed",)),
+    Mutation(
+        "D64-C2-r", "observe: a boolean passes for an integer", CONFLICT_OBSERVE_TESTS,
+        edits=(Edit(OBSERVE_PY, "            if type(value) is not int:\n                raise ObservationError(f\"{name} is not an integer\")",
+                    "            if not isinstance(value, int):\n                raise ObservationError(f\"{name} is not an integer\")"),),
+        targets=("test_a_value_outside_the_contract_stops_the_pass",)),
+    Mutation(
+        "D64-C2-s", "observe: a hash wider than 48 bits is accepted", CONFLICT_OBSERVE_TESTS,
+        edits=(Edit(OBSERVE_PY, "< 1 << 48)", "< 1 << 60)"),),
+        targets=("test_a_value_outside_the_contract_stops_the_pass",)),
+    Mutation(
+        "D64-C2-t", "service: a failed removal counts against the cap", CONFLICT_OBSERVE_TESTS,
+        edits=(Edit(SERVICE_PY2, "                if (result.outcome == DONE and result.action.kind == vocab.REMOVE_NETWORK",
+                    "                if (result.action.kind == vocab.REMOVE_NETWORK"),),
+        targets=("test_only_a_verified_removal_for_a_range_conflict_by_a_name_that_is_a_number_counts",)),
+    Mutation(
+        "D64-C2-u", "service: a removal is never forgotten", CONFLICT_OBSERVE_TESTS,
+        edits=(Edit(SERVICE_PY2, "[t for t in times if t > horizon]", "[t for t in times]"),),
+        targets=("test_a_removal_is_forgotten_after_twenty_four_hours_and_not_before",)),
+    Mutation(
+        "D64-C2-v", "config: the minimum idle time may be below B_cap + P + Q", CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        if values[\"network_conflict_min_idle_s\"] < least_idle:", "        if False:"),),
+        targets=("test_the_minimum_idle_time_is_never_below_b_cap_plus_p_plus_q",)),
+    Mutation(
+        "D64-C2-w", "config: the conflict window may exceed what the function accepts", CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        if window > MAX_CONFLICT_WINDOW_S:", "        if False:"),),
+        targets=("test_the_conflict_window_is_at_most_what_the_database_function_accepts",)),
+    Mutation(
+        "D64-C2-x", "a file that vanishes before the unlink is a failure", RACE_TESTS,
+        edits=(Edit(FILES_PY, "    except FileNotFoundError:             # whoever made it unlinked it between the look and now",
+                    "    except FileExistsError:             # (never raised by unlink)"),),
+        targets=("test_file_scripted_the_name_vanishes_between_the_look_and_the_unlink",)),
+    Mutation(
+        "D64-C2-y", "a network whose removal was refused while someone else removed it is 'in use'", RACE_TESTS,
+        edits=(Edit(DOCKER_PY, "        if gone():\n            return Result(action, GONE)\n        return Result(action, FAILED, IN_USE)",
+                    "        return Result(action, FAILED, IN_USE)"),),
+        targets=("test_network_scripted_a_refusal_while_someone_else_removes_it_is_gone_not_in_use",)),
+    Mutation(
+        "D64-C2-z", "a real refusal to remove a network is no longer reported", RACE_TESTS,
+        edits=(Edit(DOCKER_PY, "        if gone():\n            return Result(action, GONE)\n        return Result(action, FAILED, IN_USE)",
+                    "        return Result(action, GONE)"),),
+        targets=("test_network_scripted_a_refusal_that_is_real_is_still_in_use",)),
+    Mutation(
+        "D64-C2-za", "residue: in-flight runs of the session's engagements are left as they were", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "    WHERE status = ANY(:in_flight)\"\"\"", "    WHERE false AND status = ANY(:in_flight)\"\"\""),),
+        targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
+    Mutation(
+        "D64-C2-zb", "residue: a stuck row in an engagement nobody registered is not looked for", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "                         and r.engagement_id not in CREATED]", "                         and False]"),),
+        targets=("test_an_engagement_nobody_registered_is_left_alone_and_its_new_stuck_row_is_found",)),
+    Mutation(
+        "D64-C2-zc", "residue: an engagement made by make_engagement is not registered", RESIDUE_TESTS,
+        edits=(Edit(HELPERS_PY, "    residue.CREATED.add(engagement_id)", "    pass"),),
+        targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})
