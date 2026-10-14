@@ -80,6 +80,12 @@ def plan(obs: Observation, th: Thresholds) -> Plan:
         reports.extend(part[1])
     if obs.rows_truncated:
         reports.append(Report("result", "stuck_proposals", vocab.RESULT_TRUNCATED))
+    clock = _docker_clock(obs, th)
+    if clock is not None:
+        # every age of a Docker object is the daemon's clock against ours: with the two apart, none
+        # of them is judged, and nothing that kills or removes one is asked for (ACCEPTANCE 5.93)
+        actions = [a for a in actions if a.kind not in vocab.DOCKER_ACTIONS]
+        reports.append(clock)
     actions.sort(key=lambda a: (EXECUTION_ORDER.index(a.kind), a.subject_id, a.reason_code))
     reports.sort(key=lambda r: (r.subject, r.subject_id, r.reason_code))
     return Plan(tuple(actions), tuple(reports))
@@ -156,6 +162,16 @@ def _approved(row: StuckRow, th: Thresholds) -> Action | Report | None:
     if (row.approval_valid_until_us is not None
             and row.db_now_us >= row.approval_valid_until_us + th.approval_grace_s * US):
         return _move(row, vocab.CLOSE, vocab.APPROVAL_EXPIRED)
+    return None
+
+
+def _docker_clock(obs: Observation, th: Thresholds) -> Report | None:
+    """A report when the host's clock and the daemon's are not known to agree within the
+    configured bound; ``None`` when they are."""
+    if obs.docker_skew_us is None:
+        return Report("result", "docker_clock", vocab.DOCKER_CLOCK_UNKNOWN)
+    if abs(obs.docker_skew_us) > th.max_clock_skew_s * US:
+        return Report("result", "docker_clock", vocab.DOCKER_CLOCK_SKEWED)
     return None
 
 

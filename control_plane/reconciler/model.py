@@ -130,6 +130,10 @@ class Observation:
     conflict_removals_24h: dict[int, int] = field(default_factory=dict)
     #: the host's clock, in microseconds, when the containers were listed
     host_now_us: int = 0
+    #: the host's clock minus the Docker daemon's, in microseconds, measured around one ``info``
+    #: call; ``None`` when it could not be measured. Default 0: a reading nobody took is not a
+    #: skew (the tests that build an ``Observation`` by hand); ``observe`` always sets it
+    docker_skew_us: int | None = 0
     #: the file owner the sweeper expects (the control plane's uid)
     expected_uid: int = -1
     #: the stuck-proposals result filled its page, so rows beyond it were not seen

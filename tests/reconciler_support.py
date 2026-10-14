@@ -28,6 +28,13 @@ TOUCHED: set[str] = set()
 
 
 
+def docker_info() -> dict:
+    """What a Docker daemon on this host answers to ``info``: its clock is the host's, so the skew
+    the reconciler measures is the round trip and nothing else."""
+    from datetime import UTC, datetime
+    return {"SystemTime": datetime.now(UTC).isoformat()}
+
+
 # ---------------------------------------------------------------------------------------------
 # fixtures: proposals at a stage, with whatever hangs off them
 # ---------------------------------------------------------------------------------------------

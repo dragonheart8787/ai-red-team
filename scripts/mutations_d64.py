@@ -1468,6 +1468,49 @@ CATALOGUE += [
         "D64-C3-q", "residue: an engagement does not remember the file that made it", RESIDUE_TESTS,
         edits=(Edit(RESIDUE_PY, "    FILE_OF.setdefault(engagement_id, current_file())", "    FILE_OF.setdefault(engagement_id, NOT_IN_A_TEST)"),),
         targets=("test_an_engagement_remembers_the_test_file_that_made_it",)),
+    Mutation(
+        "D64-C3-r", "the plan does not look at the skew", CLOCK_TESTS,
+        edits=(Edit(PLAN_PY, "    if clock is not None:", "    if False:"),),
+        targets=("test_a_skew_beyond_the_bound_asks_for_nothing_on_Docker_and_says_so",
+                 "test_real_a_host_clock_a_day_ahead_would_kill_a_container_and_the_guard_stops_it")),
+    Mutation(
+        "D64-C3-s", "a skew exactly at the bound is refused (the bound is exclusive)", CLOCK_TESTS,
+        edits=(Edit(PLAN_PY, "    if abs(obs.docker_skew_us) > th.max_clock_skew_s * US:",
+                    "    if abs(obs.docker_skew_us) >= th.max_clock_skew_s * US:"),),
+        targets=("test_a_skew_up_to_the_bound_changes_nothing",)),
+    Mutation(
+        "D64-C3-t", "only a skew ahead of the daemon counts", CLOCK_TESTS,
+        edits=(Edit(PLAN_PY, "    if abs(obs.docker_skew_us) > th.max_clock_skew_s * US:",
+                    "    if obs.docker_skew_us > th.max_clock_skew_s * US:"),),
+        targets=("test_a_skew_beyond_the_bound_asks_for_nothing_on_Docker_and_says_so",)),
+    Mutation(
+        "D64-C3-u", "a skew nobody could measure is zero", CLOCK_TESTS,
+        edits=(Edit(OBSERVE_PY, "    except Exception:                                           # noqa: BLE001 - unknown, not zero\n        return None",
+                    "    except Exception:                                           # noqa: BLE001\n        return 0"),),
+        targets=("test_a_clock_the_daemon_does_not_give_is_unknown_not_zero",)),
+    Mutation(
+        "D64-C3-v", "an unknown skew is not reported", CLOCK_TESTS,
+        edits=(Edit(PLAN_PY, "        return Report(\"result\", \"docker_clock\", vocab.DOCKER_CLOCK_UNKNOWN)", "        return None"),),
+        targets=("test_a_skew_nobody_could_measure_is_treated_as_too_large",)),
+    Mutation(
+        "D64-C3-w", "only the kill is withheld when the clocks disagree", CLOCK_TESTS,
+        edits=(Edit(PLAN_PY, "        actions = [a for a in actions if a.kind not in vocab.DOCKER_ACTIONS]",
+                    "        actions = [a for a in actions if a.kind != vocab.KILL_CONTAINER]"),),
+        targets=("test_every_kind_of_docker_action_is_withheld_not_only_the_kill",)),
+    Mutation(
+        "D64-C3-x", "the daemon's zone is ignored", CLOCK_TESTS,
+        edits=(Edit(OBSERVE_PY, "    elif len(moment) > 6 and moment[-6] in \"+-\" and moment[-3] == \":\":", "    elif False:"),),
+        targets=("test_the_daemons_time_is_read_in_any_zone_it_reports_in",
+                 "test_a_daemon_zone_ten_hours_east_is_the_same_instant")),
+    Mutation(
+        "D64-C3-y", "the skew is the host's time before the call, not its middle", CLOCK_TESTS,
+        edits=(Edit(OBSERVE_PY, "        return (before + after) // 2 - parse_rfc3339_us(info[\"SystemTime\"])",
+                    "        return before - parse_rfc3339_us(info[\"SystemTime\"])"),),
+        targets=("test_the_reading_is_taken_at_the_middle_of_the_round_trip",)),
+    Mutation(
+        "D64-C3-z", "the bound may be as large as the whole margin", CLOCK_TESTS + CONFIG_TESTS,
+        edits=(Edit(CONFIG_PY, "        if values[\"max_clock_skew_s\"] * SKEW_FRACTION_OF_MARGIN > values[\"kill_margin_s\"]:", "        if False:"),),
+        targets=("test_it_is_at_most_a_quarter_of_the_kill_margin",)),
 ]
 
 

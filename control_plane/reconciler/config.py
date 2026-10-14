@@ -48,6 +48,10 @@ MAX_CONFLICT_WINDOW_S = 31 * 86400
 #: The longest an honest decision stage takes (reviewer 120 s + OPA 30 s) -- D64 §1.8.
 DECISION_STAGE_FLOOR_S = 150
 
+#: ``MAX_CLOCK_SKEW_S`` is at most this fraction of ``KILL_MARGIN_S`` (one over it): a clock that
+#: far out may use up a quarter of the margin, never all of it.
+SKEW_FRACTION_OF_MARGIN = 4
+
 
 @dataclass(frozen=True)
 class Thresholds:
@@ -69,6 +73,11 @@ class Thresholds:
     q_proxy_s: int
     #: the longest the control plane's own ``kill()`` is allowed
     kill_margin_s: int
+    #: the most the host's clock may differ from the Docker daemon's before no Docker object is
+    #: judged by time (ACCEPTANCE 5.93): every age of a container or a network is the daemon's
+    #: ``StartedAt`` / ``Created`` against the host's ``now``, so a skew of ``s`` seconds moves
+    #: every deadline by ``s``. At most a quarter of ``kill_margin_s``, so it can use up only part
+    max_clock_skew_s: int
     #: an exited or never-started container is kept this long (its output is the only evidence)
     retention_s: int
     #: a network with no container of any state attached is idle after this long
@@ -179,6 +188,11 @@ def load(env: Mapping[str, str]) -> Thresholds:
         if window > MAX_CONFLICT_WINDOW_S:
             problems.append(f"{PREFIX}NETWORK_CONFLICT_WINDOW_S: {window} is above "
                             f"{MAX_CONFLICT_WINDOW_S}, the most the database function accepts")
+        if values["max_clock_skew_s"] * SKEW_FRACTION_OF_MARGIN > values["kill_margin_s"]:
+            problems.append(
+                f"{PREFIX}MAX_CLOCK_SKEW_S: {values['max_clock_skew_s']} is above a quarter of "
+                f"KILL_MARGIN_S ({values['kill_margin_s']}): a clock that far out would use up "
+                "the margin that lets the control plane's own kill come first")
         least_idle = values["b_cap_s"] + values["p_proxy_s"] + values["q_proxy_s"]
         if values["network_conflict_min_idle_s"] < least_idle:
             problems.append(

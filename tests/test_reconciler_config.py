@@ -27,7 +27,8 @@ VALID = {
     "RECONCILER_STAGE_GRACE_S": "3600", "RECONCILER_LEASE_GRACE_S": "30",
     "RECONCILER_APPROVAL_GRACE_S": "30", "RECONCILER_B_CAP_S": "1800",
     "RECONCILER_P_PROXY_S": "915", "RECONCILER_Q_PROXY_S": "300",
-    "RECONCILER_KILL_MARGIN_S": "60", "RECONCILER_RETENTION_S": "86400",
+    "RECONCILER_KILL_MARGIN_S": "60", "RECONCILER_MAX_CLOCK_SKEW_S": "5",
+    "RECONCILER_RETENTION_S": "86400",
     "RECONCILER_NETWORK_IDLE_S": "3600", "RECONCILER_NETWORK_SWEEP_PERIOD_S": "86400",
     "RECONCILER_VERIFY_WAIT_S": "10", "RECONCILER_SUMMARY_PERIOD_S": "3600",
     "RECONCILER_RETRY_AFTER_FAILURE_S": "1800", "RECONCILER_MAX_PAGES": "20",
@@ -101,7 +102,8 @@ def test_nothing_is_defaulted_the_loader_reads_each_value_from_its_argument():
     named = {n.targets[0].id for n in ast.walk(tree) if isinstance(n, ast.Assign)
              and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Constant)}
     assert named == {"PREFIX", "DOCKER_CALLS_BEFORE_PROXY", "PROXY_READINESS_S",
-                     "DOCKER_CALLS_AFTER_PROXY", "DECISION_STAGE_FLOOR_S"}
+                     "DOCKER_CALLS_AFTER_PROXY", "DECISION_STAGE_FLOOR_S",
+                     "SKEW_FRACTION_OF_MARGIN"}
     in_functions = [node.value for func in ast.walk(tree) if isinstance(func, ast.FunctionDef)
                     for node in ast.walk(func)
                     if isinstance(node, ast.Constant) and isinstance(node.value, int)

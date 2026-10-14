@@ -183,6 +183,34 @@ def parse_docker_time(value: str | None) -> int | None:
     return int(moment.timestamp()) * US + int(fraction)
 
 
+def parse_rfc3339_us(value: str) -> int:
+    """An RFC 3339 time with any number of fraction digits and a ``Z`` or ``+hh:mm`` offset, as
+    Docker's ``info`` reports ``SystemTime`` (in the daemon's own zone), to microseconds."""
+    moment = value.strip()
+    zone = "+00:00"
+    if moment.endswith(("Z", "z")):
+        moment = moment[:-1]
+    elif len(moment) > 6 and moment[-6] in "+-" and moment[-3] == ":":
+        moment, zone = moment[:-6], moment[-6:]
+    head, _, fraction = moment.partition(".")
+    fraction = (fraction + "000000")[:6]
+    stamp = datetime.fromisoformat(f"{head}.{fraction}{zone}")
+    return int(stamp.timestamp()) * US + int(fraction)
+
+
+def docker_skew_us(client: Any, clock_us: Callable[[], int]) -> int | None:
+    """The host's clock minus the Docker daemon's, in microseconds: the host's time at the middle
+    of one ``info`` call against the daemon's ``SystemTime`` in its reply (so the error is at most
+    half the round trip). ``None`` when the daemon does not say."""
+    try:
+        before = clock_us()
+        info = client.info()
+        after = clock_us()
+        return (before + after) // 2 - parse_rfc3339_us(info["SystemTime"])
+    except Exception:                                           # noqa: BLE001 - unknown, not zero
+        return None
+
+
 def container_obs(container: Any) -> ContainerObs:
     attrs = container.attrs
     state = attrs.get("State", {})
@@ -282,6 +310,7 @@ def observe(conn: Any, client: Any, *, directory: str, expected_uid: int,
     before the act half opens its own. ``max_pages`` is ``RECONCILER_MAX_PAGES`` (the service
     always passes it)."""
     rows, truncated = read_stuck(conn, max_pages=max_pages)
+    skew = docker_skew_us(client, clock_us)
     containers = list_containers(client)
     host_now = clock_us()
     run_ids = {c.run_id for c in containers if c.run_id}
@@ -291,4 +320,5 @@ def observe(conn: Any, client: Any, *, directory: str, expected_uid: int,
         rows=rows, run_states=states, containers=containers,
         networks=list_networks(client, idle_seen=idle_seen),
         files=list_files(directory, live_mount_sources(client)), conflicts=conflicts,
-        host_now_us=host_now, expected_uid=expected_uid, rows_truncated=truncated)
+        host_now_us=host_now, docker_skew_us=skew, expected_uid=expected_uid,
+        rows_truncated=truncated)

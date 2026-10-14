@@ -566,7 +566,8 @@ def test_the_service_hands_observe_the_configured_page_count_and_the_act_half_th
 # the list for its module. The list is what the reconciler may ask of Docker, in full.
 
 DOCKER_ROOTS = {"client", "container", "network"}      # the names the Docker handles arrive by
-OBSERVE_VERBS = {"containers.list", "networks.list", "reload", "attrs.get", "name.startswith"}
+OBSERVE_VERBS = {"containers.list", "networks.list", "info", "reload", "attrs.get",
+                 "name.startswith"}
 ACT_DOCKER_VERBS = {"containers.get", "containers.list", "networks.get", "reload", "kill", "remove",
                     "attrs.get", "name.startswith"}
 ALLOWED_DOCKER_VERBS = {"observe": OBSERVE_VERBS, "act_docker": ACT_DOCKER_VERBS}

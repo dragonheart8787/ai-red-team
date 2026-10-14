@@ -93,11 +93,14 @@ NAME_MISMATCH = "name_mismatch"
 RESULT_TRUNCATED = "result_truncated"
 NETWORK_CONFLICT_FOREIGN = "network_conflict_foreign"
 NETWORK_CONFLICT_UNRESOLVED = "network_conflict_unresolved"
+DOCKER_CLOCK_SKEWED = "docker_clock_skewed"
+DOCKER_CLOCK_UNKNOWN = "docker_clock_unknown"
 
 REPORT_REASONS = (BUDGET_UNREADABLE, CAPABILITY_MISSING, APPROVAL_MISSING, NO_OWNER_LABEL,
                   NO_RUN_ID_LABEL, RUN_UNKNOWN, UNEXPECTED_STATE, NOT_A_REGULAR_FILE,
                   FOREIGN_OWNER, NAME_MISMATCH, RESULT_TRUNCATED,
-                  NETWORK_CONFLICT_FOREIGN, NETWORK_CONFLICT_UNRESOLVED)
+                  NETWORK_CONFLICT_FOREIGN, NETWORK_CONFLICT_UNRESOLVED, DOCKER_CLOCK_SKEWED,
+                  DOCKER_CLOCK_UNKNOWN)
 
 #: what a report is about
 SUBJECTS = ("proposal", "container", "network", "file", "result")

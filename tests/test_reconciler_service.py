@@ -47,13 +47,13 @@ from control_plane.state.db import (
 )
 from tests import scheduler_support as sup
 from tests.helpers import committing_scope
-from tests.reconciler_support import EXPECTED, _proposal, residue_world
+from tests.reconciler_support import EXPECTED, _proposal, docker_info, residue_world
 from tests.test_reconciler_config import VALID
 
 REPO = Path(__file__).resolve().parents[1]
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
-    q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
+    q_proxy_s=300, kill_margin_s=60, max_clock_skew_s=5, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
     retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
     backoff_max_s=900, network_conflict_window_s=86400, network_conflict_min_idle_s=3600,
@@ -63,9 +63,16 @@ DRY_RUN = Settings(Mode.DRY_RUN)
 
 
 class FakeDocker:
-    def __init__(self, containers=(), networks=()):
+    def __init__(self, containers=(), networks=(), now_us=None):
         self.containers = SimpleNamespace(list=lambda **kw: list(containers))
         self.networks = SimpleNamespace(list=lambda: list(networks))
+        self._now_us = now_us                  # the daemon's clock, when it is not the host's
+
+    def info(self):
+        if self._now_us is None:
+            return docker_info()
+        from datetime import UTC, datetime
+        return {"SystemTime": datetime.fromtimestamp(self._now_us() / 1e6, UTC).isoformat()}
 
 
 MADE: list[Reconciler] = []
@@ -480,7 +487,7 @@ def test_a_network_is_not_planned_for_removal_in_the_first_idle_period_of_a_new_
         def reload(self):
             return None
 
-    client = FakeDocker(networks=[Net()])
+    client = FakeDocker(networks=[Net()], now_us=lambda: clock["us"])
     client.containers = SimpleNamespace(list=lambda **kw: [])
     r = Reconciler(settings=STATE_ONLY, th=TH, client=client, directory=str(emptydir),
                    expected_uid=os.getuid(), lock=SingletonLock(),

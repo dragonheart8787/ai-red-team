@@ -28,12 +28,12 @@ from control_plane.reconciler.model import US, StuckRow
 from control_plane.reconciler.observe import ObservationError
 from control_plane.reconciler.plan import plan
 from control_plane.state.db import reconciler_reader_scope
-from tests.reconciler_support import EPOCH, _approval, _capability, _proposal, _run
+from tests.reconciler_support import EPOCH, _approval, _capability, _proposal, _run, docker_info
 from tests.test_reconciler_reader import STUCK_COLUMNS, M
 
 TH = Thresholds(
     stage_grace_s=3600, lease_grace_s=30, approval_grace_s=30, b_cap_s=1800, p_proxy_s=915,
-    q_proxy_s=300, kill_margin_s=60, retention_s=86400, network_idle_s=3600,
+    q_proxy_s=300, kill_margin_s=60, max_clock_skew_s=5, retention_s=86400, network_idle_s=3600,
     network_sweep_period_s=86400, verify_wait_s=10, summary_period_s=3600,
     retry_after_failure_s=1800, max_pages=20, max_actions_per_pass=500,
     backoff_max_s=900, network_conflict_window_s=86400, network_conflict_min_idle_s=3600,
@@ -268,6 +268,9 @@ class FakeClient:
                 return client._networks
 
         self.containers, self.networks = Containers(), Networks()
+
+    def info(self):
+        return docker_info()
 
 
 def test_containers_are_listed_by_label_in_any_state_and_each_once():
