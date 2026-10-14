@@ -202,6 +202,9 @@ MENTIONS = re.compile(
 #: fails until it is listed (the same device as ``NULL_IS_A_STATE``): the point is a person reading
 #: whether the new stage ``abandoned`` needs anything there.
 FILE_REGISTRY = {
+    "scripts/drill_reconciler_docker.py":
+        "seeds proposals at `dispatching` / `recorded` for the drill's containers and reads the "
+        "stages the command line moved them to; it moves none itself",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",

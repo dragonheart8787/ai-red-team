@@ -603,3 +603,128 @@ fixed.
 ### 8.6 Next, and not started
 
 The classification flag and phase 1 wait for a person to read the plan.
+
+## 9. Completion round 3 (every flag is still off on anything that was not seeded)
+
+Claims are tagged **[E]** measured here, **[R]** read from the code, **[D]** deduced and not reproduced.
+
+### 9.1 The first `state-only` runs on the development database (item 1)
+
+`scripts/check_reconciler_run.py` (new) takes what a run did and checks it against three independent witnesses. `before` records the
+schema (`snapshot_schema`, 452 facts: columns, constraints, policies, functions, grants, comments) and the database's own
+insert/update/delete counters (`pg_stat_user_tables`, which count every row any role writes and are not subject to row-level
+security). `after` reads the passes' JSON lines and fails unless: every `done` proposal is in the stage and detail the transition
+table promises; `assert_coherent` (the suite's own function) holds for every moved proposal; each transition has exactly one
+reconciler audit event naming it, and no other proposal has one; `audit_log` took exactly `transitions + 2 × passes + failure events`
+rows (a failure is audited once per object, kind and reason per process); `action_proposals` was updated exactly `transitions`
+times; **no table had a row deleted**; and the schema is identical.
+
+| | round 1 (04:23 UTC) | round 2 (04:57 UTC) |
+|---|---:|---:|
+| what was there | the leftovers of the previous full suite; recommended thresholds | the leftovers of a full suite run with the session cleanup switched off; `STAGE_GRACE_S=300` (the floor) |
+| planned | 475 | 484 |
+| **moved (`done`)** | **39**: `close:capability_not_live` 33, `close:approval_revoked` 5, `close:engagement_killed` 1 | **17**: `mark_unknown_outcome` 11, `abandon` 4, `close:approval_revoked` 1, `close:capability_not_live` 1 |
+| failed | 436 × 2 passes = 872, all `abandon:db_error` | 467 × 2 passes = 934, all `abandon:db_error` |
+| engagements | 38 | 17 |
+| every moved row in the promised stage | yes (0 wrong) | yes (0 wrong) |
+| `assert_coherent` on every moved proposal | 0 incoherent | 0 incoherent |
+| audit events: one per transition, none for others | 0 engagements wrong | 0 engagements wrong |
+| `audit_log` rows inserted / expected | **915 / 915** (39 + 4 + 872) | **955 / 955** (17 + 4 + 934) |
+| `action_proposals` updates | 39 | 17 |
+| `tool_runs` updates | 0 | 9 (the in-flight runs of the 11 `mark_unknown_outcome`) |
+| rows deleted in any table | **0** | **0** |
+| schema differences | **0** of 452 | **0** of 452 |
+
+56 transitions in all, every one coherent, every one audited once. [E]
+
+**What the run found: 436, then 467, proposals that the plan wanted to abandon and the database refused.** They are rows at
+`received` that *have a decision* (`decision = 'ALLOW'`, `dispatch_state = 'dispatching'`), made by hand by the stateful test
+(`tests/stateful/test_capability_lifecycle.py`; through the pipeline a decision is written together with `decided`, so such a row
+cannot arise [R]). The plan sees an undecided proposal past the grace; `stages.abandon` is refused by the CHECK
+`action_proposals_abandoned_is_undecided`; the result is `failed / db_error`. That is the safe outcome (the database is the guard)
+and it is why *nothing wrong was written*. Three consequences were not safe:
+
+1. **every pass retried every one of them** and audited a failure for each, once per process: 436 attempts and 436 `action_failed`
+   events per `--once` run; and with `RECONCILER_MAX_ACTIONS_PER_PASS` = 500, 500 doomed attempts would fill a pass and starve the
+   healthy work behind them. *Fixed (own commit):* a failed action of **any** kind is held back for `RETRY_AFTER_FAILURE_S`
+   (it was only a kill, a removal or an unlink); the memory is dropped when the period passes. Two tests and two mutations.
+2. the rows stay stuck for ever and the plan cannot say why, because `reconciler_stuck_proposals()` does not return the decision
+   column: the plan has no way to report `unexpected_state` for them instead of planning an action that cannot succeed. *Not done:*
+   it needs migration 0026 (a column on both read functions). **Recommended; not started.**
+3. the first dry run (§8.5) planned 878 `abandon`s, 852 of the 1,403 actions on engagements prefixed `ENG-SM-`, which
+   `D64_DRY_RUN_2026-10-13.md` attributes to "the reconciler service tests". **That attribution was a guess from the prefix and is
+   wrong:** `ENG-SM-` is the stateful test's prefix (`tests/stateful/test_capability_lifecycle.py`; the reconciler's own tests use
+   `ENG-TEST-`). If those rows had the shape of today's 436 and 467, most of that dry run's "abandon" lines were actions the database
+   would have refused. Not verifiable now (the rows were closed afterwards) [N]; the dry-run file is left as printed, with this said
+   here.
+
+### 9.2 Where the 11, the 20 and the 1 came from (item 2)
+
+All three were in the first dry run (`D64_DRY_RUN_2026-10-13.md`); none was in the database a day later (the suite's own cleanup had
+closed them, which is also why the run above found different rows). Their origin was found by running each test file alone with
+the session cleanup switched off and diffing the set of stuck proposals before and after (`observe.read_stuck`): [E]
+
+* **`approval_missing` × 11** — `tests/test_stage_vocabulary.py::test_st6_a_resumed_proposal_in_a_stage_this_call_cannot_drive…`,
+  the `approved` parameter. It runs the whole pipeline once, then `UPDATE`s the proposal to `approved` with
+  `HUMAN_APPROVAL` and **no approvals row**, to see what `propose_action` says about a proposal in a stage it only reports. One
+  such row per run of the file; 11 runs of the file between 12:53 and 13:49 on 10-12. Six of them were 6–7 seconds apart, closer
+  than a full suite can be (the file itself takes about 6 s): they were back-to-back runs of that file, most likely under the
+  mutation runner [D]. The 11 rows had a succeeded run and a capability (the pipeline ran first), and a twin created 0.15 s after
+  each: this test's `dispatching` parameter.
+* **`mark_unknown_outcome` × 20** = **11 + 9**. The 11 are the same test's `dispatching` parameter (stage `dispatching`, decision
+  `ALLOW`, run `succeeded`: written by hand), one per run of the file, each created 0.15 s after its `approved` twin. The 9 are
+  **3 × 3**: `tests/test_pipeline_stages.py` kills a real subprocess with SIGKILL in the middle of a dispatch three times per run of
+  the file (the three D58 crash experiments), which leaves three `dispatching` proposals with a `running` run; three full suites
+  (12:50, 13:11, 13:45) × 3, created one second apart. Run alone now: 3 stuck `dispatching` + 3 `running`. 11 + 9 = 20.
+* **`network_conflict_foreign` × 1** — refusals for an overlapping range that no network of this database's history explains. Only
+  `tests/test_network_conflicts_read.py` makes them on purpose (a test of "a refusal nothing explains"); run alone it adds 5 to the
+  24-hour window. The report is one line whatever the count ("at least one refusal in the window that no network of ours explains"),
+  so the dry run's `×1` does not say how many. It is a *report*, and correct: they are the tests' own.
+
+None of the 31 belonged to a real engagement; the engagements were `ENG-TEST-…`, the same population as everything else in this
+database. The question the numbers raise for a *real* database is the one this section answers for the test one: each of these three
+reports names a test that makes exactly that state on purpose, and each would, in production, be a real finding.
+
+### 9.3 The test session now counts, per file, what it left (item 3)
+
+`tests/residue.py` (ACCEPTANCE 5.71): each engagement the session makes remembers the test file that made it
+(`PYTEST_CURRENT_TEST`); at the end the stuck proposals and in-flight runs it closes are **counted per file** and compared with
+`FILE_CAP`. **A file not listed may leave none; a file over its cap fails the session**, naming the file, the count and the cap. The
+table is printed on every run (it was not: the reporter wrote into the fixture's captured output, so a passing run showed nothing).
+
+Measured in two full runs, the same both times: `test_scheduler_roles` 116, `test_approved_dispatch` 17, `test_scheduler_skips` 14,
+`test_scheduler_service` 8, `test_dispatch_late_result` 6, `test_approvals` 6, `test_pipeline_stages` 6 (the three kill -9
+experiments: 3 + 3), `test_dispatch` 5, `test_web_console` 5, `test_scheduler_e2e` 4, `test_stage_vocabulary` 3 (§9.2),
+`test_network_conflicts_read` 3, `test_scheduler_structure` 1, `test_scheduler_cli` 1, and the stateful test (Hypothesis decides;
+490 and 455 in two runs; the cap is 1,000). Eleven of those files do not say why, and the table says so ("measured, not yet
+explained"): the cap is a ceiling, not an explanation.
+
+Two things the count showed at once: `test_refusal_code` and six of the reconciler's test files left 23 **runs** in flight between them, because
+`close_touched` (the reconciler tests' own cleanup) closed proposals and not their runs; it closes both now. And the stateful
+test registered its engagements by `residue.CREATED.add` rather than the helper, so its 490 rows were attributed to "(outside a
+test)"; it uses `residue.register`.
+
+### 9.4 The five switches (item 4)
+
+ACCEPTANCE 5.92, its own commit. `kill`, `container`, `proxy` can be enabled, from the command line, after a person types the phrase
+at a terminal; `network` and `file` are refused at argument validation. `reconciler.started` records what was enabled.
+
+### 9.5 Which clock judges what (item 6)
+
+`docs/D64_CLOCKS.md`, ACCEPTANCE 5.93. Eight comparisons; two of them mix clocks (Docker's against the host's; a remote file
+system's against the host's); the first is guarded by `RECONCILER_MAX_CLOCK_SKEW_S`.
+
+### 9.6 The drill on a real Docker daemon (item 5)
+
+ACCEPTANCE 5.95; the whole output, with Docker's own event stream and the audit trail, in `D64_DRILL_2026-10-14.md` and the directory
+beside it. Eight passes of the product's own command line against seeded objects, each preceded by a dry run whose plan was compared
+with the expectation. With no switch nothing changed; `kill` killed the overdue container and nothing else; `container` and
+`proxy` removed the orphan proxy of a control plane killed with SIGKILL, the container past its retention and, once their runs were
+declared unknown, the corpses of the other two. Untouched through every pass with all three switches on: unlabeled containers, an
+owner-only and a run-only label, a container well inside its budget, containers inside their retention, a proxy of a run in flight, a
+container whose live control plane was late (stopped, not dead), and a container that took the name of a removed one. Docker saw
+exactly the kills and removals that were expected; the audit trail has 6 intents and 6 verified results.
+
+### 9.7 Next, and not started
+
+Nothing is switched on for anything the drill did not make. The classification flag and phase 1 wait for a person to read this.
