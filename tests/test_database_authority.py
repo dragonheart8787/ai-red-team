@@ -110,7 +110,8 @@ EXPECTED_VIEWS = {
 #: Migration files that may contain a SECURITY DEFINER function. A new one must be added here, which
 #: is the moment a person looks at it.
 DEFINER_MIGRATIONS = {"0015_baseline_freeze.py", "0023_reconciler_reader.py",
-                      "0024_reconciler_paging.py", "0025_tool_run_refusal_code.py"}
+                      "0024_reconciler_paging.py", "0025_tool_run_refusal_code.py",
+                      "0026_reconciler_has_decision.py"}
 
 #: Privilege keywords: ``GRANT <one of these> ...`` is an object grant, not a role membership.
 PRIVILEGES = {

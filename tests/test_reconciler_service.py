@@ -382,7 +382,7 @@ def test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_s
         r.pass_once()
         (summary,) = global_events(r.instance_id, emit.FAILURE_SUMMARY)
         assert summary["payload"] == {"instance_id": r.instance_id, "passes": 4,
-                                      "failed": {"abandon:db_error": 8}}
+                                      "failed": {"abandon:db_error": 8}, "reported": {}}
         clock.now += TH.summary_period_s
         r.pass_once()                                   # a window with failures again...
         assert len(global_events(r.instance_id, emit.FAILURE_SUMMARY)) == 2
@@ -391,10 +391,11 @@ def test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_s
     assert state(engagement_id, first)[0] == "received"
 
 
-def _received_with_a_decision(eid) -> str:
+def _received_with_a_decision(eid, decision="ALLOW") -> str:
     """The shape the first state-only run on the development database found: a proposal at
-    ``received`` that has a decision. The plan sees an undecided one past the grace; the database
-    refuses to abandon it (``action_proposals_abandoned_is_undecided``)."""
+    ``received`` that has a decision. The plan saw an undecided one past the grace; the database
+    refuses to abandon it (``action_proposals_abandoned_is_undecided``). ``decision=None`` makes
+    the ordinary undecided kind, with an id that sorts before any other."""
     from tests.reconciler_support import EPOCH, TOUCHED
     TOUCHED.add(eid)
     pid = f"PROP-0000{uuid.uuid4().hex[:8]}"          # sorts before any other, so it goes first
@@ -403,16 +404,32 @@ def _received_with_a_decision(eid) -> str:
             INSERT INTO action_proposals (proposal_id, engagement_id, agent_id,
                 request_idempotency_key, action, target, "authorization", discovery, decision,
                 pipeline_stage, stage_updated_at)
-            VALUES (:p, :e, 'agent', :k, 'network.scan', '{}', '{}', '{}', 'ALLOW', 'received',
-                    CAST(:t AS timestamptz))"""), {"p": pid, "e": eid, "k": f"k-{pid}", "t": EPOCH})
+            VALUES (:p, :e, 'agent', :k, 'network.scan', '{}', '{}', '{}', :d, 'received',
+                    CAST(:t AS timestamptz))"""),
+                     {"p": pid, "e": eid, "k": f"k-{pid}", "t": EPOCH, "d": decision})
+    return pid
+
+
+def _doomed(eid, monkeypatch) -> str:
+    """A proposal the plan will ask to abandon and the database will refuse -- the failure that
+    436 rows with a decision once were, before the plan could see ``has_decision`` (migration
+    0026): the transition raises, for that proposal alone. It goes first."""
+    pid = _received_with_a_decision(eid, decision=None)
+    real = act._move
+
+    def refusing(conn, action, *a, **kw):
+        if action.subject_id == pid:
+            raise OperationalError("UPDATE", {}, Exception("refused"))
+        return real(conn, action, *a, **kw)
+    monkeypatch.setattr(act, "_move", refusing)
     return pid
 
 
 def test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest(
-        engagement_id, emptydir):
+        engagement_id, emptydir, monkeypatch):
     """436 such rows failed 436 times in every pass and, with a cap on the actions of a pass, would
     have kept the healthy work behind them waiting for ever."""
-    refused = _received_with_a_decision(engagement_id)
+    refused = _doomed(engagement_id, monkeypatch)
     healthy = _proposal(engagement_id, "received")
     clock = Clock()
     one_at_a_time = dataclasses.replace(TH, max_actions_per_pass=1)
@@ -436,9 +453,9 @@ def test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not
     assert state(engagement_id, refused)[0] == "received"
 
 
-def test_the_memory_of_failures_is_bounded_by_the_period(engagement_id, emptydir):
+def test_the_memory_of_failures_is_bounded_by_the_period(engagement_id, emptydir, monkeypatch):
     from tests.reconciler_support import close_touched
-    _received_with_a_decision(engagement_id)
+    _doomed(engagement_id, monkeypatch)
     clock = Clock()
     r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock)
     r.begin()
@@ -452,6 +469,63 @@ def test_the_memory_of_failures_is_bounded_by_the_period(engagement_id, emptydir
         clock.now += 2
         r.pass_once()
         assert r._failed_at == {}                  # past it: forgotten, and nothing re-learnt
+    finally:
+        r.finish("signal")
+
+
+def test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary(
+        engagement_id, emptydir):
+    """The shape the first state-only run found 436 and 467 of (completion 3, §9.1): since
+    migration 0026 the plan reads ``has_decision`` and says so instead of asking for an action the
+    database refuses."""
+    odd = _received_with_a_decision(engagement_id)
+    healthy = _proposal(engagement_id, "received")
+    clock = Clock()
+    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock)
+    r.begin()
+    try:
+        first = r.pass_once()
+        assert first.outcomes == {"done": 1}                    # the healthy one, and only it
+        assert state(engagement_id, healthy) == ("abandoned", "undecided_past_grace")
+        assert state(engagement_id, odd)[0] == "received"
+        assert [(x.subject, x.subject_id, x.reason_code) for x in first.plan.reports
+                if x.subject_id == odd] == [("proposal", odd, "unexpected_state")]
+        assert events(engagement_id, emit.ACTION_FAILED) == []   # nothing was tried and refused
+        r.pass_once()
+        assert global_events(r.instance_id, emit.FAILURE_SUMMARY) == []            # not yet
+        clock.now += TH.summary_period_s
+        r.pass_once()
+        written = global_events(r.instance_id, emit.FAILURE_SUMMARY)
+        assert len(written) == 1, written
+        summary = written[0]
+        assert summary["payload"]["failed"] == {}
+        assert summary["payload"]["passes"] == 3
+        assert summary["payload"]["reported"] == {"proposal:unexpected_state": 1}   # one object
+    finally:
+        r.finish("signal")
+
+
+def test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again(
+        engagement_id, emptydir):
+    from tests.reconciler_support import close_touched
+    one, two = (_received_with_a_decision(engagement_id) for _ in range(2))
+    clock = Clock()
+    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock)
+    r.begin()
+    try:
+        for _ in range(3):
+            r.pass_once()
+        clock.now += TH.summary_period_s
+        r.pass_once()
+        written = global_events(r.instance_id, emit.FAILURE_SUMMARY)
+        assert len(written) == 1, written
+        first = written[0]
+        assert first["payload"]["reported"] == {"proposal:unexpected_state": 2}, (one, two)
+        assert first["payload"]["passes"] == 4              # four passes, two objects
+        close_touched()                                      # the rows are dealt with
+        clock.now += TH.summary_period_s
+        r.pass_once()                         # a window with nothing in it says nothing, and does
+        assert len(global_events(r.instance_id, emit.FAILURE_SUMMARY)) == 1      # not repeat
     finally:
         r.finish("signal")
 

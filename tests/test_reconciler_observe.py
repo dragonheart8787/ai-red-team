@@ -127,7 +127,7 @@ def good(**kw) -> tuple:
                 db_now_us=2, engagement_status="active", kill_switch_engaged=False, enrolled=False,
                 capability_id=None, max_duration_s=None, lease_expires_us=None,
                 capability_revoked=None, approval_id=None, approval_valid_until_us=None,
-                approval_revoked=None, run_id=None, run_status=None)
+                approval_revoked=None, run_id=None, run_status=None, has_decision=False)
     base.update(kw)
     return tuple(base[c] for c in observe.STUCK_COLUMNS)
 
@@ -162,6 +162,7 @@ def test_a_function_that_returns_other_columns_is_refused(columns):
     dict(stage_updated_us="5"), dict(stage_updated_us=1.5), dict(stage_updated_us=True),
     dict(max_duration_s="120"), dict(max_duration_s=True), dict(enrolled=1),
     dict(kill_switch_engaged="f"), dict(run_status=5),
+    dict(has_decision=None), dict(has_decision=1), dict(has_decision="t"), dict(has_decision=0),
 ])
 def test_a_value_the_contract_does_not_allow_is_refused(kw):
     assert_refused(lambda: observe.read_stuck(FakeConn(rows=[good(**kw)])))

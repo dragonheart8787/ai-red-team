@@ -29,8 +29,10 @@ ladder exists:
   got nothing done makes the wait before the next one double, up to ``backoff_max_s``; any other
   pass resets it. A pass that gets something done never slows down;
 * a failed action is audited once per ``(object, kind, reason)`` per process lifetime and counted
-  after that; every ``summary_period_s`` a **failure summary** says how many of what failed, if any
-  did. A restart reports once more -- stated, not hidden (D64-11);
+  after that; every ``summary_period_s`` a **summary** (``reconciler.failure_summary``) says how
+  many of what failed and how many objects of each kind the plan reported and left alone
+  (``subject:reason`` -> distinct objects, e.g. ``proposal:unexpected_state``), if there is
+  anything to say. A restart reports once more -- stated, not hidden (D64-11);
 * a network is judged idle by how long *this process* has seen it idle, so a freshly started
   reconciler removes no network in its first idle period.
 
@@ -149,6 +151,8 @@ class Reconciler:
         self._idle_seen: dict[str, int] = {}
         self._reported: set[tuple[str, str, str]] = set()
         self._window: Counter = Counter()
+        #: what the plan reported and left alone in this window: ``subject:reason`` -> the ids seen
+        self._window_reported: dict[str, set[str]] = {}
         self._window_passes = 0
         self._window_started = monotonic()
         self._audit_failed = False
@@ -247,7 +251,7 @@ class Reconciler:
                 saved=self._evidence_saved if self.audits else None,
                 wall_clock_us=self._wall_clock_us)
             if self.audits:
-                self._after(results)
+                self._after(results, plan.reports)
                 self._assert_lock()
         except BaseException as exc:
             raise _translate(exc) from exc
@@ -379,12 +383,15 @@ class Reconciler:
             self._audit_failed = True
             raise
 
-    def _after(self, results: list[Result]) -> None:
+    def _after(self, results: list[Result], reports=()) -> None:
         """What is written once the pass has acted: removed files (counted), failed actions (once
         each), the summary (when its period has passed). An audit record that cannot be written
         stops the service -- after the pass, so the rest of it is not left half-reported."""
         try:
             self._window_passes += 1
+            for report in reports:
+                self._window_reported.setdefault(
+                    f"{report.subject}:{report.reason_code}", set()).add(report.subject_id)
             for result in results:
                 if (result.outcome == DONE and result.action.kind == vocab.REMOVE_NETWORK
                         and result.action.reason_code == vocab.RANGE_CONFLICT
@@ -412,11 +419,13 @@ class Reconciler:
         now = self._monotonic()
         if now - self._window_started < self.th.summary_period_s:
             return
-        if self._window:
-            emit.emit(emit.FAILURE_SUMMARY, {"instance_id": self.instance_id,
-                                             "passes": self._window_passes,
-                                             "failed": dict(sorted(self._window.items()))},
-                      subject_type="reconciler", subject_id=self.instance_id)
+        if self._window or self._window_reported:
+            emit.emit(emit.FAILURE_SUMMARY, {
+                "instance_id": self.instance_id, "passes": self._window_passes,
+                "failed": dict(sorted(self._window.items())),
+                "reported": {k: len(v) for k, v in sorted(self._window_reported.items())}},
+                subject_type="reconciler", subject_id=self.instance_id)
         self._window.clear()
+        self._window_reported.clear()
         self._window_passes = 0
         self._window_started = now

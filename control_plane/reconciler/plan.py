@@ -122,6 +122,10 @@ def _proposal(row: StuckRow, th: Thresholds) -> Action | Report | None:
     now = row.db_now_us
     stage = row.pipeline_stage
     if stage == vocab.STAGE_RECEIVED:
+        if row.has_decision:
+            # a decision is written together with `decided`; a `received` proposal that has one
+            # cannot be abandoned (the database refuses: 0022) and is nobody's to repair here
+            return _report(row, vocab.UNEXPECTED_STATE)
         if now - row.stage_updated_us >= th.stage_grace_s * US:
             return _move(row, vocab.ABANDON, vocab.UNDECIDED_PAST_GRACE)
         return None

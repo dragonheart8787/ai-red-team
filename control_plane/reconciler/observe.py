@@ -53,10 +53,10 @@ _TYPES: dict[str, tuple[type, ...]] = {
     "kill_switch_engaged": _BOOL, "enrolled": _BOOL, "capability_id": _TEXT,
     "max_duration_s": _INT, "lease_expires_us": _INT, "capability_revoked": _BOOL,
     "approval_id": _TEXT, "approval_valid_until_us": _INT, "approval_revoked": _BOOL,
-    "run_id": _TEXT, "run_status": _TEXT,
+    "run_id": _TEXT, "run_status": _TEXT, "has_decision": _BOOL,
 }
 _REQUIRED = {"engagement_id", "proposal_id", "pipeline_stage", "stage_updated_us", "db_now_us",
-             "enrolled"}
+             "enrolled", "has_decision"}
 
 
 class ObservationError(Exception):

@@ -66,7 +66,8 @@ GOOD = {
     emit.ACTION_FAILED: {"kind": "kill_container", "subject_id": "RUN-1",
                          "reason_code": "still_running_after_kill"},
     emit.FAILURE_SUMMARY: {"instance_id": "RECON-abc", "passes": 12,
-                           "failed": {"kill_container:daemon_error": 3}},
+                           "failed": {"kill_container:daemon_error": 3},
+                           "reported": {"proposal:unexpected_state": 2}},
 }
 ENGAGEMENT_SCOPED = {emit.PROPOSAL_ABANDONED, emit.PROPOSAL_CLOSED, emit.DISPATCH_UNKNOWN_OUTCOME,
                      emit.CONTAINER_KILLED, emit.CONTAINER_REMOVED, emit.PROXY_REMOVED,
@@ -111,7 +112,11 @@ def test_a_count_is_a_non_negative_integer_and_not_a_boolean(bad):
         emit.validate(emit.FILES_REMOVED, {"kind": "tls_leaf", "count": bad})
     with pytest.raises(PayloadRejected):
         emit.validate(emit.FAILURE_SUMMARY, {"instance_id": "RECON-1", "passes": 1,
-                                             "failed": {"kill_container:daemon_error": bad}})
+                                             "failed": {"kill_container:daemon_error": bad},
+                                             "reported": {}})
+    with pytest.raises(PayloadRejected):
+        emit.validate(emit.FAILURE_SUMMARY, {"instance_id": "RECON-1", "passes": 1, "failed": {},
+                                             "reported": {"proposal:unexpected_state": bad}})
 
 
 def test_a_reason_code_outside_its_events_list_is_refused():

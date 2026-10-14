@@ -172,7 +172,7 @@ SCHEMAS: dict[str, tuple[str, dict[str, Callable[[Any], Any]]]] = {
         "kind": _one_of(vocab.ACTION_KINDS), "subject_id": _id,
         "reason_code": _one_of(FAILURE_CODES)}),
     FAILURE_SUMMARY: ("global", {
-        "instance_id": _id, "passes": _count, "failed": _counts}),
+        "instance_id": _id, "passes": _count, "failed": _counts, "reported": _counts}),
 }
 
 

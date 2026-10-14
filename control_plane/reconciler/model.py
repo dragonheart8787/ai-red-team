@@ -47,6 +47,9 @@ class StuckRow:
     approval_revoked: bool | None
     run_id: str | None
     run_status: str | None
+    #: whether the proposal has a decision (never what it is); False by default so that a row built
+    #: without it is the ordinary, undecided kind (migration 0026)
+    has_decision: bool = False
 
 
 @dataclass(frozen=True)

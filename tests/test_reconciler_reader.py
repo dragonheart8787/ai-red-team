@@ -59,7 +59,10 @@ spec25 = importlib.util.spec_from_file_location(
 M25 = importlib.util.module_from_spec(spec25)
 spec25.loader.exec_module(M25)
 
-
+spec26 = importlib.util.spec_from_file_location(
+    "m0026", REPO / "db" / "migrations" / "versions" / "0026_reconciler_has_decision.py")
+M26 = importlib.util.module_from_spec(spec26)
+spec26.loader.exec_module(M26)
 
 OWNER, READER = RECONCILER_FN_OWNER_ROLE, RECONCILER_READER_ROLE
 CONFLICTS = "reconciler_network_conflicts"             # which networks blocked refused runs (0025)
@@ -77,7 +80,7 @@ STUCK_COLUMNS = [
     ("max_duration_s", "integer"), ("lease_expires_us", "bigint"),
     ("capability_revoked", "boolean"),
     ("approval_id", "text"), ("approval_valid_until_us", "bigint"), ("approval_revoked", "boolean"),
-    ("run_id", "text"), ("run_status", "text"),
+    ("run_id", "text"), ("run_status", "text"), ("has_decision", "boolean"),    # 0026
 ]
 RUN_COLUMNS = [("run_id", "text"), ("status", "text")]
 SCALAR_TYPES = {"text", "bigint", "integer", "boolean"}
@@ -240,6 +243,8 @@ def test_the_owner_has_column_select_on_exactly_the_listed_columns_and_nothing_e
                     {"r": OWNER, "o": rel, "c": col}).scalar_one(), (rel, col)
     expected = {t: set(c) for t, c in M.OWNER_COLUMNS.items()}
     expected["tool_runs"] |= set(M25.NEW_OWNER_COLUMNS)              # 0025: the conflicts read
+    for table, columns in M26.NEW_OWNER_COLUMNS.items():             # 0026: has_decision
+        expected[table] |= set(columns)
     assert found == expected
 
 
@@ -365,10 +370,42 @@ def test_the_run_function_returns_exactly_the_pinned_columns_and_only_scalar_typ
 
 
 def test_no_column_names_a_target_a_decision_a_reason_a_budget_or_a_tool_document(db_available):
-    names = {n for n, _ in STUCK_COLUMNS + RUN_COLUMNS}
+    # (``has_decision`` says whether there is one, as a boolean -- see the next test)
+    names = {n for n, _ in STUCK_COLUMNS + RUN_COLUMNS if n != "has_decision"}
     for forbidden in ("target", "decision", "reason", "budget", "tool", "params", "authorization",
                       "discovery", "payload", "credential", "allowlist"):
         assert not [n for n in names if forbidden in n], (forbidden, names)
+
+
+def test_has_decision_is_a_boolean_that_says_whether_never_what(db_available, engagement_id):
+    undecided = _proposal(engagement_id, "received")
+    decided = _proposal(engagement_id, "decided")
+    odd = _proposal(engagement_id, "received")
+    with engagement_scope(engagement_id) as conn:           # a decision on a `received` row
+        conn.execute(text("UPDATE action_proposals SET decision = 'DENY' WHERE proposal_id = :p"),
+                     {"p": odd})
+    rows = _stuck()
+    assert (rows[undecided]["has_decision"], rows[decided]["has_decision"],
+            rows[odd]["has_decision"]) == (False, True, True)
+    page = {r["proposal_id"]: r for r in _after(0, "")}      # the next page says the same
+    assert {p: page[p]["has_decision"] for p in (undecided, decided, odd) if p in page} == {
+        p: rows[p]["has_decision"] for p in (undecided, decided, odd) if p in page}
+    for row in rows.values():                                # and it is a boolean, not a value
+        assert type(row["has_decision"]) is bool
+    assert "DENY" not in repr(rows[odd]) and "ALLOW" not in repr(rows[decided])
+
+
+def test_the_functions_owner_reads_the_decision_column_and_the_reader_cannot(db_available):
+    with get_engine().connect() as conn:
+        assert conn.execute(text(
+            "SELECT has_column_privilege(:r, 'action_proposals', 'decision', 'SELECT')"),
+            {"r": OWNER}).scalar_one() is True
+        assert conn.execute(text(
+            "SELECT has_column_privilege(:r, 'action_proposals', 'decision', 'SELECT')"),
+            {"r": READER}).scalar_one() is False
+        assert conn.execute(text(
+            "SELECT has_column_privilege(:r, 'action_proposals', 'decision', 'UPDATE')"),
+            {"r": OWNER}).scalar_one() is False
 
 
 def test_the_enum_columns_hold_only_the_closed_vocabularies(db_available, engagement_id):

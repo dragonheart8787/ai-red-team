@@ -116,7 +116,7 @@ def stuck_values(i: int, *, us: int | None = None, pid: str | None = None) -> tu
            "enrolled": True, "capability_id": None, "max_duration_s": None,
            "lease_expires_us": None, "capability_revoked": None, "approval_id": None,
            "approval_valid_until_us": None, "approval_revoked": None, "run_id": None,
-           "run_status": None}
+           "run_status": None, "has_decision": True}
     return tuple(row[c] for c in observe.STUCK_COLUMNS)
 
 

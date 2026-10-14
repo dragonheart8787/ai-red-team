@@ -48,6 +48,20 @@ def _load_0023():
 
 
 _M23 = _load_0023()
+M0026 = "db/migrations/versions/0026_reconciler_has_decision.py"
+
+
+def _load_0026():
+    """Migration 0026, whose ``_with_has_decision`` turns 0023's / 0024's function texts into the
+    ones the database has now (the mutations below change one line of those)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("m0026", Path(__file__).resolve().parents[1] / M0026)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_M26 = _load_0026()
 READER_TESTS = ("tests/test_reconciler_reader.py",)
 _OR_REPLACE = ("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION")
 
@@ -64,7 +78,7 @@ def _as_function_owner(*statements: str) -> tuple[str, ...]:
 
 def _stuck_sql(*changes: tuple[str, str]) -> str:
     """The stuck-proposals function as a CREATE OR REPLACE, with each (old, new) applied once."""
-    text = _M23._stuck_function("public").replace(*_OR_REPLACE, 1)
+    text = _M26._with_has_decision(_M23._stuck_function("public")).replace(*_OR_REPLACE, 1)
     for old, new in changes:
         assert text.count(old) == 1, old
         text = text.replace(old, new)
@@ -1082,7 +1096,7 @@ _AFTER_SIG = "public.reconciler_stuck_proposals_after(bigint, text)"
 
 def _after_sql(*changes: tuple[str, str]) -> str:
     """The next-page function as a CREATE OR REPLACE, with each (old, new) applied once."""
-    text = _M24._function("public").replace(*_OR_REPLACE, 1)
+    text = _M26._with_has_decision(_M24._function("public")).replace(*_OR_REPLACE, 1)
     for old, new in changes:
         assert text.count(old) == 1, old
         text = text.replace(old, new)
@@ -1597,6 +1611,71 @@ CATALOGUE += [
         "D64-C4-r", "every container removal keeps evidence, even of a run that finished normally", EVIDENCE_TESTS,
         edits=(Edit(DOCKER_PY, "    if action.reason_code == vocab.RUN_UNKNOWN_OUTCOME and not proxy:", "    if not proxy:"),),
         targets=("test_a_finished_run_needs_no_evidence_and_leaves_none",)),
+]
+
+
+PLAN_TESTS26 = ("tests/test_reconciler_plan.py", "tests/test_reconciler_observe.py")
+SERVICE_TESTS26 = ("tests/test_reconciler_service.py",)
+_HD = "test_has_decision_is_a_boolean_that_says_whether_never_what"
+CATALOGUE += [
+    Mutation(
+        "D64-C4-s", "the plan does not look at has_decision", PLAN_TESTS26 + SERVICE_TESTS26,
+        edits=(Edit(PLAN_PY, "        if row.has_decision:\n", "        if False:\n"),),
+        targets=("test_r6_a_received_proposal_with_a_decision_is_reported_never_abandoned",
+                 "test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary")),
+    Mutation(
+        "D64-C4-t", "a received proposal with a decision is reported only past the grace", PLAN_TESTS26,
+        edits=(Edit(PLAN_PY, "        if row.has_decision:\n", "        if row.has_decision and now - row.stage_updated_us >= th.stage_grace_s * US:\n"),),
+        targets=("test_r6_a_received_proposal_with_a_decision_is_reported_never_abandoned",)),
+    Mutation(
+        "D64-C4-u", "a decided proposal is judged by has_decision too", PLAN_TESTS26,
+        edits=(Edit(PLAN_PY, "    if stage == vocab.STAGE_DECIDED:\n", "    if stage == vocab.STAGE_DECIDED and not row.has_decision:\n"),),
+        targets=("test_a_decision_is_what_every_later_stage_has_so_has_decision_changes_nothing_there",)),
+    Mutation(
+        "D64-C4-v", "a NULL has_decision is accepted", PLAN_TESTS26,
+        edits=(Edit(OBSERVE_PY, "             \"enrolled\", \"has_decision\"}", "             \"enrolled\"}"),),
+        targets=("test_a_value_the_contract_does_not_allow_is_refused",)),
+    Mutation(
+        "D64-C4-w", "has_decision may be an integer", PLAN_TESTS26,
+        edits=(Edit(OBSERVE_PY, "\"run_status\": _TEXT, \"has_decision\": _BOOL,", "\"run_status\": _TEXT, \"has_decision\": _INT + _BOOL,"),),
+        targets=("test_a_value_the_contract_does_not_allow_is_refused",)),
+    Mutation(
+        "D64-C4-x", "the summary counts passes, not objects", SERVICE_TESTS26,
+        edits=(Edit(SERVICE_PY, "f\"{report.subject}:{report.reason_code}\", set()).add(report.subject_id)", "f\"{report.subject}:{report.reason_code}\", set()).add(self._window_passes)"),),
+        targets=("test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",)),
+    Mutation(
+        "D64-C4-y", "a window with reports and no failure writes no summary", SERVICE_TESTS26,
+        edits=(Edit(SERVICE_PY, "        if self._window or self._window_reported:", "        if self._window:"),),
+        targets=("test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+                 "test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again")),
+    Mutation(
+        "D64-C4-z", "what was reported is carried into the next window", SERVICE_TESTS26,
+        edits=(Edit(SERVICE_PY, "        self._window_reported.clear()\n", ""),),
+        targets=("test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",)),
+    Mutation(
+        "D64-C4-aa", "the pass hands the plan's reports to nobody", SERVICE_TESTS26,
+        edits=(Edit(SERVICE_PY, "                self._after(results, plan.reports)\n", "                self._after(results)\n"),),
+        targets=("test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",)),
+    Mutation(
+        "D64-C4-ab", "the first function says the opposite of the truth", READER_TESTS,
+        sql_up=_as_function_owner(_stuck_sql(("p.decision IS NOT NULL", "p.decision IS NULL"))),
+        sql_down=_as_function_owner(_stuck_sql()),
+        targets=(_HD,)),
+    Mutation(
+        "D64-C4-ac", "the next page says the opposite of the truth", READER_TESTS,
+        sql_up=_as_function_owner(_after_sql(("p.decision IS NOT NULL", "p.decision IS NULL"))),
+        sql_down=_as_function_owner(_after_sql()),
+        targets=(_HD,)),
+    Mutation(
+        "D64-C4-ad", "the functions' owner can read another column of the proposals", READER_TESTS,
+        sql_up=("GRANT SELECT (stage_detail) ON action_proposals TO reconciler_fn_owner",),
+        sql_down=("REVOKE SELECT (stage_detail) ON action_proposals FROM reconciler_fn_owner",),
+        targets=("test_the_owner_has_column_select_on_exactly_the_listed_columns_and_nothing_else",)),
+    Mutation(
+        "D64-C4-ae", "the reader is given the decision column", READER_TESTS,
+        sql_up=("GRANT SELECT (decision) ON action_proposals TO reconciler_reader",),
+        sql_down=("REVOKE SELECT (decision) ON action_proposals FROM reconciler_reader",),
+        targets=("test_the_functions_owner_reads_the_decision_column_and_the_reader_cannot",)),
 ]
 
 

@@ -812,3 +812,76 @@ def test_0025_adds_the_column_its_two_checks_the_index_and_the_function_and_take
     scratch.alembic("upgrade", "0025")
     assert not snapshot_diff(s25, scratch.snapshot()), "\n".join(
         snapshot_diff(s25, scratch.snapshot()))
+
+
+# ---------------------------------------------------------------------------------------------
+# 0026: has_decision on both read functions, and nothing else; rows untouched in both directions
+# ---------------------------------------------------------------------------------------------
+
+def test_0026_adds_one_boolean_column_to_both_functions_and_one_column_grant_and_takes_them_back(
+        scratch):
+    scratch.alembic("upgrade", "0025")
+    eid, ids = _seed_stages(scratch, {"decided": SHAPES_0021["decided"],
+                                      "received": SHAPES_0021["received"]})
+    with scratch.engine.begin() as conn:       # the shape the development database held 400+ of
+        _bind(conn, eid)
+        odd = _add_proposal(conn, eid)
+        conn.execute(text("UPDATE action_proposals SET decision = 'DENY' WHERE proposal_id = :p"),
+                     {"p": odd})
+    s25 = scratch.snapshot()
+    rows_25 = _all_stages(scratch, eid, {**ids, "odd": odd})
+
+    scratch.alembic("upgrade", "0026")
+    s26 = scratch.snapshot()
+    changed = {line.split(": ", 1)[1].split("  [")[0].strip() for line in snapshot_diff(s25, s26)}
+    assert changed, "0026 changed nothing"
+    # exactly these four keys: the two functions (result type, hence definition and COMMENT), the
+    # decision column (its ACL: one column-level SELECT for the owner) and the version row
+    assert changed == {
+        "alembic:version", "column:action_proposals.decision",
+        "function:reconciler_stuck_proposals()",
+        "function:reconciler_stuck_proposals_after(p_after_us bigint, p_after_id text)"}, changed
+    for signature in ("reconciler_stuck_proposals()",
+                      "reconciler_stuck_proposals_after(p_after_us bigint, p_after_id text)"):
+        definition = s26[f"function:{signature}"]
+        assert ("owner=reconciler_fn_owner secdef=true "
+                'config={"search_path=pg_catalog, <schema>, pg_temp"}') in definition, signature
+        assert "has_decision" in definition, signature
+    with scratch.engine.begin() as conn:                # both answer, in the migration's schema
+        conn.execute(text("SET LOCAL ROLE reconciler_fn_owner"))
+        first = conn.execute(text(
+            f"SELECT proposal_id, has_decision FROM {scratch.name}.reconciler_stuck_proposals()"
+        )).all()
+        after = conn.execute(text(
+            f"SELECT proposal_id, has_decision "
+            f"FROM {scratch.name}.reconciler_stuck_proposals_after(0, '')")).all()
+    assert dict(first)[ids["received"]] is False
+    assert dict(first)[ids["decided"]] is True and dict(first)[odd] is True
+    assert dict(after) == dict(first)
+    assert _all_stages(scratch, eid, {**ids, "odd": odd}) == rows_25      # no row was touched
+
+    scratch.alembic("downgrade", "0025")
+    assert scratch.revision() == "0025"
+    assert not snapshot_diff(s25, scratch.snapshot()), "\n".join(
+        snapshot_diff(s25, scratch.snapshot()))
+    assert _all_stages(scratch, eid, {**ids, "odd": odd}) == rows_25
+
+    scratch.alembic("upgrade", "0026")
+    assert not snapshot_diff(s26, scratch.snapshot()), "\n".join(
+        snapshot_diff(s26, scratch.snapshot()))
+
+
+def test_0026_refuses_to_patch_a_definition_it_was_not_written_against():
+    import importlib.util
+    from pathlib import Path
+    path = (Path(__file__).resolve().parents[1]
+            / "db/migrations/versions/0026_reconciler_has_decision.py")
+    spec = importlib.util.spec_from_file_location("m0026_unit", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(RuntimeError):
+        module._with_has_decision("CREATE FUNCTION f() RETURNS TABLE (x text) AS $$ $$;")
+    earlier = module._earlier("0023_reconciler_reader.py")
+    patched = module._with_has_decision(earlier._stuck_function("public"))
+    assert patched.count("has_decision") == 1 and "p.decision IS NOT NULL" in patched
+    assert "p.decision IS NOT NULL" not in earlier._stuck_function("public")

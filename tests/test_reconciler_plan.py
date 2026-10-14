@@ -58,7 +58,8 @@ def row(stage: str, **kw) -> StuckRow:
         stage_updated_us=NOW - s(10), db_now_us=NOW, engagement_status="active",
         kill_switch_engaged=False, enrolled=True, capability_id=None, max_duration_s=None,
         lease_expires_us=None, capability_revoked=None, approval_id=None,
-        approval_valid_until_us=None, approval_revoked=None, run_id=None, run_status=None)
+        approval_valid_until_us=None, approval_revoked=None, run_id=None, run_status=None,
+        has_decision=False)
     base.update(kw)
     return StuckRow(**base)
 
@@ -110,6 +111,34 @@ def test_r6_the_grace_is_the_configured_one(stage):
     assert decide(r)[0]
     assert decide(r, thresholds=th(stage_grace_s=GRACE + 1))[0] == ()
     assert decide(r, thresholds=th(stage_grace_s=GRACE - 1))[0]
+
+
+@pytest.mark.parametrize("age_s", [0, GRACE - 1, GRACE, GRACE * 100])
+def test_r6_a_received_proposal_with_a_decision_is_reported_never_abandoned(age_s):
+    """The database refuses to abandon a proposal that has a decision (0022); the plan used not to
+    know (436 and 467 doomed attempts per pass on the development database) and since migration
+    0026 it does. Reported at every age: the row is wrong whatever its age."""
+    r = row("received", stage_updated_us=NOW - s(age_s), has_decision=True)
+    actions, reports = decide(r)
+    assert actions == ()
+    assert [(x.subject, x.subject_id, x.reason_code, x.engagement_id) for x in reports] == [
+        ("proposal", "PROP-1", vocab.UNEXPECTED_STATE, "ENG")]
+
+
+@pytest.mark.parametrize("stage", ["decided", "approved", "capability_issued", "dispatching"])
+def test_a_decision_is_what_every_later_stage_has_so_has_decision_changes_nothing_there(stage):
+    """Only a ``received`` proposal is judged by ``has_decision``: at the other four stages a
+    decision is the normal case, and it is the same plan whichever way the flag reads."""
+    kw = dict(stage_updated_us=NOW - s(10 ** 7), capability_id="CAP-1", max_duration_s=120,
+              lease_expires_us=NOW - s(10 ** 6), capability_revoked=False, enrolled=True)
+    with_flag = decide(row(stage, has_decision=True, **kw))
+    without = decide(row(stage, has_decision=False, **kw))
+    assert with_flag == without
+
+
+def test_r6_an_undecided_received_proposal_is_abandoned_as_before():
+    r = row("received", stage_updated_us=NOW - s(GRACE), has_decision=False)
+    assert_move(decide(r)[0], vocab.ABANDON, vocab.UNDECIDED_PAST_GRACE, r)
 
 
 LEASE = TH.lease_grace_s
