@@ -243,6 +243,32 @@ deny_reasons contains "capability_budget_missing" if not is_number(requested_max
 
 deny_reasons contains "target_count_unknown" if not is_number(requested_target_count)
 
+# The duration of a capability is bounded here, at the one decision point (D58-16, D64). Nothing
+# bounded `max_duration_seconds` before: whoever built the Budget chose it, a day was legal, and a
+# container is stopped only by the control plane that started it. The ceiling is a number in one
+# place -- `control_plane/policy/ceiling.py` carries the same value for the reconciler, and a test
+# fails if the two differ. It is deliberately the *global* ceiling; the operator-owned per-action
+# ceiling of D58-16 is smaller or equal and a later, separate decision.
+#
+# Same reasoning as the target budget above, in both directions: a request that states no duration
+# is not a request for an unlimited one (I10), and a duration that is not a positive number is not
+# a duration.
+max_duration_ceiling_seconds := 1800
+
+requested_max_duration := object.get(input, ["capability_request", "max_duration_seconds"], null)
+
+deny_reasons contains "budget_duration_exceeds_ceiling" if {
+	is_number(requested_max_duration)
+	requested_max_duration > max_duration_ceiling_seconds
+}
+
+deny_reasons contains "budget_duration_invalid" if {
+	is_number(requested_max_duration)
+	requested_max_duration < 1
+}
+
+deny_reasons contains "budget_duration_missing" if not is_number(requested_max_duration)
+
 # I10: an authorization-critical attribute that is UNKNOWN is handled per
 # action class below, but CONFLICT is never survivable. Two authoritative
 # classifications disagreeing is the case where guessing is least defensible.

@@ -1,0 +1,38 @@
+{
+ "tag": "ea1ef6",
+ "dir": "(a scratch directory)",
+ "engagements": {
+  "L1": "ENG-LIVE-ea1ef6-L1",
+  "L2": "ENG-LIVE-ea1ef6-L2",
+  "F": "ENG-LIVE-ea1ef6-F"
+ },
+ "containers": {
+  "L1": "3a4ae5cd00f44a2f43bf77c61981d3cbf1e4ed50f0189d6225fbcac5517d447d",
+  "L2": "34f20ff841b9918e725ad1f672a2984f02e5134ea3db3847e22929d7b74401eb",
+  "F": "9ce77a614a35ad5386c6144fc3a4c9f8b6ebe265ad6d97e389525708c23659ec"
+ },
+ "rows": {
+  "L1": {
+   "proposal": "PROP-4b0c0c9a84",
+   "run": "RUN-50d7c6e69050"
+  },
+  "L2": {
+   "proposal": "PROP-b830339062",
+   "run": "RUN-59b185b992ad"
+  },
+  "F": {
+   "proposal": "PROP-fe0ce64c99",
+   "run": "RUN-78332c2cd341"
+  }
+ },
+ "children": {
+  "L1": 30452,
+  "L2": 30526,
+  "F": 30599
+ },
+ "cidrs": [
+  "10.100.157.248/29",
+  "10.101.51.120/29",
+  "10.102.127.120/29"
+ ]
+}

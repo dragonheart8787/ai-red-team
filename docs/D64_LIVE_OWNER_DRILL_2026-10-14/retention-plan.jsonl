@@ -1,0 +1,2 @@
+{"detail": null, "engagement_id": "ENG-LIVE-ea1ef6-F", "kind": "remove_container", "outcome": "dry_run", "reason_code": "run_unknown_outcome", "subject_id": "9ce77a614a35ad5386c6144fc3a4c9f8b6ebe265ad6d97e389525708c23659ec"}
+{"held_back": 0, "limited": 0, "outcomes": {"dry_run": 1}, "reports": 0, "summary": {"remove_container:run_unknown_outcome": 1}, "truncated": false}

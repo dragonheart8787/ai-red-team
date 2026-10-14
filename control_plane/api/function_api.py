@@ -79,6 +79,7 @@ from control_plane.capability.broker import (
 from control_plane.evidence.redaction import detect_secret_formats
 from control_plane.orchestrator import stages
 from control_plane.orchestrator.dispatch import (
+    TIMED_OUT,
     dispatch_code_scan,
     dispatch_collection,
     dispatch_scan,
@@ -96,6 +97,9 @@ logger = logging.getLogger("cyberorch.api")
 ALLOW = "ALLOW"
 DENY = "DENY"
 HUMAN_APPROVAL = "HUMAN_APPROVAL"
+
+#: The deny reason an abandoned proposal reports (D64): not a refusal, a proposal nobody decided.
+ABANDONED_REASONS = ("abandoned_before_decision",)
 
 
 @dataclass(frozen=True)
@@ -674,9 +678,9 @@ def _drive(run: _Run, proposal_id: str) -> ActionOutcome:
         elif stage == stages.CAPABILITY_ISSUED:
             out = _dispatch(run, proposal_id)
         else:
-            # awaiting_approval / approved / dispatching / recorded / closed: nothing left for
-            # this call to do. Reached by a resumed proposal; a fresh one returns from the stage
-            # that finished it.
+            # awaiting_approval / approved / dispatching / recorded / closed / abandoned: nothing
+            # left for this call to do. Reached by a resumed proposal; a fresh one returns from
+            # the stage that finished it.
             return _outcome_from_rows(run, proposal_id)
         if out is not None and out is not _RELOAD:
             return out
@@ -992,6 +996,15 @@ def _record_provenance(run: _Run, proposal_id: str) -> None:
         )
 
 
+def _run_timed_out(engagement_id: str, run_id: str) -> bool:
+    """Whether the run's result record carries the timeout reason (``dispatch.TIMED_OUT``)."""
+    with engagement_scope(engagement_id) as conn:
+        return conn.execute(
+            text("SELECT 1 FROM audit_log WHERE subject_id = :r AND event_type = 'tool_run.failed' "
+                 "AND :code = ANY(reasons) LIMIT 1"),
+            {"r": run_id, "code": TIMED_OUT}).scalar_one_or_none() is not None
+
+
 def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
     """The outcome of a proposal that this call found already past the stages it could drive.
 
@@ -1024,7 +1037,11 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
     decision, failure = row["decision"] or DENY, None
     deny, approval = (reasons if decision == DENY else ()), (
         reasons if decision == HUMAN_APPROVAL else ())
-    if stage == stages.DISPATCHING:
+    if stage == stages.ABANDONED:
+        # Never decided (D64, A8): not a refusal, and not something to retry with the same key. The
+        # caller is told which, so that "refused" and "never decided" are not the same answer.
+        decision, deny, approval, failure = DENY, ABANDONED_REASONS, (), "abandoned"
+    elif stage == stages.DISPATCHING:
         failure = "dispatch_in_progress_or_unknown_outcome"
     elif detail.startswith("approval_revalidation_failed:"):
         decision, deny, failure = DENY, tuple(detail.split(":", 1)[1].split(",")), \
@@ -1038,7 +1055,10 @@ def _outcome_from_rows(run: _Run, proposal_id: str) -> ActionOutcome:
             run_row = detail.removeprefix("dedup_hit:")
     elif stage == stages.RECORDED and detail not in ("succeeded", "failed"):
         failure = detail or None
-    if stage in stages.TERMINAL:
+    elif stage == stages.RECORDED and detail == "failed" and run_row and _run_timed_out(
+            run.engagement_id, run_row):
+        failure = TIMED_OUT                           # a resumed call tells it as the first did
+    if stage in stages.TERMINAL and stage != stages.ABANDONED:
         _record_provenance(run, proposal_id)
     return ActionOutcome(
         decision=decision, proposal_id=proposal_id, deny_reasons=deny,

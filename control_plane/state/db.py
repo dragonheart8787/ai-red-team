@@ -27,6 +27,7 @@ _UI_READER_ENGINE: Engine | None = None
 _CREDENTIAL_ADMIN_ENGINE: Engine | None = None
 _GLOBAL_POLICY_ADMIN_ENGINE: Engine | None = None
 _SCHEDULER_READER_ENGINE: Engine | None = None
+_RECONCILER_READER_ENGINE: Engine | None = None
 _SCHEDULER_ADMIN_ENGINE: Engine | None = None
 _SCHEDULER_STATE_WRITER_ENGINE: Engine | None = None
 
@@ -101,6 +102,15 @@ def scheduler_reader_url() -> str:
         "SCHEDULER_READER_DATABASE_URL",
         hint="Run scripts/init_db.sh, or export SCHEDULER_READER_DATABASE_URL "
              "for the scheduler_reader role.",
+    )
+
+
+def reconciler_reader_url() -> str:
+    """The reconciler's plan-side connection string (D64): ``reconciler_reader``, EXECUTE only."""
+    return require_env(
+        "RECONCILER_READER_DATABASE_URL",
+        hint="Run scripts/init_db.sh, or export RECONCILER_READER_DATABASE_URL "
+             "for the reconciler_reader role.",
     )
 
 
@@ -180,6 +190,16 @@ def get_global_policy_admin_engine() -> Engine:
     return _GLOBAL_POLICY_ADMIN_ENGINE
 
 
+def get_reconciler_reader_engine() -> Engine:
+    """Pool for ``reconciler_reader`` (D64): the two read functions of migration 0023 only."""
+    global _RECONCILER_READER_ENGINE
+    if _RECONCILER_READER_ENGINE is None:
+        _RECONCILER_READER_ENGINE = create_engine(
+            reconciler_reader_url(), pool_pre_ping=True, future=True
+        )
+    return _RECONCILER_READER_ENGINE
+
+
 def get_scheduler_reader_engine() -> Engine:
     """Pool for ``scheduler_reader`` (D62): the scheduling decision's inputs, SELECT only."""
     global _SCHEDULER_READER_ENGINE
@@ -230,10 +250,12 @@ def reset_engine() -> None:
     global _ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE, _UI_READER_ENGINE
     global _CREDENTIAL_ADMIN_ENGINE, _GLOBAL_POLICY_ADMIN_ENGINE
     global _SCHEDULER_READER_ENGINE, _SCHEDULER_ADMIN_ENGINE, _SCHEDULER_STATE_WRITER_ENGINE
+    global _RECONCILER_READER_ENGINE
     for engine in (_ENGINE, _REGISTRY_ADMIN_ENGINE, _GLOBAL_AUDITOR_ENGINE,
                    _UI_READER_ENGINE, _CREDENTIAL_ADMIN_ENGINE,
                    _GLOBAL_POLICY_ADMIN_ENGINE, _SCHEDULER_READER_ENGINE,
-                   _SCHEDULER_ADMIN_ENGINE, _SCHEDULER_STATE_WRITER_ENGINE):
+                   _SCHEDULER_ADMIN_ENGINE, _SCHEDULER_STATE_WRITER_ENGINE,
+                   _RECONCILER_READER_ENGINE):
         if engine is not None:
             engine.dispose()
     _ENGINE = None
@@ -245,6 +267,7 @@ def reset_engine() -> None:
     _SCHEDULER_READER_ENGINE = None
     _SCHEDULER_ADMIN_ENGINE = None
     _SCHEDULER_STATE_WRITER_ENGINE = None
+    _RECONCILER_READER_ENGINE = None
 
 
 REGISTRY_ADMIN_ROLE = "registry_admin"
@@ -255,6 +278,8 @@ GLOBAL_POLICY_ADMIN_ROLE = "global_policy_admin"
 SCHEDULER_READER_ROLE = "scheduler_reader"
 SCHEDULER_ADMIN_ROLE = "scheduler_admin"
 SCHEDULER_STATE_WRITER_ROLE = "scheduler_state_writer"
+RECONCILER_READER_ROLE = "reconciler_reader"
+RECONCILER_FN_OWNER_ROLE = "reconciler_fn_owner"
 
 
 def assert_registry_admin(conn: Connection) -> None:
@@ -490,6 +515,20 @@ def scheduler_reader_enrollment_scope() -> Iterator[Connection]:
 
 
 @contextmanager
+def reconciler_reader_scope() -> Iterator[Connection]:
+    """A read transaction as ``reconciler_reader`` with **no engagement bound** (D64, 0023).
+
+    The one connection in the system that sees more than one engagement without setting the
+    engagement GUC, and it sees them only through the two ``SECURITY DEFINER`` functions of
+    migration 0023: it holds no grant on any table, so a direct ``SELECT`` is ``permission
+    denied``. What the functions return -- ids, closed-vocabulary enums and integers -- is pinned by
+    ``tests/test_reconciler_reader.py``. It cannot write, and the act side never receives it.
+    """
+    with get_reconciler_reader_engine().begin() as conn:
+        yield conn
+
+
+@contextmanager
 def scheduler_state_writer_scope(engagement_id: str) -> Iterator[Connection]:
     """A write transaction on ``scheduler_state`` for one engagement (D62); nothing else."""
     with _scoped(get_scheduler_state_writer_engine(), engagement_id) as conn:
@@ -501,6 +540,22 @@ def scheduler_admin_scope() -> Iterator[Connection]:
     """The enrollment writer's transaction (D62). The operator CLI only; a test scans for that."""
     with get_scheduler_admin_engine().begin() as conn:
         yield conn
+
+
+def open_reconciler_lock_connection() -> Connection:
+    """The reconciler's singleton-lock session (D64-10): unpooled, autocommit, TCP keepalives, as
+    ``reconciler_reader`` -- a login role that holds no table privilege, which is all an advisory
+    lock needs. Its own key (``control_plane/reconciler/lock.py``), so it can be held together with
+    the scheduler's. The caller owns it and closes it."""
+    from sqlalchemy.pool import NullPool
+
+    engine = create_engine(
+        reconciler_reader_url(), poolclass=NullPool, future=True,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"keepalives": 1, "keepalives_idle": 5, "keepalives_interval": 2,
+                      "keepalives_count": 3},
+    )
+    return engine.connect()
 
 
 def open_scheduler_lock_connection() -> Connection:

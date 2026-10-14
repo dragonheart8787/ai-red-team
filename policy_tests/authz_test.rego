@@ -707,6 +707,69 @@ test_non_numeric_budget_denies if {
 }
 
 # ---------------------------------------------------------------------------
+# Capability duration ceiling (D58-16, D64)
+# ---------------------------------------------------------------------------
+# `base` states 120 s, so every other test in this file already passes the ceiling. These pin the
+# boundary and both fail-closed directions; the number itself is compared with the Python side in
+# tests/test_duration_ceiling.py.
+
+test_a_duration_at_the_ceiling_is_allowed if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": 1800}})
+
+	r.decision == "ALLOW"
+	count(r.deny_reasons) == 0
+}
+
+test_a_duration_one_second_over_the_ceiling_denies if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": 1801}})
+
+	r.decision == "DENY"
+	"budget_duration_exceeds_ceiling" in r.deny_reasons
+}
+
+test_a_day_long_duration_denies if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": 86400}})
+
+	r.decision == "DENY"
+	"budget_duration_exceeds_ceiling" in r.deny_reasons
+}
+
+test_a_zero_or_negative_duration_denies if {
+	zero := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": 0}})
+	negative := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": -5}})
+
+	"budget_duration_invalid" in zero.deny_reasons
+	"budget_duration_invalid" in negative.deny_reasons
+	zero.decision == "DENY"
+	negative.decision == "DENY"
+}
+
+# I10: no stated duration is not an unlimited one.
+test_an_absent_duration_denies if {
+	stripped := json.remove(base, ["capability_request/max_duration_seconds"])
+	r := authz.result with input as stripped
+
+	r.decision == "DENY"
+	"budget_duration_missing" in r.deny_reasons
+}
+
+test_a_non_numeric_duration_denies if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": "600"}})
+
+	r.decision == "DENY"
+	"budget_duration_missing" in r.deny_reasons
+}
+
+# The ceiling answers the duration and nothing else: a duration over it adds one reason and does
+# not disturb the others, and a request that is fine except for its duration has exactly that one.
+test_the_duration_ceiling_is_the_only_reason_when_it_is_the_only_problem if {
+	r := authz.result with input as object.union(base, {"capability_request": {"max_duration_seconds": 3600}})
+
+	count(r.deny_reasons) == 1
+	"budget_duration_exceeds_ceiling" in r.deny_reasons
+}
+
+# ---------------------------------------------------------------------------
 # Action pattern matching (§4.1.5)
 # ---------------------------------------------------------------------------
 

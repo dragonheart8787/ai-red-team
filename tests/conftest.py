@@ -8,6 +8,7 @@ in the first place.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 
@@ -69,15 +70,46 @@ def _nothing_is_left_behind(request):
         return
     yield
     found = residue.leftovers(before)
+    rows = residue.close_session_rows(before)
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    capture = request.config.pluginmanager.get_plugin("capturemanager")
+    lines = []
     if found.networks_removed:
-        reporter = request.config.pluginmanager.get_plugin("terminalreporter")
-        if reporter is not None:
-            reporter.write_line(
-                f"residue: removed {len(found.networks_removed)} sandbox network(s) the session "
-                f"left behind (the sandbox keeps one per allowlist by design)")
-    if found.failures():
-        pytest.fail("the test session left state behind:\n  " + "\n  ".join(found.failures()),
-                    pytrace=False)
+        lines.append(f"residue: removed {len(found.networks_removed)} sandbox network(s) the "
+                     f"session left behind (the sandbox keeps one per allowlist by design)")
+    if rows.proposals or rows.runs:
+        lines.append(f"residue: closed {sum(rows.proposals.values())} stuck proposal(s) "
+                     f"{dict(sorted(rows.proposals.items()))} and {rows.runs} in-flight run(s) the "
+                     f"session left in {rows.engagements} engagement(s) it created, by test file:")
+        lines += rows.table()
+    if residue.CLOSED_AT_TEST_END:
+        top = sorted(residue.CLOSED_AT_TEST_END.items(), key=lambda kv: -kv[1])
+        total = sum(residue.CLOSED_AT_TEST_END.values())
+        lines.append(f"residue: {total} stuck row(s) were closed "
+                     f"at the end of the test that made them, in {len(top)} file(s): "
+                     + ", ".join(f"{f.removeprefix('tests/')} {n}" for f, n in top[:6])
+                     + (" ..." if len(top) > 6 else ""))
+    if reporter is not None and lines:
+        # (written past the capture of the fixture's teardown, so that a passing run shows it too)
+        with capture.global_and_fixture_disabled() if capture else contextlib.nullcontext():
+            for line in lines:
+                reporter.write_line(line)
+    if found.failures() or rows.failures():
+        pytest.fail("the test session left state behind:\n  "
+                    + "\n  ".join(found.failures() + rows.failures()), pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def _each_test_finishes_what_it_started():
+    """The engagements a test made have their stuck proposals and in-flight runs closed when it
+    ends (tests/residue.py). Taken after the module- and session-scoped fixtures exist, so those
+    engagements, which later tests still use, are not closed early. What this does not reach is
+    counted at the session end, per file, against ``FILE_CAP``."""
+    before = set(residue.CREATED)
+    yield
+    made = residue.CREATED - before
+    if made:
+        residue.finish_test(made)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -96,6 +128,15 @@ def _a_global_baseline_exists(_nothing_is_left_behind):
     yield
     if published is not None:
         deactivate_global_layer(published, actor="test-session-teardown")
+
+
+@pytest.fixture(autouse=True)
+def _reconciler_test_rows_are_closed_out():
+    """Stuck rows the reconciler's tests made are moved to a terminal stage when the test ends, so
+    a development database does not fill up with them (tests/reconciler_support.py)."""
+    yield
+    from tests.reconciler_support import close_touched
+    close_touched()
 
 
 @pytest.fixture

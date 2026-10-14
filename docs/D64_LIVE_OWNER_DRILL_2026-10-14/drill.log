@@ -1,0 +1,40 @@
+B = 30 s, margin = 60 s, the reconciler's bound for a container is B + margin = 90 s after its start; a wait of 3 s after each pass; retention 45 s
+the reconciler is passing (2 passes so far)
+containers started at L1 +0.0s, L2 +0.6s, F +1.2s
+the late owner (L2) continues at +40.6s, after 40 s stopped; its deadline passed at +30.6s
+the reconciler stopped (exit 0) after 21 passes
+waiting 33 s for the retention of F's corpse
+Docker's own record (seconds after the first container started):
+  +   -0.0  L1  create
+  +    0.2  L1  start
+  +    0.6  L2  create
+  +    0.7  L2  start
+  +    1.2  F   create
+  +    1.4  F   start
+  +   30.2  L1  kill signal 9
+  +   30.3  L1  die
+  +   30.3  L1  destroy
+  +   40.7  L2  kill signal 9
+  +   40.8  L2  die
+  +   40.8  L2  destroy
+  +   95.2  F   kill signal 9
+  +   95.3  F   die
+  +  150.1  F   destroy
+  audit L1: []
+  audit L2: []
+  audit F: ['action_intended', 'container_killed', 'action_intended', 'evidence_saved', 'container_removed']
+passes: 21 in all; 13 inside [B, B + margin + 10 s] = [+30, +100] s of the containers' start (a wait of 3 s after each pass, plus the pass itself); the longest gap in that interval is 5.5 s
+  L1: killed at +30.2s of its life by a process that was 'S (sleeping)'; the reconciler's bound was +90s
+  L2: killed at +40.1s of its life by a process that was 'T (stopped)' (continued at +40.6s); the reconciler's bound was +90s
+  L2 was past its deadline for 10.1 s (inside the 60 s margin) when its owner killed it; 2 reconciler pass(es) ran while it was overdue and none acted
+  F: killed at +94.0s of its life, its owner 'T (stopped)'; the reconciler's bound is +90s
+  the first pass that planned a kill: +94.1s of F's life
+  F's trail: ['action_intended', 'container_killed', 'action_intended', 'evidence_saved', 'container_removed']
+  inspect_sha256 in the trail 87730216c5bd7f01...  sha256 of 9ce77a614a35ad... 87730216c5bd7f01...
+  logs_sha256 in the trail da3687f7d214da22...  sha256 of 9ce77a614a35ad... da3687f7d214da22...
+  files: ['9ce77a614a35ad....json', '9ce77a614a35ad....logs']
+RESULT: OK
+removed network cyberorch-allow-c2b99762f9ec
+removed network cyberorch-allow-c57edec6248b
+removed network cyberorch-allow-7e568a886bd5
+closed 1 stuck proposal(s) the drill's engagements left

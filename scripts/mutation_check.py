@@ -88,6 +88,11 @@ class Mutation:
     cleanup_sql: tuple[str, ...] = ()
     #: A callable returning (sql_up, sql_down) for mutations built from the live definition.
     build_sql: Callable[[], tuple[tuple[str, ...], tuple[str, ...]]] | None = None
+    #: Run after the edits are in place, before the tests: builds whatever the edited files make
+    #: (a program, from edited source) and returns environment variables for the test run. If it
+    #: raises, the mutation did not build and is INVALID, the same as a Python edit that does not
+    #: compile.
+    prepare: Callable[[], dict[str, str]] | None = None
 
 
 @dataclass
@@ -150,12 +155,12 @@ def _superuser_sql(statement: str) -> None:
 # running
 # ---------------------------------------------------------------------------------------------
 
-def _pytest(tests: tuple[str, ...]) -> tuple[ET.Element, int]:
+def _pytest(tests: tuple[str, ...], env: dict[str, str] | None = None) -> tuple[ET.Element, int]:
     with tempfile.TemporaryDirectory() as tmp:
         xml = Path(tmp) / "result.xml"
         done = subprocess.run(
             [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={xml}", *tests],
-            cwd=ROOT, capture_output=True, text=True)
+            cwd=ROOT, capture_output=True, text=True, env={**os.environ, **(env or {})})
         if not xml.exists():
             raise RuntimeError(f"pytest produced no result file:\n{done.stdout[-800:]}"
                                f"\n{done.stderr[-800:]}")
@@ -242,7 +247,16 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
                 result.problems.append(f"the SQL of the mutation does not run: {exc}"[:300])
                 return result
 
-        root, _code = _pytest(mutation.tests)
+        extra_env: dict[str, str] = {}
+        if mutation.prepare is not None:
+            try:
+                extra_env = mutation.prepare()
+            except Exception as exc:
+                result.verdict = "INVALID"
+                result.problems.append(f"the mutation does not build: {exc}"[:400])
+                return result
+
+        root, _code = _pytest(mutation.tests, extra_env)
         result.passed, result.failures = _failures(root, mutation.allowed_errors)
     finally:
         for path, data in originals.items():

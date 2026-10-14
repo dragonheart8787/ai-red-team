@@ -218,6 +218,7 @@ tool_runs = Table(
     Column("status", Text, nullable=False),
     Column("network_allowlist", ARRAY(Text), nullable=False),
     Column("exit_code", Integer),
+    Column("refusal_code", Text),
     _ts("fresh_until"), _ts("started_at"), _ts("finished_at"), _ts("created_at"),
 )
 

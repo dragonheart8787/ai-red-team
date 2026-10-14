@@ -17,10 +17,10 @@ merge audit:
 | D58-6b what an L2 hold is | **NOT built** | — |
 | D58-7 `UNKNOWN_OUTCOME` | **built, option B** (the mislabel fixed; "never auto-retry" kept; the retry half is not taken) | `D58_7_SANDBOX_NOT_STARTED_REPORT.md`, 5.58 |
 | D58-8 lease / approved-proposal dispatch | **built** (D61, H-A) with the approval re-derivation | `D61_JIT_CAPABILITY_REPORT.md`, 5.56 |
-| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2) | — |
+| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2). **Design checkpoint written (revision 3), decisions open (D63 → D64):** scope, identity/permissions, relation to the scheduler, audit; thirteen decisions D64-1…13. **Prerequisite and first in order: D65-A, a deadline inside the tool container (design written, decisions open).** Two defects found while designing it are ACCEPTANCE 5.74 and 5.75 | `D64_RECONCILER_DESIGN.md`, `D65A_CONTAINER_DEADLINE_DESIGN.md`, 5.72, 5.74, 5.75 |
 | D58-10 recording the defects X1–X16 | **done** (D63 closeout): X1–X5, X8, X11, X12 as they were closed (5.52, 5.53, 5.56–5.58); X6 residual, X7, X9, X10, X13, X14, X15, X16 as open rows 5.60–5.67 | ACCEPTANCE 5.60–5.67 |
 | D58-11 priority basis | not needed yet (serial scheduler) | — |
-| D58-12 planning / closed-directions ledger | **NOT built** | — |
+| D58-12 planning / closed-directions ledger | **NOT built.** Its input vocabulary is now fixed: how each pipeline stage maps to "a direction the engagement closed" is entered below (D64 step 5) | the D58-12 entry under "A recency window is not a memory" (below), ACCEPTANCE 5.78 |
 | D58-13 resource quotas | **NOT built** (the scheduler is serial: concurrency 1) | — |
 | D58-14 network isolation | **built** (D59) | `D59_NETWORK_ISOLATION_REPORT.md`, 5.52 |
 | D58-15 who selects `credential_id` | **NOT built**; an approved `ad.collect` still cannot run | 5.57 |
@@ -812,6 +812,27 @@ could not exhibit:
    `ADR_TASK_IDENTITY.md` already defines "the same work").
 2. **Transient infrastructure errors must not enter that set** (§3.2 link 2): `engine_unavailable` and
    `capability_refused`-for-lease reasons are *not* directions the engagement has closed.
+
+   **D58-12 entry for the stage `abandoned` (D64 migration 0022, ACCEPTANCE 5.78).** A proposal that was
+   received and **never decided** is a third kind of "not a direction the engagement closed": nothing was
+   refused, so the ledger must not read it as a `DENY` (the old `_outcome_from_rows` did, with no reason).
+   The ledger derives from `(pipeline_stage, stage_detail, decision)`; the mapping it must use, for the stages
+   that exist now:
+
+   | stage / detail | a closed direction? |
+   |---|---|
+   | `closed` / `decision_DENY` | yes — terminal-for-now |
+   | `closed` / `approval_denied` | yes — a person said no |
+   | `closed` / `capability_refused:*`, `approval_revalidation_failed:*` | only for reasons that are not transient (item 2) |
+   | `closed` / `dedup_hit:*` | no — it was served from an earlier run |
+   | `recorded` / `succeeded` | done, not "closed" |
+   | `recorded` / `failed` | a failed attempt, the failure ladder's (D58-6) |
+   | `recorded` / `unknown_outcome` | no — a person's (I7) |
+   | `awaiting_approval`, `approved`, `dispatching`, `capability_issued`, `decided`, `received` | open |
+   | **`abandoned` / `undecided_past_grace`** | **no — open, re-proposable under a new idempotency key** (the old key keeps answering `abandoned_before_decision`) |
+
+   A new stage is a new row here: `tests/test_stage_vocabulary.py` (ST5) fails until the stage is classified,
+   and this table is where the planner's classification is written down.
 3. **Planning must be change-triggered.** In D40's rounds 3 and 4 the Supervisor spent a real model call to
    conclude "nothing left to do" — fine once; with N engagements × a tick every 30 s it is a standing
    cost and, per Finding #4, a categorical assessment that flips under a frozen state cannot serve as the
@@ -1074,7 +1095,7 @@ what a resident version has to add.
 | **D58-13** ⚑ | Cross-engagement resource quota | (A) in-process semaphores; (B) DB-backed counting; (C) cgroup quotas; and what `max_concurrency` becomes (enforce per-engagement, or delete) | **(A)** global/per-class now, **(B)** per-engagement after D58-5/B; the cross-engagement quota is operator config, **not OPA** | after D58-1, D58-5 |
 | **D58-14** ⚑ | Per-engagement network isolation | keep allowlist-keyed; key by engagement + solve overlap; other isolation | **security finding**: cross-engagement reachability is verified; direction needs your call — I do not have a lean without a decision on how real customer ranges are reached | — |
 | **D58-15** ⚑ | Who selects `credential_id` | (V1) operator-bound mapping; (V2) human-approved first use; (V3) the LLM (rejected) | **(V1)**, optionally (V2) on top; requires fixing the approval path to carry `credential_id` | — |
-| **D58-16** ⚑ | Gating unattended credentialed dispatch; `M` ceiling | (G-A) unattended; (G-B) human acknowledgment; (G-C) unattended only after active kill exists; + operator-owned per-action `max_duration_seconds` ceiling | **(G-C)** if the kill is built with D58-5/B, **(G-B)** until then; ceiling mandatory | after D58-5 |
+| **D58-16** ⚑ | Gating unattended credentialed dispatch; `M` ceiling (**the global ceiling, 1,800 s, is built — D64 step 3, ACCEPTANCE 5.76; the per-action ceiling and the gating are not**) | (G-A) unattended; (G-B) human acknowledgment; (G-C) unattended only after active kill exists; + operator-owned per-action `max_duration_seconds` ceiling | **(G-C)** if the kill is built with D58-5/B, **(G-B)** until then; ceiling mandatory | after D58-5 |
 | **D58-17** ⚑ | Secret residency and orphan handling | (A) sweeper + mode review; (B) `0700` per-run dir on a dedicated tmpfs; (C) vault sidecar holding the key | **A + B** now; **C** if D58-2 = A and residency is unacceptable | after D58-2 |
 
 ### 8.1 What I would settle first, and why

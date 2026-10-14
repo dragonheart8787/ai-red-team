@@ -40,6 +40,15 @@ is recoverable.
 
 tests/test_audit_logger.py pins all of this so none of it is rediscovered by
 accident.
+
+**The one exception, and why it is the opposite case.**
+:func:`record_audit_in_transaction` writes the record on the *caller's* connection, so it commits
+and rolls back with the caller's change. That is right for exactly one kind of record: one that
+says "this state change committed" (the reconciler's proposal transitions, D64 item 4). There the
+failure to avoid is the reverse of a lost refusal: a state change with no record (a ``kill -9``
+between the commit and a separate audit write), and a record of a change that did not commit. In one
+transaction both exist or neither does. A structural test pins its callers; ``record_audit`` still
+takes no ``conn``.
 """
 
 from __future__ import annotations
@@ -147,6 +156,59 @@ def record_audit(
         # The independent channel. Everything the lost record would have said
         # goes here, so the entry is recoverable from the application log even
         # though the database rejected it.
+        logger.critical(
+            "AUDIT WRITE FAILED — record not persisted: %s | record=%s",
+            exc, json.dumps(record, default=str, sort_keys=True),
+        )
+        raise AuditWriteError(
+            f"could not write audit record {event_type!r} for "
+            f"{subject_type}:{subject_id}: {exc}"
+        ) from exc
+
+
+def record_audit_in_transaction(
+    conn: Any,
+    *,
+    engagement_id: str,
+    actor: str,
+    event_type: str,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    decision: str | None = None,
+    reasons: Sequence[str] = (),
+    payload: dict[str, Any] | None = None,
+) -> int:
+    """Append one engagement-scoped audit record **on the caller's transaction**; returns its id.
+
+    The record commits with the caller's change and rolls back with it. Use it only for a record
+    that asserts "this change committed" -- see the module docstring. Raises
+    :class:`AuditWriteError` if the insert fails; the caller's transaction is then unusable and must
+    roll back, which is the point: no state change is left without its record.
+    """
+    if not engagement_id:
+        raise ValueError("engagement-scoped audit records must name an engagement")
+    if not actor:
+        raise ValueError("audit records must name an actor")
+    body = payload or {}
+    record = {
+        "engagement_id": engagement_id, "scope": "engagement", "actor": actor,
+        "event_type": event_type, "subject_type": subject_type, "subject_id": subject_id,
+        "decision": decision, "reasons": list(reasons), "payload": body,
+    }
+    try:
+        return conn.execute(
+            text("""
+                INSERT INTO audit_log (engagement_id, scope, actor, event_type,
+                    subject_type, subject_id, decision, reasons, payload)
+                VALUES (:eid, 'engagement', :actor, :event, :stype, :sid, :decision,
+                        :reasons, CAST(:payload AS jsonb))
+                RETURNING audit_id
+            """),
+            {"eid": engagement_id, "actor": actor, "event": event_type, "stype": subject_type,
+             "sid": subject_id, "decision": decision, "reasons": list(reasons),
+             "payload": json.dumps(body, default=str, sort_keys=True)},
+        ).scalar_one()
+    except SQLAlchemyError as exc:
         logger.critical(
             "AUDIT WRITE FAILED — record not persisted: %s | record=%s",
             exc, json.dumps(record, default=str, sort_keys=True),

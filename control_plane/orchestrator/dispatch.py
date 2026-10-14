@@ -86,6 +86,17 @@ DENY_DECISION = "DENY"
 # is unresolved, not failed.
 IN_FLIGHT = (DISPATCHING, RUNNING)
 
+#: Written when a run's result arrives *after* the proposal was declared ``unknown_outcome`` (by the
+#: reconciler, ACCEPTANCE 5.74) and the result is recorded over that state. The one and only way a
+#: proposal leaves ``recorded / unknown_outcome``; see :func:`_take_result_stage`.
+LATE_RESULT_EVENT = "run.late_result"
+
+#: A dispatch finished, or was refused, but the proposal's stage had been moved by someone else to
+#: something that is not the reconciler's ``unknown_outcome``: nothing is recorded (the raw output
+#: is already on disk and its path is logged) and the outcome says so, rather than a second writer
+#: contradicting the first (ACCEPTANCE 5.74).
+STAGE_MOVED = "stage_moved_before_record"
+
 
 class DispatchError(RuntimeError):
     """The dispatch could not be started."""
@@ -125,6 +136,50 @@ def _set_state(conn: Connection, proposal_id: str, state: str) -> None:
              "WHERE proposal_id = :pid"),
         {"pid": proposal_id, "s": state},
     )
+
+
+def _take_result_stage(
+    conn: Connection, proposal_id: str, run_id: str, *, detail: str,
+) -> bool:
+    """First statement of a dispatch's record transaction: win the stage, or be a late result.
+
+    ``True`` is the ordinary case: ``dispatching -> recorded`` was ours. If the stage had already
+    moved, there is exactly one state in which the result is still wanted -- the reconciler's
+    ``recorded / unknown_outcome`` (proposal and run both ``unknown_outcome``): the run it declared
+    unknown has now finished, and its result replaces "unknown" in the same transaction (the caller
+    audits ``run.late_result``). That is ``False`` here. Anything else is not ours to overwrite and
+    raises :class:`stages.StageConflict`, which rolls the whole record back.
+
+    **Whose result it is.** ``run_id`` is the run this dispatch started, and the late transition
+    is conditional on *that run* being the proposal's run and being ``unknown_outcome`` -- in the
+    same statement that moves the proposal, not in a separate check. A proposal the reconciler
+    declared unknown is not overwritten by a result that belongs to another run, or to a run
+    of another proposal, or to a run that is not itself unknown (ACCEPTANCE 5.74).
+    """
+    if stages.advance(conn, proposal_id, expected=stages.DISPATCHING, new=stages.RECORDED,
+                      detail=detail):
+        return False
+    late = conn.execute(
+        text("""
+            UPDATE action_proposals
+            SET pipeline_stage = :recorded, stage_detail = :detail,
+                stage_updated_at = now(), updated_at = now()
+            WHERE proposal_id = :pid AND pipeline_stage = :recorded
+              AND stage_detail = :unknown AND dispatch_state = :unknown
+              AND EXISTS (SELECT 1 FROM tool_runs r
+                          WHERE r.run_id = :run AND r.proposal_id = :pid
+                            AND r.status = :unknown)
+            RETURNING proposal_id
+        """),
+        {"pid": proposal_id, "run": run_id, "recorded": stages.RECORDED, "detail": detail,
+         "unknown": UNKNOWN_OUTCOME},
+    ).scalar_one_or_none()
+    if late is None:
+        raise stages.StageConflict(
+            f"proposal {proposal_id!r} is no longer in stage {stages.DISPATCHING!r}, and is not "
+            f"the reconciler's {stages.RECORDED}/{UNKNOWN_OUTCOME} for run {run_id!r}"
+        )
+    return True
 
 
 def fingerprint_context(
@@ -245,6 +300,36 @@ NETWORK_UNAVAILABLE = "network_unavailable"
 #: is ``failed`` (retryable), never ``unknown_outcome``.
 SANDBOX_NOT_STARTED = "sandbox_not_started"
 
+#: The run *started* and was ended by its deadline -- the control plane's own timeout, or the
+#: in-container helper's (D65-A, exit 124 after the container ran as long as its deadline). A
+#: ``failed`` run with whatever output it had, recorded as ``tool_run.failed`` carrying this
+#: reason. It is the opposite of the ``NotStarted`` refusals above (``tool_run.refused``, the
+#: exception's own reason code, no run output, retryable as "never ran"): the two must never share
+#: a code, and ``tests/test_timeout_vs_not_started.py`` keeps it so.
+TIMED_OUT = "tool_run_timed_out"
+
+
+#: The closed vocabulary of ``tool_runs.refusal_code`` (migration 0025): every ``reason`` a
+#: ``NotStarted`` subclass can carry, and every ``deadline_helper_*`` code.
+#: ``tests/test_refusal_code.py`` compares it with the migration's CHECK and with the sandbox, so
+#: none can be added in one place.
+REFUSAL_CODES = (
+    "sandbox_not_started", "docker_unreachable", "tool_image_missing", "container_start_refused",
+    "network_unavailable", "network_in_use_by_another_engagement",
+    "network_range_conflicts_with_another_network", "tool_command_not_executable",
+    "deadline_helper_unavailable", "deadline_helper_unsupported_architecture",
+    "deadline_helper_unpinned", "deadline_helper_unreadable", "deadline_helper_missing",
+    "deadline_helper_hash_mismatch", "deadline_helper_not_executable",
+    "deadline_helper_path_in_use",
+)
+
+
+def refusal_code_of(exc: NotStarted) -> str:
+    """The code the run row records. A reason outside the vocabulary (a new subclass nobody added
+    to it) is ``sandbox_not_started``: the database refuses any other value, and a refusal that
+    could not be recorded because its own reason was new would lose the run's record."""
+    return exc.reason if exc.reason in REFUSAL_CODES else SANDBOX_NOT_STARTED
+
 
 def _refused_before_start(
     conn: Connection, *, engagement_id: str, actor: str, run_id: str,
@@ -256,7 +341,8 @@ def _refused_before_start(
     by construction name no other engagement; who holds the network is in the
     operator log, not in this engagement's trail.
     """
-    _finish_run(conn, run_id, FAILED, exit_code=None)
+    # The code is state, written by the statement that fails the run, in this transaction (0025).
+    _finish_run(conn, run_id, FAILED, exit_code=None, refusal_code=refusal_code_of(exc))
     _set_state(conn, proposal_id, FAILED)
     record_audit(
         engagement_id=engagement_id, actor=actor,
@@ -354,29 +440,45 @@ def _execute(
     try:
         return sandbox_run()
     except NotStarted as exc:
-        with engagement_scope(engagement_id) as conn:
-            outcome = _refused_before_start(
-                conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
-                proposal_id=proposal_id, exc=exc,
-            )
-            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
-                           new=stages.CLOSED, detail=exc.reason)
-        return outcome
+        try:
+            with engagement_scope(engagement_id) as conn:
+                # First statement: win the stage, or write nothing (audit-after-win, stages.py).
+                stages.take(conn, proposal_id, expected=stages.DISPATCHING,
+                            new=stages.CLOSED, detail=exc.reason)
+                return _refused_before_start(
+                    conn, engagement_id=engagement_id, actor=actor, run_id=run_id,
+                    proposal_id=proposal_id, exc=exc,
+                )
+        except stages.StageConflict:
+            logger.error("run %s was refused before it started (%s) but proposal %s had already "
+                         "been moved; nothing recorded", run_id, exc.reason, proposal_id)
+            return DispatchOutcome(False, None, UNKNOWN_OUTCOME, reason=STAGE_MOVED)
     except SandboxUnavailable as exc:
         # The tool may or may not have run — the sandbox failed at a point we
         # cannot distinguish. §8.8 says that is UNKNOWN_OUTCOME, not FAILED,
         # because "failed" invites a retry.
-        with engagement_scope(engagement_id) as conn:
-            _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
-            _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
-            record_audit(
-                engagement_id=engagement_id, actor=actor,
-                event_type="tool_run.unknown_outcome", subject_type="tool_run",
-                subject_id=run_id, reasons=("sandbox_unavailable",),
-                payload={"error": str(exc)},
-            )
-            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
-                           new=stages.RECORDED, detail=UNKNOWN_OUTCOME)
+        try:
+            with engagement_scope(engagement_id) as conn:
+                if not stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
+                                      new=stages.RECORDED, detail=UNKNOWN_OUTCOME):
+                    # Already ``recorded / unknown_outcome`` (the reconciler got there first) is
+                    # the state this branch would have written; anything else is not ours.
+                    if stages.stage_of(conn, proposal_id) != (stages.RECORDED, UNKNOWN_OUTCOME):
+                        raise stages.StageConflict(
+                            f"proposal {proposal_id!r} is no longer in stage "
+                            f"{stages.DISPATCHING!r}")
+                _finish_run(conn, run_id, UNKNOWN_OUTCOME, exit_code=None)
+                _set_state(conn, proposal_id, UNKNOWN_OUTCOME)
+                record_audit(
+                    engagement_id=engagement_id, actor=actor,
+                    event_type="tool_run.unknown_outcome", subject_type="tool_run",
+                    subject_id=run_id, reasons=("sandbox_unavailable",),
+                    payload={"error": str(exc)},
+                )
+        except stages.StageConflict:
+            logger.error("run %s has an unknown outcome (sandbox unavailable) but proposal %s "
+                         "had already been moved; nothing recorded", run_id, proposal_id)
+            return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=STAGE_MOVED)
         return DispatchOutcome(True, run_id, UNKNOWN_OUTCOME, reason=str(exc))
 
 
@@ -420,6 +522,19 @@ def _record_scan_result(
                    if incomplete_reason is not None else {})
     try:
         with engagement_scope(engagement_id) as conn:
+            # First statement: win the stage -- or be a late result over the reconciler's
+            # ``unknown_outcome`` -- or record nothing at all (ACCEPTANCE 5.74).
+            late = _take_result_stage(conn, proposal_id, started.run_id, detail=status)
+            recorded = _finish_run(
+                conn, started.run_id, status, exit_code=result.exit_code,
+                fresh_for_seconds=started.fresh_for_seconds if status == SUCCEEDED else None,
+                only_if_status=UNKNOWN_OUTCOME if late else None,
+                of_proposal=proposal_id if late else None,
+            )
+            if not recorded:
+                raise stages.StageConflict(
+                    f"run {started.run_id!r} is not the unknown_outcome run of proposal "
+                    f"{proposal_id!r}")
             record_evidence(
                 conn, engagement_id=engagement_id, evidence_id=evidence_id,
                 run_id=started.run_id, evidence_type="tool_output", raw=raw,
@@ -427,20 +542,33 @@ def _record_scan_result(
                 tool=adapter.TOOL, tool_version=started.tool_version,
                 ruleset_version=started.ruleset_version,
             )
-            _finish_run(
-                conn, started.run_id, status, exit_code=result.exit_code,
-                fresh_for_seconds=started.fresh_for_seconds if status == SUCCEEDED else None,
-            )
             _set_state(conn, proposal_id, status)
             record_audit(
                 engagement_id=engagement_id, actor=actor,
                 event_type=f"tool_run.{status}", subject_type="tool_run",
                 subject_id=started.run_id, decision="ALLOW" if status == SUCCEEDED else None,
+                reasons=(TIMED_OUT,) if result.timed_out else (),
                 payload={**result.as_dict(), "evidence_id": evidence_id, **audit_extra,
-                         **_revoked_during_run(conn, started.capability_id)},
+                         **_revoked_during_run(conn, started.capability_id),
+                         **({"late_result": True} if late else {})},
             )
-            stages.advance(conn, proposal_id, expected=stages.DISPATCHING,
-                           new=stages.RECORDED, detail=status)
+            if late:
+                record_audit(
+                    engagement_id=engagement_id, actor=actor, event_type=LATE_RESULT_EVENT,
+                    subject_type="tool_run", subject_id=started.run_id,
+                    reasons=("result_after_unknown_outcome",),
+                    payload={"proposal_id": proposal_id, "run_id": started.run_id,
+                             "previous": UNKNOWN_OUTCOME, "status": status,
+                             "evidence_id": evidence_id},
+                )
+    except stages.StageConflict:
+        logger.critical(
+            "run %s finished (exit %s) but proposal %s is no longer where its dispatch left it, "
+            "so the result was NOT recorded; the output is on disk at %s (sha256 %s)",
+            started.run_id, result.exit_code, proposal_id, path, digest,
+        )
+        return DispatchOutcome(True, started.run_id, UNKNOWN_OUTCOME, reason=STAGE_MOVED,
+                               result=result)
     except Exception:
         logger.critical(
             "run %s finished (exit %s) but its result could not be recorded; the output is "
@@ -448,7 +576,8 @@ def _record_scan_result(
             started.run_id, result.exit_code, path, digest,
         )
         raise
-    return DispatchOutcome(True, started.run_id, status, evidence_id=evidence_id, result=result)
+    return DispatchOutcome(True, started.run_id, status, evidence_id=evidence_id, result=result,
+                           reason=TIMED_OUT if result.timed_out else None)
 
 
 def _scan_start(
@@ -1446,19 +1575,30 @@ def dispatch_code_scan(
 def _finish_run(
     conn: Connection, run_id: str, status: str, *,
     exit_code: int | None, fresh_for_seconds: int | None = None,
-) -> None:
-    conn.execute(
+    only_if_status: str | None = None, of_proposal: str | None = None,
+    refusal_code: str | None = None,
+) -> bool:
+    """Set a run's final status. With ``only_if_status`` the update is conditional on the run
+    still being in that status, with ``of_proposal`` on the run belonging to that proposal, and
+    the return value says whether it did."""
+    moved = conn.execute(
         text("""
             UPDATE tool_runs
             SET status = :status, exit_code = :code, finished_at = now(),
+                refusal_code = coalesce(CAST(:refusal AS text), refusal_code),
                 fresh_until = CASE
                     WHEN CAST(:fresh AS double precision) IS NULL THEN NULL
                     ELSE now() + make_interval(secs => CAST(:fresh AS double precision))
                 END
             WHERE run_id = :run
+              AND (CAST(:only AS text) IS NULL OR status = CAST(:only AS text))
+              AND (CAST(:prop AS text) IS NULL OR proposal_id = CAST(:prop AS text))
+            RETURNING run_id
         """),
-        {"run": run_id, "status": status, "code": exit_code, "fresh": fresh_for_seconds},
-    )
+        {"run": run_id, "status": status, "code": exit_code, "fresh": fresh_for_seconds,
+         "only": only_if_status, "prop": of_proposal, "refusal": refusal_code},
+    ).scalar_one_or_none()
+    return moved is not None
 
 
 def reconcile_stale_dispatches(

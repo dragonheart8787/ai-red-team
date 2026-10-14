@@ -32,6 +32,19 @@ Back-fill: a HUMAN_APPROVAL proposal that pre-dates this migration is ``closed``
 ``awaiting_approval`` (it was always pending). An already-approved or denied one stays closed: the
 old path issued (or did not) at grant time, and re-opening it would let a month-old approval be
 dispatched. No old approval is resurrected.
+
+Row-level security (found at D64, ACCEPTANCE 5.75). Every table named below is under ``FORCE ROW
+LEVEL SECURITY``, which binds the table owner -- the role migrations run as -- and with no
+``cyberorch.engagement_id`` set the owner sees **no rows**. A data statement in a migration
+therefore reads and writes nothing, silently. Written without knowing that, the downgrade fails
+(the old CHECK cannot be re-added over rows it did not repair) and the upgrade back-fill goes wrong:
+its ``NOT EXISTS`` over ``approvals`` and ``audit_log`` would be true for every row, which re-opens
+approvals that were granted or denied -- the opposite of "no old approval is resurrected". So each
+data statement here runs with ``FORCE`` switched off for exactly the tables it reads or writes, and
+back on straight after, in the same transaction (0020 does the same; a failure between the two
+rolls both back, so no committed state has the isolation off).
+``tests/test_migrations_rls_writes.py`` reads every migration and fails on a data statement that is
+not wrapped this way.
 """
 
 from alembic import op
@@ -54,6 +67,10 @@ def upgrade() -> None:
                     'capability_issued', 'dispatching', 'recorded', 'closed'));
     """)
     op.execute("ALTER TABLE action_proposals ADD COLUMN decided_policy_version BIGINT;")
+    # The two back-fill statements read approvals and audit_log and write action_proposals.
+    op.execute("ALTER TABLE action_proposals NO FORCE ROW LEVEL SECURITY;")
+    op.execute("ALTER TABLE approvals NO FORCE ROW LEVEL SECURITY;")
+    op.execute("ALTER TABLE audit_log NO FORCE ROW LEVEL SECURITY;")
     op.execute("""
         UPDATE action_proposals p
         SET pipeline_stage = 'awaiting_approval', stage_detail = NULL,
@@ -72,6 +89,9 @@ def upgrade() -> None:
           AND EXISTS (SELECT 1 FROM audit_log l
                       WHERE l.subject_id = p.proposal_id AND l.event_type = 'approval.denied');
     """)
+    op.execute("ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;")
+    op.execute("ALTER TABLE approvals FORCE ROW LEVEL SECURITY;")
+    op.execute("ALTER TABLE action_proposals FORCE ROW LEVEL SECURITY;")
     op.execute("""
         DROP INDEX IF EXISTS action_proposals_open_stage;
         CREATE INDEX action_proposals_open_stage
@@ -82,11 +102,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE action_proposals NO FORCE ROW LEVEL SECURITY;")
     op.execute("""
         UPDATE action_proposals SET pipeline_stage = 'closed',
             stage_detail = 'decision_HUMAN_APPROVAL', stage_updated_at = now()
         WHERE pipeline_stage IN ('awaiting_approval', 'approved');
     """)
+    op.execute("ALTER TABLE action_proposals FORCE ROW LEVEL SECURITY;")
     op.execute("ALTER TABLE action_proposals DROP COLUMN decided_policy_version;")
     op.execute("""
         ALTER TABLE action_proposals

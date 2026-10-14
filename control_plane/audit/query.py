@@ -63,6 +63,7 @@ STAGE_OF_EVENT = {
     "security_graph.recorded": "execution",
     "security_graph.record_failed": "execution",
     "dispatch.unknown_outcome": "execution",
+    "run.late_result": "execution",
     "engagement.paused": "engagement",
     "engagement.resumed": "engagement",
     "engagement.completed": "engagement",
@@ -82,6 +83,11 @@ STAGE_OF_EVENT = {
     "scheduler.skipped": "decision",
     "scheduler.deferred": "engagement",
     "scheduler.resumed": "engagement",
+    # D64: what the reconciler did to a proposal joins that proposal's chain. (Its Docker, file and
+    # service-level events are global or belong to a run, and sit in no proposal's chain.)
+    "reconciler.proposal_abandoned": "decision",
+    "reconciler.proposal_closed": "decision",
+    "reconciler.dispatch_unknown_outcome": "execution",
 }
 
 STAGE_ORDER = [
@@ -462,3 +468,80 @@ def audited_event_types(conn: Connection) -> set[str]:
     return set(
         conn.execute(text("SELECT DISTINCT event_type FROM audit_log")).scalars().all()
     )
+
+
+#: The event that closes a reconciler intent, by the kind of action it announced. A failed attempt
+#: closes it too (``reconciler.action_failed`` for the same kind and subject). The reconciler's own
+#: table is ``control_plane.reconciler.emit.RESULT_EVENT_OF_KIND``; a test holds the two equal.
+RECONCILER_RESULT_EVENT_OF_KIND = {
+    "kill_container": "reconciler.container_killed",
+    "remove_container": "reconciler.container_removed",
+    "remove_proxy": "reconciler.proxy_removed",
+    "remove_network": "reconciler.network_removed",
+    "unlink_file": "reconciler.files_removed",
+}
+
+
+@dataclass(frozen=True)
+class UnresolvedIntent:
+    audit_id: int
+    ts: datetime
+    kind: str
+    subject_id: str
+    reason_code: str
+
+
+def unresolved_reconciler_intents(conn: Connection) -> list[UnresolvedIntent]:
+    """Irreversible reconciler actions that were announced and never reported (D64 item 4).
+
+    The reconciler writes ``reconciler.action_intended`` right before a kill, a removal or an
+    unlink, and afterwards either the result event (``container_removed`` ...) or
+    ``reconciler.action_failed``. An intent with neither, later in the trail, for the same kind and
+    subject, is a process that died between the call and its verification: the object may or may
+    not be gone. It is listed here, oldest first, for a person to read; nothing repairs it, and the
+    next pass plans from what exists.
+
+    Rows are those the connection can see: an engagement-scoped connection sees that engagement's
+    containers and proxies, the ``global_auditor`` connection sees networks and files.
+    """
+    cases = " ".join(f"WHEN '{kind}' THEN '{event}'"
+                     for kind, event in RECONCILER_RESULT_EVENT_OF_KIND.items())
+    rows = conn.execute(text(f"""
+        SELECT i.audit_id, i.ts, i.payload ->> 'kind' AS kind, i.subject_id,
+               i.payload ->> 'reason_code' AS reason_code
+        FROM audit_log i
+        WHERE i.event_type = 'reconciler.action_intended'
+          AND NOT EXISTS (
+              SELECT 1 FROM audit_log r
+              WHERE r.audit_id > i.audit_id AND r.subject_id = i.subject_id
+                AND (r.event_type = CASE i.payload ->> 'kind' {cases} END
+                     OR (r.event_type = 'reconciler.action_failed'
+                         AND r.payload ->> 'kind' = i.payload ->> 'kind')))
+        ORDER BY i.audit_id
+    """)).mappings().all()
+    return [UnresolvedIntent(r["audit_id"], r["ts"], r["kind"], r["subject_id"], r["reason_code"])
+            for r in rows]
+
+
+#: The two audit events that say a **proposal** ended with an outcome nobody can state (D64 item 5).
+#: ``dispatch.unknown_outcome`` is the older one, written by ``reconcile_stale_dispatches``;
+#: ``reconciler.dispatch_unknown_outcome`` is the reconciler's own, whose payload is held to ids and
+#: closed codes. A reader that wants "which proposals ended with an unknown outcome" has to ask for
+#: both -- this tuple is where it says so, and a test keeps any other module from naming either
+#: event by its literal. (``tool_run.unknown_outcome`` is a third name and a different thing: it is
+#: about one *run*, written when the sandbox itself was unreachable.)
+UNKNOWN_OUTCOME_EVENTS = ("dispatch.unknown_outcome", "reconciler.dispatch_unknown_outcome")
+
+
+def unknown_outcome_events(
+    conn: Connection, *, proposal_id: str | None = None, limit: int = 500
+) -> list[AuditEvent]:
+    """Every event saying a proposal's outcome is unknown, from either writer, oldest first
+    (RLS-scoped to the connection's engagement)."""
+    sql = _SELECT + " WHERE event_type = ANY(:types)"
+    params: dict[str, Any] = {"types": list(UNKNOWN_OUTCOME_EVENTS), "limit": limit}
+    if proposal_id is not None:
+        sql += " AND subject_id = :sid"
+        params["sid"] = proposal_id
+    return [_to_event(r) for r in conn.execute(
+        text(sql + " ORDER BY audit_id LIMIT :limit"), params).mappings().all()]

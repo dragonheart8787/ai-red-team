@@ -12,6 +12,7 @@ from control_plane.policy.layers import deactivate_policy_layer, publish_policy_
 from control_plane.registry.metadata_registry import register_metadata
 from control_plane.registry.scope_registry import register_scope_object
 from control_plane.state.db import global_policy_admin_scope, registry_admin_scope
+from tests import residue
 
 
 def make_engagement(
@@ -37,6 +38,8 @@ def make_engagement(
         create_engagement(
             conn, engagement_id=engagement_id, customer_id=customer_id, actor=actor,
         )
+    # the session's own: its stuck rows are closed when the session ends (tests/residue.py)
+    residue.register(engagement_id)
 
 
 def make_tool_run(

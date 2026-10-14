@@ -1,0 +1,15 @@
+# sha256 of the Rust 1.94.1 components the helper is built with (D65-A). toolchain.sh downloads
+# nothing else and installs nothing that does not match a line here.
+#
+# Each value was checked against three independent sources when it was written, and they agreed:
+#   1. the digest computed from the downloaded tarball;
+#   2. the digest in the file published next to it (<tarball>.sha256);
+#   3. `xz_hash` in https://static.rust-lang.org/dist/channel-rust-1.94.1.toml
+#      (sha256 of that manifest: cc2f04dfc883549d683c8cc2a9393f523a3dfbd931f5d5eaef00303cca64a60d).
+# The toolchain is the x86_64 Linux host's; the two rust-std musl components are what it compiles
+# the helper for. rustc must report commit e408947bf (checked by toolchain.sh after installing).
+0a6b16ca476461c6238f48efcb74a7aa08a3983e61adf587f208ba48504d87e1  rustc-1.94.1-x86_64-unknown-linux-gnu.tar.xz
+03595624775204f80ff3a67986f69c8918e4cd311877ced635108888013a1e39  cargo-1.94.1-x86_64-unknown-linux-gnu.tar.xz
+74109ee2c19098f1d7122087dd338a8f643203b3ce678c9d58169db733e17a03  rust-std-1.94.1-x86_64-unknown-linux-gnu.tar.xz
+5a233ab503d58a3fb65bf7ecaa1b82f821f799dfd94a2613215317097ad43547  rust-std-1.94.1-x86_64-unknown-linux-musl.tar.xz
+f9192506a2bef2d2b79a1865200c9df3d4da598ba6b72af978fe0dbe8a2dbfac  rust-std-1.94.1-aarch64-unknown-linux-musl.tar.xz

@@ -1,0 +1,4 @@
+{"detail": null, "engagement_id": "ENG-DRILL-68dd02-S3", "kind": "remove_container", "outcome": "dry_run", "reason_code": "run_finished", "subject_id": "2760830852d27456d8d7b1f43f5ee0802e658ba25a115daae1386abd389937e6"}
+{"engagement_id": null, "report": "no_owner_label", "subject": "container", "subject_id": "043b94e74fb95419a6358ab1de7051c235f3b45644d5dfb41987fe9efb4b5b4a"}
+{"engagement_id": null, "report": "network_conflict_foreign", "subject": "result", "subject_id": "network_conflicts"}
+{"held_back": 0, "limited": 0, "outcomes": {"dry_run": 1}, "reports": 2, "summary": {"remove_container:run_finished": 1, "report:network_conflict_foreign": 1, "report:no_owner_label": 1}, "truncated": false}
