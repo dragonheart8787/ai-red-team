@@ -254,24 +254,45 @@ def test_a_cap_is_never_above_the_ceiling():
             "lowered, never raised -- fix the test that leaves the rows")
 
 
-def test_the_ceiling_is_never_above_the_main_lines():
-    """Raising the ceiling beside the cap would defeat the first test, so the ceiling is compared
-    with the one on ``origin/main`` (skipped where that history is not in the checkout)."""
+def ceiling_above_the_main_lines(main_source: str, ours: dict[str, int]) -> list[str]:
+    """The files whose ceiling is above the one in ``main_source`` (the text of this file on the
+    main line). A main line with no ceiling yet has nothing for ours to be above."""
     import ast
     import re
+    found = re.search(r"^FILE_CAP_CEILING[^=]*= (\{.*?\})$", main_source, re.M)
+    if found is None:
+        return []
+    main = ast.literal_eval(found.group(1))
+    return [f"{file}: {ceiling} > {main.get(file, 0)}" for file, ceiling in ours.items()
+            if ceiling > main.get(file, 0)]
+
+
+def test_the_ceiling_is_never_above_the_main_lines():
+    """Raising the ceiling beside the cap would defeat the first test, so the ceiling is compared
+    with the one on ``origin/main``. This test never skips (CI fails a run that skips): where
+    ``origin/main`` is missing it fails and says to fetch it -- the CI job checks out the whole
+    history for exactly this -- and where the main line has no ceiling yet there is nothing for
+    this one to be above, so it holds."""
     import subprocess
     try:
         shown = subprocess.run(
             ["git", "show", "origin/main:tests/test_residue_check.py"], capture_output=True,
             text=True, check=True, timeout=30, cwd=Path(__file__).resolve().parents[1]).stdout
     except (OSError, subprocess.SubprocessError):
-        pytest.skip("origin/main is not in this checkout")
-    found = re.search(r"^FILE_CAP_CEILING[^=]*= (\{.*?\})$", shown, re.M)
-    if found is None:
-        pytest.skip("the main line has no ceiling yet")
-    main = ast.literal_eval(found.group(1))
-    for file, ceiling in FILE_CAP_CEILING.items():
-        assert ceiling <= main.get(file, 0), (file, ceiling, main.get(file, 0))
+        pytest.fail("origin/main is not in this checkout: fetch it (git fetch origin main)")
+    assert ceiling_above_the_main_lines(shown, FILE_CAP_CEILING) == []
+
+
+def test_the_comparison_with_the_main_line_says_which_ceiling_is_raised():
+    main_text = "FILE_CAP_CEILING: dict[str, int] = {'tests/test_a.py': 3}\n"
+    assert ceiling_above_the_main_lines(main_text, {"tests/test_a.py": 3}) == []
+    assert ceiling_above_the_main_lines(main_text, {"tests/test_a.py": 2}) == []
+    assert ceiling_above_the_main_lines(main_text, {}) == []
+    assert ceiling_above_the_main_lines(main_text, {"tests/test_a.py": 4}) == [
+        "tests/test_a.py: 4 > 3"]
+    assert ceiling_above_the_main_lines(main_text, {"tests/test_b.py": 1}) == [
+        "tests/test_b.py: 1 > 0"]                      # a file the main line did not allow at all
+    assert ceiling_above_the_main_lines("nothing here\n", {"tests/test_b.py": 1}) == []
 
 
 def test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file(

@@ -64,6 +64,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, so that origin/main is there: tests/test_residue_check.py compares
+          # the test session's residue ceiling with the one on the main line, and a test that cannot
+          # make that comparison fails (CI also fails any skip).
+          fetch-depth: 0
 
       - name: Fetch the deadline helper built and verified by the previous job
         uses: actions/download-artifact@v4

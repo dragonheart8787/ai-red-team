@@ -804,11 +804,12 @@ now carries a correction that points at §9.1, point 3.
 
 ### 10.6 The audit before the merge (item 6)
 
-`D64_PREMERGE_AUDIT.md`, ACCEPTANCE 5.100. The range is taken from git (an unmoved `main`; 39 commits; the whole of D64 with the
+`D64_PREMERGE_AUDIT.md`, ACCEPTANCE 5.100. The range is taken from git (an unmoved `main`; 40 commits; the whole of D64 with the
 deadline helper), the six things are checked and not assumed, and the findings are fixed in the audit's own commit: the README now says the
 helper binary is built and not committed; 5.72's status is no longer stale; the ACCEPTANCE numbering and what ships (no switch anywhere)
-are tests; and the full sweep of the 278 mutations of D64 was run again, which found ten entries that no longer applied and
-repaired them. All valid.
+are tests; and the full sweep of the 279 mutations of D64 was run again, which found ten entries that no longer applied and
+repaired them. All valid. CI's first run of the audit's commit failed its "nothing was skipped" step (a new test skipped where `main` has no
+residue ceiling yet); repaired in the next commit, the full suite run again.
 
 ### 10.7 Next
 

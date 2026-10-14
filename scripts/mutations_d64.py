@@ -1735,5 +1735,13 @@ CATALOGUE += [
 ]
 
 
+CATALOGUE += [
+    Mutation(
+        "D64-C4-aq", "a raised ceiling is not noticed", RESIDUE_TESTS,
+        edits=(Edit("tests/test_residue_check.py", "            if ceiling > main.get(file, 0)]", "            if False]"),),
+        targets=("test_the_comparison_with_the_main_line_says_which_ceiling_is_raised",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})
