@@ -608,7 +608,7 @@ CATALOGUE += [
         edits=(Edit(OBSERVE_PY, "def read_run_states(conn: Any, run_ids: Iterable[str])",
                     "def _oops(conn):\n    conn.execute(text(\"DELETE FROM tool_runs\"))\n\n\n"
                     "def read_run_states(conn: Any, run_ids: Iterable[str])"),),
-        targets=("test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_two_reads",)),
+        targets=("test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_four_reads",)),
     Mutation(
         "D64-6b-zc", "a threshold is configured and the plan never uses it", STRUCT_TESTS,
         edits=(Edit(PLAN_PY, "th.retention_s * US", "86400 * US"),),
@@ -732,10 +732,10 @@ CATALOGUE += [
         targets=("test_a_file_is_judged_again_on_the_spot",)),
     Mutation(
         "D64-6c-u", "an unlink is not verified", ACT_TESTS,
-        edits=(Edit(FILES_PY, "    os.unlink(name, dir_fd=fd)\n    try:\n        os.lstat(name, dir_fd=fd)\n"
+        edits=(Edit(FILES_PY, "        return Result(action, GONE)\n    try:\n        os.lstat(name, dir_fd=fd)\n"
                     "    except FileNotFoundError:\n        return Result(action, DONE)\n"
                     "    return Result(action, FAILED, NOT_GONE_AFTER_REMOVAL)",
-                    "    os.unlink(name, dir_fd=fd)\n    return Result(action, DONE)"),),
+                    "        return Result(action, GONE)\n    return Result(action, DONE)"),),
         targets=("test_an_unlink_that_leaves_the_file_is_failed_not_done",)),
     Mutation(
         "D64-6c-v", "the audit hook runs for results that were not verified", ACT_TESTS,
@@ -749,8 +749,8 @@ CATALOGUE += [
         targets=("test_the_act_half_has_exactly_four_sql_statements_each_of_a_known_shape",)),
     Mutation(
         "D64-6c-x", "the act half imports the plan", ACT_STRUCT,
-        edits=(Edit(ACT_PY, "from control_plane.reconciler import act_docker, act_files, vocab",
-                    "from control_plane.reconciler import act_docker, act_files, plan, vocab"),),
+        edits=(Edit(ACT_PY, "from control_plane.reconciler import act_docker, act_files, evidence, flags, vocab",
+                    "from control_plane.reconciler import act_docker, act_files, evidence, flags, plan, vocab"),),
         targets=("test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan",)),
     Mutation(
         "D64-6c-y", "the act half can dispatch", ACT_STRUCT,
@@ -766,8 +766,8 @@ CATALOGUE += [
         targets=("test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",)),
     Mutation(
         "D64-6c-za", "an operator's mode name switches the kill switch on", ACT_TESTS + FLAG_TESTS,
-        edits=(Edit(ACT_PY, "    return Settings(mode, enabled=chosen)",
-                    "    return Settings(mode, enabled=chosen | ({flags.KILL} if mode is Mode.STATE_ONLY else set()))"),),
+        edits=(Edit(ACT_PY, "    return Settings(mode, enabled=chosen, evidence_dir=evidence_dir)",
+                    "    return Settings(mode, enabled=chosen | ({flags.KILL} if mode is Mode.STATE_ONLY else set()), evidence_dir=evidence_dir)"),),
         targets=("test_the_operator_can_choose_two_modes_and_neither_allows_deletions",
                  "test_nothing_is_enabled_by_default_and_an_operator_with_no_words_enables_nothing")),
 ]
@@ -813,7 +813,7 @@ CATALOGUE += [
     Mutation(
         "D64-6d-g", "an audit failure inside the hook is ignored", SERVICE_TESTS,
         edits=(Edit(SERVICE_PY, "        if self._audit_failed:                      # the hook failed inside act.carry_out\n            raise StopService(emit.STOP_AUDIT_FAILED)\n", ""),),
-        targets=("test_an_audit_record_that_cannot_be_written_stops_the_service_after_the_action_happened",)),
+        targets=("test_a_transition_whose_record_cannot_be_written_is_not_made_and_the_service_stops",)),
     Mutation(
         "D64-6d-h", "the lock is not checked before a pass", SERVICE_TESTS,
         edits=(Edit(SERVICE_PY, "            if self.audits:\n                self._assert_lock()\n            plan = make_plan(",
@@ -870,8 +870,8 @@ CATALOGUE += [
         targets=("test_there_is_no_default_mode_and_no_third_one",)),
     Mutation(
         "D64-6d-s", "a network event names the whole container-network name", EMIT_TESTS,
-        edits=(Edit(EMIT_PY, "        network = (action.name or \"\").rsplit(\"-\", 1)[-1]\n        return (NETWORK_REMOVED",
-                    "        network = (action.name or \"\")\n        return (NETWORK_REMOVED"),),
+        edits=(Edit(EMIT_PY, "        network = (action.name or \"\").rsplit(\"-\", 1)[-1]\n        return None, \"sandbox_network\", network",
+                    "        network = (action.name or \"\")\n        return None, \"sandbox_network\", network"),),
         targets=("test_a_verified_result_becomes_exactly_its_event_and_validates",)),
 ]
 
@@ -996,8 +996,8 @@ CATALOGUE += [
     Mutation(
         "D64-P4-e", "the intent of a removal is written before the check that can decline it",
         ORDER_TESTS,
-        edits=(Edit(ACT_DOCKER_PY, "    proxy = action.kind == vocab.REMOVE_PROXY\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n    if (blocked := declared(action, intend)) is not None:\n        return blocked\n",
-                    "    proxy = action.kind == vocab.REMOVE_PROXY\n    if (blocked := declared(action, intend)) is not None:\n        return blocked\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n"),),
+        edits=(Edit(ACT_DOCKER_PY, "    proxy = action.kind == vocab.REMOVE_PROXY\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n    kept = None\n",
+                    "    proxy = action.kind == vocab.REMOVE_PROXY\n    if (blocked := declared(action, intend)) is not None:\n        return blocked\n    if not proxy and _state(container) in LIVE_STATES:\n        return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked\n    kept = None\n"),),
         targets=("test_real_an_action_that_is_declined_writes_no_intent",
                  "test_every_irreversible_call_comes_after_the_intent_in_the_same_function")),
     Mutation(
@@ -1018,7 +1018,7 @@ CATALOGUE += [
         targets=("test_an_intent_alone_is_unresolved_and_a_result_or_a_failure_after_it_closes_it",)),
     Mutation(
         "D64-P4-i", "a failed object is attempted again at once (the hold-back is off)", ORDER_TESTS,
-        edits=(Edit(SERVICE_PY2, "                    and now - failed < self.th.retry_after_failure_s):", "                    and False):"),),
+        edits=(Edit(SERVICE_PY2, "            if failed is not None and now - failed < self.th.retry_after_failure_s:", "            if failed is not None and False:"),),
         targets=("test_a_failed_irreversible_action_is_not_attempted_again_until_the_wait_has_passed",)),
     Mutation(
         "D64-P4-j", "the service writes a proposal's event a second time, and the writer would take it",
@@ -1157,7 +1157,7 @@ CATALOGUE += [
         targets=("test_a_pass_that_did_something_never_slows_down_and_resets_the_wait",)),
     Mutation(
         "D64-P6-k", "the service reads one page whatever RECONCILER_MAX_PAGES says", PAGING_TESTS,
-        edits=(Edit(SERVICE_PY2, "clock_us=self._wall_clock_us, max_pages=self.th.max_pages)", "clock_us=self._wall_clock_us, max_pages=1)"),),
+        edits=(Edit(SERVICE_PY2, "max_pages=self.th.max_pages,", "max_pages=1,"),),
         targets=("test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap",
                  "test_a_truncated_read_is_reported_by_the_pass")),
     Mutation(
@@ -1395,7 +1395,7 @@ CATALOGUE += [
         targets=("test_an_engagement_nobody_registered_is_left_alone_and_its_new_stuck_row_is_found",)),
     Mutation(
         "D64-C2-zc", "residue: an engagement made by make_engagement is not registered", RESIDUE_TESTS,
-        edits=(Edit(HELPERS_PY, "    residue.CREATED.add(engagement_id)", "    pass"),),
+        edits=(Edit(HELPERS_PY, "    residue.register(engagement_id)", "    pass"),),
         targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
 ]
 
@@ -1702,6 +1702,36 @@ CATALOGUE += [
         "D64-C4-aj", "the rows are closed and the in-flight runs are not", RESIDUE_TESTS,
         edits=(Edit(RESIDUE_PY, "                runs = conn.execute(text(CLOSE_RUNS), {\"in_flight\": list(IN_FLIGHT)}).rowcount\n", "                runs = 0\n"),),
         targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
+]
+
+
+NUMBERING_TESTS = ("tests/test_acceptance_numbering.py",)
+ACCEPTANCE_MD = "docs/ACCEPTANCE_MVP1_AGENTS.md"
+CATALOGUE += [
+    Mutation(
+        "D64-C4-ak", "an ACCEPTANCE number is used twice", NUMBERING_TESTS,
+        edits=(Edit(ACCEPTANCE_MD, "| **5.95** |", "| **5.94** |"),),
+        targets=("test_the_rows_of_the_table_are_consecutive_each_number_once_and_in_order",)),
+    Mutation(
+        "D64-C4-al", "an ACCEPTANCE row is lost from the table", NUMBERING_TESTS,
+        edits=(Edit(ACCEPTANCE_MD, "| **5.93** |", "| **5.93x** |"),),
+        targets=("test_the_rows_of_the_table_are_consecutive_each_number_once_and_in_order",)),
+    Mutation(
+        "D64-C4-am", "a status in none of the document's words", NUMBERING_TESTS,
+        edits=(Edit(ACCEPTANCE_MD, "**Closed at completion 4, item 2.**", "**Done at completion 4, item 2.**"),),
+        targets=("test_every_row_from_5_58_on_starts_its_status_with_one_of_the_documents_words",)),
+    Mutation(
+        "D64-C4-an", "a file points at an ACCEPTANCE row that does not exist", NUMBERING_TESTS,
+        edits=(Edit("tests/residue.py", "(ACCEPTANCE 5.71, 5.96).", "(ACCEPTANCE 5.71, 5.196)."),),
+        targets=("test_every_acceptance_pointer_in_the_repository_names_an_item_that_exists",)),
+    Mutation(
+        "D64-C4-ao", "a row says it was revised by a row that does not exist", NUMBERING_TESTS,
+        edits=(Edit(ACCEPTANCE_MD, "*Revised by 5.97: `--enable container` needs", "*Revised by 5.197: `--enable container` needs"),),
+        targets=("test_every_revised_by_names_a_row_that_exists_and_comes_after_the_row_it_revises",)),
+    Mutation(
+        "D64-C4-ap", "the Makefile starts the reconciler with a switch", ("tests/test_reconciler_flags.py",),
+        edits=(Edit("Makefile", "lint:\n\t.venv/bin/ruff check .", "lint:\n\t.venv/bin/ruff check .\n\tpython scripts/run_reconciler.py --mode state-only --enable kill"),),
+        targets=("test_nothing_that_ships_starts_the_reconciler_with_a_switch",)),
 ]
 
 

@@ -469,3 +469,26 @@ def test_the_started_payload_is_what_the_service_writes(engagement_id, tmp_path)
     assert [e["payload"]["enabled"] for e in new] == [["kill", "proxy"]]
     assert json.loads(json.dumps(new[0]["payload"]))["instance_id"] == r.instance_id
 
+
+# --- what ships (pre-merge audit) ------------------------------------------------------------
+
+def test_nothing_that_ships_starts_the_reconciler_with_a_switch():
+    """A default deployment has no switch on. The reconciler is started by a person; nothing in
+    the CI workflow, the Makefile, an environment template, a shell script or a service definition
+    starts it at all, and none of them carries a switch. (Documents and the drill scripts quote
+    ``--enable`` on purpose and are not what ships a deployment.)"""
+    import fnmatch
+    root = Path(__file__).resolve().parents[1]
+    tracked = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True,
+                             check=True).stdout.split()
+    shaped = ("Makefile", ".env.example", ".github/*", "scripts/*.sh", "*.service", "*.timer",
+              "docker-compose*", "*.yml", "*.yaml", "pyproject.toml", "alembic.ini")
+    files = [f for f in tracked if any(fnmatch.fnmatch(f, p) for p in shaped)
+             and not f.startswith("tool_gateway/deadline/vendor/")]
+    assert ".github/workflows/test.yml" in files and ".env.example" in files and "Makefile" in files
+    for name in files:
+        for number, line in enumerate((root / name).read_text(errors="replace").splitlines(), 1):
+            low = line.lower()
+            where = f"{name}:{number}: {line!r}"
+            assert not ("reconciler" in low and "--enable" in low), where
+            assert not (name == ".env.example" and "reconciler" in low and "enable" in low), where

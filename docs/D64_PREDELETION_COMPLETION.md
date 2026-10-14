@@ -801,3 +801,16 @@ periodic summary says how many distinct objects of each kind were reported (`rep
 
 `D64_DRY_RUN_2026-10-13.md` still says the 852 `ENG-SM-` actions were "the reconciler service tests". It is left as it was printed and
 now carries a correction that points at §9.1, point 3.
+
+### 10.6 The audit before the merge (item 6)
+
+`D64_PREMERGE_AUDIT.md`, ACCEPTANCE 5.100. The range is taken from git (an unmoved `main`; 39 commits; the whole of D64 with the
+deadline helper), the six things are checked and not assumed, and the findings are fixed in the audit's own commit: the README now says the
+helper binary is built and not committed; 5.72's status is no longer stale; the ACCEPTANCE numbering and what ships (no switch anywhere)
+are tests; and the full sweep of the 278 mutations of D64 was run again, which found ten entries that no longer applied and
+repaired them. All valid.
+
+### 10.7 Next
+
+The merge, then nothing is switched on for anything the drills did not make. Still not done, and still waiting for a person to read this:
+the classification flag and phase 1. Still not drilled, because they cannot be turned on: `network` and `file`.
