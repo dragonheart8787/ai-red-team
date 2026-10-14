@@ -857,7 +857,9 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         return reasons
 
     def teardown(self) -> None:
-        """Each example leaves its engagement behind; ids are unique."""
+        """Each example leaves its engagement behind (ids are unique) and closes what it left stuck:
+        300 examples were 455-490 hand-made proposals at the end of the session."""
+        residue.finish_test({self.engagement_id})
 
 
 CapabilityLifecycle.TestCase.settings = settings(

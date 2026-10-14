@@ -61,34 +61,14 @@ CREATED: set[str] = set()
 FILE_OF: dict[str, str] = {}
 NOT_IN_A_TEST = "(outside a test: a session fixture)"
 
-#: The most rows -- stuck proposals plus in-flight runs -- a test file may leave for the end of the
-#: session to close. **A file not listed may leave none.** The numbers are what each file leaves by
-#: design, measured at completion 3 (ACCEPTANCE 5.71): a file that leaves more has a test that
-#: stopped finishing what it started, and the run fails naming the file, so that the leak is found
-#: where it was made and not as a thousand rows in a development database. A cap is raised only
-#: by someone who has read why the file leaves rows.
-FILE_CAP: dict[str, int] = {
-    # Hypothesis chooses how much of 300 examples x 30 steps leaves a hand-made proposal behind
-    # (490, 455 in two measured runs); the bound is generous because the count is not fixed
-    "tests/stateful/test_capability_lifecycle.py": 1000,
-    # Measured in two full runs, the same both times. Where a reason is given it was found by
-    # running the file alone; the others are measured and not yet explained, and say so.
-    "tests/test_scheduler_roles.py": 116,        # measured, not yet explained
-    "tests/test_approved_dispatch.py": 17,       # measured, not yet explained
-    "tests/test_scheduler_skips.py": 14,         # measured, not yet explained
-    "tests/test_scheduler_service.py": 8,        # measured, not yet explained
-    "tests/test_dispatch_late_result.py": 6,     # 1 proposal + 5 runs; measured, not yet explained
-    "tests/test_approvals.py": 6,                # measured, not yet explained
-    "tests/test_pipeline_stages.py": 6,          # the three kill -9 experiments: 3 + 3 runs
-    "tests/test_dispatch.py": 5,                 # five `received` proposals; not yet explained
-    "tests/test_web_console.py": 5,              # measured, not yet explained
-    "tests/test_scheduler_e2e.py": 4,            # measured, not yet explained
-    "tests/test_stage_vocabulary.py": 3,         # test_st6: approved with no approval row,
-                                                 # dispatching, and one received
-    "tests/test_network_conflicts_read.py": 3,   # three runs made 'running' by the test itself
-    "tests/test_scheduler_structure.py": 1,      # measured, not yet explained
-    "tests/test_scheduler_cli.py": 1,            # measured, not yet explained
-}
+#: The most rows -- stuck proposals plus in-flight runs -- a test file may leave for the *end of
+#: the session* to close. **A file not listed may leave none, and the table is empty**: since
+#: completion 4 each test closes what the engagements it made still have stuck when it ends
+#: (``conftest._each_test_finishes_what_it_started``), so what reaches the session end is what a
+#: test could not close itself -- a module-scoped fixture, another process. A cap is a ceiling
+#: that only goes down: ``tests/test_residue_check.py`` holds the ceiling, refuses a cap above
+#: it, and refuses a ceiling above the one on the main line (ACCEPTANCE 5.71, 5.96).
+FILE_CAP: dict[str, int] = {}
 
 
 def register(engagement_id: str) -> None:
@@ -243,14 +223,14 @@ CLOSE_RUNS = """
     WHERE status = ANY(:in_flight)"""
 
 
-def close_session_rows(before: Snapshot) -> RowsClosed:
-    """Move the stuck proposals and in-flight runs of every engagement this session created to a
-    terminal state, then look for stuck proposals newer than the session that this did not cover.
-    The table owner with the engagement bound -- as subject to row-level security as anyone."""
+def close_rows(engagement_ids) -> RowsClosed:
+    """Move the stuck proposals and in-flight runs of these engagements to a terminal state and say
+    how many, per stage and per test file. The table owner with the engagement bound -- as subject
+    to row-level security as anyone."""
     done = RowsClosed()
     engine = create_engine(os.environ["MIGRATION_DATABASE_URL"], future=True)
     try:
-        for eid in sorted(CREATED):
+        for eid in sorted(engagement_ids):
             with engine.begin() as conn:
                 conn.execute(text("SELECT set_config('cyberorch.engagement_id', :e, true)"),
                              {"e": eid})
@@ -268,6 +248,27 @@ def close_session_rows(before: Snapshot) -> RowsClosed:
                 done.by_file[file] = (had[0] + proposals, had[1] + runs)
     finally:
         engine.dispose()
+    return done
+
+
+#: what each test file's tests had closed *at the end of the test* that made the rows (file ->
+#: stuck proposals + in-flight runs): the sources the session-end count does not see any more
+CLOSED_AT_TEST_END: dict[str, int] = {}
+
+
+def finish_test(made: set[str]) -> None:
+    """The end of one test: the engagements it made have their stuck rows closed. A fixture row a
+    test leaves in ``approved`` for an actor it never runs is the commonest case (§9.3)."""
+    closed = close_rows(made)
+    for file, (proposals, runs) in closed.by_file.items():
+        CLOSED_AT_TEST_END[file] = CLOSED_AT_TEST_END.get(file, 0) + proposals + runs
+
+
+def close_session_rows(before: Snapshot) -> RowsClosed:
+    """Close what the engagements this session created still have stuck (what the tests' own end
+    did not reach: a module-scoped fixture, another process), then look for stuck proposals newer
+    than the session in an engagement nobody registered."""
+    done = close_rows(CREATED)
     with reconciler_reader_scope() as conn:
         rows, _ = observe.read_stuck(conn, max_pages=SEARCH_PAGES)
     done.unregistered = [(r.engagement_id, r.pipeline_stage) for r in rows

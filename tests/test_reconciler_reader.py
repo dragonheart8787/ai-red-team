@@ -59,6 +59,8 @@ spec25 = importlib.util.spec_from_file_location(
 M25 = importlib.util.module_from_spec(spec25)
 spec25.loader.exec_module(M25)
 
+
+
 OWNER, READER = RECONCILER_FN_OWNER_ROLE, RECONCILER_READER_ROLE
 CONFLICTS = "reconciler_network_conflicts"             # which networks blocked refused runs (0025)
 STUCK = "reconciler_stuck_proposals"
@@ -622,9 +624,13 @@ def test_rows_with_the_same_timestamp_are_ordered_by_id_and_the_cursor_splits_th
 
 
 @pytest.mark.parametrize("us, pid", [(None, "x"), (5, None), (None, None)])
-def test_a_cursor_with_a_missing_half_returns_nothing(db_available, us, pid):
+def test_a_cursor_with_a_missing_half_returns_nothing(db_available, engagement_id, us, pid):
     """SQL compares rows left to right, so ROW(a, b) > ROW(x, NULL) is true whenever a > x; found by
-    calling it with (5, NULL), which returned every stuck row. The function says it in a WHERE."""
+    calling it with (5, NULL), which returned every stuck row. The function says it in a WHERE.
+    (There is a stuck row to return: with none, the test would pass for any function -- found when
+    the suite stopped leaving stuck rows behind and D64-P6-a stopped failing.)"""
+    _proposal(engagement_id, "dispatching", age_s=100)
+    assert _stuck(), "the premise: there is something for a bad cursor to return"
     assert _after(us, pid) == []
 
 

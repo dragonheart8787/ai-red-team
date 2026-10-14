@@ -1514,5 +1514,31 @@ CATALOGUE += [
 ]
 
 
+CONFTEST_PY = "tests/conftest.py"
+CATALOGUE += [
+    Mutation(
+        "D64-C4-af", "the end of a test closes nothing", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "    closed = close_rows(made)\n", "    closed = close_rows(set())\n"),),
+        targets=("test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file",
+                 "test_ends_one_and_by_the_next_test_it_has_been_closed")),
+    Mutation(
+        "D64-C4-ag", "the end of a test closes the module's engagements too", RESIDUE_TESTS,
+        edits=(Edit(CONFTEST_PY, "    made = residue.CREATED - before\n", "    made = set(residue.CREATED)\n"),),
+        targets=("test_module_two_and_the_first_test_did_not_close_it_early",)),
+    Mutation(
+        "D64-C4-ah", "the end of a test is never reached", RESIDUE_TESTS,
+        edits=(Edit(CONFTEST_PY, "    if made:\n        residue.finish_test(made)", "    if False:\n        residue.finish_test(made)"),),
+        targets=("test_ends_one_and_by_the_next_test_it_has_been_closed",)),
+    Mutation(
+        "D64-C4-ai", "a file is given an allowance", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "FILE_CAP: dict[str, int] = {}", "FILE_CAP: dict[str, int] = {\"tests/test_residue_check.py\": 1}"),),
+        targets=("test_a_cap_is_never_above_the_ceiling",)),
+    Mutation(
+        "D64-C4-aj", "the rows are closed and the in-flight runs are not", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "                runs = conn.execute(text(CLOSE_RUNS), {\"in_flight\": list(IN_FLIGHT)}).rowcount\n", "                runs = 0\n"),),
+        targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

@@ -82,6 +82,13 @@ def _nothing_is_left_behind(request):
                      f"{dict(sorted(rows.proposals.items()))} and {rows.runs} in-flight run(s) the "
                      f"session left in {rows.engagements} engagement(s) it created, by test file:")
         lines += rows.table()
+    if residue.CLOSED_AT_TEST_END:
+        top = sorted(residue.CLOSED_AT_TEST_END.items(), key=lambda kv: -kv[1])
+        total = sum(residue.CLOSED_AT_TEST_END.values())
+        lines.append(f"residue: {total} stuck row(s) were closed "
+                     f"at the end of the test that made them, in {len(top)} file(s): "
+                     + ", ".join(f"{f.removeprefix('tests/')} {n}" for f, n in top[:6])
+                     + (" ..." if len(top) > 6 else ""))
     if reporter is not None and lines:
         # (written past the capture of the fixture's teardown, so that a passing run shows it too)
         with capture.global_and_fixture_disabled() if capture else contextlib.nullcontext():
@@ -90,6 +97,19 @@ def _nothing_is_left_behind(request):
     if found.failures() or rows.failures():
         pytest.fail("the test session left state behind:\n  "
                     + "\n  ".join(found.failures() + rows.failures()), pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def _each_test_finishes_what_it_started():
+    """The engagements a test made have their stuck proposals and in-flight runs closed when it
+    ends (tests/residue.py). Taken after the module- and session-scoped fixtures exist, so those
+    engagements, which later tests still use, are not closed early. What this does not reach is
+    counted at the session end, per file, against ``FILE_CAP``."""
+    before = set(residue.CREATED)
+    yield
+    made = residue.CREATED - before
+    if made:
+        residue.finish_test(made)
 
 
 @pytest.fixture(scope="session", autouse=True)

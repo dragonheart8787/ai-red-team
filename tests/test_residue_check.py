@@ -9,6 +9,7 @@ and a snapshot compared with itself is clean.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -231,12 +232,104 @@ def test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it(
     assert closed.over_cap() == {}
 
 
+#: The most any file may be allowed to leave for the session end. Empty since completion 4: the
+#: tests close their own rows (below). It only ever shrinks: a cap above it fails
+#: (``test_a_cap_is_never_above_the_ceiling``), and so does a ceiling above the main line's
+#: (``test_the_ceiling_is_never_above_the_main_lines``).
+FILE_CAP_CEILING: dict[str, int] = {}
+
+
 def test_the_caps_name_files_that_exist_and_are_whole_positive_numbers():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     for file, cap in residue.FILE_CAP.items():
         assert (root / file).is_file(), f"{file}: no such test file"
         assert isinstance(cap, int) and cap >= 1, (file, cap)
+
+
+def test_a_cap_is_never_above_the_ceiling():
+    for file, cap in residue.FILE_CAP.items():
+        assert cap <= FILE_CAP_CEILING.get(file, 0), (
+            f"{file}: cap {cap} is above its ceiling {FILE_CAP_CEILING.get(file, 0)}; a cap is "
+            "lowered, never raised -- fix the test that leaves the rows")
+
+
+def test_the_ceiling_is_never_above_the_main_lines():
+    """Raising the ceiling beside the cap would defeat the first test, so the ceiling is compared
+    with the one on ``origin/main`` (skipped where that history is not in the checkout)."""
+    import ast
+    import re
+    import subprocess
+    try:
+        shown = subprocess.run(
+            ["git", "show", "origin/main:tests/test_residue_check.py"], capture_output=True,
+            text=True, check=True, timeout=30, cwd=Path(__file__).resolve().parents[1]).stdout
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("origin/main is not in this checkout")
+    found = re.search(r"^FILE_CAP_CEILING[^=]*= (\{.*?\})$", shown, re.M)
+    if found is None:
+        pytest.skip("the main line has no ceiling yet")
+    main = ast.literal_eval(found.group(1))
+    for file, ceiling in FILE_CAP_CEILING.items():
+        assert ceiling <= main.get(file, 0), (file, ceiling, main.get(file, 0))
+
+
+def test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file(
+        engagement_factory, monkeypatch):
+    a, _ = engagement_factory()
+    monkeypatch.setattr(residue, "CLOSED_AT_TEST_END", {})
+    monkeypatch.setattr(residue, "FILE_OF", {a: "tests/test_a.py"})
+    _leave(a, 2, 1)
+    residue.finish_test({a})
+    assert residue.CLOSED_AT_TEST_END == {"tests/test_a.py": 3}
+    stages, runs = _stages_and_runs(a)
+    assert not [v for v in stages.values() if v.startswith(("approved", "received"))]
+    assert set(runs.values()) == {"unknown_outcome"}
+    residue.finish_test({a})                                       # and nothing twice
+    assert residue.CLOSED_AT_TEST_END == {"tests/test_a.py": 3}
+
+
+_LEFT_BY_AN_EARLIER_TEST: list[str] = []
+
+
+def test_ends_zero_a_test_leaves_a_stuck_row_in_its_own_engagement(engagement_id):
+    from tests import reconciler_support
+    _leave(engagement_id, 2, 1)
+    # (the reconciler tests' own cleanup would close it: it is the end of *every* test that has to)
+    reconciler_support.TOUCHED.discard(engagement_id)
+    _LEFT_BY_AN_EARLIER_TEST.append(engagement_id)
+
+
+def test_ends_one_and_by_the_next_test_it_has_been_closed():
+    (eid,) = _LEFT_BY_AN_EARLIER_TEST
+    stages, runs = _stages_and_runs(eid)
+    assert not [v for v in stages.values() if v.startswith("approved")], stages
+    assert set(runs.values()) <= {"unknown_outcome"}, runs
+
+
+@pytest.fixture(scope="module")
+def a_module_scoped_engagement(db_available):
+    import uuid
+
+    from tests.helpers import make_engagement
+    eid = f"ENG-TEST-{uuid.uuid4().hex[:12]}"
+    from tests import reconciler_support
+    make_engagement(eid)
+    _leave(eid, 1, 0)
+    reconciler_support.TOUCHED.discard(eid)    # that cleanup is per test; this row outlives one
+    yield eid
+    residue.close_rows({eid})
+
+
+def test_module_one_a_module_scoped_engagement_has_its_row(a_module_scoped_engagement):
+    stages, _ = _stages_and_runs(a_module_scoped_engagement)
+    assert [v for v in stages.values() if v.startswith("approved")]
+
+
+def test_module_two_and_the_first_test_did_not_close_it_early(a_module_scoped_engagement):
+    stages, _ = _stages_and_runs(a_module_scoped_engagement)
+    assert [v for v in stages.values() if v.startswith("approved")], (
+        "a test closed an engagement it did not make")
 
 
 def test_a_session_start_after_a_rows_last_touch_makes_it_not_the_sessions(monkeypatch):
