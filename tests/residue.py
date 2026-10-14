@@ -57,6 +57,52 @@ SEARCH_PAGES = 40
 #: engagements this session created (``tests.helpers.make_engagement``); their stuck rows are the
 #: session's own
 CREATED: set[str] = set()
+#: the test file each of them was created in (from ``PYTEST_CURRENT_TEST``), for the per-file count
+FILE_OF: dict[str, str] = {}
+NOT_IN_A_TEST = "(outside a test: a session fixture)"
+
+#: The most rows -- stuck proposals plus in-flight runs -- a test file may leave for the end of the
+#: session to close. **A file not listed may leave none.** The numbers are what each file leaves by
+#: design, measured at completion 3 (ACCEPTANCE 5.71): a file that leaves more has a test that
+#: stopped finishing what it started, and the run fails naming the file, so that the leak is found
+#: where it was made and not as a thousand rows in a development database. A cap is raised only
+#: by someone who has read why the file leaves rows.
+FILE_CAP: dict[str, int] = {
+    # Hypothesis chooses how much of 300 examples x 30 steps leaves a hand-made proposal behind
+    # (490, 455 in two measured runs); the bound is generous because the count is not fixed
+    "tests/stateful/test_capability_lifecycle.py": 1000,
+    # Measured in two full runs, the same both times. Where a reason is given it was found by
+    # running the file alone; the others are measured and not yet explained, and say so.
+    "tests/test_scheduler_roles.py": 116,        # measured, not yet explained
+    "tests/test_approved_dispatch.py": 17,       # measured, not yet explained
+    "tests/test_scheduler_skips.py": 14,         # measured, not yet explained
+    "tests/test_scheduler_service.py": 8,        # measured, not yet explained
+    "tests/test_dispatch_late_result.py": 6,     # 1 proposal + 5 runs; measured, not yet explained
+    "tests/test_approvals.py": 6,                # measured, not yet explained
+    "tests/test_pipeline_stages.py": 6,          # the three kill -9 experiments: 3 + 3 runs
+    "tests/test_dispatch.py": 5,                 # five `received` proposals; not yet explained
+    "tests/test_web_console.py": 5,              # measured, not yet explained
+    "tests/test_scheduler_e2e.py": 4,            # measured, not yet explained
+    "tests/test_stage_vocabulary.py": 3,         # test_st6: approved with no approval row,
+                                                 # dispatching, and one received
+    "tests/test_network_conflicts_read.py": 3,   # three runs made 'running' by the test itself
+    "tests/test_scheduler_structure.py": 1,      # measured, not yet explained
+    "tests/test_scheduler_cli.py": 1,            # measured, not yet explained
+}
+
+
+def register(engagement_id: str) -> None:
+    """An engagement this session made: its stuck rows are the session's to close, and the file of
+    the test that made it is remembered. Called by ``tests.helpers.make_engagement``."""
+    CREATED.add(engagement_id)
+    FILE_OF.setdefault(engagement_id, current_file())
+
+
+def current_file() -> str:
+    """The test file running now (``PYTEST_CURRENT_TEST`` is ``path::name (phase)``)."""
+    running = os.environ.get("PYTEST_CURRENT_TEST", "")
+    path = running.split("::", 1)[0].strip()
+    return path if path.endswith(".py") else NOT_IN_A_TEST
 
 
 @dataclass(frozen=True)
@@ -153,13 +199,33 @@ class RowsClosed:
     engagements: int = 0
     #: stuck proposals newer than the session in an engagement nobody registered
     unregistered: list[tuple[str, str]] = field(default_factory=list)
+    #: test file -> (stuck proposals, in-flight runs) its engagements left for the session end
+    by_file: dict[str, tuple[int, int]] = field(default_factory=dict)
+    caps: dict[str, int] = field(default_factory=lambda: dict(FILE_CAP))
+
+    def over_cap(self) -> dict[str, tuple[int, int]]:
+        """File -> (rows it left, its cap) for every file that left more than it may."""
+        return {f: (p + r, self.caps.get(f, 0)) for f, (p, r) in sorted(self.by_file.items())
+                if p + r > self.caps.get(f, 0)}
 
     def failures(self) -> list[str]:
-        if not self.unregistered:
-            return []
-        shown = sorted(set(self.unregistered))[:5]
-        return [f"{len(self.unregistered)} stuck proposal(s) newer than the session in engagements "
-                f"it did not register (tests.helpers.make_engagement does): {shown}"]
+        out = []
+        if self.unregistered:
+            shown = sorted(set(self.unregistered))[:5]
+            out.append(f"{len(self.unregistered)} stuck proposal(s) newer than the session in "
+                       f"engagements it did not register (tests.helpers.make_engagement does): "
+                       f"{shown}")
+        for file, (left, cap) in self.over_cap().items():
+            out.append(f"{file} left {left} stuck row(s) (proposals {self.by_file[file][0]}, "
+                       f"in-flight runs {self.by_file[file][1]}) and may leave {cap}: a test there "
+                       f"does not finish what it starts (tests/residue.py FILE_CAP)")
+        return out
+
+    def table(self) -> list[str]:
+        """One line per file that left anything: what it left, and its cap."""
+        return [f"  {file}: {p} proposal(s) + {r} run(s), cap {self.caps.get(file, 0)}"
+                for file, (p, r) in sorted(self.by_file.items(), key=lambda kv: -sum(kv[1]))
+                if p or r]
 
 
 CLOSE_PROPOSALS = """
@@ -188,11 +254,18 @@ def close_session_rows(before: Snapshot) -> RowsClosed:
             with engine.begin() as conn:
                 conn.execute(text("SELECT set_config('cyberorch.engagement_id', :e, true)"),
                              {"e": eid})
+                proposals = 0
                 for stage, n in conn.execute(text(COUNT_STUCK), {"stuck": list(STUCK)}):
                     done.proposals[stage] = done.proposals.get(stage, 0) + n
+                    proposals += n
                 conn.execute(text(CLOSE_PROPOSALS), {"stuck": list(STUCK)})
-                done.runs += conn.execute(text(CLOSE_RUNS), {"in_flight": list(IN_FLIGHT)}).rowcount
+                runs = conn.execute(text(CLOSE_RUNS), {"in_flight": list(IN_FLIGHT)}).rowcount
+            done.runs += runs
             done.engagements += 1
+            if proposals or runs:
+                file = FILE_OF.get(eid, NOT_IN_A_TEST)
+                had = done.by_file.get(file, (0, 0))
+                done.by_file[file] = (had[0] + proposals, had[1] + runs)
     finally:
         engine.dispose()
     with reconciler_reader_scope() as conn:

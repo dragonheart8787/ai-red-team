@@ -39,7 +39,7 @@ def make_engagement(
             conn, engagement_id=engagement_id, customer_id=customer_id, actor=actor,
         )
     # the session's own: its stuck rows are closed when the session ends (tests/residue.py)
-    residue.CREATED.add(engagement_id)
+    residue.register(engagement_id)
 
 
 def make_tool_run(

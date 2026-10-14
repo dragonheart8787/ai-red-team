@@ -1456,6 +1456,18 @@ CATALOGUE += [
         "D64-C3-n", "the memory of failures is never forgotten", ("tests/test_reconciler_service.py",),
         edits=(Edit(SERVICE_PY, "                           if now - t < self.th.retry_after_failure_s}", "                           if True}"),),
         targets=("test_the_memory_of_failures_is_bounded_by_the_period",)),
+    Mutation(
+        "D64-C3-o", "residue: no file is ever over its cap", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "                if p + r > self.caps.get(f, 0)}", "                if False}"),),
+        targets=("test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it",)),
+    Mutation(
+        "D64-C3-p", "residue: every file's rows are counted under one name", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "                file = FILE_OF.get(eid, NOT_IN_A_TEST)", "                file = NOT_IN_A_TEST"),),
+        targets=("test_the_rows_a_file_left_are_counted_per_file",)),
+    Mutation(
+        "D64-C3-q", "residue: an engagement does not remember the file that made it", RESIDUE_TESTS,
+        edits=(Edit(RESIDUE_PY, "    FILE_OF.setdefault(engagement_id, current_file())", "    FILE_OF.setdefault(engagement_id, NOT_IN_A_TEST)"),),
+        targets=("test_an_engagement_remembers_the_test_file_that_made_it",)),
 ]
 
 

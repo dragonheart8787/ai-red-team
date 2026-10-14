@@ -85,7 +85,8 @@ def _run(eid: str, pid: str, cid: str | None, status: str = "running") -> str:
 
 
 def close_touched() -> None:
-    """Move every stuck row of every engagement a test touched to a terminal stage."""
+    """Move every stuck row of every engagement a test touched to a terminal stage, and its
+    in-flight runs to ``unknown_outcome`` (the session end counts what a file leaves: 5.71)."""
     if not TOUCHED:
         return
     engine = create_engine(os.environ["MIGRATION_DATABASE_URL"], future=True)
@@ -102,6 +103,10 @@ def close_touched() -> None:
                                             ELSE 'test_cleanup' END,
                         stage_updated_at = now()
                     WHERE pipeline_stage = ANY(:stuck)"""), {"stuck": list(STUCK)})
+                conn.execute(text("""
+                    UPDATE tool_runs
+                    SET status = 'unknown_outcome', finished_at = coalesce(finished_at, now())
+                    WHERE status IN ('queued', 'dispatching', 'running')"""))
     finally:
         engine.dispose()
         TOUCHED.clear()

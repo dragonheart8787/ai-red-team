@@ -8,6 +8,7 @@ in the first place.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 
@@ -71,16 +72,21 @@ def _nothing_is_left_behind(request):
     found = residue.leftovers(before)
     rows = residue.close_session_rows(before)
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
-    if reporter is not None:
-        if found.networks_removed:
-            reporter.write_line(
-                f"residue: removed {len(found.networks_removed)} sandbox network(s) the session "
-                f"left behind (the sandbox keeps one per allowlist by design)")
-        if rows.proposals or rows.runs:
-            reporter.write_line(
-                f"residue: closed {sum(rows.proposals.values())} stuck proposal(s) "
-                f"{dict(sorted(rows.proposals.items()))} and {rows.runs} in-flight run(s) the "
-                f"session left in {rows.engagements} engagement(s) it created")
+    capture = request.config.pluginmanager.get_plugin("capturemanager")
+    lines = []
+    if found.networks_removed:
+        lines.append(f"residue: removed {len(found.networks_removed)} sandbox network(s) the "
+                     f"session left behind (the sandbox keeps one per allowlist by design)")
+    if rows.proposals or rows.runs:
+        lines.append(f"residue: closed {sum(rows.proposals.values())} stuck proposal(s) "
+                     f"{dict(sorted(rows.proposals.items()))} and {rows.runs} in-flight run(s) the "
+                     f"session left in {rows.engagements} engagement(s) it created, by test file:")
+        lines += rows.table()
+    if reporter is not None and lines:
+        # (written past the capture of the fixture's teardown, so that a passing run shows it too)
+        with capture.global_and_fixture_disabled() if capture else contextlib.nullcontext():
+            for line in lines:
+                reporter.write_line(line)
     if found.failures() or rows.failures():
         pytest.fail("the test session left state behind:\n  "
                     + "\n  ".join(found.failures() + rows.failures()), pytrace=False)

@@ -126,6 +126,7 @@ def test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed(
     from tests.reconciler_support import _capability, _proposal, _run, freshen
     assert engagement_id in residue.CREATED                      # make_engagement registered it
     monkeypatch.setattr(residue, "CREATED", {engagement_id})     # (the session's others: not here)
+    monkeypatch.setattr(residue, "FILE_CAP", {"tests/test_residue_check.py": 6})   # what it leaves
     before = residue.snapshot()
     stuck = {stage: _proposal(engagement_id, stage) for stage in
              ("received", "decided", "approved", "capability_issued", "dispatching")}
@@ -167,6 +168,75 @@ def test_an_engagement_nobody_registered_is_left_alone_and_its_new_stuck_row_is_
     finally:
         monkeypatch.setattr(residue, "CREATED", {eid})
         residue.close_session_rows(before)             # take it back, as the session end would
+
+
+# ---------------------------------------------------------------------------------------------
+# the count, per test file, and its cap (completion 3, item 3)
+# ---------------------------------------------------------------------------------------------
+
+def test_an_engagement_remembers_the_test_file_that_made_it(engagement_id):
+    assert residue.FILE_OF[engagement_id] == "tests/test_residue_check.py"
+    assert residue.current_file() == "tests/test_residue_check.py"
+
+
+def test_outside_a_test_the_file_is_said_not_to_be_one(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert residue.current_file() == residue.NOT_IN_A_TEST
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_x.py::test_y[param::with::colons] (call)")
+    assert residue.current_file() == "tests/test_x.py"
+
+
+def _leave(eid, n_proposals, n_runs):
+    from tests.reconciler_support import _proposal, _run
+    pids = [_proposal(eid, "approved") for _ in range(max(n_proposals, 1))]
+    for _ in range(n_runs):
+        _run(eid, pids[0], None, "running")
+    return pids
+
+
+def test_the_rows_a_file_left_are_counted_per_file(engagement_factory, monkeypatch):
+    a, _ = engagement_factory()
+    b, _ = engagement_factory()
+    monkeypatch.setattr(residue, "CREATED", {a, b})
+    monkeypatch.setattr(residue, "FILE_OF", {a: "tests/test_a.py", b: "tests/test_b.py"})
+    before = residue.snapshot()
+    _leave(a, 3, 2)
+    _leave(b, 1, 0)
+    closed = residue.close_session_rows(before)
+    assert closed.by_file == {"tests/test_a.py": (3, 2), "tests/test_b.py": (1, 0)}
+    assert closed.table()[0].startswith("  tests/test_a.py: 3 proposal(s) + 2 run(s)")
+
+
+def test_an_engagement_with_nothing_left_is_not_in_the_count(engagement_id, monkeypatch):
+    monkeypatch.setattr(residue, "CREATED", {engagement_id})
+    monkeypatch.setattr(residue, "FILE_OF", {engagement_id: "tests/test_a.py"})
+    assert residue.close_session_rows(residue.snapshot()).by_file == {}
+
+
+def test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it(
+        engagement_id, monkeypatch):
+    monkeypatch.setattr(residue, "CREATED", {engagement_id})
+    monkeypatch.setattr(residue, "FILE_OF", {engagement_id: "tests/test_leaky.py"})
+    before = residue.snapshot()
+    _leave(engagement_id, 2, 1)                           # three rows
+    closed = residue.close_session_rows(before)
+    assert closed.by_file == {"tests/test_leaky.py": (2, 1)}
+    assert closed.over_cap() == {"tests/test_leaky.py": (3, 0)}         # unlisted: may leave none
+    assert any("tests/test_leaky.py left 3 stuck row(s)" in f for f in closed.failures())
+    closed.caps = {"tests/test_leaky.py": 2}
+    assert closed.over_cap() == {"tests/test_leaky.py": (3, 2)}         # one over is over
+    closed.caps = {"tests/test_leaky.py": 3}
+    assert closed.over_cap() == {} and closed.failures() == []          # exactly the cap is fine
+    closed.caps = {"tests/test_leaky.py": 4}
+    assert closed.over_cap() == {}
+
+
+def test_the_caps_name_files_that_exist_and_are_whole_positive_numbers():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for file, cap in residue.FILE_CAP.items():
+        assert (root / file).is_file(), f"{file}: no such test file"
+        assert isinstance(cap, int) and cap >= 1, (file, cap)
 
 
 def test_a_session_start_after_a_rows_last_touch_makes_it_not_the_sessions(monkeypatch):

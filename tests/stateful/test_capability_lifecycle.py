@@ -194,7 +194,7 @@ class CapabilityLifecycle(RuleBasedStateMachine):
         a live capability makes the retirement cascade and its precision check
         reachable from step zero. Hypothesis still explores freely on top.
         """
-        residue.CREATED.add(self.engagement_id)        # the session closes its stuck rows (5.71)
+        residue.register(self.engagement_id)           # the session closes its stuck rows (5.71)
         with registry_admin_scope(self.engagement_id) as conn:
             create_engagement(
                 conn, engagement_id=self.engagement_id, customer_id="CUST-SM",
