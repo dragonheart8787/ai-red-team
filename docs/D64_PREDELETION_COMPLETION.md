@@ -728,3 +728,76 @@ exactly the kills and removals that were expected; the audit trail has 6 intents
 ### 9.7 Next, and not started
 
 Nothing is switched on for anything the drill did not make. The classification flag and phase 1 wait for a person to read this.
+
+## 10. Completion round 4 (every flag is still off on anything that was not seeded)
+
+Claims are tagged **[E]** measured here, **[R]** read from the code, **[D]** deduced and not reproduced.
+
+### 10.1 The reconciler beside live control planes (item 1)
+
+ACCEPTANCE 5.99; the record is `D64_LIVE_OWNER_DRILL_2026-10-14.md` and the directory beside it (Docker's events, the audit trail, the
+passes with the moment each was seen, the state of each owner once a second). The first drill (§9.6) left one thing unshown: a pass
+*through* `[B, B + margin + 10 s]` while the owner is alive. This one runs the product's own command line in loop mode for the whole
+interval, only `kill` enabled, limited to its own engagements: **L1** (healthy owner) is killed by its owner at +30 s; **L2** (owner
+stopped across its deadline and continued 40 s in, 10 s past it) is left alone by the two passes that ran while it was overdue and is
+killed by its owner as it continues; **F** (owner stopped for good) is killed by the reconciler at +94 s, at the first pass after the
++90 s bound. 21 passes, 13 inside the interval, the longest gap 5.5 s [E]. L1 and L2 have no reconciler audit event at all; F has an
+intent and a verified result. The drill prints `RESULT: OK` itself.
+
+What it cost to get there is in the document: the first two attempts failed because **this environment continues the stopped
+processes of a tool call when the call ends** (a `SIGSTOP`ped owner was running again three seconds later, and killed its container at
+its own deadline); the drill now runs in a session of its own. That is a fact about the place the drill runs in, not about the
+reconciler, and it explains why the first drill's frozen owner stayed stopped (it was an orphan by then).
+
+### 10.2 A container whose run's outcome is unknown (item 2)
+
+ACCEPTANCE 5.97. The retention already bound it (the plan looks at the container's age before its run) and is now shown to, at the
+plan, at the service and on the drill. What is new: its removal has its own reason code, `run_unknown_outcome`; before the removal
+`<id>.inspect.json` and `<id>.logs` are written to a private directory the operator gives with `--evidence-dir` (required with
+`--enable container`), their SHA-256 — of the files as read back — go to the audit trail with the ids and nothing else, and **if
+anything stops the archive the container stays and no intent is written**. 51 tests, 18 mutations. Not archived: the egress proxies
+(their runs' outcome is not theirs). The evidence directory grows without bound until the operator prunes it; the files can hold what
+the container's environment held, which is why the directory must be 0700.
+
+### 10.3 The test session's allowances (item 3)
+
+ACCEPTANCE 5.96. Completion 3 counted what each test file left and allowed eleven of them a number they could not explain. They are
+explained now, and the allowance is gone. [E] each file's rows, found by reading the stuck set after every test:
+
+| file | rows | what leaves them |
+|---|---:|---|
+| `stateful/test_capability_lifecycle` | 455–490 | `received` rows the machine writes by hand (it now closes its engagement in `teardown`) |
+| `test_scheduler_roles` | 116 | fixture proposals left in `approved` for a scheduler the test never runs |
+| `test_approved_dispatch` | 17 | the same, for an approver |
+| `test_scheduler_skips` | 14 | the same |
+| `test_scheduler_service` | 8 | the same |
+| `test_dispatch_late_result` | 6 | one `capability_issued` proposal and five `running` runs, left on purpose to be late |
+| `test_approvals` | 6 | proposals left `approved` |
+| `test_pipeline_stages` | 6 | the three `kill -9` experiments: a `dispatching` proposal and its `running` run each |
+| `test_dispatch` | 5 | `received` proposals of the claim and reconcile tests |
+| `test_web_console` | 5 | proposals left `approved` |
+| `test_scheduler_e2e` | 4 | the same |
+| `test_stage_vocabulary` | 3 | the shapes the resumed-call test writes by hand (§9.2) |
+| `test_network_conflicts_read` | 3 runs | in-flight runs of the refusal fixtures |
+| `test_scheduler_structure`, `test_scheduler_cli` | 1 each | one fixture proposal each |
+
+None was a defect in what it tested. The fix is one fixture for all of them: when a test ends, the stuck rows of the engagements it
+made are closed (an engagement a module-scoped fixture made is not closed until the session ends). In the full suite 669 rows were
+closed that way and the session end found none; `FILE_CAP` is empty; a test enforces that it can only stay empty or shrink, and that
+the ceiling it is compared with is not above the main line's.
+
+One thing it exposed: `D64-P6-a` had been passing a broken function for as long as the development database held leftover stuck
+rows, and failing on nothing since there were none. A test that is red only because the database is dirty is not a test; that one
+is fixed, and the whole mutation catalogue was run again for the same reason (5.96).
+
+### 10.4 `has_decision` (item 4)
+
+ACCEPTANCE 5.98, migration 0026. Both read functions return whether a proposal has a decision (a boolean; never the decision); the plan
+reports a `received` proposal that has one as `unexpected_state` instead of asking for an `abandon` the database refuses; the
+periodic summary says how many distinct objects of each kind were reported (`reported`). The 436 and 467 doomed attempts per pass of
+§9.1 are one report per object. Up, down and up again leave the schema snapshot identical and touch no row; 13 mutations.
+
+### 10.5 The first dry-run document (item 5)
+
+`D64_DRY_RUN_2026-10-13.md` still says the 852 `ENG-SM-` actions were "the reconciler service tests". It is left as it was printed and
+now carries a correction that points at §9.1, point 3.
