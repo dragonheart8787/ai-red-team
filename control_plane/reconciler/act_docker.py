@@ -17,7 +17,12 @@ real Docker and, where Docker cannot be made to misbehave, on a fake that does:
    ``reconciler.action_intended`` and commits it. If that cannot be written, no call is made
    (``failed / audit_failed``). A declined action (``changed_since_plan``, ``already_gone``) leaves
    no intent, so an intent always means "the call was about to be made".
-5. **Verify afterwards, independently of the call's own reply.** A killed container must be seen not
+5. **Keep the evidence of a run nobody can explain.** A container whose run ended in
+   ``unknown_outcome`` (reason ``run_unknown_outcome``) is removed only after its inspect output and
+   its logs were written to files and read back, and their SHA-256 given to ``saved`` (the audit
+   trail). If they cannot be kept in full, the container stays, no intent is written
+   (``failed / evidence_not_saved``). See ``evidence.py``.
+6. **Verify afterwards, independently of the call's own reply.** A killed container must be seen not
    running; a removed one must be gone from ``get`` *and* from ``list(all=True,
    filters={"id": ...})`` (E14-V2); a removed network must be gone from ``get``. The wait is
    ``verify_wait_s``.
@@ -34,7 +39,7 @@ from typing import Any
 
 from docker.errors import APIError, NotFound
 
-from control_plane.reconciler import vocab
+from control_plane.reconciler import evidence, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
@@ -42,6 +47,7 @@ from control_plane.reconciler.outcome import (
     CHANGED,
     DAEMON_ERROR,
     DONE,
+    EVIDENCE_NOT_SAVED,
     FAILED,
     GONE,
     IN_USE,
@@ -70,8 +76,11 @@ POLL_S = 0.2
 
 def perform(action: Action, *, client: Any, th: Thresholds,
             sleep: Callable[[float], None], clock: Callable[[], float],
-            intend: Callable[[Action], None] | None = None) -> Result:
-    """Kill or remove what ``action`` names; every path ends in a ``Result``."""
+            intend: Callable[[Action], None] | None = None,
+            evidence_dir: str | None = None,
+            saved: Callable[[Action, evidence.Saved], None] | None = None) -> Result:
+    """Kill or remove what ``action`` names; every path ends in a ``Result``. ``evidence_dir`` and
+    ``saved`` serve only the removal of a container whose run's outcome is unknown."""
     if client is None or not FULL_ID.fullmatch(action.subject_id):
         return Result(action, FAILED, INVALID_ACTION)
     try:
@@ -82,18 +91,24 @@ def perform(action: Action, *, client: Any, th: Thresholds,
             return container
         if action.kind == vocab.KILL_CONTAINER:
             return _kill(action, container, th, sleep, clock, intend)
-        return _remove_container(action, container, client, th, sleep, clock, intend)
+        return _remove_container(action, container, client, th, sleep, clock, intend,
+                                 evidence_dir, saved)
     except APIError:
         return Result(action, FAILED, DAEMON_ERROR)
 
 
-def declared(action: Action, intend: Callable[[Action], None] | None) -> Result | None:
-    """Write the intent just before an irreversible call. ``None``: go ahead. A ``Result``: the
-    intent could not be written, so the call must not be made."""
+def declared(action: Action, intend: Callable[[Action], None] | None,
+             kept: evidence.Saved | None = None,
+             saved: Callable[[Action, evidence.Saved], None] | None = None) -> Result | None:
+    """Write the intent just before an irreversible call -- and, after it, what was kept of the
+    container (``kept``, only for a run whose outcome is unknown). ``None``: go ahead. A
+    ``Result``: a record could not be written, so the call must not be made."""
     if intend is None:
         return None
     try:
         intend(action)
+        if kept is not None and saved is not None:
+            saved(action, kept)
     except Exception as exc:                                  # noqa: BLE001
         log.error("reconciler: intent not written (%s) for %s; nothing was done",
                   type(exc).__name__, action.kind)
@@ -164,11 +179,19 @@ def _kill(action: Action, container: Any, th: Thresholds, sleep, clock, intend=N
 
 
 def _remove_container(action: Action, container: Any, client: Any, th: Thresholds,
-                      sleep, clock, intend=None) -> Result:
+                      sleep, clock, intend=None, evidence_dir=None, saved=None) -> Result:
     proxy = action.kind == vocab.REMOVE_PROXY
     if not proxy and _state(container) in LIVE_STATES:
         return Result(action, CHANGED, NOT_AT_REST)        # it started since the plan looked
-    if (blocked := declared(action, intend)) is not None:
+    kept = None
+    if action.reason_code == vocab.RUN_UNKNOWN_OUTCOME and not proxy:
+        try:                                    # before the intent: no evidence, no intent, no call
+            kept = evidence.save(container, evidence_dir)
+        except evidence.EvidenceError:
+            log.error("reconciler: evidence of a container whose run is unknown was not kept; "
+                      "the container stays")
+            return Result(action, FAILED, EVIDENCE_NOT_SAVED)
+    if (blocked := declared(action, intend, kept, saved)) is not None:
         return blocked
 
     def gone() -> bool:

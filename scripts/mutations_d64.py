@@ -1414,7 +1414,7 @@ CATALOGUE += [
         targets=("test_with_one_category_on_exactly_its_kinds_reach_the_act_half",)),
     Mutation(
         "D64-C3-e", "the command line drops the words it was given", (FLAG_UNITS,),
-        edits=(Edit(RUN_PY, "        settings = act.settings_for(args.mode, args.enable or ())", "        settings = act.settings_for(args.mode, ())"),),
+        edits=(Edit(RUN_PY, "        settings = act.settings_for(args.mode, args.enable or (), args.evidence_dir)", "        settings = act.settings_for(args.mode, (), args.evidence_dir)"),),
         targets=("test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",
                  "test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started")),
     Mutation(
@@ -1511,6 +1511,92 @@ CATALOGUE += [
         "D64-C3-z", "the bound may be as large as the whole margin", CLOCK_TESTS + CONFIG_TESTS,
         edits=(Edit(CONFIG_PY, "        if values[\"max_clock_skew_s\"] * SKEW_FRACTION_OF_MARGIN > values[\"kill_margin_s\"]:", "        if False:"),),
         targets=("test_it_is_at_most_a_quarter_of_the_kill_margin",)),
+]
+
+
+EVIDENCE_PY = "control_plane/reconciler/evidence.py"
+EVIDENCE_TESTS = ("tests/test_reconciler_evidence.py",)
+_ORDER = "test_the_order_is_archive_then_intent_then_evidence_record_then_removal"
+_FAIL_CLOSED = "test_no_evidence_no_intent_no_removal"
+_PRIVATE = "test_a_directory_that_is_not_private_and_ours_is_refused"
+_DOOR = ("test_container_cannot_be_enabled_without_a_private_directory",)
+_SERVICE_TRAIL = "test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_hashes_only"
+CATALOGUE += [
+    Mutation(
+        "D64-C4-a", "the evidence is not kept before the removal", EVIDENCE_TESTS,
+        edits=(Edit(DOCKER_PY, "            kept = evidence.save(container, evidence_dir)", "            kept = None"),),
+        targets=(_ORDER, _FAIL_CLOSED, _SERVICE_TRAIL, "test_real_a_container_with_output_is_kept_and_then_removed")),
+    Mutation(
+        "D64-C4-b", "a failure to keep the evidence is ignored and the container is removed", EVIDENCE_TESTS,
+        edits=(Edit(DOCKER_PY, "            return Result(action, FAILED, EVIDENCE_NOT_SAVED)", "            kept = None"),),
+        targets=(_FAIL_CLOSED, "test_real_a_container_that_cannot_be_archived_is_still_there_after",
+                 "test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_said_once")),
+    Mutation(
+        "D64-C4-c", "the hashes are never given to the audit trail", EVIDENCE_TESTS,
+        edits=(Edit(DOCKER_PY, "            saved(action, kept)", "            pass"),),
+        targets=(_ORDER, _SERVICE_TRAIL, "test_real_a_container_with_output_is_kept_and_then_removed")),
+    Mutation(
+        "D64-C4-d", "a hash record that cannot be written does not stop the removal", EVIDENCE_TESTS,
+        edits=(Edit(DOCKER_PY, "            saved(action, kept)", "            try:\n                saved(action, kept)\n            except Exception:  # noqa: BLE001\n                pass"),),
+        targets=("test_an_evidence_record_that_cannot_be_written_stops_the_removal",)),
+    Mutation(
+        "D64-C4-e", "a directory other people can use is accepted", EVIDENCE_TESTS + (FLAG_UNITS,),
+        edits=(Edit(EVIDENCE_PY, "    if info.st_mode & 0o077:", "    if False:"),),
+        targets=(_PRIVATE, *_DOOR)),
+    Mutation(
+        "D64-C4-f", "a directory that belongs to somebody else is accepted", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "    if info.st_uid != os.getuid():", "    if False:"),),
+        targets=(_PRIVATE,)),
+    Mutation(
+        "D64-C4-g", "a link to a directory is followed", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "        info = os.lstat(directory)", "        info = os.stat(directory)"),),
+        targets=(_PRIVATE,)),
+    Mutation(
+        "D64-C4-h", "a file that is already there is replaced", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "            os.link(temporary, final)             # fails if the name is taken: nothing is replaced", "            os.replace(temporary, final)"),),
+        targets=("test_a_different_file_already_there_is_never_replaced_and_is_a_refusal",)),
+    Mutation(
+        "D64-C4-i", "the hash is of what was meant to be written, not of the file in place", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "        return _sha256_of(final)", "        return written"),),
+        targets=("test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_written",)),
+    Mutation(
+        "D64-C4-j", "a log of any size is kept", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "                if limit is not None and size > limit:", "                if False:"),),
+        targets=("test_a_log_too_large_to_keep_is_refused_not_cut",)),
+    Mutation(
+        "D64-C4-k", "the file is not synced before it is trusted", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "            os.fsync(handle.fileno())", "            pass"),),
+        targets=("test_a_file_or_directory_that_cannot_be_synced_is_not_evidence",)),
+    Mutation(
+        "D64-C4-l", "an unknown-outcome container is removed as soon as its run is over, retention or not", (*EVIDENCE_TESTS, "tests/test_reconciler_plan.py"),
+        edits=(Edit(PLAN_PY, "    if obs.host_now_us - since < th.retention_s * US:\n        return None\n    if run_status is None:", "    if run_status != \"unknown_outcome\" and obs.host_now_us - since < th.retention_s * US:\n        return None\n    if run_status is None:"),),
+        targets=("test_retention_binds_an_unknown_outcome_container_to_the_microsecond",
+                 "test_r2_a_container_at_rest_is_removed_after_the_retention_and_not_before")),
+    Mutation(
+        "D64-C4-m", "an unknown-outcome container is removed like a finished one", (*EVIDENCE_TESTS, "tests/test_reconciler_plan.py"),
+        edits=(Edit(PLAN_PY, "    if run_status == \"unknown_outcome\":     # nobody knows how it ended: keep what it left first", "    if False:"),),
+        targets=("test_only_a_run_of_unknown_outcome_carries_that_reason",
+                 "test_r2_a_container_at_rest_is_removed_after_the_retention_and_not_before")),
+    Mutation(
+        "D64-C4-n", "the evidence event takes any text for a hash", EVIDENCE_TESTS,
+        edits=(Edit(EMIT_PY, "    if not isinstance(value, str) or not _SHA256.fullmatch(value):", "    if not isinstance(value, str):"),),
+        targets=("test_the_evidence_event_refuses_anything_else",)),
+    Mutation(
+        "D64-C4-o", "the service never gives the act half a place to record the hashes", EVIDENCE_TESTS,
+        edits=(Edit(SERVICE_PY, "                saved=self._evidence_saved if self.audits else None,", "                saved=None,"),),
+        targets=(_SERVICE_TRAIL,)),
+    Mutation(
+        "D64-C4-p", "container can be enabled without somewhere to keep the evidence", EVIDENCE_TESTS + (FLAG_UNITS,),
+        edits=(Edit(ACT_PY, "    if flags.CONTAINER in chosen:", "    if False:"),),
+        targets=(*_DOOR, "test_container_without_a_private_evidence_directory_is_exit_7_before_anything")),
+    Mutation(
+        "D64-C4-q", "the command line drops the evidence directory", EVIDENCE_TESTS + (FLAG_UNITS,),
+        edits=(Edit(RUN_PY, "        settings = act.settings_for(args.mode, args.enable or (), args.evidence_dir)", "        settings = act.settings_for(args.mode, args.enable or ())"),),
+        targets=("test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",)),
+    Mutation(
+        "D64-C4-r", "every container removal keeps evidence, even of a run that finished normally", EVIDENCE_TESTS,
+        edits=(Edit(DOCKER_PY, "    if action.reason_code == vocab.RUN_UNKNOWN_OUTCOME and not proxy:", "    if not proxy:"),),
+        targets=("test_a_finished_run_needs_no_evidence_and_leaves_none",)),
 ]
 
 

@@ -248,6 +248,8 @@ def _at_rest(c: ContainerObs, obs: Observation, th: Thresholds,
         return None
     if run_status is None:
         return _docker_action(c, vocab.REMOVE_CONTAINER, vocab.NO_RUN_ROW_PAST_GRACE)
+    if run_status == "unknown_outcome":     # nobody knows how it ended: keep what it left first
+        return _docker_action(c, vocab.REMOVE_CONTAINER, vocab.RUN_UNKNOWN_OUTCOME)
     if run_status in RUN_OVER:
         return _docker_action(c, vocab.REMOVE_CONTAINER, vocab.RUN_FINISHED)
     return None        # the run may still be recording: the proposal's own bound decides

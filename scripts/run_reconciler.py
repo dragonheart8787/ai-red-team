@@ -23,6 +23,11 @@ service manager cannot answer. In this version ``network`` and ``file`` are refu
 the configuration is read; so is any other word, and so is a run that cannot be confirmed. What was
 enabled is written to ``reconciler.started``.
 
+``container`` also needs ``--evidence-dir DIR`` (exit 7 without it): a container whose run's outcome
+is unknown is removed only after its ``docker inspect`` and its logs were written there and their
+SHA-256 recorded in the audit trail (ACCEPTANCE 5.97). ``DIR`` is yours and closed to everybody
+else (mode 0700); if the evidence cannot be kept, the container stays.
+
 Every threshold comes from the ``RECONCILER_*`` settings (see ``.env.example``); with one missing or
 unusable the reconciler refuses to start (exit 8), naming the keys.
 
@@ -91,7 +96,8 @@ EXIT_FLAG_REFUSED = 7
 #: one line each, for the person who is about to confirm
 EFFECT = {
     flags.KILL: "KILL a tool container still running past its run's budget plus the margin",
-    flags.CONTAINER: "REMOVE a tool container at rest whose run is over and whose retention passed",
+    flags.CONTAINER: "REMOVE a tool container at rest whose run is over and whose retention passed "
+                     "(a run of unknown outcome: after its inspect output and logs are kept)",
     flags.PROXY: "REMOVE an egress proxy whose run is over or whose bound has passed",
     flags.NETWORK: "REMOVE a sandbox network",
     flags.FILE: "REMOVE a credential or TLS file from the temporary directory",
@@ -140,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="let this category of irreversible action be carried out "
                              f"({', '.join(flags.OPERATOR_MAY_ENABLE)} in this version; repeat for "
                              "more; state-only only; confirmed by typing a phrase at a terminal)")
+    parser.add_argument("--evidence-dir", metavar="DIR",
+                        help="where the inspect output and logs of a container whose run's outcome "
+                             "is unknown are kept before it is removed (required with --enable "
+                             "container; your own directory, mode 0700)")
     parser.add_argument("--engagement", action="append", metavar="ID",
                         help="limit the pass to this engagement (repeatable): its proposals and "
                              "the containers it owns; networks and files are then left alone")
@@ -147,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="where the credential and TLS files are (default: the temp dir)")
     args = parser.parse_args(argv)
     try:                                   # before the configuration, the database and Docker
-        settings = act.settings_for(args.mode, args.enable or ())
+        settings = act.settings_for(args.mode, args.enable or (), args.evidence_dir)
     except flags.FlagRefused as refused:
         print(f"refused: {refused}", file=sys.stderr)
         return EXIT_FLAG_REFUSED

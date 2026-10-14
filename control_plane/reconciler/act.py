@@ -47,7 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from control_plane.orchestrator import stages
-from control_plane.reconciler import act_docker, act_files, flags, vocab
+from control_plane.reconciler import act_docker, act_files, evidence, flags, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
@@ -83,6 +83,9 @@ class Settings:
 
     mode: Mode
     enabled: frozenset[str] = frozenset()
+    #: where the evidence of a container whose run's outcome is unknown is kept before it is
+    #: removed (``evidence.py``); required to enable ``container``
+    evidence_dir: str | None = None
 
     def __post_init__(self) -> None:
         if not self.enabled <= flags.EVERYTHING:
@@ -91,15 +94,23 @@ class Settings:
             raise ValueError("a dry run changes nothing, so it cannot also enable anything")
 
 
-def settings_for(name: str, enable: Iterable[str] = ()) -> Settings:
+def settings_for(name: str, enable: Iterable[str] = (),
+                 evidence_dir: str | None = None) -> Settings:
     """The settings an operator's words select: a mode name and, for ``state-only``, the categories
-    (``flags.FlagRefused`` for any that is unknown or not available in this version)."""
+    (``flags.FlagRefused`` for any that is unknown or not available in this version) and, with
+    ``container``, the directory the evidence of unexplained runs is kept in."""
     try:
         mode = MODE_NAMES[name]
     except KeyError:
         raise ValueError(f"unknown mode {name!r}; the modes are {sorted(MODE_NAMES)}") from None
     chosen = flags.validate(enable)
-    return Settings(mode, enabled=chosen)
+    if flags.CONTAINER in chosen:
+        try:
+            evidence.check_directory(evidence_dir)
+        except evidence.EvidenceError:
+            raise ValueError("enabling container needs --evidence-dir: an existing directory of "
+                             "yours that nobody else can read or write (0700)") from None
+    return Settings(mode, enabled=chosen, evidence_dir=evidence_dir)
 
 
 # --- the three statements that change a proposal -------------------------------------------------
@@ -144,6 +155,7 @@ def carry_out(
     on_verified: Callable[[Result], None] | None = None,
     record: Callable[[Any, Action], None] | None = None,
     intend: Callable[[Action], None] | None = None,
+    saved: Callable[[Action, evidence.Saved], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     wall_clock_us: Callable[[], int] = lambda: time.time_ns() // 1000,
@@ -157,12 +169,13 @@ def carry_out(
     the conditional ``UPDATE`` moved a row and before the commit; if it raises, the transaction
     rolls back and the result is ``failed / audit_failed`` (the proposal is unchanged).
     ``intend(action)`` is called for a kill, a removal or an unlink right before the call; if it
-    raises, no call is made.
+    raises, no call is made. ``saved(action, kept)`` is called, right after the intent, for the
+    removal of a container whose run's outcome is unknown, with what was kept of it (hashes).
     """
     results: list[Result] = []
     for action in actions:
         result = _one(action, settings, th, client, directory, expected_uid, sleep, clock,
-                      wall_clock_us, record, intend)
+                      wall_clock_us, record, intend, saved)
         results.append(result)
         if result.outcome == DONE and on_verified is not None:
             try:
@@ -174,7 +187,7 @@ def carry_out(
 
 
 def _one(action, settings, th, client, directory, expected_uid, sleep, clock, wall_clock_us,
-         record=None, intend=None):
+         record=None, intend=None, saved=None):
     if action.kind not in vocab.ACTION_KINDS or action.reason_code not in vocab.REASONS.get(
             action.kind, ()):
         return Result(action, FAILED, INVALID_ACTION)
@@ -190,7 +203,7 @@ def _one(action, settings, th, client, directory, expected_uid, sleep, clock, wa
         return act_files.sweep(action, directory=directory, expected_uid=expected_uid, th=th,
                                 client=client, wall_clock_us=wall_clock_us, intend=intend)
     return act_docker.perform(action, client=client, th=th, sleep=sleep, clock=clock,
-                              intend=intend)
+                              intend=intend, evidence_dir=settings.evidence_dir, saved=saved)
 
 
 # --- proposals -----------------------------------------------------------------------------------

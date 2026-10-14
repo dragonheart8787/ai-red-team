@@ -78,7 +78,8 @@ def test_the_reason_codes_of_every_action_kind_are_the_designs():
     assert vocab.REASONS[vocab.CLOSE] == (
         "abandoned_after_decision", "capability_not_live", "approval_expired", "approval_revoked",
         "engagement_killed")
-    assert vocab.REASONS[vocab.REMOVE_CONTAINER] == ("run_finished", "no_run_row_past_grace")
+    assert vocab.REASONS[vocab.REMOVE_CONTAINER] == (
+            "run_finished", "run_unknown_outcome", "no_run_row_past_grace")
     assert vocab.REASONS[vocab.REMOVE_PROXY] == ("owner_run_ended", "overran_deadline")
     assert vocab.REASONS[vocab.KILL_CONTAINER] == ("overran_deadline",)
 

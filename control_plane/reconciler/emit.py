@@ -56,12 +56,14 @@ PROXY_REMOVED = "reconciler.proxy_removed"
 NETWORK_REMOVED = "reconciler.network_removed"
 FILES_REMOVED = "reconciler.files_removed"
 ACTION_INTENDED = "reconciler.action_intended"
+EVIDENCE_SAVED = "reconciler.evidence_saved"
 ACTION_FAILED = "reconciler.action_failed"
 FAILURE_SUMMARY = "reconciler.failure_summary"
 
 EVENTS = (STARTED, STOPPED, START_REFUSED, PROPOSAL_ABANDONED, PROPOSAL_CLOSED,
           DISPATCH_UNKNOWN_OUTCOME, CONTAINER_KILLED, CONTAINER_REMOVED, PROXY_REMOVED,
-          NETWORK_REMOVED, FILES_REMOVED, ACTION_INTENDED, ACTION_FAILED, FAILURE_SUMMARY)
+          NETWORK_REMOVED, FILES_REMOVED, ACTION_INTENDED, EVIDENCE_SAVED, ACTION_FAILED,
+          FAILURE_SUMMARY)
 
 #: the proposal events: written in the transaction that makes the change
 TRANSACTIONAL_EVENTS = (PROPOSAL_ABANDONED, PROPOSAL_CLOSED, DISPATCH_UNKNOWN_OUTCOME)
@@ -111,6 +113,15 @@ def _categories(value: Any) -> list[str]:
     return list(value)
 
 
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _sha256(value: Any) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise PayloadRejected(f"not a sha256: {value!r:.40}")
+    return value
+
+
 def _one_of(allowed: tuple[str, ...]) -> Callable[[Any], str]:
     def check(value: Any) -> str:
         if value not in allowed:
@@ -155,6 +166,8 @@ SCHEMAS: dict[str, tuple[str, dict[str, Callable[[Any], Any]]]] = {
     ACTION_INTENDED: ("either", {
         "kind": _one_of(IRREVERSIBLE_KINDS), "subject_id": _id,
         "reason_code": _one_of(INTENT_REASONS)}),
+    EVIDENCE_SAVED: ("engagement", {
+        "run_id": _id, "container_id": _id, "inspect_sha256": _sha256, "logs_sha256": _sha256}),
     ACTION_FAILED: ("either", {
         "kind": _one_of(vocab.ACTION_KINDS), "subject_id": _id,
         "reason_code": _one_of(FAILURE_CODES)}),
@@ -260,6 +273,19 @@ def intent_for(
     return (ACTION_INTENDED,
             {"kind": action.kind, "subject_id": subject_id, "reason_code": action.reason_code},
             engagement, subject_type, subject_id)
+
+
+def evidence_for(
+    action: Action, kept: Any,
+) -> tuple[str, dict[str, Any], str | None, str, str]:
+    """``(event type, payload, engagement id, subject type, subject id)`` of
+    ``reconciler.evidence_saved``: the container's id and the hashes of the two files kept of it --
+    nothing else, in particular no path."""
+    _engagement, subject_type, subject_id = _subject_of(action)
+    return (EVIDENCE_SAVED,
+            {"run_id": subject_id, "container_id": kept.container_id,
+             "inspect_sha256": kept.inspect_sha256, "logs_sha256": kept.logs_sha256},
+            action.expected_owner, subject_type, subject_id)
 
 
 def for_result(

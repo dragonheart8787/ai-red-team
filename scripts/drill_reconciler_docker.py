@@ -461,6 +461,10 @@ def play(args) -> int:
             say(f"[{name}] STOP before acting at t+{elapsed:.0f}s: {problems or status}")
             return 3
         words = [w for s in switches for w in ("--enable", s)]
+        if "container" in switches:           # (completion 4: a removal keeps its evidence first)
+            vault = out / "evidence"
+            vault.mkdir(mode=0o700, exist_ok=True)
+            words += ["--evidence-dir", str(vault)]
         phrase = ("enable " + " ".join(sorted(switches)) + "\n") if switches else None
         status, shown = run_cli(["--mode", "state-only", "--once", *words], env, answer=phrase)
         lines = parse(shown)
@@ -552,6 +556,8 @@ def name_race(client, state, env, out):
     eid = state["engagements"]["N2"]
     name = f"drill-{state['tag']}-n2"
     here = tempfile.mkdtemp(prefix="drill-empty-")          # no file of ours in it: nothing to see
+    vault = out / "evidence"
+    vault.mkdir(mode=0o700, exist_ok=True)
     try:                                          # (a resumed drill finds it already made)
         old = client.containers.get(name)
         started_at = time.time() - 1
@@ -577,7 +583,8 @@ def name_race(client, state, env, out):
     old.remove(force=True)                                  # someone else removes it ...
     newcomer = client.containers.run(IMAGE, ["sleep", "3600"], detach=True, name=name)   # ... and a
     state["containers"]["N2NEW"] = newcomer.id              #       new one takes the name
-    results = act.carry_out(wanted, act.settings_for("state-only", [flags.CONTAINER]),
+    results = act.carry_out(wanted, act.settings_for("state-only", [flags.CONTAINER],
+                                                      str(vault)),
                             th=th, client=client, directory=here, expected_uid=os.getuid())
     newcomer.reload()
     ok = (results[0].outcome == outcome.GONE and newcomer.status == "running"

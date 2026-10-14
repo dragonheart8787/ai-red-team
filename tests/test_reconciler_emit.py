@@ -41,8 +41,8 @@ DESIGN_EVENTS = {
     "reconciler.proposal_abandoned", "reconciler.proposal_closed",
     "reconciler.dispatch_unknown_outcome", "reconciler.container_killed",
     "reconciler.container_removed", "reconciler.proxy_removed", "reconciler.network_removed",
-    "reconciler.files_removed", "reconciler.action_intended", "reconciler.action_failed",
-    "reconciler.failure_summary",
+    "reconciler.files_removed", "reconciler.action_intended", "reconciler.evidence_saved",
+    "reconciler.action_failed", "reconciler.failure_summary",
 }
 
 GOOD = {
@@ -61,13 +61,16 @@ GOOD = {
     emit.FILES_REMOVED: {"kind": "tls_leaf", "count": 1},
     emit.ACTION_INTENDED: {"kind": "remove_container", "subject_id": "RUN-1",
                            "reason_code": "run_finished"},
+    emit.EVIDENCE_SAVED: {"run_id": "RUN-1", "container_id": "c" * 64,
+                          "inspect_sha256": "a" * 64, "logs_sha256": "b" * 64},
     emit.ACTION_FAILED: {"kind": "kill_container", "subject_id": "RUN-1",
                          "reason_code": "still_running_after_kill"},
     emit.FAILURE_SUMMARY: {"instance_id": "RECON-abc", "passes": 12,
                            "failed": {"kill_container:daemon_error": 3}},
 }
 ENGAGEMENT_SCOPED = {emit.PROPOSAL_ABANDONED, emit.PROPOSAL_CLOSED, emit.DISPATCH_UNKNOWN_OUTCOME,
-                     emit.CONTAINER_KILLED, emit.CONTAINER_REMOVED, emit.PROXY_REMOVED}
+                     emit.CONTAINER_KILLED, emit.CONTAINER_REMOVED, emit.PROXY_REMOVED,
+                     emit.EVIDENCE_SAVED}
 
 
 def test_the_closed_list_is_the_designs_and_every_event_has_a_schema_and_a_good_example():

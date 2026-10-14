@@ -67,9 +67,11 @@ def test_nothing_is_enabled_by_default_and_an_operator_with_no_words_enables_not
 
 
 @pytest.mark.parametrize("category", flags.OPERATOR_MAY_ENABLE)
-def test_the_first_three_can_be_named(category):
+def test_the_first_three_can_be_named(category, tmp_path):
+    vault = tmp_path / "evidence"
+    vault.mkdir(mode=0o700)
     assert flags.validate([category]) == frozenset({category})
-    assert act.settings_for("state-only", [category]).enabled == frozenset({category})
+    assert act.settings_for("state-only", [category], str(vault)).enabled == frozenset({category})
 
 
 def test_all_three_together_and_naming_one_twice():
@@ -310,6 +312,25 @@ def test_a_refused_word_is_exit_7_before_the_configuration_is_even_read(args):
     assert done.stderr.startswith("refused: ")
 
 
+@pytest.mark.parametrize("how", ["absent", "missing", "open"])
+def test_container_without_a_private_evidence_directory_is_exit_7_before_anything(
+        engagement_id, tmp_path, how):
+    """Nothing is asked of the person, nothing is read, nothing started (ACCEPTANCE 5.97)."""
+    before = len(started_events())
+    args = ["--mode", "state-only", "--once", "--engagement", engagement_id,
+            "--enable", "container"]
+    if how == "missing":
+        args += ["--evidence-dir", str(tmp_path / "nowhere")]
+    if how == "open":
+        (tmp_path / "open").mkdir()
+        os.chmod(tmp_path / "open", 0o755)
+        args += ["--evidence-dir", str(tmp_path / "open")]
+    done = cli(*args, env={"RECONCILER_READER_DATABASE_URL": "postgresql://nowhere/x"})
+    assert done.returncode == EXIT_REFUSED, (done.returncode, done.stderr)
+    assert done.stdout == "" and "evidence-dir" in done.stderr
+    assert len(started_events()) == before
+
+
 def test_a_pipe_is_refused_exit_7_and_nothing_is_started(engagement_id):
     before = len(started_events())
     done = cli("--mode", "state-only", "--once", "--engagement", engagement_id,
@@ -332,10 +353,12 @@ def test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started(engagemen
 def test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled(
         engagement_id, tmp_path):
     before = max((e["audit_id"] for e in started_events()), default=0)
+    vault = tmp_path / "evidence"
+    vault.mkdir(mode=0o700)
     status, shown = on_a_terminal(
         ["--mode", "state-only", "--once", "--engagement", engagement_id,
-         "--directory", str(tmp_path), "--enable", "proxy", "--enable", "kill",
-         "--enable", "container"], "enable container kill proxy\n", VALID)
+         "--directory", str(tmp_path), "--evidence-dir", str(vault), "--enable", "proxy",
+         "--enable", "kill", "--enable", "container"], "enable container kill proxy\n", VALID)
     assert status == 0, shown
     assert "reconciler stopped (exit 0)" in shown or '"summary"' in shown
     new = [e for e in started_events() if e["audit_id"] > before]
@@ -445,3 +468,4 @@ def test_the_started_payload_is_what_the_service_writes(engagement_id, tmp_path)
     new = [e for e in started_events() if e["audit_id"] > before]
     assert [e["payload"]["enabled"] for e in new] == [["kill", "proxy"]]
     assert json.loads(json.dumps(new[0]["payload"]))["instance_id"] == r.instance_id
+

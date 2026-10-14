@@ -368,7 +368,7 @@ RETENTION = TH.retention_s
     ("exited", True, False), ("created", False, True)])
 @pytest.mark.parametrize("run_state, reason", [
     ("succeeded", vocab.RUN_FINISHED), ("failed", vocab.RUN_FINISHED),
-    ("unknown_outcome", vocab.RUN_FINISHED), (None, vocab.NO_RUN_ROW_PAST_GRACE)])
+    ("unknown_outcome", vocab.RUN_UNKNOWN_OUTCOME), (None, vocab.NO_RUN_ROW_PAST_GRACE)])
 def test_r2_a_container_at_rest_is_removed_after_the_retention_and_not_before(
         status, finished, created, run_state, reason):
     states = {} if run_state is None else {"RUN-1": run_state}

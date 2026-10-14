@@ -49,6 +49,7 @@ ENGAGEMENT_KILLED = "engagement_killed"
 UNKNOWN_OUTCOME = "unknown_outcome"
 OVERRAN_DEADLINE = "overran_deadline"
 RUN_FINISHED = "run_finished"
+RUN_UNKNOWN_OUTCOME = "run_unknown_outcome"      # as run_finished, but its evidence is kept first
 NO_RUN_ROW_PAST_GRACE = "no_run_row_past_grace"
 OWNER_RUN_ENDED = "owner_run_ended"
 IDLE_SWEEP = "idle_sweep"
@@ -60,7 +61,7 @@ REASONS: dict[str, tuple[str, ...]] = {
             ENGAGEMENT_KILLED),
     MARK_UNKNOWN_OUTCOME: (UNKNOWN_OUTCOME,),
     KILL_CONTAINER: (OVERRAN_DEADLINE,),
-    REMOVE_CONTAINER: (RUN_FINISHED, NO_RUN_ROW_PAST_GRACE),
+    REMOVE_CONTAINER: (RUN_FINISHED, RUN_UNKNOWN_OUTCOME, NO_RUN_ROW_PAST_GRACE),
     REMOVE_PROXY: (OWNER_RUN_ENDED, OVERRAN_DEADLINE),
     REMOVE_NETWORK: (IDLE_SWEEP, RANGE_CONFLICT),
     UNLINK_FILE: ("credential_mount", "tls_leaf"),

@@ -830,6 +830,8 @@ and failed actions; those are **logged, not audited**, except that a failed acti
 `(object, reason_code)` per process lifetime (a restart reports once more — stated, not hidden). If an operator
 needs "reported once, ever", that is a `reconciler_state` table like `scheduler_state` (D64-11).
 
+> **Revised at completion 4 (ACCEPTANCE 5.97, 5.98).** A container whose run ended in `unknown_outcome` is removed with reason `run_unknown_outcome`, and only after its inspect output and logs were written to the operator's `--evidence-dir` and their SHA-256 recorded in `reconciler.evidence_saved` (the order is archive, intent, `evidence_saved`, removal, `container_removed`; if the archive fails nothing else happens). `reconciler.failure_summary` also carries `reported`: for each `subject:reason` the plan reported and left alone, the number of distinct objects in the window.
+
 **Implemented (D64 step 6d, ACCEPTANCE 5.83):** `control_plane/reconciler/emit.py` is this table, with two differences:
 `reconciler.dispatch_unknown_outcome` stands where the table says the existing `dispatch.unknown_outcome` is kept (its payload
 has a boolean and free text; the rule is ids and reason codes, so a query for unresolved runs asks for both), and
@@ -845,7 +847,8 @@ Proposed vocabulary (names are proposals):
 | `reconciler.proposal_closed` | engagement | `proposal_id`, `reason_code` | `capability_not_live`, `approval_expired`, `approval_revoked`, `engagement_killed`, `abandoned_after_decision` |
 | `reconciler.proposal_abandoned` | engagement | `proposal_id`, `reason_code` | `undecided_past_grace` |
 | `reconciler.container_killed` | engagement (owner known) | `run_id`, `reason_code` | `overran_deadline` |
-| `reconciler.container_removed` | engagement (owner known) / global | `run_id`, `reason_code` | `overran_deadline`, `run_finished`, `no_run_row_past_grace` |
+| `reconciler.container_removed` | engagement (owner known) / global | `run_id`, `reason_code` | `overran_deadline`, `run_finished`, `run_unknown_outcome`, `no_run_row_past_grace` |
+| `reconciler.evidence_saved` | engagement (owner known) | `run_id`, `container_id`, `inspect_sha256`, `logs_sha256` | — (written after the intent and before the removal of a container whose run is `unknown_outcome`; ids and hashes only, never a path; ACCEPTANCE 5.97) |
 | `reconciler.proxy_removed` | engagement / global | `run_id`, `reason_code` | `owner_run_ended`, `overran_deadline` |
 | `reconciler.network_removed` | global | `network_id` (the hash in the name), `reason_code` | `range_conflict`, `idle_sweep` |
 | `reconciler.files_removed` | global | `kind`, `count` | kinds `credential_mount`, `tls_leaf` (removed only when no live container mounts them and they are older than `B_cap + P + Q`) |

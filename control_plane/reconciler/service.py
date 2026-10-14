@@ -244,6 +244,7 @@ class Reconciler:
                 on_verified=self._audit if self.audits else None,
                 record=self._record if self.audits else None,
                 intend=self._intend if self.audits else None,
+                saved=self._evidence_saved if self.audits else None,
                 wall_clock_us=self._wall_clock_us)
             if self.audits:
                 self._after(results)
@@ -347,6 +348,18 @@ class Reconciler:
         """The hook called right before an irreversible call: the intent, committed first."""
         try:
             event_type, payload, engagement_id, subject_type, subject_id = emit.intent_for(action)
+            emit.emit(event_type, payload, engagement_id=engagement_id,
+                      subject_type=subject_type, subject_id=subject_id)
+        except Exception:
+            self._audit_failed = True
+            raise
+
+    def _evidence_saved(self, action, kept) -> None:
+        """Called right after the intent of a removal whose run's outcome is unknown: what was kept
+        of the container, as ids and hashes. Written before the call, like the intent."""
+        try:
+            event_type, payload, engagement_id, subject_type, subject_id = emit.evidence_for(
+                action, kept)
             emit.emit(event_type, payload, engagement_id=engagement_id,
                       subject_type=subject_type, subject_id=subject_id)
         except Exception:
