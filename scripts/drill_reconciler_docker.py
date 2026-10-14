@@ -343,8 +343,11 @@ def child_live(args) -> int:
 
     from control_plane.state.db import engagement_scope
     from tool_gateway.sandbox import DockerSandbox
+    command = ["sleep", "3600"]
+    if args.noisy:                      # something for the logs to hold: ncat says it is listening
+        command = ["ncat", "-l", "-v", "127.0.0.1", "9999"]
     result = DockerSandbox().run(
-        command=["sleep", "3600"], network_allowlist=[args.cidr], max_duration_seconds=BUDGET_S,
+        command=command, network_allowlist=[args.cidr], max_duration_seconds=BUDGET_S,
         run_id=args.run, engagement_id=args.owner, deadline_helper=None)
     with engagement_scope(args.owner) as conn:
         conn.execute(text("UPDATE tool_runs SET status = 'failed', exit_code = -1 "
@@ -698,6 +701,8 @@ def main(argv=None) -> int:
     one = sub.add_parser("child-live")
     for flag in ("--run", "--owner", "--proposal", "--cidr"):
         one.add_argument(flag, required=True)
+    one.add_argument("--noisy", action="store_true",
+                     help="run a command that writes to its log and then waits (ncat -l -v)")
     args = parser.parse_args(argv)
     from control_plane.config import load_dotenv
     load_dotenv()

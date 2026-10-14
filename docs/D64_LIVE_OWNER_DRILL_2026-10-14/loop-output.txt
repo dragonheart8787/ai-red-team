@@ -1,0 +1,24 @@
+   -10.6  enable kill
+    -6.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    -0.7  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+     5.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    10.5  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    15.7  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    20.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    26.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    31.5  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    36.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    42.1  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    47.3  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    52.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    57.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    63.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    68.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    73.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    79.3  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    84.7  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    89.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    95.3  {"detail": null, "engagement_id": "ENG-LIVE-ea1ef6-F", "kind": "kill_container", "outcome": "done", "reason_code": "overran_deadline", "subject_id": "9ce77a614a35ad5386c6144fc3a4c9f8b6ebe265ad6d97e389525708c23659ec"}
+    95.3  {"held_back": 0, "limited": 0, "outcomes": {"done": 1}, "reports": 0, "summary": {"kill_container:overran_deadline": 1}, "truncated": false}
+   100.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   100.9  reconciler stopped (exit 0)

@@ -1,0 +1,27 @@
+{
+ "finished_at": 1791978033.56696,
+ "dry_run_before_retention_s_after_finish": 8.7,
+ "dry_run_before_retention_plan": [],
+ "real_pass_before_retention_s_after_finish": 13.9,
+ "dry_run_after_retention_plan": [
+  {
+   "detail": null,
+   "engagement_id": "ENG-LIVE-ea1ef6-F",
+   "kind": "remove_container",
+   "outcome": "dry_run",
+   "reason_code": "run_unknown_outcome",
+   "subject_id": "9ce77a614a35ad5386c6144fc3a4c9f8b6ebe265ad6d97e389525708c23659ec"
+  }
+ ],
+ "real_pass_after_retention": [
+  {
+   "detail": null,
+   "engagement_id": "ENG-LIVE-ea1ef6-F",
+   "kind": "remove_container",
+   "outcome": "done",
+   "reason_code": "run_unknown_outcome",
+   "subject_id": "9ce77a614a35ad5386c6144fc3a4c9f8b6ebe265ad6d97e389525708c23659ec"
+  }
+ ],
+ "real_pass_exit": 0
+}
