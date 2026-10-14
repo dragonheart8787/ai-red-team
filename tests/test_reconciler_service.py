@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -354,10 +355,14 @@ def test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_s
 
     monkeypatch.setattr(act, "_move", broken)
     clock = Clock()
-    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock)
+    # (held back for a second after a failure here, so that every pass tries again and the counting
+    # is what is looked at; the hold-back itself is the next test)
+    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock,
+                   th=dataclasses.replace(TH, retry_after_failure_s=1))
     r.begin()
     try:
         for _ in range(3):
+            clock.now += 2
             report = r.pass_once()
             assert report.outcomes == {"failed": 2}
         failed = events(engagement_id, emit.ACTION_FAILED)
@@ -377,6 +382,71 @@ def test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_s
     finally:
         r.finish("signal")
     assert state(engagement_id, first)[0] == "received"
+
+
+def _received_with_a_decision(eid) -> str:
+    """The shape the first state-only run on the development database found: a proposal at
+    ``received`` that has a decision. The plan sees an undecided one past the grace; the database
+    refuses to abandon it (``action_proposals_abandoned_is_undecided``)."""
+    from tests.reconciler_support import EPOCH, TOUCHED
+    TOUCHED.add(eid)
+    pid = f"PROP-0000{uuid.uuid4().hex[:8]}"          # sorts before any other, so it goes first
+    with engagement_scope(eid) as conn:
+        conn.execute(text("""
+            INSERT INTO action_proposals (proposal_id, engagement_id, agent_id,
+                request_idempotency_key, action, target, "authorization", discovery, decision,
+                pipeline_stage, stage_updated_at)
+            VALUES (:p, :e, 'agent', :k, 'network.scan', '{}', '{}', '{}', 'ALLOW', 'received',
+                    CAST(:t AS timestamptz))"""), {"p": pid, "e": eid, "k": f"k-{pid}", "t": EPOCH})
+    return pid
+
+
+def test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest(
+        engagement_id, emptydir):
+    """436 such rows failed 436 times in every pass and, with a cap on the actions of a pass, would
+    have kept the healthy work behind them waiting for ever."""
+    refused = _received_with_a_decision(engagement_id)
+    healthy = _proposal(engagement_id, "received")
+    clock = Clock()
+    one_at_a_time = dataclasses.replace(TH, max_actions_per_pass=1)
+    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock, th=one_at_a_time)
+    r.begin()
+    try:
+        first = r.pass_once()
+        assert first.outcomes == {"failed": 1} and first.limited == 1 and first.held_back == 0
+        second = r.pass_once()                     # the refused one is held; the healthy one goes
+        assert second.outcomes == {"done": 1} and second.held_back == 1 and second.limited == 0
+        assert state(engagement_id, healthy) == ("abandoned", "undecided_past_grace")
+        third = r.pass_once()
+        assert third.outcomes == {} and third.held_back == 1
+        assert len(events(engagement_id, emit.ACTION_FAILED)) == 1            # and said once
+        clock.now += one_at_a_time.retry_after_failure_s
+        fourth = r.pass_once()                     # the period has passed: one more attempt
+        assert fourth.outcomes == {"failed": 1} and fourth.held_back == 0
+        assert len(events(engagement_id, emit.ACTION_FAILED)) == 1            # not said again
+    finally:
+        r.finish("signal")
+    assert state(engagement_id, refused)[0] == "received"
+
+
+def test_the_memory_of_failures_is_bounded_by_the_period(engagement_id, emptydir):
+    from tests.reconciler_support import close_touched
+    _received_with_a_decision(engagement_id)
+    clock = Clock()
+    r = reconciler(engagement_id, tmp_path=emptydir, monotonic=clock)
+    r.begin()
+    try:
+        r.pass_once()
+        assert len(r._failed_at) == 1
+        close_touched()                            # the row is dealt with; nothing fails any more
+        clock.now += TH.retry_after_failure_s - 1
+        r.pass_once()
+        assert len(r._failed_at) == 1              # still inside the period: remembered
+        clock.now += 2
+        r.pass_once()
+        assert r._failed_at == {}                  # past it: forgotten, and nothing re-learnt
+    finally:
+        r.finish("signal")
 
 
 def test_a_period_without_a_failure_writes_no_summary(engagement_id, emptydir):

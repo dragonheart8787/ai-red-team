@@ -327,7 +327,7 @@ reconciler.container_removed | _killed | …         reconciler.action_failed
 * **Bounded volume.** The plan re-plans a failing action every pass; with an intent per attempt that would be an event per
   minute per object for ever. So after a *failed* attempt the same `(kind, subject)` is not attempted again by this
   process for `RECONCILER_RETRY_AFTER_FAILURE_S` (new, required, no default; `.env.example` says 1,800 s `[N]`). A pass that
-  holds an action back says so (`PassReport.held_back`). The failure is still reported once per object and reason.
+  holds an action back says so (`PassReport.held_back`). The failure is still reported once per object and reason. *Revised at completion 3 (§9.1): any failed action is held back, not only an irreversible one.*
 * **Not done:** a two-phase protocol between Docker and PostgreSQL. There is none to be had; the intent record is the
   honest alternative, and the flag that would let any of this run is still off.
 

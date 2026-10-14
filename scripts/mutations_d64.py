@@ -1447,6 +1447,15 @@ CATALOGUE += [
         "D64-C3-l", "a dry run may carry a switch", (FLAG_UNITS,),
         edits=(Edit(ACT_PY, "        if self.enabled and self.mode is Mode.DRY_RUN:", "        if False:"),),
         targets=("test_a_dry_run_changes_nothing_so_it_cannot_carry_a_switch",)),
+    Mutation(
+        "D64-C3-m", "a failed proposal transition is retried in every pass", ("tests/test_reconciler_service.py",),
+        edits=(Edit(SERVICE_PY, "            if failed is not None and now - failed < self.th.retry_after_failure_s:",
+                    "            if (action.kind in emit.IRREVERSIBLE_KINDS and failed is not None\n                    and now - failed < self.th.retry_after_failure_s):"),),
+        targets=("test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest",)),
+    Mutation(
+        "D64-C3-n", "the memory of failures is never forgotten", ("tests/test_reconciler_service.py",),
+        edits=(Edit(SERVICE_PY, "                           if now - t < self.th.retry_after_failure_s}", "                           if True}"),),
+        targets=("test_the_memory_of_failures_is_bounded_by_the_period",)),
 ]
 
 

@@ -355,7 +355,7 @@ call report success without doing it and require `action_failed`, not `*_removed
 `proxy`, `network`, `file` — each off, each turned on by `--enable <name>` and a phrase typed at a terminal, and the last
 two refused in this version (ACCEPTANCE 5.92; the first three drilled on a real daemon, 5.95).
 
-A failed action is retried on the next pass; to keep a stuck object from filling the audit log, a given
+A failed action is retried after `RETRY_AFTER_FAILURE_S` (any kind, since completion 3: ACCEPTANCE 5.94); to keep a stuck object from filling the audit log, a given
 `(object, reason_code)` is audited once per process lifetime and counted thereafter (a restart reports once
 more — stated, not hidden; D64-11).
 

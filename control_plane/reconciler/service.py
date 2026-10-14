@@ -17,9 +17,12 @@ ladder exists:
   audit record that fails to write makes the service stop at the end of the pass: for a proposal
   nothing was changed; for an irreversible act no call was made, or the action happened and the stop
   is what says so;
-* an irreversible action that **failed** is not tried again on the same object by this process for
-  ``retry_after_failure_s``, so a persistently failing object costs one intent and one call per
-  period, not per pass;
+* an action that **failed** -- a kill, a removal, an unlink, or a proposal transition the database
+  refused -- is not tried again on the same object by this process for ``retry_after_failure_s``, so
+  a persistently failing object costs one attempt per period, not per pass, and cannot fill the
+  ``max_actions_per_pass`` that healthy work is waiting behind (found by the first ``state-only``
+  run on the development database: 436 rows the database's CHECK refused to abandon, 436 failed
+  attempts in every pass);
 * **a backlog is worked off in bounded passes** (D64 pre-deletion item 6): a pass reads at most
   ``max_pages`` pages of stuck proposals and carries out at most ``max_actions_per_pass`` actions;
   what is left is planned again by the next pass. A pass that was truncated or limited and still
@@ -268,17 +271,18 @@ class Reconciler:
         return interval
 
     def _not_recently_failed(self, actions) -> tuple[tuple, int]:
-        """Drop the irreversible actions whose object this process failed on less than
-        ``retry_after_failure_s`` ago (a dry run writes nothing and makes no call: nothing to
-        hold)."""
+        """Drop the actions whose object this process failed on less than ``retry_after_failure_s``
+        ago (a dry run writes nothing and makes no call: nothing to hold)."""
         if not self.audits:
             return tuple(actions), 0
         now = self._monotonic()
+        # (the memory of failures is bounded: what is older than the period is forgotten)
+        self._failed_at = {k: t for k, t in self._failed_at.items()
+                           if now - t < self.th.retry_after_failure_s}
         kept, held = [], 0
         for action in actions:
             failed = self._failed_at.get(self._attempt_key(action))
-            if (action.kind in emit.IRREVERSIBLE_KINDS and failed is not None
-                    and now - failed < self.th.retry_after_failure_s):
+            if failed is not None and now - failed < self.th.retry_after_failure_s:
                 held += 1
                 continue
             kept.append(action)
@@ -375,8 +379,7 @@ class Reconciler:
                     self._conflict_removed.setdefault(blocked, []).append(self._wall_clock_us())
                 if result.outcome != FAILED:
                     continue
-                if result.action.kind in emit.IRREVERSIBLE_KINDS:
-                    self._failed_at[self._attempt_key(result.action)] = self._monotonic()
+                self._failed_at[self._attempt_key(result.action)] = self._monotonic()
                 event_type, payload, engagement_id, subject_type = emit.failure(result)
                 self._window[f"{payload['kind']}:{payload['reason_code']}"] += 1
                 key = (payload["subject_id"], payload["kind"], payload["reason_code"])

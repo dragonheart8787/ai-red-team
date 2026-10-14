@@ -202,6 +202,9 @@ MENTIONS = re.compile(
 #: fails until it is listed (the same device as ``NULL_IS_A_STATE``): the point is a person reading
 #: whether the new stage ``abandoned`` needs anything there.
 FILE_REGISTRY = {
+    "scripts/check_reconciler_run.py":
+        "reads the stage of each proposal a state-only run moved and compares it with "
+        "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",
     "control_plane/orchestrator/stages.py":
         "the vocabulary, the transitions, and the one writer of `abandoned`",
     "control_plane/orchestrator/dispatch.py":
