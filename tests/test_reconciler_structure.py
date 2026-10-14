@@ -26,7 +26,8 @@ And the act half (step 6c), the other side of the same wall:
   the reconciler has no business with;
 * ``kill`` and ``remove`` are called only in ``act_docker``, ``unlink`` only in ``act_files``, and
   nothing in the package creates, runs, starts, stops or prunes anything;
-* the deletion flag is ``False`` by default and no source file outside the tests sets it.
+* the five switches are empty by default and no source file outside the tests builds them but
+  ``act.settings_for``, from words ``flags.validate`` accepted.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ PKG = REPO / "control_plane" / "reconciler"
 
 PURE = ("model", "vocab", "plan")
 ALL = ("config", "model", "observe", "plan", "vocab")          # the plan half
-ACT = ("act", "act_docker", "act_files", "outcome")            # the act half (step 6c)
+ACT = ("act", "act_docker", "act_files", "flags", "outcome")   # the act half (6c, 5.92)
 SERVICE = ("service", "emit", "lock")                          # the process around them (step 6d)
 EVERY = ALL + ACT + SERVICE
 
@@ -367,33 +368,32 @@ def test_stages_abandon_is_called_in_act_py_alone():
     assert {n for n in EVERY if "abandon" in _attribute_calls(n)} == {"act"}
 
 
-# --- the deletion flag ---------------------------------------------------------------------------
+# --- the switches ---------------------------------------------------------------------------------
 
-def test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on():
-    from control_plane.reconciler import act
+def test_every_switch_is_off_by_default_and_nothing_in_the_product_turns_one_on():
+    from control_plane.reconciler import act, flags
     fields = {f.name: f for f in dataclasses.fields(act.Settings)}
-    assert fields["allow_deletions"].default is False
+    assert fields["enabled"].default == frozenset()
     assert set(act.MODE_NAMES) == {"dry-run", "state-only"}
-    assert not [k for k in config.KEYS if "DELET" in k or "ALLOW" in k]      # not configurable
+    assert not [k for k in config.KEYS if "DELET" in k or "ALLOW" in k or "ENABLE" in k]
+    # Only act.settings_for passes `enabled=` by name, and what it passes is what the validator
+    # returned. (The wider rule, in tests/test_reconciler_flags.py: nothing else builds it.)
     offenders = []
     for top in ("control_plane", "scripts", "agents", "tool_gateway"):
         for path in (REPO / top).rglob("*.py"):
             if path.name.startswith("mutations_"):
                 continue
             for node in ast.walk(ast.parse(path.read_text())):
-                if isinstance(node, ast.keyword) and node.arg == "allow_deletions" \
-                        and not (isinstance(node.value, ast.Constant)
-                                 and node.value.value is False):
+                if isinstance(node, ast.keyword) and node.arg == "enabled" and not (
+                        path.name == "act.py" and ast.unparse(node.value) == "chosen"):
                     offenders.append(f"{path.relative_to(REPO)}:{node.value.lineno}")
                 if isinstance(node, ast.Assign | ast.AnnAssign) and any(
                         isinstance(t, ast.Name | ast.Attribute)
                         and getattr(t, "id", getattr(t, "attr", "")) == "allow_deletions"
                         for t in (node.targets if isinstance(node, ast.Assign) else [node.target])):
-                    if isinstance(node, ast.Assign) or node.value is not None:
-                        value = node.value
-                        if not (isinstance(value, ast.Constant) and value.value is False):
-                            offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
-    assert offenders == [], f"something other than False reaches allow_deletions: {offenders}"
+                    offenders.append(f"{path.relative_to(REPO)}:{node.lineno} (the old flag)")
+    assert offenders == [], f"only validated words may reach `enabled`: {offenders}"
+    assert flags.OPERATOR_MAY_ENABLE == ("kill", "container", "proxy")
 
 
 # =============================================================================================

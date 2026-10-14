@@ -2,7 +2,7 @@
 
 * **modes.** A dry run opens no connection and makes no call; the state-only mode moves proposals
   and *skips* every kill, removal and unlink -- the client it is handed is never touched. The flag
-  that would let it act is ``Settings.allow_deletions``; it defaults to ``False`` and only a test
+  that would let it act is ``Settings.enabled``; it defaults to empty and only a test
   here sets it.
 * **a state change is a compare-and-set.** Seven transitions, each from the right stage with the
   right reason; a proposal touched since the plan (even by a transaction still open when the act
@@ -28,7 +28,7 @@ import pytest
 from docker.errors import APIError, NotFound
 from sqlalchemy import text
 
-from control_plane.reconciler import act, vocab
+from control_plane.reconciler import act, flags, vocab
 from control_plane.reconciler.act import Mode, Settings, settings_for
 from control_plane.reconciler.act import carry_out as run
 from control_plane.reconciler.config import Thresholds
@@ -53,7 +53,7 @@ TH = Thresholds(
     backoff_max_s=900, network_conflict_window_s=86400, network_conflict_min_idle_s=3600,
     network_conflict_daily_cap=3)
 STATE_ONLY = Settings(Mode.STATE_ONLY)
-DELETIONS = Settings(Mode.STATE_ONLY, allow_deletions=True)       # tests only: no code path sets it
+DELETIONS = Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING)    # tests only
 IMAGE = "python:3.12-slim"
 
 
@@ -68,7 +68,7 @@ def test_the_operator_can_choose_two_modes_and_neither_allows_deletions():
             chosen = settings_for(name)
         except ValueError as exc:
             pytest.fail(f"the operator's mode {name!r} was refused: {exc}")
-        assert chosen.allow_deletions is False
+        assert chosen.enabled == frozenset()
     assert settings_for("dry-run").mode is Mode.DRY_RUN
     assert settings_for("state-only").mode is Mode.STATE_ONLY
     for bad in ("full", "delete", "STATE-ONLY", "", "state_only", "deletions"):
@@ -77,10 +77,10 @@ def test_the_operator_can_choose_two_modes_and_neither_allows_deletions():
 
 
 def test_the_flag_defaults_to_off_and_a_dry_run_cannot_carry_it():
-    assert Settings(Mode.STATE_ONLY).allow_deletions is False
-    assert Settings(Mode.DRY_RUN).allow_deletions is False
+    assert Settings(Mode.STATE_ONLY).enabled == frozenset()
+    assert Settings(Mode.DRY_RUN).enabled == frozenset()
     with pytest.raises(ValueError):
-        Settings(Mode.DRY_RUN, allow_deletions=True)
+        Settings(Mode.DRY_RUN, enabled=flags.EVERYTHING)
 
 
 def action(kind, reason, subject="x" * 64, **kw) -> Action:

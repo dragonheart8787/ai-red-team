@@ -47,7 +47,7 @@ from sqlalchemy import text
 
 from control_plane.capability import broker
 from control_plane.orchestrator import dispatch, stages
-from control_plane.reconciler import act, emit
+from control_plane.reconciler import act, emit, flags
 from control_plane.reconciler.act import Mode, Settings
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
@@ -302,7 +302,7 @@ def test_ct5_a_live_run_inside_its_deadline_is_not_touched_and_an_overdue_one_is
             freshen(engagement_id, pid)                      # inside its own B + P + Q: not stale
         time.sleep(3)                                         # the budget of 1 s + the margin pass
         quick = Thresholds(**{**TH.__dict__, "kill_margin_s": 1})
-        r = recon(engagement_id, settings=Settings(Mode.STATE_ONLY, allow_deletions=True),
+        r = recon(engagement_id, settings=Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING),
                   th=quick, client=client)
         r.begin()
         try:

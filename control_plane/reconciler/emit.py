@@ -31,7 +31,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from control_plane.audit.logger import record_audit, record_audit_in_transaction
-from control_plane.reconciler import vocab
+from control_plane.reconciler import flags, vocab
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
     DETAIL_CODES,
@@ -103,6 +103,14 @@ def _counts(value: Any) -> dict[str, int]:
     return {_id(k): _count(v) for k, v in value.items()}
 
 
+def _categories(value: Any) -> list[str]:
+    """The switches that were on: known categories, each once, sorted -- possibly none."""
+    if (not isinstance(value, list | tuple) or any(not isinstance(v, str) for v in value)
+            or any(v not in flags.CATEGORIES for v in value) or list(value) != sorted(set(value))):
+        raise PayloadRejected(f"not a sorted list of categories: {value!r:.60}")
+    return list(value)
+
+
 def _one_of(allowed: tuple[str, ...]) -> Callable[[Any], str]:
     def check(value: Any) -> str:
         if value not in allowed:
@@ -125,7 +133,8 @@ RESULT_EVENT_OF_KIND = {
 
 #: event -> (scope, {payload key: validator}).
 SCHEMAS: dict[str, tuple[str, dict[str, Callable[[Any], Any]]]] = {
-    STARTED: ("global", {"instance_id": _id, "mode": _one_of(MODES), "planned": _counts}),
+    STARTED: ("global", {"instance_id": _id, "mode": _one_of(MODES), "planned": _counts,
+                         "enabled": _categories}),
     STOPPED: ("global", {"instance_id": _id, "reason_code": _one_of(STOP_REASONS)}),
     START_REFUSED: ("global", {"instance_id": _id, "reason_code": _one_of(REFUSAL_REASONS)}),
     PROPOSAL_ABANDONED: ("engagement", {

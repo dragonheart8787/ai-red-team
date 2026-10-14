@@ -47,7 +47,8 @@ DESIGN_EVENTS = {
 
 GOOD = {
     emit.STARTED: {"instance_id": "RECON-abc", "mode": "state_only",
-                   "planned": {"abandon:undecided_past_grace": 3, "report:run_unknown": 1}},
+                   "planned": {"abandon:undecided_past_grace": 3, "report:run_unknown": 1},
+                   "enabled": []},
     emit.STOPPED: {"instance_id": "RECON-abc", "reason_code": "signal"},
     emit.START_REFUSED: {"instance_id": "RECON-abc", "reason_code": "lock_held"},
     emit.PROPOSAL_ABANDONED: {"proposal_id": "PROP-1", "reason_code": "undecided_past_grace"},

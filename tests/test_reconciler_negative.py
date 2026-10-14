@@ -29,7 +29,7 @@ import docker
 import pytest
 from docker.errors import APIError, NotFound
 
-from control_plane.reconciler import act, emit, observe, vocab
+from control_plane.reconciler import act, emit, flags, observe, vocab
 from control_plane.reconciler.act import Mode, Settings
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.plan import plan
@@ -108,7 +108,7 @@ def test_e24_a_whole_host_pass_removes_the_forgers_container_and_touches_nothing
         event_type, payload, eid, stype, sid = emit.intent_for(action)
         emit.emit(event_type, payload, engagement_id=eid, subject_type=stype, subject_id=sid)
 
-    results = act.carry_out(mine, Settings(Mode.STATE_ONLY, allow_deletions=True), th=th,
+    results = act.carry_out(mine, Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING), th=th,
                             client=client, intend=intend)
     assert [r.outcome for r in results] == ["done"]
     with pytest.raises(NotFound):

@@ -32,7 +32,7 @@ import docker
 import pytest
 from docker.errors import APIError, NotFound
 
-from control_plane.reconciler import act, vocab
+from control_plane.reconciler import act, flags, vocab
 from control_plane.reconciler.act import Mode, Settings
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import CHANGED, DONE, FAILED, GONE
@@ -315,7 +315,7 @@ def test_network_scripted_a_refusal_while_someone_else_removes_it_is_gone_not_in
                           vanished_after_remove=True)
     action = Action(kind=vocab.REMOVE_NETWORK, reason_code=vocab.IDLE_SWEEP,
                     subject_id=network.id, name=network.name)
-    result = act.carry_out([action], Settings(Mode.STATE_ONLY, allow_deletions=True), th=TH,
+    result = act.carry_out([action], Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING), th=TH,
                            client=FakeNetworks(network))[0]
     assert (result.outcome, result.detail) == (GONE, None)
 
@@ -327,6 +327,6 @@ def test_network_scripted_a_refusal_that_is_real_is_still_in_use():
                           vanished_after_remove=False)
     action = Action(kind=vocab.REMOVE_NETWORK, reason_code=vocab.IDLE_SWEEP,
                     subject_id=network.id, name=network.name)
-    result = act.carry_out([action], Settings(Mode.STATE_ONLY, allow_deletions=True), th=TH,
+    result = act.carry_out([action], Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING), th=TH,
                            client=FakeNetworks(network))[0]
     assert (result.outcome, result.detail) == (FAILED, "in_use")

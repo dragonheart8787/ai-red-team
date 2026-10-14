@@ -472,7 +472,7 @@ import json, os, signal, sys
 import docker
 from control_plane.config import load_dotenv
 load_dotenv()
-from control_plane.reconciler import act, emit
+from control_plane.reconciler import act, emit, flags
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 
@@ -505,7 +505,7 @@ def intend(a):
 
 
 th = Thresholds(**spec["th"])
-act.carry_out([action], act.Settings(act.Mode.STATE_ONLY, allow_deletions=True), th=th,
+act.carry_out([action], act.Settings(act.Mode.STATE_ONLY, enabled=flags.EVERYTHING), th=th,
               client=type("C", (), {"containers": Containers()})(), intend=intend)
 """
 

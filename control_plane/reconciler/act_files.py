@@ -1,4 +1,4 @@
-"""Host files, acted on (D64 §1.5, §1.7, D64-12). Off unless ``Settings.allow_deletions`` says so.
+"""Host files, acted on (D64 §1.5, §1.7, D64-12). Off unless ``file`` is in ``Settings.enabled``.
 
 The only module in the package that unlinks anything. Every condition the plan judged is judged
 **again** here, on the file as it is now, because a plan is a minute old and ``/tmp`` is shared:

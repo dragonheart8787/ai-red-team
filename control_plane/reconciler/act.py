@@ -3,13 +3,15 @@
 The plan hands over plain ``Action`` values; nothing here decides whether an action is warranted.
 What this half adds is **safety at the moment of acting**:
 
-* **two modes, and a flag that is off.** ``Mode.DRY_RUN`` changes nothing at all -- no connection is
-  opened, no Docker call made -- and says what it would have done. ``Mode.STATE_ONLY`` carries out
-  the proposal transitions and *skips* every action that kills, removes or deletes a Docker object
-  or a host file (outcome ``skipped_deletions_off``). Those are behind ``Settings.allow_deletions``,
-  which is ``False`` by default, which no setting, environment variable or command-line option sets,
-  and which a structural test keeps that way: turning it on is a change to the code, made on purpose
-  (the request that opened this step: report first, then enable);
+* **two modes, and five switches that are off.** ``Mode.DRY_RUN`` changes nothing at all -- no
+  connection is opened, no Docker call made -- and says what it would have done. ``Mode.STATE_ONLY``
+  carries out the proposal transitions and *skips* every action that kills, removes or deletes a
+  Docker object or a host file (outcome ``skipped_deletions_off``) unless its category is in
+  ``Settings.enabled``: ``kill``, ``container``, ``proxy``, ``network``, ``file`` (``flags.py``,
+  ACCEPTANCE 5.92). ``enabled`` is empty by default, no setting or environment variable sets it, and
+  the one place that builds it from an operator's words is ``settings_for`` -- from the command
+  line's ``--enable``, confirmed by a person at a terminal, and refusing ``network`` and ``file`` in
+  this version;
 * **a state change is one conditional ``UPDATE``** inside ``engagement_scope(engagement_id)``, a
   compare-and-set on the stage *and* on the ``stage_updated_at`` the plan observed. Zero rows moved
   means someone else got there first: ``lost_race``, nothing is audited, nothing is retried. When
@@ -45,7 +47,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from control_plane.orchestrator import stages
-from control_plane.reconciler import act_docker, act_files, vocab
+from control_plane.reconciler import act_docker, act_files, flags, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.model import Action
 from control_plane.reconciler.outcome import (
@@ -76,22 +78,28 @@ MODE_NAMES = {"dry-run": Mode.DRY_RUN, "state-only": Mode.STATE_ONLY}
 
 @dataclass(frozen=True)
 class Settings:
-    """How a pass acts. ``allow_deletions`` is the flag the first version keeps off."""
+    """How a pass acts. ``enabled`` is the set of irreversible-action categories switched on
+    (``flags.CATEGORIES``); empty unless a person said otherwise at a terminal."""
 
     mode: Mode
-    allow_deletions: bool = False
+    enabled: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        if self.allow_deletions and self.mode is Mode.DRY_RUN:
-            raise ValueError("a dry run changes nothing, so it cannot also allow deletions")
+        if not self.enabled <= flags.EVERYTHING:
+            raise ValueError(f"not categories: {sorted(self.enabled - flags.EVERYTHING)}")
+        if self.enabled and self.mode is Mode.DRY_RUN:
+            raise ValueError("a dry run changes nothing, so it cannot also enable anything")
 
 
-def settings_for(name: str) -> Settings:
-    """The settings an operator's mode name selects. Deletions are never among them."""
+def settings_for(name: str, enable: Iterable[str] = ()) -> Settings:
+    """The settings an operator's words select: a mode name and, for ``state-only``, the categories
+    (``flags.FlagRefused`` for any that is unknown or not available in this version)."""
     try:
-        return Settings(MODE_NAMES[name])
+        mode = MODE_NAMES[name]
     except KeyError:
         raise ValueError(f"unknown mode {name!r}; the modes are {sorted(MODE_NAMES)}") from None
+    chosen = flags.validate(enable)
+    return Settings(mode, enabled=chosen)
 
 
 # --- the three statements that change a proposal -------------------------------------------------
@@ -174,7 +182,7 @@ def _one(action, settings, th, client, directory, expected_uid, sleep, clock, wa
         return Result(action, DRY_RUN)
     if action.kind in vocab.PROPOSAL_ACTIONS:
         return _transition(action, record)
-    if not settings.allow_deletions:
+    if flags.CATEGORY_OF[action.kind] not in settings.enabled:
         return Result(action, SKIPPED_OFF)
     if th is None:
         return Result(action, FAILED, INVALID_ACTION)

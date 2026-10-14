@@ -1,4 +1,4 @@
-"""Docker, acted on (D64 §1.5, §1.7, §2.4). Off unless ``Settings.allow_deletions`` says so.
+"""Docker, acted on (D64 §1.5, §1.7, §2.4). Off unless the category is in ``Settings.enabled``.
 
 The only module in the package that kills or removes a Docker object. Four rules, each tested on
 real Docker and, where Docker cannot be made to misbehave, on a fake that does:

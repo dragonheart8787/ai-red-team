@@ -182,7 +182,8 @@ class Reconciler:
             self.lock.start_watchdog(self.watchdog_interval)
             planned = _planned(make_plan(self._observe(), self.th))
             emit.emit(emit.STARTED, {"instance_id": self.instance_id, "mode": "state_only",
-                                     "planned": planned},
+                                     "planned": planned,
+                                     "enabled": sorted(self.settings.enabled)},
                       subject_type="reconciler", subject_id=self.instance_id)
         except BaseException as exc:
             self.lock.close()

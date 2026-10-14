@@ -605,6 +605,7 @@ ACT_PY = "control_plane/reconciler/act.py"
 DOCKER_PY = "control_plane/reconciler/act_docker.py"
 FILES_PY = "control_plane/reconciler/act_files.py"
 ACT_TESTS = ("tests/test_reconciler_act.py",)
+FLAG_TESTS = ("tests/test_reconciler_flags.py",)
 ACT_STRUCT = ("tests/test_reconciler_structure.py",)
 _CAS = "WHERE proposal_id = :pid AND pipeline_stage = :expected AND stage_updated_at = :planned"
 
@@ -638,13 +639,13 @@ CATALOGUE += [
                     "    return _EPOCH + timedelta(microseconds=microseconds // 1000 * 1000)"),),
         targets=("test_the_compare_and_set_matches_the_timestamp_to_the_last_microsecond",)),
     Mutation(
-        "D64-6c-f", "the deletion flag defaults to on", ACT_TESTS + ACT_STRUCT,
-        edits=(Edit(ACT_PY, "    allow_deletions: bool = False", "    allow_deletions: bool = True"),),
+        "D64-6c-f", "state-only defaults to having the kill switch on", ACT_TESTS + ACT_STRUCT,
+        edits=(Edit(ACT_PY, "    enabled: frozenset[str] = frozenset()", "    enabled: frozenset[str] = frozenset({\"kill\"})"),),
         targets=("test_the_flag_defaults_to_off_and_a_dry_run_cannot_carry_it",
-                 "test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on")),
+                 "test_every_switch_is_off_by_default_and_nothing_in_the_product_turns_one_on")),
     Mutation(
         "D64-6c-g", "state-only mode carries out deletions", ACT_TESTS,
-        edits=(Edit(ACT_PY, "    if not settings.allow_deletions:\n        return Result(action, SKIPPED_OFF)",
+        edits=(Edit(ACT_PY, "    if flags.CATEGORY_OF[action.kind] not in settings.enabled:\n        return Result(action, SKIPPED_OFF)",
                     "    if False:\n        return Result(action, SKIPPED_OFF)"),),
         targets=("test_state_only_skips_every_deletion_and_never_touches_docker_or_the_filesystem",)),
     Mutation(
@@ -750,11 +751,11 @@ CATALOGUE += [
                     "def _oops(client):\n    return client.containers.run(\"x\")\n\n\ndef _state(container: Any) -> str:"),),
         targets=("test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",)),
     Mutation(
-        "D64-6c-za", "an operator's mode name switches deletions on", ACT_TESTS + ACT_STRUCT,
-        edits=(Edit(ACT_PY, "        return Settings(MODE_NAMES[name])",
-                    "        return Settings(MODE_NAMES[name], allow_deletions=True)"),),
+        "D64-6c-za", "an operator's mode name switches the kill switch on", ACT_TESTS + FLAG_TESTS,
+        edits=(Edit(ACT_PY, "    return Settings(mode, enabled=chosen)",
+                    "    return Settings(mode, enabled=chosen | ({flags.KILL} if mode is Mode.STATE_ONLY else set()))"),),
         targets=("test_the_operator_can_choose_two_modes_and_neither_allows_deletions",
-                 "test_the_deletion_flag_is_off_by_default_and_nothing_in_the_product_turns_it_on")),
+                 "test_nothing_is_enabled_by_default_and_an_operator_with_no_words_enables_nothing")),
 ]
 
 LOCK_PY = "control_plane/reconciler/lock.py"
@@ -1382,6 +1383,70 @@ CATALOGUE += [
         "D64-C2-zc", "residue: an engagement made by make_engagement is not registered", RESIDUE_TESTS,
         edits=(Edit(HELPERS_PY, "    residue.CREATED.add(engagement_id)", "    pass"),),
         targets=("test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",)),
+]
+
+
+# ---- completion 3: the five switches (ACCEPTANCE 5.92), the hold-back of failed transitions, the
+# per-file cap of the session-end cleanup (5.71)
+CLOCK_TESTS = ("tests/test_reconciler_clocks.py",)
+FLAGS_PY = "control_plane/reconciler/flags.py"
+FLAG_UNITS = "tests/test_reconciler_flags.py"
+CATALOGUE += [
+    Mutation(
+        "D64-C3-a", "an operator may enable network and file", (FLAG_UNITS,),
+        edits=(Edit(FLAGS_PY, "OPERATOR_MAY_ENABLE = (KILL, CONTAINER, PROXY)", "OPERATOR_MAY_ENABLE = CATEGORIES"),),
+        targets=("test_network_and_file_are_refused_whatever_else_is_asked",
+                 "test_the_two_unavailable_categories_have_no_other_door")),
+    Mutation(
+        "D64-C3-b", "'all' means every category an operator may enable", (FLAG_UNITS,),
+        edits=(Edit(FLAGS_PY, "    for name in names:\n        if name not in CATEGORIES:",
+                    "    for name in names:\n        if name == \"all\":\n            chosen.update(OPERATOR_MAY_ENABLE)\n            continue\n        if name not in CATEGORIES:"),),
+        targets=("test_any_word_that_is_not_exactly_a_category_is_refused",)),
+    Mutation(
+        "D64-C3-c", "the kill and container categories cover each other's kind", (FLAG_UNITS,),
+        edits=(Edit(FLAGS_PY, "    KILL: (vocab.KILL_CONTAINER,),\n    CONTAINER: (vocab.REMOVE_CONTAINER,),",
+                    "    KILL: (vocab.REMOVE_CONTAINER,),\n    CONTAINER: (vocab.KILL_CONTAINER,),"),),
+        targets=("test_each_category_covers_the_kind_its_name_says",
+                 "test_with_one_category_on_exactly_its_kinds_reach_the_act_half")),
+    Mutation(
+        "D64-C3-d", "any enabled category enables every kind", (FLAG_UNITS,),
+        edits=(Edit(ACT_PY, "    if flags.CATEGORY_OF[action.kind] not in settings.enabled:", "    if not settings.enabled:"),),
+        targets=("test_with_one_category_on_exactly_its_kinds_reach_the_act_half",)),
+    Mutation(
+        "D64-C3-e", "the command line drops the words it was given", (FLAG_UNITS,),
+        edits=(Edit(RUN_PY, "        settings = act.settings_for(args.mode, args.enable or ())", "        settings = act.settings_for(args.mode, ())"),),
+        targets=("test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",
+                 "test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started")),
+    Mutation(
+        "D64-C3-f", "any answer confirms", (FLAG_UNITS,),
+        edits=(Edit(RUN_PY, "    return answer.rstrip(\"\\r\\n\") == flags.phrase(categories)", "    return True"),),
+        targets=("test_any_other_answer_does_not_confirm",
+                 "test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started")),
+    Mutation(
+        "D64-C3-g", "a pipe may confirm", (FLAG_UNITS,),
+        edits=(Edit(RUN_PY, "    if not (_is_terminal(stdin) and _is_terminal(stdout)):", "    if False:"),),
+        targets=("test_a_pipe_cannot_confirm_even_with_the_right_phrase",)),
+    Mutation(
+        "D64-C3-h", "the phrase is not the sorted names", (FLAG_UNITS,),
+        edits=(Edit(FLAGS_PY, "    return \"enable \" + \" \".join(sorted(categories))", "    return \"enable \" + \" \".join(reversed(sorted(categories)))"),),
+        targets=("test_the_phrase_is_enable_and_the_sorted_categories",)),
+    Mutation(
+        "D64-C3-i", "reconciler.started does not say what was enabled", (FLAG_UNITS,),
+        edits=(Edit(SERVICE_PY, "                                     \"enabled\": sorted(self.settings.enabled)},", "                                     \"enabled\": []},"),),
+        targets=("test_the_started_payload_is_what_the_service_writes",
+                 "test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled")),
+    Mutation(
+        "D64-C3-j", "the started event takes an unsorted list", (FLAG_UNITS,),
+        edits=(Edit(EMIT_PY, "or list(value) != sorted(set(value))", "or False"),),
+        targets=("test_the_started_event_accepts_a_sorted_list_of_known_categories_and_nothing_else",)),
+    Mutation(
+        "D64-C3-k", "Settings takes a word that is not a category", (FLAG_UNITS,),
+        edits=(Edit(ACT_PY, "        if not self.enabled <= flags.EVERYTHING:", "        if False:"),),
+        targets=("test_settings_refuses_a_word_that_is_not_a_category_even_from_the_tests",)),
+    Mutation(
+        "D64-C3-l", "a dry run may carry a switch", (FLAG_UNITS,),
+        edits=(Edit(ACT_PY, "        if self.enabled and self.mode is Mode.DRY_RUN:", "        if False:"),),
+        targets=("test_a_dry_run_changes_nothing_so_it_cannot_carry_a_switch",)),
 ]
 
 
