@@ -138,6 +138,7 @@ class Conductor:
             self.run_dir, self.journal, env, self.eids, self.evidence_dir,
             interval_reconciler=self.args.reconciler_interval,
             interval_scheduler=self.args.scheduler_interval,
+            scheduler_script=self.args.scheduler_script,
             worker_args=["--threads", str(self.args.threads), "--mean-gap",
                          str(self.args.mean_gap), "--budget", str(self.args.budget),
                          "--seed", str(self.args.seed)])
@@ -304,7 +305,7 @@ class Conductor:
     # -- the injector -----------------------------------------------------------------------
 
     def injector(self) -> None:
-        bag = faults.Bag(self.rng)
+        bag = faults.Bag(self.rng, tuple(self.args.faults) if self.args.faults else faults.KINDS)
         first = self.args.first_fault_s
         wait = first if first is not None else self.rng.uniform(self.args.fault_min,
                                                                self.args.fault_max) * 60
@@ -662,6 +663,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reconciler-interval", type=float, default=20.0)
     parser.add_argument("--scheduler-interval", type=float, default=5.0)
     parser.add_argument("--drain-minutes", type=float, default=45.0)
+    parser.add_argument("--faults", nargs="*", choices=faults.KINDS,
+                        help="only these kinds (a diagnostic run; the real soak draws all six)")
+    parser.add_argument("--scheduler-script", type=Path,
+                        help="a different script for the scheduler (a diagnostic wrapper)")
     parser.add_argument("--seed", default="d66")
     parser.add_argument("--reuse-world", action="store_true")
     parser.add_argument("--halt-on-finding", action="store_true", default=True)

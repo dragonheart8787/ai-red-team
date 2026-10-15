@@ -31,13 +31,14 @@ KINDS = ("postgres_restart", "docker_restart", "kill9_scheduler", "kill9_reconci
 class Bag:
     """Every kind once, in a random order, then again."""
 
-    def __init__(self, rng: random.Random):
+    def __init__(self, rng: random.Random, kinds: tuple[str, ...] = KINDS):
         self.rng = rng
+        self.kinds = kinds
         self.items: list[str] = []
 
     def draw(self) -> str:
         if not self.items:
-            self.items = list(KINDS)
+            self.items = list(self.kinds)
             self.rng.shuffle(self.items)
         return self.items.pop()
 

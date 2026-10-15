@@ -62,7 +62,8 @@ class Service:
 class Supervisor:
     def __init__(self, run_dir: Path, journal: lib.Journal, env: dict[str, str],
                  engagements: list[str], evidence_dir: Path, *, interval_reconciler: float,
-                 interval_scheduler: float, worker_args: list[str]):
+                 interval_scheduler: float, worker_args: list[str],
+                 scheduler_script: Path | None = None):
         self.run_dir = run_dir
         self.journal = journal
         self.lock = threading.Lock()
@@ -76,10 +77,10 @@ class Supervisor:
             reconciler_argv += ["--enable", category]
         for eid in engagements:
             reconciler_argv += ["--engagement", eid]
+        scheduler = scheduler_script or lib.REPO_ROOT / "scripts" / "run_scheduler.py"
         self.services: dict[str, Service] = {
-            "scheduler": Service("scheduler", [PY, str(lib.REPO_ROOT / "scripts" /
-                                                       "run_scheduler.py"),
-                                               "--interval", str(interval_scheduler)],
+            "scheduler": Service("scheduler", [PY, str(scheduler), "--interval",
+                                               str(interval_scheduler)],
                                  env, self.logs / "scheduler.log"),
             "reconciler": Service("reconciler", reconciler_argv, env, self.logs / "reconciler.log",
                                   pty_answer="enable " + " ".join(sorted(enable))),
