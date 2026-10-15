@@ -150,3 +150,4 @@ there, and nothing prunes them. The thresholds come from the `RECONCILER_*` keys
 (`make db` creates its two roles and runs every migration) and its own login role `reconciler_reader`, which
 can execute two read functions and nothing else. `docs/D64_RECONCILER_DESIGN.md` is the design;
 `docs/D64_PREDELETION_COMPLETION.md` is what was built and measured, round by round.
+`docs/D66_SOAK.md` is the method of the long run under faults (`scripts/soak/`), and `docs/D66_SOAK_PILOT_2026-10-15.md` what its pilots found.

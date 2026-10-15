@@ -1,0 +1,209 @@
+"""The soak's report: what was injected, how long recovery took, what held, what trended (D66)."""
+
+from __future__ import annotations
+
+import json
+import statistics
+from collections import Counter, defaultdict
+
+from scripts.soak import checks, lib
+
+
+def slope_per_hour(points: list[tuple[float, float]]) -> float | None:
+    """Least-squares slope of ``points`` (seconds, value), per hour; ``None`` under three points."""
+    if len(points) < 3:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    mx, my = statistics.fmean(xs), statistics.fmean(ys)
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return None
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / den * 3600
+
+
+def _spread(values: list[float]) -> str:
+    if not values:
+        return "-"
+    return f"{min(values):.0f} / {statistics.median(values):.0f} / {max(values):.0f}"
+
+
+def trends(samples: list[dict]) -> list[dict]:
+    """Per process incarnation (a pid): memory, descriptors, connections to Postgres."""
+    by_pid: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for s in samples:
+        for name, stats in (s.get("procs") or {}).items():
+            if stats:
+                by_pid[(name, stats["pid"])].append({"ts": s["ts"], **stats})
+    out = []
+    for (name, pid), rows in sorted(by_pid.items(), key=lambda kv: kv[1][0]["ts"]):
+        t0 = rows[0]["ts"]
+        rss = [(r["ts"] - t0, r["rss_kb"]) for r in rows]
+        out.append({
+            "process": name, "pid": pid, "samples": len(rows),
+            "minutes": round((rows[-1]["ts"] - rows[0]["ts"]) / 60, 1),
+            "rss_first_mb": round(rows[0]["rss_kb"] / 1024, 1),
+            "rss_last_mb": round(rows[-1]["rss_kb"] / 1024, 1),
+            "rss_max_mb": round(max(r["rss_kb"] for r in rows) / 1024, 1),
+            "rss_slope_mb_per_h": (round(s / 1024, 2) if (s := slope_per_hour(rss)) is not None
+                                   else None),
+            "fds_min_max": [min(r["fds"] for r in rows), max(r["fds"] for r in rows)],
+            "pg_connections_min_max": [min(r["pg_connections"] for r in rows),
+                                       max(r["pg_connections"] for r in rows)],
+            "threads_min_max": [min(r["threads"] for r in rows), max(r["threads"] for r in rows)],
+        })
+    return out
+
+
+def write(conductor, final_results, teardown) -> None:
+    run_dir = conductor.run_dir
+    journal = conductor.journal.read()
+    ended = lib.now()
+    eids = conductor.eids
+
+    faults = conductor.faults_done
+    by_kind: dict[str, list[dict]] = defaultdict(list)
+    for fault in faults:
+        by_kind[fault["kind"]].append(fault)
+
+    lines = ["# Soak report (D66)\n",
+             f"* run: `{run_dir}`",
+             f"* started {lib.stamp(conductor.started)}, ended {lib.stamp(ended)} "
+             f"({(ended - conductor.started) / 3600:.2f} h; the traffic and the faults ran "
+             f"{conductor.args.hours} h, then the drain)",
+             f"* seed `{conductor.args.seed}`, engagements {len(eids)}, worker threads "
+             f"{conductor.args.threads}, mean gap {conductor.args.mean_gap} s, run budget "
+             f"{conductor.args.budget} s",
+             f"* outcome: **{'FINDING - stopped' if conductor.findings else 'no finding'}**\n"]
+
+    lines.append("## Findings\n")
+    if conductor.findings:
+        for f in conductor.findings:
+            lines.append(f"* `{f['kind']}` -- {f['detail']}")
+    else:
+        lines.append("none")
+
+    lines.append("\n## Faults injected\n")
+    lines.append("| fault | times | recovered (s): min / median / max | not recovered | "
+                 "action (s) |")
+    lines.append("|---|---|---|---|---|")
+    for kind in faults_kinds():
+        rows = by_kind.get(kind, [])
+        rec = [r["recovered_s"] for r in rows if r.get("recovered_s") is not None]
+        miss = [r for r in rows if r.get("recovered_s") is None]
+        act = [r["action_s"] for r in rows if r.get("action_s") is not None]
+        lines.append(f"| {kind} | {len(rows)} | {_spread(rec)} | {len(miss)} | {_spread(act)} |")
+    lines.append("\nEach injection (recovery = the slowest of: all three services alive with "
+                 "the database and Docker reachable; a reconciler pass after the fault; an ALLOW "
+                 "proposal created after the fault recorded as succeeded; a HUMAN_APPROVAL "
+                 "proposal dispatched by the scheduler and recorded after the fault):\n")
+    lines.append("| at | fault | detail | services up | reconciler pass | ALLOW recorded | "
+                 "scheduler dispatched | recovered |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    for f in faults:
+        r = f.get("recovery_s") or {}
+        detail = {k: v for k, v in f.items() if k in ("pid", "container", "hold_s", "detail",
+                                                      "error", "killed_hard", "unpause")}
+        lines.append(f"| {f['began_at']} | {f['kind']} | {json.dumps(detail)[:90]} | "
+                     f"{r.get('services_up')} | {r.get('reconciler_pass')} | "
+                     f"{r.get('allow_recorded')} | {r.get('scheduler_dispatched')} | "
+                     f"{f.get('recovered_s')} |")
+
+    lines.append("\n## Services\n")
+    lines.append("| service | starts | exits (cause: count) |")
+    lines.append("|---|---|---|")
+    for name, svc in conductor.sup.services.items():
+        causes = Counter(e["cause"] for e in svc.exits)
+        lines.append(f"| {name} | {svc.starts} | {dict(causes)} |")
+    lines.append("\n`explained_by_*` is a service that stopped itself with its documented exit "
+                 "code after the fault named, and was started again by this program: **neither "
+                 "service reconnects**, a supervisor is part of the design.")
+
+    lines.append("\n## Invariants\n")
+    lines.append("| check | runs | failed | last detail |")
+    lines.append("|---|---|---|---|")
+    names: dict[str, list[dict]] = defaultdict(list)
+    for r in conductor.check_results:
+        names[r["name"]].append(r)
+    for name, rows in names.items():
+        failed = sum(1 for r in rows if not r["ok"])
+        lines.append(f"| {name} | {len(rows)} | {failed} | {rows[-1]['detail'][:200]} |")
+
+    lines.append("\n## Traffic\n")
+    try:
+        arr = checks._quote(eids)
+        stages = lib.psql("SELECT pipeline_stage || ' / ' || coalesce(stage_detail, ''), count(*) "
+                          "FROM action_proposals WHERE engagement_id = ANY(" + arr +
+                          ") GROUP BY 1 ORDER BY 2 DESC")
+        runs = lib.psql("SELECT status, count(*) FROM tool_runs WHERE engagement_id = ANY(" + arr +
+                        ") GROUP BY 1 ORDER BY 2 DESC")
+        events = lib.psql("SELECT event_type, count(*) FROM audit_log WHERE engagement_id = ANY(" +
+                          arr + ") GROUP BY 1 ORDER BY 1")
+        lines.append("proposals by `stage / detail`: " + ", ".join(f"{s} {n}" for s, n in stages))
+        lines.append("\nruns by status: " + ", ".join(f"{s} {n}" for s, n in runs))
+        lines.append("\naudit events: " + ", ".join(f"{s} {n}" for s, n in events))
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"(could not read the database: {exc})")
+    retries = Counter(r["kind"] for r in journal if r["kind"].startswith("worker."))
+    lines.append(f"\nworker: {dict(retries)}")
+    actions = Counter((r.get("action"), r.get("outcome")) for r in journal
+                      if r["kind"] == "reconciler.action")
+    lines.append("\nreconciler actions (kind, outcome): " + ", ".join(
+        f"{k[0]}/{k[1]} {n}" for k, n in sorted(actions.items(), key=str)))
+    passes = sum(1 for r in journal if r["kind"] == "reconciler.pass")
+    lines.append(f"\nreconciler passes seen: {passes}")
+
+    lines.append("\n## Memory and connections (per process incarnation)\n")
+    lines.append("| process | pid | minutes | RSS first / last / max (MB) | RSS slope (MB/h) | "
+                 "fds min-max | pg connections min-max | threads min-max |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    for t in trends(conductor.samples):
+        lines.append(f"| {t['process']} | {t['pid']} | {t['minutes']} | {t['rss_first_mb']} / "
+                     f"{t['rss_last_mb']} / {t['rss_max_mb']} | {t['rss_slope_mb_per_h']} | "
+                     f"{t['fds_min_max']} | {t['pg_connections_min_max']} | "
+                     f"{t['threads_min_max']} |")
+    pg = [s["pg"] for s in conductor.samples if s.get("pg")]
+    if pg:
+        totals = [p["total"] for p in pg]
+        lines.append(f"\ndatabase backends (all roles): min {min(totals)}, median "
+                     f"{statistics.median(totals):.0f}, max {max(totals)}, last {totals[-1]}; "
+                     f"longest idle-in-transaction "
+                     f"{max(p['idle_in_transaction_max_age_s'] for p in pg)} s")
+
+    lines.append("\n## Host residue over time (window floors, 15 min windows)\n")
+    dk = [s for s in conductor.samples if s.get("docker")]
+    window = conductor.args.check_every * 60
+    for label, pick in (
+            ("containers", lambda s: sum(s["docker"]["tools"].values())
+             + sum(s["docker"]["proxies"].values())),
+            ("exited tool containers", lambda s: s["docker"]["tools"]["exited"]),
+            ("proxies", lambda s: sum(s["docker"]["proxies"].values())),
+            ("sandbox networks", lambda s: s["docker"]["networks"]),
+            ("temp credential/TLS files", lambda s: s["docker"]["files"]),
+            ("evidence files", lambda s: s["docker"]["evidence_files"])):
+        pts = [(s["ts"], float(pick(s))) for s in dk]
+        lines.append(f"* {label}: floors {checks.window_floors(pts, window)}, max "
+                     f"{max((p[1] for p in pts), default=0):.0f}, last "
+                     f"{pts[-1][1] if pts else '-'}")
+
+    lines.append("\n## What needed a person\n")
+    needed = [f for f in conductor.findings
+              if f["kind"] in ("dependencies_down", "no_recovery", "crash_loop",
+                               "unexplained_exit", "fault_failed")]
+    if needed:
+        for f in needed:
+            lines.append(f"* `{f['kind']}`: {f['detail']}")
+    else:
+        lines.append("no recovery needed a person: every service that stopped was started again "
+                     "by the supervisor, every fault recovered inside the bound.")
+    lines.append(f"\nteardown: {json.dumps(teardown)}")
+
+    (run_dir / "report.md").write_text("\n".join(lines) + "\n")
+    summary = {"findings": conductor.findings, "faults": faults, "checks": conductor.check_results,
+               "trends": trends(conductor.samples), "teardown": teardown}
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+
+
+def faults_kinds() -> tuple[str, ...]:
+    from scripts.soak import faults
+    return faults.KINDS

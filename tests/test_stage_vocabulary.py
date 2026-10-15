@@ -211,6 +211,14 @@ FILE_REGISTRY = {
     "scripts/drill_reconciler_late_result.py":
         "runs the real pipeline in a child process to `dispatching`, then reads the stages the "
         "reconciler and the late result move it through; it moves none itself",
+    "scripts/soak/audit_pairs.py":
+        "reads `pipeline_stage` to pair state rows with audit events; writes nothing",
+    "scripts/soak/checks.py":
+        "reads the stages to find an abandoned proposal with a capability; writes nothing",
+    "scripts/soak/conductor.py":
+        "reads the stages to know when everything is terminal at the end; moves none itself",
+    "scripts/soak/report.py":
+        "counts proposals by stage for the report; writes nothing",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",
