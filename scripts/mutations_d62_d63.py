@@ -35,6 +35,10 @@ SVC = "control_plane/scheduler/service.py"
 DEC = "control_plane/scheduler/decide.py"
 ALLOW = "control_plane/scheduler/allowlist.py"
 STAGES_PY = "control_plane/orchestrator/stages.py"
+# (`return moved is not None` is also the last line of `stages.abandon`; the line before it, in
+# `advance`, is what tells them apart)
+ANCHOR_ADVANCE = ('        {"pid": proposal_id, "new": new, "detail": detail, "expected": stages},\n'
+                  '    ).scalar_one_or_none()\n    return moved is not None')
 FAPI = "control_plane/api/function_api.py"
 DISPATCH = "control_plane/orchestrator/dispatch.py"
 APPROVED = "control_plane/api/approved_dispatch.py"
@@ -245,14 +249,17 @@ CATALOGUE = [
         ("tests/test_action_proposals_decision_stage.py",),
         sql_up=("ALTER TABLE action_proposals DROP CONSTRAINT action_proposals_decision_past_received",
                 "ALTER TABLE action_proposals ADD CONSTRAINT action_proposals_decision_past_received "
-                "CHECK (decision IS NOT NULL OR pipeline_stage IN ('received', 'recorded'))"),
+                "CHECK (decision IS NOT NULL OR "
+                "pipeline_stage IN ('received', 'abandoned', 'recorded'))"),
+        # (since 0022 the constraint also allows 'abandoned'; the entry said 'received' alone and so
+        # could not run against a database that holds an abandoned proposal -- found at completion 5)
         sql_down=("ALTER TABLE action_proposals DROP CONSTRAINT action_proposals_decision_past_received",
                   "ALTER TABLE action_proposals ADD CONSTRAINT action_proposals_decision_past_received "
-                  "CHECK (decision IS NOT NULL OR pipeline_stage = 'received')",
+                  "CHECK (decision IS NOT NULL OR pipeline_stage IN ('received', 'abandoned'))",
                   "COMMENT ON CONSTRAINT action_proposals_decision_past_received ON action_proposals "
-                  "IS 'NULL decision is the state of a proposal that has been received and not "
-                  "decided. Every later stage has a decision (D63, ACCEPTANCE 5.69).'"),
-        targets=("test_a_stage_accepts_a_missing_decision_only_if_it_is_received[recorded]",)),
+                  "IS 'NULL decision is legal at `received` (not decided yet) and at `abandoned` "
+                  "(never decided, past the grace period) and at no other stage (D63 5.69, D64 0022).'"),
+        targets=("test_a_stage_accepts_a_missing_decision_only_if_it_is_received_or_abandoned[recorded]",)),
     Mutation(
         "D63-k", "0021 (migration): the constraint allows NULL at 'recorded' as well", ROUNDTRIP,
         edits=(Edit(M0021, "CHECK (decision IS NOT NULL OR pipeline_stage = 'received');",
@@ -276,16 +283,18 @@ CATALOGUE = [
         "D63-n", "the residue check ignores global policy layers", ("tests/test_residue_check.py",),
         edits=(Edit("tests/residue.py",
                     "    found = Leftovers(layers=[\n"
-                    "        row for row in _active_unbound_layers() if row[0] not in before.layers])\n",
-                    "    found = Leftovers(layers=[])\n"),),
+                    "        row for row in _active_unbound_layers() if row[0] not in before.layers],\n"
+                    "        database=db_hygiene.current_problems())\n",
+                    "    found = Leftovers(layers=[], database=db_hygiene.current_problems())\n"),),
         targets=("test_an_active_global_layer_is_residue_and_is_not_cleaned_up",)),
     Mutation(
         "D63-o", "the session does not fail on residue (conftest)",
         ("tests/test_residue_wiring.py",),
         edits=(Edit("tests/conftest.py",
-                    '        pytest.fail("the test session left state behind:\\n  " + '
-                    '"\\n  ".join(found.failures()),\n'
-                    "                    pytrace=False)\n", "        pass\n"),),
+                    '    if found.failures() or rows.failures():\n'
+                    '        pytest.fail("the test session left state behind:\\n  "\n'
+                    '                    + "\\n  ".join(found.failures() + rows.failures()), '
+                    'pytrace=False)\n', "    if found.failures() or rows.failures():\n        pass\n"),),
         targets=("test_a_session_that_leaves_a_global_layer_behind_fails",)),
 
     # --- the decision stage's boundaries (D63 closeout 4) ----------------------------------
@@ -320,11 +329,11 @@ CATALOGUE = [
     # --- D60 (report section 5): the six guards of "a stage runs once" ----------------------
     Mutation(
         "D60-1", "the stage transition always wins (advance returns True)", PIPELINE,
-        edits=(Edit(STAGES_PY, "    return moved is not None", "    return True"),)),
+        edits=(Edit(STAGES_PY, ANCHOR_ADVANCE, ANCHOR_ADVANCE.replace("moved is not None", "True")),)),
     Mutation(
         "D60-2", "...and the driver also ignores the committed stage (retry = run everything)",
         PIPELINE,
-        edits=(Edit(STAGES_PY, "    return moved is not None", "    return True"),
+        edits=(Edit(STAGES_PY, ANCHOR_ADVANCE, ANCHOR_ADVANCE.replace("moved is not None", "True")),
                Edit(FAPI, "        stage, _detail = _stage_of(run.engagement_id, proposal_id)\n",
                     "        stage, _detail = _stage_of(run.engagement_id, proposal_id)\n"
                     "        if _ == 0:\n            stage = stages.RECEIVED\n"))),
@@ -385,16 +394,18 @@ CATALOGUE = [
     Mutation(
         "D58-7-1", "dispatch handles only the network family of refusals (the pre-fix behaviour)",
         NOT_STARTED,
-        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        with engagement_scope(engagement_id) as conn:\n"
-                    "            outcome = _refused_before_start(",
-                    "    except NetworkNotAvailable as exc:\n        with engagement_scope(engagement_id) as conn:\n"
-                    "            outcome = _refused_before_start("),)),
+        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        try:\n"
+                    "            with engagement_scope(engagement_id) as conn:\n",
+                    "    except NetworkNotAvailable as exc:\n        try:\n"
+                    "            with engagement_scope(engagement_id) as conn:\n"),)),
     Mutation(
         "D58-7-2", "daemon errors are not translated into DaemonUnreachable", NOT_STARTED,
         edits=(Edit(SANDBOX, "    except (DockerException, _RequestsConnectionError) as exc:\n"
-                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n@dataclass",
+                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n"
+                    "def _is_only_the_helpers_refusal",
                     "    except ZeroDivisionError as exc:\n"
-                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n@dataclass"),),
+                    "        raise DaemonUnreachable(f\"docker is not reachable: {exc}\") from exc\n\n\n"
+                    "def _is_only_the_helpers_refusal"),),
         allowed_errors=("DockerException", "APIError", "ConnectionError")),
     Mutation(
         "D58-7-3", "client() raises an untyped error when the daemon is unreachable", NOT_STARTED,
@@ -405,10 +416,10 @@ CATALOGUE = [
         allowed_errors=("RuntimeError",)),
     Mutation(
         "D58-7-4", "every SandboxUnavailable is treated as not started", NOT_STARTED,
-        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        with engagement_scope(engagement_id) as conn:\n"
-                    "            outcome = _refused_before_start(",
-                    "    except SandboxUnavailable as exc:\n        with engagement_scope(engagement_id) as conn:\n"
-                    "            outcome = _refused_before_start("),),
+        edits=(Edit(DISPATCH, "    except NotStarted as exc:\n        try:\n"
+                    "            with engagement_scope(engagement_id) as conn:\n",
+                    "    except SandboxUnavailable as exc:\n        try:\n"
+                    "            with engagement_scope(engagement_id) as conn:\n"),),
         allowed_errors=("AttributeError",)),
     Mutation(
         "D58-7-5", "(follow-up) start() is untyped again", NOT_STARTED,

@@ -20,6 +20,17 @@ So this tool does not report "N red". For each mutation it:
    failure, and every test named in ``targets`` is among the target failures; and
 6. restores the files byte for byte (and runs the SQL that undoes any database change), and checks.
 
+**Interruption and kill.** A mutation changes source files and, for some, the database; a run that
+is stopped half-way must not leave either changed (on 2026-10-14 one did: the round-trip test it had
+started was killed, and a scratch schema and the database's ``TEMPORARY`` grant were left). So:
+the files' original bytes and the SQL that undoes a database change are written to a **journal**
+(``.mutation-journal.json``) *before* anything is changed and removed after everything is put back;
+the test process runs in a group of its own and an interrupt or ``SIGTERM`` asks it to stop
+(``SIGINT``: its fixtures run) and waits before it is killed; ``SIGTERM`` to the runner is an
+interrupt; after each mutation and at **start** the runner puts back whatever a journal left (a run
+that was ``kill -9``'d) and drops a round-trip scratch schema or revokes a ``TEMPORARY`` grant
+a killed test left (``tests/db_hygiene.py``), and says that it did.
+
 ``python scripts/mutation_check.py --list`` names them; ``python scripts/mutation_check.py M2 M13``
 runs some; with no names, all. The result is printed and written to ``--out`` as JSON.
 """
@@ -27,9 +38,11 @@ runs some; with no names, all. The result is printed and written to ``--out`` as
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -152,15 +165,119 @@ def _superuser_sql(statement: str) -> None:
 
 
 # ---------------------------------------------------------------------------------------------
+# the journal and the state a killed run leaves
+# ---------------------------------------------------------------------------------------------
+
+JOURNAL = ROOT / ".mutation-journal.json"
+
+
+def _journal_write(originals: dict[Path, bytes], sql_down: tuple[str, ...],
+                   cleanup_sql: tuple[str, ...], applied_sql: bool) -> None:
+    """Atomically: what to put back if this process dies before it can."""
+    payload = {"files": {str(p.relative_to(ROOT)): base64.b64encode(b).decode()
+                         for p, b in originals.items()},
+               "sql_down": list(sql_down) if applied_sql else [], "cleanup_sql": list(cleanup_sql)}
+    tmp = JOURNAL.with_suffix(".tmp")
+    with open(tmp, "w") as handle:
+        handle.write(json.dumps(payload))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, JOURNAL)
+
+
+def _journal_clear() -> None:
+    try:
+        JOURNAL.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def recover() -> list[str]:
+    """Put back what a mutation run that was killed left: the files, the database change. Says what
+    it did. (Nothing, normally.)"""
+    said: list[str] = []
+    if not JOURNAL.exists():
+        return said
+    payload = json.loads(JOURNAL.read_text())
+    for rel, data in payload["files"].items():
+        path = ROOT / rel
+        original = base64.b64decode(data)
+        if not path.exists() or path.read_bytes() != original:
+            path.write_bytes(original)
+            said.append(f"RECOVERED {rel}: a killed run had left it changed")
+    try:
+        for statement in payload.get("cleanup_sql", []):
+            _superuser_sql(statement)
+        if payload.get("sql_down"):
+            _owner_sql(*payload["sql_down"])
+            said.append("RECOVERED the database change of a killed run")
+    except Exception as exc:  # noqa: BLE001
+        said.append(f"RECOVERY OF THE DATABASE FAILED, by hand: {exc}"[:300])
+        return said                                   # the journal stays: nothing is lost
+    _journal_clear()
+    return said
+
+
+def hygiene() -> list[str]:
+    """Drop the scratch schemas of round-trip tests that were killed and revoke a ``TEMPORARY``
+    grant they left; return what was found (``tests/db_hygiene.py`` says what is wrong)."""
+    sys.path.insert(0, str(ROOT))
+    from tests import db_hygiene
+    found = db_hygiene.current_problems()
+    if not found:
+        return []
+    from sqlalchemy import create_engine, text
+    engine = create_engine(os.environ["MIGRATION_DATABASE_URL"], future=True)
+    try:
+        with engine.begin() as conn:
+            for name in db_hygiene.scratch_schemas(conn):
+                conn.execute(text(f'DROP SCHEMA "{name}" CASCADE'))
+        with engine.connect() as conn:
+            temporary = db_hygiene.public_holds_temporary(conn)
+            number = db_hygiene.migration_number(conn)
+        if temporary and number is not None and number >= db_hygiene.REVOKES_TEMPORARY_FROM:
+            _superuser_sql("REVOKE TEMPORARY ON DATABASE cyberorch FROM PUBLIC")
+        with engine.connect() as conn:
+            still = db_hygiene.problems(conn)
+    finally:
+        engine.dispose()
+    return [f"CLEANED: {line}" for line in found] + [f"STILL WRONG: {line}" for line in still]
+
+
+# ---------------------------------------------------------------------------------------------
 # running
 # ---------------------------------------------------------------------------------------------
+
+def _run_group(cmd: list[str], *, env: dict[str, str] | None = None, stop_wait_s: float = 60.0
+               ) -> subprocess.CompletedProcess:
+    """``cmd`` in a process group of its own. If this process is interrupted while it runs, the
+    group is sent ``SIGINT`` (pytest then runs its fixtures' teardown), given ``stop_wait_s`` to
+    end, and killed after that; the interrupt is then raised again."""
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, env={**os.environ, **(env or {})}, start_new_session=True)
+    try:
+        out, err = proc.communicate()
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGINT)
+            proc.wait(timeout=stop_wait_s)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
 
 def _pytest(tests: tuple[str, ...], env: dict[str, str] | None = None) -> tuple[ET.Element, int]:
     with tempfile.TemporaryDirectory() as tmp:
         xml = Path(tmp) / "result.xml"
-        done = subprocess.run(
-            [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={xml}", *tests],
-            cwd=ROOT, capture_output=True, text=True, env={**os.environ, **(env or {})})
+        done = _run_group([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                           f"--junitxml={xml}", *tests], env=env)
         if not xml.exists():
             raise RuntimeError(f"pytest produced no result file:\n{done.stdout[-800:]}"
                                f"\n{done.stderr[-800:]}")
@@ -217,10 +334,14 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
     originals: dict[Path, bytes] = {}
     sql_down: tuple[str, ...] = mutation.sql_down
     applied_sql = False
+    for edit in mutation.edits:                       # what to put back, written down first
+        path = ROOT / edit.path
+        originals.setdefault(path, path.read_bytes())
+    _journal_write(originals, sql_down, mutation.cleanup_sql,
+                   bool(mutation.sql_up or mutation.build_sql))
     try:
         for edit in mutation.edits:
             path = ROOT / edit.path
-            originals.setdefault(path, path.read_bytes())
             source = path.read_text()
             if source.count(edit.old) != edit.count:
                 result.verdict = "INVALID"
@@ -271,6 +392,11 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
         for path, data in originals.items():
             if path.read_bytes() != data:
                 result.problems.append(f"{path.relative_to(ROOT)} was not restored")
+        if not any(p.startswith(("RESTORE FAILED", "RECOVERY")) or "was not restored" in p
+                   for p in result.problems):
+            _journal_clear()
+        for line in hygiene():
+            result.problems.append(line)              # a test left it: the mutation is not valid
 
     counts = result.counts()
     # a parametrized test counts under its full id and under its bare name
@@ -313,15 +439,29 @@ def main(catalogue: dict[str, Mutation]) -> None:
             print(f"{m.id:8s} {m.summary}")
         return
     _load_env()
+
+    def _as_interrupt(signum, frame):        # SIGTERM is an interrupt: the finally clauses run
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _as_interrupt)
+    for line in recover() + hygiene():
+        print(f"START-UP: {line}")
     chosen = [catalogue[i] for i in (args.ids or catalogue)]
     baselines: dict[tuple[str, ...], str] = {}
     results = []
-    for mutation in chosen:
-        result = run(mutation, baselines)
-        _print(result)
-        results.append(result)
-        if args.out:
-            args.out.write_text(json.dumps([r.__dict__ for r in results], indent=1, default=str))
+    try:
+        for mutation in chosen:
+            result = run(mutation, baselines)
+            _print(result)
+            results.append(result)
+            if args.out:
+                args.out.write_text(json.dumps([r.__dict__ for r in results], indent=1,
+                                               default=str))
+    except KeyboardInterrupt:
+        for line in hygiene():
+            print(f"AFTER THE INTERRUPT: {line}")
+        print(f"\ninterrupted after {len(results)} of {len(chosen)}; files and database put back")
+        sys.exit(130)
     bad = [r.id for r in results if r.verdict != "valid"]
     print(f"\n{len(results) - len(bad)} valid, {len(bad)} not: {bad}")
     sys.exit(1 if bad else 0)

@@ -25,3 +25,4 @@ htmlcov/
 
 # Local evidence artifacts (§4.4 raw store)
 evidence_store/
+.mutation-journal.json

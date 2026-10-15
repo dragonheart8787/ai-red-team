@@ -15,9 +15,11 @@ What is covered, per kind: **column** (type, NOT NULL, default, identity, genera
 (definition, validated, deferrable, COMMENT), **index** (definition, valid, COMMENT), **trigger**
 (definition, enabled state, COMMENT), **policy** (command, roles, USING, WITH CHECK), **function**
 (full definition, owner, SECURITY DEFINER, ``SET`` config such as ``search_path``, ACL, COMMENT),
-**view**, **role** (attributes), **default_acl**, **alembic** (revision). Role facts are
-cluster-wide; everything else is limited to ``schema``. The schema's own name is replaced by
-``<schema>`` in every value, so a scratch schema and ``public`` can be compared with each other.
+**view**, **role** (attributes), **default_acl**, **database** (owner and ACL: who may connect, make
+temporary tables, create), **alembic** (revision). Role facts and the database's own ACL are
+cluster- or database-wide; everything else is limited to ``schema``. The schema's own name is
+replaced by ``<schema>`` in every value, so a scratch schema and ``public`` can be compared with
+each other.
 
 Not covered, on purpose: row data (that is the tests' job), statistics, storage parameters beyond
 ``reloptions``, and objects outside the schema.
@@ -92,6 +94,12 @@ QUERIES: dict[str, str] = {
     "default_acl": """
         SELECT defaclrole::regrole::text || defaclobjtype::text, defaclacl::text
         FROM pg_default_acl""",
+    # database-wide, not the schema's: the privileges PUBLIC and the roles hold on the database
+    # (CONNECT, TEMPORARY, CREATE). Migration 0023 revokes TEMPORARY from PUBLIC and its downgrade
+    # grants it; a round trip that is killed in the middle leaves it granted (completion 5)
+    "database": """
+        SELECT 'acl', 'owner=' || pg_get_userbyid(datdba) || ' acl=' || coalesce(datacl::text, '')
+        FROM pg_database WHERE datname = current_database()""",
 }
 
 #: Read only when the schema has the table (a scratch schema before the first migration has not).

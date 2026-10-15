@@ -1538,7 +1538,7 @@ _SERVICE_TRAIL = "test_service_the_trail_has_intent_evidence_and_removal_in_that
 CATALOGUE += [
     Mutation(
         "D64-C4-a", "the evidence is not kept before the removal", EVIDENCE_TESTS,
-        edits=(Edit(DOCKER_PY, "            kept = evidence.save(container, evidence_dir)", "            kept = None"),),
+        edits=(Edit(DOCKER_PY, "            kept = evidence.save(container, evidence_dir, action.expected_owner)", "            kept = None"),),
         targets=(_ORDER, _FAIL_CLOSED, _SERVICE_TRAIL, "test_real_a_container_with_output_is_kept_and_then_removed")),
     Mutation(
         "D64-C4-b", "a failure to keep the evidence is ignored and the container is removed", EVIDENCE_TESTS,
@@ -1579,7 +1579,7 @@ CATALOGUE += [
         targets=("test_a_log_too_large_to_keep_is_refused_not_cut",)),
     Mutation(
         "D64-C4-k", "the file is not synced before it is trusted", EVIDENCE_TESTS,
-        edits=(Edit(EVIDENCE_PY, "            os.fsync(handle.fileno())", "            pass"),),
+        edits=(Edit(EVIDENCE_PY, "            handle.flush()\n            os.fsync(handle.fileno())\n        written = _sha256_of(temporary)", "            handle.flush()\n            pass\n        written = _sha256_of(temporary)"),),
         targets=("test_a_file_or_directory_that_cannot_be_synced_is_not_evidence",)),
     Mutation(
         "D64-C4-l", "an unknown-outcome container is removed as soon as its run is over, retention or not", (*EVIDENCE_TESTS, "tests/test_reconciler_plan.py"),
@@ -1772,6 +1772,114 @@ CATALOGUE += [
         "D64-C5-g", "the start-up probe leaves its file behind", EVIDENCE_TESTS,
         edits=(Edit(EVIDENCE_PY, "            os.unlink(name)\n", "            pass\n"),),
         targets=("test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing",)),
+]
+
+# --- completion 5, part 2: a stopped or killed mutation sweep puts back what it changed ------------
+
+MUTCHECK_PY = "scripts/mutation_check.py"
+HYGIENE_PY = "tests/db_hygiene.py"
+RESIDUE_PY = "tests/residue.py"
+MUTATION_SAFETY_TESTS = ("tests/test_mutation_safety.py",)
+
+CATALOGUE += [
+    Mutation(
+        "D64-C5-h", "snapshot_schema() leaves the database's ACL out of the fact", SNAPSHOT_TESTS,
+        edits=(Edit(SNAPSHOT_PY, " || ' acl=' || coalesce(datacl::text, '')", ""),),
+        targets=("test_the_snapshot_notices_the_database_acl_and_names_it",)),
+    Mutation(
+        "D64-C5-i", "the 0023 downgrade does not give TEMPORARY back (the round trip sees the database)",
+        ("tests/test_migrations_roundtrip.py::test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all",),
+        edits=(Edit("db/migrations/versions/0023_reconciler_reader.py",
+                    "            EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', current_database());",
+                    "            NULL;"),),
+        targets=("test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all",)),
+    Mutation(
+        "D64-C5-j", "a scratch schema left by a round trip is not a problem", MUTATION_SAFETY_TESTS,
+        edits=(Edit(HYGIENE_PY, "    found = [f\"a scratch schema of a round-trip test was left: {name}\"\n             for name in scratch_schemas(conn)]",
+                    "    found = []"),),
+        targets=("test_a_scratch_schema_of_a_round_trip_is_a_problem",
+                 "test_the_session_end_check_fails_the_run_on_either")),
+    Mutation(
+        "D64-C5-k", "TEMPORARY held by PUBLIC is not a problem", MUTATION_SAFETY_TESTS,
+        edits=(Edit(HYGIENE_PY, "number >= REVOKES_TEMPORARY_FROM and public_holds_temporary(conn):",
+                    "number >= REVOKES_TEMPORARY_FROM and False:"),),
+        targets=("test_temporary_held_by_public_is_a_problem_once_0023_is_applied",
+                 "test_the_session_end_check_fails_the_run_on_either")),
+    Mutation(
+        "D64-C5-l", "the session-end check does not look at the database", MUTATION_SAFETY_TESTS,
+        edits=(Edit(RESIDUE_PY, "database=db_hygiene.current_problems())", "database=[])"),),
+        targets=("test_the_session_end_check_fails_the_run_on_either",)),
+    Mutation(
+        "D64-C5-m", "the runner does not drop a scratch schema a killed test left", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "                conn.execute(text(f'DROP SCHEMA \"{name}\" CASCADE'))", "                pass"),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+                 "test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned")),
+    Mutation(
+        "D64-C5-n", "the runner does not revoke the TEMPORARY grant a killed test left", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, '            _superuser_sql("REVOKE TEMPORARY ON DATABASE cyberorch FROM PUBLIC")', "            pass"),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",)),
+    Mutation(
+        "D64-C5-o", "the runner does not say what it cleaned", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, '    return [f"CLEANED: {line}" for line in found] + [f"STILL WRONG: {line}" for line in still]',
+                    '    return [f"STILL WRONG: {line}" for line in still]'),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+                 "test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned")),
+    Mutation(
+        "D64-C5-p", "recover() does not put the files back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            path.write_bytes(original)\n            said.append", "            said.append"),),
+        targets=("test_a_killed_run_s_files_are_put_back_at_the_next_start",
+                 "test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone")),
+    Mutation(
+        "D64-C5-q", "recover() does not undo the database change", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            _owner_sql(*payload[\"sql_down\"])", "            pass"),),
+        targets=("test_the_database_change_of_a_killed_run_is_undone_once",)),
+    Mutation(
+        "D64-C5-r", "recover() undoes a database change that was never made", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "\"sql_down\": list(sql_down) if applied_sql else []", "\"sql_down\": list(sql_down)"),),
+        targets=("test_a_change_that_was_never_applied_is_not_undone",)),
+    Mutation(
+        "D64-C5-s", "recover() forgets the journal even when the database could not be put back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        return said                                   # the journal stays: nothing is lost",
+                    "        _journal_clear()\n        return said"),),
+        targets=("test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said",)),
+    Mutation(
+        "D64-C5-t", "recover() keeps the journal after it has put everything back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "    _journal_clear()\n    return said\n\n\ndef hygiene", "    return said\n\n\ndef hygiene"),),
+        targets=("test_a_killed_run_s_files_are_put_back_at_the_next_start",)),
+    Mutation(
+        "D64-C5-u", "the journal is written after the files are changed, not before", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "    _journal_write(originals, sql_down, mutation.cleanup_sql,\n                   bool(mutation.sql_up or mutation.build_sql))\n    try:\n",
+                    "    try:\n"),
+               Edit(MUTCHECK_PY, "        for path in originals:\n            why = _compiles(path)",
+                    "        _journal_write(originals, sql_down, mutation.cleanup_sql,\n                       bool(mutation.sql_up or mutation.build_sql))\n        for path in originals:\n            why = _compiles(path)")),
+        targets=("test_the_journal_is_on_disk_before_the_first_byte_of_a_file_is_changed",)),
+    Mutation(
+        "D64-C5-v", "run() clears the journal even when a restore failed", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        if not any(p.startswith((\"RESTORE FAILED\", \"RECOVERY\")) or \"was not restored\" in p\n                   for p in result.problems):\n            _journal_clear()",
+                    "        _journal_clear()"),),
+        targets=("test_a_restore_that_fails_keeps_the_journal_and_makes_the_mutation_invalid",)),
+    Mutation(
+        "D64-C5-w", "run() does not clean up after a test run that left the database dirty", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        for line in hygiene():\n            result.problems.append(line)              # a test left it: the mutation is not valid",
+                    "        pass"),),
+        targets=("test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",)),
+    Mutation(
+        "D64-C5-x", "an interrupted test run is killed at once, its fixtures never run", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            os.killpg(proc.pid, signal.SIGINT)\n", "            pass\n"),),
+        targets=("test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",)),
+    Mutation(
+        "D64-C5-y", "an interrupted test run that does not stop is never killed", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "                os.killpg(proc.pid, signal.SIGKILL)\n            except ProcessLookupError:\n                pass\n            proc.wait()",
+                    "                pass\n            except ProcessLookupError:\n                pass\n            proc.wait(timeout=5)"),),
+        targets=("test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates",)),
+    Mutation(
+        "D64-C5-z", "an interrupt is swallowed instead of raised again", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            proc.wait()\n        raise\n    return subprocess.CompletedProcess", "            proc.wait()\n        return subprocess.CompletedProcess(cmd, -2, \"\", \"\")\n    return subprocess.CompletedProcess"),),
+        targets=("test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",)),
+    Mutation(
+        "D64-C5-za", "the test run is not in a process group of its own", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "text=True, env={**os.environ, **(env or {})}, start_new_session=True)", "text=True, env={**os.environ, **(env or {})})"),),
+        targets=("test_the_children_of_the_test_run_are_in_the_group_that_is_stopped",)),
 ]
 
 

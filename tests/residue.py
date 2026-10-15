@@ -19,6 +19,11 @@ What the session made in an engagement it did not register (``CREATED``, filled 
 ``tests.helpers.make_engagement``) is *found* instead -- a stuck proposal newer than the session's
 start that belongs to no registered engagement fails the run, so the registration is not skipped.
 
+A fifth is **absolute**, not compared: the database itself (``tests/db_hygiene.py``). At the end
+no scratch schema of a migration round-trip test is left, and PUBLIC holds no ``TEMPORARY`` on the
+database although migration 0023 or later is applied -- the two things a test killed in the middle
+of a round trip leaves behind (an interrupted mutation sweep did, on 2026-10-14).
+
 Three kinds of thing are compared, **before** the session and **after** it:
 
 * **global policy layers** -- an active layer with no engagement applies to every engagement, so
@@ -44,6 +49,7 @@ from sqlalchemy import create_engine, text
 
 from control_plane.reconciler import observe
 from control_plane.state.db import get_engine, global_policy_admin_scope, reconciler_reader_scope
+from tests import db_hygiene
 
 NETWORK_PREFIX = "cyberorch-"
 
@@ -100,9 +106,11 @@ class Leftovers:
     containers: list[str] = field(default_factory=list)                   # "name (id) status"
     networks_removed: list[str] = field(default_factory=list)
     networks_stuck: list[str] = field(default_factory=list)
+    #: state of the database itself a killed test leaves (tests/db_hygiene.py, ACCEPTANCE 5.71)
+    database: list[str] = field(default_factory=list)
 
     def failures(self) -> list[str]:
-        out = []
+        out = list(self.database)
         if self.layers:
             out.append(f"active policy layers with no engagement left behind: {self.layers}")
         if self.containers:
@@ -152,7 +160,8 @@ def snapshot() -> Snapshot:
 def leftovers(before: Snapshot) -> Leftovers:
     """Compare with ``before``; remove the sandbox networks the session made and say which."""
     found = Leftovers(layers=[
-        row for row in _active_unbound_layers() if row[0] not in before.layers])
+        row for row in _active_unbound_layers() if row[0] not in before.layers],
+        database=db_hygiene.current_problems())
     client = _docker()
     if client is None or before.containers is None:
         return found
