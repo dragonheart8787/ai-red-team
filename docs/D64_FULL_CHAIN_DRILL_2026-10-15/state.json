@@ -1,0 +1,14 @@
+{
+ "tag": "274679",
+ "eid": "ENG-CHAIN-274679",
+ "cidr": "10.120.209.176/29",
+ "scope": "SCOPE-98f9c8c1",
+ "host": "10.120.209.179",
+ "dir": "docs/D64_FULL_CHAIN_DRILL_2026-10-15",
+ "proposal": "PROP-77f5c23175",
+ "run": "RUN-8665dccef8f8",
+ "container": "4e26ff938012c244292bda50220325a24e2ebeac4020acac7d03e675681829bc",
+ "started": 1792047807.388558,
+ "stage_updated_at": 1792047807.234736,
+ "control_plane_killed_at": 1792047807.858418
+}

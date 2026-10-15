@@ -1,0 +1,66 @@
+[
+ {
+  "audit_id": 677636,
+  "t": 106.8,
+  "event": "reconciler.action_intended",
+  "subject": "RUN-8665dccef8f8",
+  "payload": {
+   "kind": "kill_container",
+   "subject_id": "RUN-8665dccef8f8",
+   "reason_code": "overran_deadline"
+  }
+ },
+ {
+  "audit_id": 677637,
+  "t": 106.9,
+  "event": "reconciler.container_killed",
+  "subject": "RUN-8665dccef8f8",
+  "payload": {
+   "run_id": "RUN-8665dccef8f8",
+   "reason_code": "overran_deadline"
+  }
+ },
+ {
+  "audit_id": 677638,
+  "t": 1269.5,
+  "event": "reconciler.dispatch_unknown_outcome",
+  "subject": "PROP-77f5c23175",
+  "payload": {
+   "proposal_id": "PROP-77f5c23175",
+   "reason_code": "unknown_outcome"
+  }
+ },
+ {
+  "audit_id": 677639,
+  "t": 1634.8,
+  "event": "reconciler.action_intended",
+  "subject": "RUN-8665dccef8f8",
+  "payload": {
+   "kind": "remove_container",
+   "subject_id": "RUN-8665dccef8f8",
+   "reason_code": "run_unknown_outcome"
+  }
+ },
+ {
+  "audit_id": 677640,
+  "t": 1634.8,
+  "event": "reconciler.evidence_saved",
+  "subject": "RUN-8665dccef8f8",
+  "payload": {
+   "run_id": "RUN-8665dccef8f8",
+   "logs_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "container_id": "4e26ff938012c244292bda50220325a24e2ebeac4020acac7d03e675681829bc",
+   "inspect_sha256": "0c23510325568008d07fcb72a891223e141800688e4b70ef486a81b625635194"
+  }
+ },
+ {
+  "audit_id": 677641,
+  "t": 1634.8,
+  "event": "reconciler.container_removed",
+  "subject": "RUN-8665dccef8f8",
+  "payload": {
+   "run_id": "RUN-8665dccef8f8",
+   "reason_code": "run_unknown_outcome"
+  }
+ }
+]

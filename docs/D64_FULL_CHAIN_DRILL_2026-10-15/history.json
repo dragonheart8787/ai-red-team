@@ -1,0 +1,38 @@
+[
+ {
+  "t": 5.5,
+  "container": "running",
+  "stage": [
+   "dispatching",
+   "",
+   "running"
+  ]
+ },
+ {
+  "t": 111.5,
+  "container": "exited",
+  "stage": [
+   "dispatching",
+   "",
+   "running"
+  ]
+ },
+ {
+  "t": 1273.4,
+  "container": "exited",
+  "stage": [
+   "recorded",
+   "unknown_outcome",
+   "unknown_outcome"
+  ]
+ },
+ {
+  "t": 1637.3,
+  "container": "gone",
+  "stage": [
+   "recorded",
+   "unknown_outcome",
+   "unknown_outcome"
+  ]
+ }
+]

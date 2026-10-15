@@ -1,0 +1,56 @@
+     0.7  enable container kill
+     7.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    40.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+    73.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   107.0  {"detail": null, "engagement_id": "ENG-CHAIN-274679", "kind": "kill_container", "outcome": "done", "reason_code": "overran_deadline", "subject_id": "4e26ff938012c244292bda50220325a24e2ebeac4020acac7d03e675681829bc"}
+   107.0  {"held_back": 0, "limited": 0, "outcomes": {"done": 1}, "reports": 0, "summary": {"kill_container:overran_deadline": 1}, "truncated": false}
+   140.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   173.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   207.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   240.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   273.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   307.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   340.5  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   373.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   407.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   440.3  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   473.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   506.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   539.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   573.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   606.3  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   639.6  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   673.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   705.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   739.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   771.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   805.3  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   838.7  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   871.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   904.7  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   938.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+   971.5  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1004.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1038.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1070.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1104.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1137.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1170.1  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1203.1  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1236.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1269.6  {"detail": null, "engagement_id": "ENG-CHAIN-274679", "kind": "mark_unknown_outcome", "outcome": "done", "reason_code": "unknown_outcome", "subject_id": "PROP-77f5c23175"}
+  1269.6  {"held_back": 0, "limited": 0, "outcomes": {"done": 1}, "reports": 0, "summary": {"mark_unknown_outcome:unknown_outcome": 1}, "truncated": false}
+  1303.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1335.9  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1368.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1402.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1435.2  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1468.5  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1501.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1534.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1568.0  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1601.4  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1634.8  {"detail": null, "engagement_id": "ENG-CHAIN-274679", "kind": "remove_container", "outcome": "done", "reason_code": "run_unknown_outcome", "subject_id": "4e26ff938012c244292bda50220325a24e2ebeac4020acac7d03e675681829bc"}
+  1634.8  {"held_back": 0, "limited": 0, "outcomes": {"done": 1}, "reports": 0, "summary": {"remove_container:run_unknown_outcome": 1}, "truncated": false}
+  1668.8  {"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+  1672.3  reconciler stopped (exit 0)

@@ -205,6 +205,9 @@ FILE_REGISTRY = {
     "scripts/drill_reconciler_docker.py":
         "seeds proposals at `dispatching` / `recorded` for the drill's containers and reads the "
         "stages the command line moved them to; it moves none itself",
+    "scripts/drill_reconciler_full_chain.py":
+        "runs the real pipeline in a child process to `dispatching`, then only reads the stages "
+        "the command line moves the proposal through (`dispatching`, `recorded`); moves none",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",
