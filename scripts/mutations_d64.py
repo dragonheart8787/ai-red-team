@@ -1743,5 +1743,37 @@ CATALOGUE += [
 ]
 
 
+CATALOGUE += [
+    Mutation(
+        "D64-C5-a", "an engagement's evidence subdirectory may be open to others", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "or info.st_uid != os.getuid() or info.st_mode & 0o077:", "or info.st_uid != os.getuid():"),),
+        targets=("test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused",)),
+    Mutation(
+        "D64-C5-b", "an engagement name is not checked, so it can be a path", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "not _ENGAGEMENT_NAME.fullmatch(engagement_id):", "not engagement_id:"),),
+        targets=("test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made",)),
+    Mutation(
+        "D64-C5-c", "every engagement's evidence goes into the same directory", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "    path = os.path.join(directory, engagement_id)\n", "    path = directory\n"),),
+        targets=("test_each_engagement_has_its_own_private_subdirectory_and_the_files_are_in_it",)),
+    Mutation(
+        "D64-C5-d", "the start-up probe checks nothing", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "    directory = check_directory(directory)\n    name = os.path.join(directory, f\".probe.{os.getpid()}\")", "    return\n    name = os.path.join(directory, f\".probe.{os.getpid()}\")"),),
+        targets=("test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file",)),
+    Mutation(
+        "D64-C5-e", "the service does not run the start-up probe", EVIDENCE_TESTS,
+        edits=(Edit(SERVICE_PY, "                evidence.probe(self.settings.evidence_dir)", "                pass"),),
+        targets=("test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start",)),
+    Mutation(
+        "D64-C5-f", "the service probes the evidence directory even where container is off", EVIDENCE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if flags.CONTAINER in self.settings.enabled:\n            try:", "        if True:\n            try:"),),
+        targets=("test_a_reconciler_without_container_enabled_does_not_look_at_the_evidence_directory",)),
+    Mutation(
+        "D64-C5-g", "the start-up probe leaves its file behind", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "            os.unlink(name)\n", "            pass\n"),),
+        targets=("test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing",)),
+]
+
+
 if __name__ == "__main__":
     main({m.id: m for m in CATALOGUE})

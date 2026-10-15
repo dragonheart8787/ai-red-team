@@ -51,8 +51,15 @@ from tests.test_reconciler_service import (
 )
 
 CID = "c" * 64
-LABELS = {"cyberorch.run_id": "RUN-U", "cyberorch.owner": "ENG-U"}
+ENG = "ENG-U"
+LABELS = {"cyberorch.run_id": "RUN-U", "cyberorch.owner": ENG}
 LOGS = b"2026-10-14T10:00:00.000000000Z line one\n2026-10-14T10:00:01.000000000Z line two\n"
+
+
+def files(vault, engagement=ENG):
+    """What is in an engagement's evidence subdirectory (nothing, if it was never made)."""
+    path = os.path.join(vault, engagement)
+    return sorted(os.listdir(path)) if os.path.isdir(path) else []
 
 
 @pytest.fixture
@@ -118,7 +125,7 @@ class Journal:
         self.fail_intent = self.fail_saved = False
 
     def intend(self, action):
-        self.calls.append(("intend", sorted(os.listdir(self.vault)), self.ct.removed))
+        self.calls.append(("intend", files(self.vault), self.ct.removed))
         if self.fail_intent:
             raise RuntimeError("audit down")
 
@@ -190,10 +197,10 @@ def test_a_proxy_has_no_such_reason_and_a_forged_one_is_refused():
 
 def test_the_archive_is_two_private_files_named_by_the_id_and_hashed_as_they_are_on_disk(vault):
     ct = Ct()
-    kept = evidence.save(ct, vault)
-    inspect_path = os.path.join(vault, CID + ".inspect.json")
-    logs_path = os.path.join(vault, CID + ".logs")
-    assert sorted(os.listdir(vault)) == sorted([CID + ".inspect.json", CID + ".logs"])
+    kept = evidence.save(ct, vault, ENG)
+    inspect_path = os.path.join(vault, ENG, CID + ".inspect.json")
+    logs_path = os.path.join(vault, ENG, CID + ".logs")
+    assert sorted(files(vault)) == sorted([CID + ".inspect.json", CID + ".logs"])
     assert open(logs_path, "rb").read() == LOGS                       # both halves of the stream
     assert json.load(open(inspect_path)) == ct.attrs
     assert (kept.container_id, kept.inspect_sha256, kept.logs_sha256) == (
@@ -204,21 +211,22 @@ def test_the_archive_is_two_private_files_named_by_the_id_and_hashed_as_they_are
 
 
 def test_saving_the_same_container_twice_is_the_same_evidence_and_replaces_nothing(vault):
-    first = evidence.save(Ct(), vault)
-    inode = os.stat(os.path.join(vault, CID + ".logs")).st_ino
-    assert evidence.save(Ct(), vault) == first
-    assert os.stat(os.path.join(vault, CID + ".logs")).st_ino == inode
-    assert sorted(os.listdir(vault)) == sorted([CID + ".inspect.json", CID + ".logs"])
+    first = evidence.save(Ct(), vault, ENG)
+    inode = os.stat(os.path.join(vault, ENG, CID + ".logs")).st_ino
+    assert evidence.save(Ct(), vault, ENG) == first
+    assert os.stat(os.path.join(vault, ENG, CID + ".logs")).st_ino == inode
+    assert sorted(files(vault)) == sorted([CID + ".inspect.json", CID + ".logs"])
 
 
 def test_a_different_file_already_there_is_never_replaced_and_is_a_refusal(vault):
-    path = os.path.join(vault, CID + ".logs")
+    os.mkdir(os.path.join(vault, ENG), 0o700)
+    path = os.path.join(vault, ENG, CID + ".logs")
     with open(path, "wb") as handle:
         handle.write(b"somebody else's")
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(), vault)
+        evidence.save(Ct(), vault, ENG)
     assert open(path, "rb").read() == b"somebody else's"
-    assert not [n for n in os.listdir(vault) if n.endswith(".partial")]
+    assert not [n for n in files(vault) if n.endswith(".partial")]
 
 
 @pytest.mark.parametrize("how", ["missing", "none", "empty", "file", "link", "group", "world",
@@ -240,7 +248,7 @@ def test_a_directory_that_is_not_private_and_ours_is_refused(tmp_path, monkeypat
     with pytest.raises(evidence.EvidenceError):
         evidence.check_directory(target)
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(), target)
+        evidence.save(Ct(), target, ENG)
     assert os.listdir(good) == []
 
 
@@ -251,18 +259,18 @@ def test_a_private_directory_of_ours_is_accepted(vault):
 def test_a_log_that_breaks_half_way_leaves_no_file_of_it_and_no_partial(vault):
     ct = Ct(log_error=APIError("the daemon went away"))
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(ct, vault)
-    assert not os.path.exists(os.path.join(vault, CID + ".logs"))
-    assert not [n for n in os.listdir(vault) if n.endswith(".partial")]
+        evidence.save(ct, vault, ENG)
+    assert not os.path.exists(os.path.join(vault, ENG, CID + ".logs"))
+    assert not [n for n in files(vault) if n.endswith(".partial")]
 
 
 def test_a_log_too_large_to_keep_is_refused_not_cut(vault, monkeypatch):
     monkeypatch.setattr(evidence, "MAX_LOG_BYTES", len(LOGS) - 1)
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(), vault)
-    assert not os.path.exists(os.path.join(vault, CID + ".logs"))
+        evidence.save(Ct(), vault, ENG)
+    assert not os.path.exists(os.path.join(vault, ENG, CID + ".logs"))
     monkeypatch.setattr(evidence, "MAX_LOG_BYTES", len(LOGS))
-    assert evidence.save(Ct(), vault).container_id == CID               # the edge itself is kept
+    assert evidence.save(Ct(), vault, ENG).container_id == CID        # the edge itself is kept
 
 
 @pytest.mark.parametrize("what", ["the file", "the directory"])
@@ -276,7 +284,7 @@ def test_a_file_or_directory_that_cannot_be_synced_is_not_evidence(vault, monkey
         return real(fd)
     monkeypatch.setattr(os, "fsync", broken)
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(), vault)
+        evidence.save(Ct(), vault, ENG)
 
 
 def test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_written(
@@ -288,17 +296,17 @@ def test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_writt
         with open(target, "ab") as handle:               # something else touched it on the way
             handle.write(b"?")
     monkeypatch.setattr(os, "link", link_then_damage)
-    kept = evidence.save(Ct(), vault)
-    assert kept.logs_sha256 == sha(os.path.join(vault, CID + ".logs"))
+    kept = evidence.save(Ct(), vault, ENG)
+    assert kept.logs_sha256 == sha(os.path.join(vault, ENG, CID + ".logs"))
     assert kept.logs_sha256 != hashlib.sha256(LOGS).hexdigest()
 
 
 def test_an_id_that_is_not_a_full_container_id_is_refused(vault):
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(cid="../../etc/passwd"), vault)
+        evidence.save(Ct(cid="../../etc/passwd"), vault, ENG)
     with pytest.raises(evidence.EvidenceError):
-        evidence.save(Ct(cid="c" * 12), vault)
-    assert os.listdir(vault) == []
+        evidence.save(Ct(cid="c" * 12), vault, ENG)
+    assert files(vault) == []
 
 
 # ---------------------------------------------------------------------------------------------
@@ -315,8 +323,8 @@ def test_the_order_is_archive_then_intent_then_evidence_record_then_removal(vaul
     assert intent[1] == sorted([CID + ".inspect.json", CID + ".logs"])    # already on disk
     assert intent[2] is False and saved[2] is False                       # not yet removed
     kept = saved[1]
-    assert kept.inspect_sha256 == sha(os.path.join(vault, CID + ".inspect.json"))
-    assert kept.logs_sha256 == sha(os.path.join(vault, CID + ".logs"))
+    assert kept.inspect_sha256 == sha(os.path.join(vault, ENG, CID + ".inspect.json"))
+    assert kept.logs_sha256 == sha(os.path.join(vault, ENG, CID + ".logs"))
 
 
 @pytest.mark.parametrize("breakage", ["no_directory", "bad_directory", "log_error", "too_large",
@@ -329,7 +337,8 @@ def test_no_evidence_no_intent_no_removal(vault, tmp_path, monkeypatch, breakage
     if breakage == "cannot_sync":
         monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("full")))
     if breakage == "other_file_there":
-        open(os.path.join(vault, CID + ".inspect.json"), "w").write("{}")
+        os.mkdir(os.path.join(vault, ENG), 0o700)
+        open(os.path.join(vault, ENG, CID + ".inspect.json"), "w").write("{}")
     result, journal = carry(ct, target)
     assert (result.outcome, result.detail) == (FAILED, EVIDENCE_NOT_SAVED)
     assert ct.removed is False
@@ -340,14 +349,14 @@ def test_a_container_that_started_since_the_plan_is_left_and_nothing_is_archived
     ct = Ct(status="running")
     result, journal = carry(ct, vault)
     assert (result.outcome, result.detail) == (CHANGED, "not_at_rest")
-    assert os.listdir(vault) == [] and journal.calls == [] and ct.removed is False
+    assert files(vault) == [] and journal.calls == [] and ct.removed is False
 
 
 def test_a_container_whose_labels_changed_is_left_and_nothing_is_archived(vault):
     ct = Ct(labels={"cyberorch.run_id": "RUN-OTHER", "cyberorch.owner": "ENG-U"})
     result, journal = carry(ct, vault)
     assert (result.outcome, result.detail) == (CHANGED, "labels_changed")
-    assert os.listdir(vault) == [] and journal.calls == [] and ct.removed is False
+    assert files(vault) == [] and journal.calls == [] and ct.removed is False
 
 
 def test_an_intent_that_cannot_be_written_stops_the_removal(vault):
@@ -372,7 +381,7 @@ def test_a_finished_run_needs_no_evidence_and_leaves_none(vault):
     ct = Ct()
     result, journal = carry(ct, vault, action=removal(vocab.RUN_FINISHED))
     assert result.outcome == DONE and ct.removed
-    assert os.listdir(vault) == [] and ct.log_calls == []
+    assert files(vault) == [] and ct.log_calls == []
     assert [c[0] for c in journal.calls] == ["intend"]
 
 
@@ -381,14 +390,14 @@ def test_without_the_container_switch_nothing_is_archived_and_nothing_removed(va
     off = Settings(Mode.STATE_ONLY, evidence_dir=vault)
     result = run([removal()], off, th=TH, client=client_for(ct))[0]
     assert result.outcome == "skipped_deletions_off"
-    assert os.listdir(vault) == [] and ct.removed is False and ct.log_calls == []
+    assert files(vault) == [] and ct.removed is False and ct.log_calls == []
 
 
 def test_a_dry_run_archives_nothing(vault):
     ct = Ct()
     result = run([removal()], Settings(Mode.DRY_RUN), th=TH, client=client_for(ct))[0]
     assert result.outcome == "dry_run"
-    assert os.listdir(vault) == [] and ct.log_calls == []
+    assert files(vault) == [] and ct.log_calls == []
 
 
 # ---------------------------------------------------------------------------------------------
@@ -416,7 +425,7 @@ def test_container_cannot_be_enabled_without_a_private_directory(vault, tmp_path
 # ---------------------------------------------------------------------------------------------
 
 def test_the_evidence_event_is_an_id_and_two_hashes_and_nothing_else(vault):
-    kept = evidence.save(Ct(), vault)
+    kept = evidence.save(Ct(), vault, ENG)
     event_type, payload, engagement, subject_type, subject_id = emit.evidence_for(removal(), kept)
     assert event_type == emit.EVIDENCE_SAVED == "reconciler.evidence_saved"
     assert payload == {"run_id": "RUN-U", "container_id": CID,
@@ -432,7 +441,7 @@ def test_the_evidence_event_is_an_id_and_two_hashes_and_nothing_else(vault):
     ("logs_sha256", None), ("logs_sha256", 7), ("logs_sha256", "a" * 63),
     ("container_id", "/tmp/evidence/" + CID), ("container_id", ""), ("run_id", "x y")])
 def test_the_evidence_event_refuses_anything_else(vault, key, bad):
-    kept = evidence.save(Ct(), vault)
+    kept = evidence.save(Ct(), vault, ENG)
     payload = emit.evidence_for(removal(), kept)[1]
     payload[key] = bad
     with pytest.raises(emit.PayloadRejected):
@@ -474,20 +483,20 @@ def test_real_a_container_with_output_is_kept_and_then_removed(real_client, vaul
         saved = []
         order = []
         result = run([action], settings(vault), th=TH, client=real_client,
-                     intend=lambda a: order.append(("intend", sorted(os.listdir(vault)))),
+                     intend=lambda a: order.append(("intend", files(vault))),
                      saved=lambda a, kept: (order.append("saved"), saved.append(kept)))[0]
         assert result.outcome == DONE
         with pytest.raises(NotFound):
             real_client.containers.get(ct.id)
-        assert sorted(os.listdir(vault)) == sorted([ct.id + ".inspect.json", ct.id + ".logs"])
+        assert files(vault) == sorted([ct.id + ".inspect.json", ct.id + ".logs"])
         assert len(saved) == 1 and order[-1] == "saved"
-        logs = open(os.path.join(vault, ct.id + ".logs"), "rb").read()
+        logs = open(os.path.join(vault, ENG, ct.id + ".logs"), "rb").read()
         assert b"out-line" in logs and b"err-line" in logs
         assert logs.startswith(b"20")                                   # Docker's timestamps
-        attrs = json.load(open(os.path.join(vault, ct.id + ".inspect.json")))
+        attrs = json.load(open(os.path.join(vault, ENG, ct.id + ".inspect.json")))
         assert attrs["Id"] == ct.id and attrs["Config"]["Labels"]["cyberorch.run_id"] == run_id
         (kept,) = saved
-        assert kept.logs_sha256 == sha(os.path.join(vault, ct.id + ".logs"))
+        assert kept.logs_sha256 == sha(os.path.join(vault, ENG, ct.id + ".logs"))
         assert order[0] == ("intend", sorted([ct.id + ".inspect.json", ct.id + ".logs"]))
     finally:
         try:
@@ -582,12 +591,13 @@ def test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_ha
     assert written[0]["payload"]["reason_code"] == vocab.RUN_UNKNOWN_OUTCOME
     saved = written[1]["payload"]
     assert saved == {"run_id": run_id, "container_id": ct.id,
-                     "inspect_sha256": sha(os.path.join(vault, ct.id + ".inspect.json")),
-                     "logs_sha256": sha(os.path.join(vault, ct.id + ".logs"))}
+                     "inspect_sha256": sha(os.path.join(vault, engagement_id,
+                                                        ct.id + ".inspect.json")),
+                     "logs_sha256": sha(os.path.join(vault, engagement_id, ct.id + ".logs"))}
     assert written[2]["payload"]["reason_code"] == vocab.RUN_UNKNOWN_OUTCOME
     trail = json.dumps([e["payload"] for e in written])
     assert vault not in trail and "kept-line" not in trail
-    assert b"kept-line" in open(os.path.join(vault, ct.id + ".logs"), "rb").read()
+    assert b"kept-line" in open(os.path.join(vault, engagement_id, ct.id + ".logs"), "rb").read()
 
 
 def test_service_inside_the_retention_nothing_is_archived_and_nothing_removed(
@@ -597,7 +607,7 @@ def test_service_inside_the_retention_nothing_is_archived_and_nothing_removed(
     report = _pass(engagement_id, tmp_path, real_client, vault, retention_s=3600)
     assert not [r for r in report.results if r.action.subject_id == ct.id]
     assert real_client.containers.get(ct.id).id == ct.id
-    assert os.listdir(vault) == []
+    assert files(vault, engagement_id) == []
     assert not events(engagement_id, emit.ACTION_INTENDED, emit.EVIDENCE_SAVED)
 
 
@@ -606,13 +616,120 @@ def test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_
     run_id = _unknown_run(engagement_id)
     ct = _exited_container(real_client, run_id, engagement_id, made_containers)
     time.sleep(1.2)
-    os.chmod(vault, 0o755)                         # the directory stopped being private
+    sub = os.path.join(vault, engagement_id)       # this engagement's directory is not private
+    os.mkdir(sub)
+    os.chmod(sub, 0o750)
     report = _pass(engagement_id, tmp_path, real_client, vault, retention_s=1)
     mine = [r for r in report.results if r.action.subject_id == ct.id]
     assert [(r.outcome, r.detail) for r in mine] == [(FAILED, EVIDENCE_NOT_SAVED)]
     assert real_client.containers.get(ct.id).id == ct.id
-    assert os.listdir(vault) == []
+    assert os.listdir(sub) == []
     written = events(engagement_id, emit.ACTION_INTENDED, emit.EVIDENCE_SAVED,
                      emit.CONTAINER_REMOVED, emit.ACTION_FAILED)
     assert [(e["event_type"], e["payload"]["reason_code"]) for e in written
             if e["subject_id"] == run_id] == [(emit.ACTION_FAILED, EVIDENCE_NOT_SAVED)]
+
+
+# ---------------------------------------------------------------------------------------------
+# one subdirectory per engagement, and the start-up check (completion 5)
+# ---------------------------------------------------------------------------------------------
+
+def test_each_engagement_has_its_own_private_subdirectory_and_the_files_are_in_it(vault):
+    one, two = Ct(cid="a" * 64), Ct(cid="b" * 64)
+    evidence.save(one, vault, "ENG-ONE")
+    evidence.save(two, vault, "ENG-TWO")
+    assert sorted(os.listdir(vault)) == ["ENG-ONE", "ENG-TWO"]
+    for name, cid in (("ENG-ONE", "a" * 64), ("ENG-TWO", "b" * 64)):
+        path = os.path.join(vault, name)
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o700
+        assert sorted(os.listdir(path)) == sorted([cid + ".inspect.json", cid + ".logs"])
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", ".hidden", "a/b", "../x", "a b", "x" * 200, None,
+                                  7,
+                                  "a\0b", ".leading-dot"])
+def test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made(vault, name):
+    with pytest.raises(evidence.EvidenceError):
+        evidence.save(Ct(), vault, name)
+    assert os.listdir(vault) == []
+
+
+@pytest.mark.parametrize("how", ["open_mode", "a_link", "a_file"])
+def test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused(vault, tmp_path, how):
+    path = os.path.join(vault, ENG)
+    if how == "open_mode":
+        os.mkdir(path)
+        os.chmod(path, 0o750)
+    elif how == "a_link":
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        os.symlink(elsewhere, path)
+    else:
+        open(path, "w").close()
+    with pytest.raises(evidence.EvidenceError):
+        evidence.save(Ct(), vault, ENG)
+    if how == "a_link":
+        assert os.listdir(tmp_path / "elsewhere") == []
+
+
+def test_the_no_engagement_case_is_refused(vault):
+    result, journal = carry(Ct(labels={"cyberorch.run_id": "RUN-U", "cyberorch.owner": "../x"}),
+                            vault, action=Action(
+                                kind=vocab.REMOVE_CONTAINER, reason_code=vocab.RUN_UNKNOWN_OUTCOME,
+                                subject_id=CID, run_id="RUN-U", expected_owner="../x",
+                                engagement_id="../x"))
+    assert (result.outcome, result.detail) == (FAILED, EVIDENCE_NOT_SAVED)
+    assert journal.calls == [] and os.listdir(vault) == []
+
+
+def test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing(vault):
+    evidence.probe(vault)
+    assert os.listdir(vault) == []
+
+
+@pytest.mark.parametrize("how", ["missing", "open", "cannot_sync", "cannot_create"])
+def test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file(tmp_path, monkeypatch, how):
+    path = tmp_path / "e"
+    if how != "missing":
+        path.mkdir(mode=0o700)
+        os.chmod(path, 0o755 if how == "open" else 0o700)
+    if how == "cannot_sync":
+        monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("full")))
+    if how == "cannot_create":
+        real = os.open
+        monkeypatch.setattr(os, "open", lambda p, *a, **k: (
+            (_ for _ in ()).throw(PermissionError("read-only")) if ".probe." in str(p)
+            else real(p, *a, **k)))
+    with pytest.raises(evidence.EvidenceError):
+        evidence.probe(str(path))
+    assert [n for n in os.listdir(path)] == [] if path.exists() else True
+
+
+def test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start(
+        engagement_id, tmp_path, vault):
+    import dataclasses
+
+    from control_plane.reconciler.service import EXIT_CONFIG_REFUSED, StopService
+    from tests.test_reconciler_service import FakeDocker
+    os.chmod(vault, 0o755)                           # it stopped being private since the CLI looked
+    r = reconciler(engagement_id, settings=settings(vault), th=dataclasses.replace(SERVICE_TH),
+                   client=FakeDocker(), tmp_path=tmp_path)
+    with pytest.raises(StopService) as stopped:
+        r.begin()
+    assert stopped.value.exit_code == EXIT_CONFIG_REFUSED == 8
+    assert stopped.value.reason == emit.CONFIG_REFUSED
+    assert not r.started
+
+
+def test_a_reconciler_without_container_enabled_does_not_look_at_the_evidence_directory(
+        engagement_id, tmp_path):
+    from tests.test_reconciler_service import FakeDocker
+    r = reconciler(engagement_id, settings=Settings(Mode.STATE_ONLY, evidence_dir="/nonexistent"),
+                   client=FakeDocker(), tmp_path=tmp_path)
+    try:
+        r.begin()
+        assert r.started
+    except Exception as exc:                          # noqa: BLE001 - Docker is a stand-in here
+        pytest.fail(f"it should not have looked: {type(exc).__name__}")
+    finally:
+        r.finish("signal")

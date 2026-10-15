@@ -831,6 +831,8 @@ and failed actions; those are **logged, not audited**, except that a failed acti
 `(object, reason_code)` per process lifetime (a restart reports once more — stated, not hidden). If an operator
 needs "reported once, ever", that is a `reconciler_state` table like `scheduler_state` (D64-11).
 
+> **Revised at completion 5 (ACCEPTANCE 5.101).** The evidence files are `<evidence dir>/<engagement id>/<container id>.inspect.json` and `.logs`, the subdirectory `0700`; they are raw data (not redacted); the service probes the directory when it starts and refuses to start if it cannot write there.
+
 > **Revised at completion 4 (ACCEPTANCE 5.97, 5.98).** A container whose run ended in `unknown_outcome` is removed with reason `run_unknown_outcome`, and only after its inspect output and logs were written to the operator's `--evidence-dir` and their SHA-256 recorded in `reconciler.evidence_saved` (the order is archive, intent, `evidence_saved`, removal, `container_removed`; if the archive fails nothing else happens). `reconciler.failure_summary` also carries `reported`: for each `subject:reason` the plan reported and left alone, the number of distinct objects in the window.
 
 **Implemented (D64 step 6d, ACCEPTANCE 5.83):** `control_plane/reconciler/emit.py` is this table, with two differences:

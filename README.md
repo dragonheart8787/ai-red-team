@@ -139,7 +139,9 @@ key or default turns one on. A person turns one on from the command line, for on
 at a terminal (`--enable kill`, `--enable container`, `--enable proxy`; `network` and `file` are refused in this
 version). `--enable container` also needs `--evidence-dir DIR` -- a directory of yours, mode 0700 -- because a
 container whose run ended in an unknown outcome is removed only after its `docker inspect` output and logs are
-written there and their SHA-256 are in the audit trail. The thresholds come from the `RECONCILER_*` keys in
+written there (in a 0700 subdirectory per engagement) and their SHA-256 are in the audit trail. Those files are
+**raw data**, not redacted, as sensitive as the engagement; the service refuses to start if it cannot write one
+there, and nothing prunes them. The thresholds come from the `RECONCILER_*` keys in
 `.env.example`; with one missing it refuses to start. The reconciler needs the database at migration head
 (`make db` creates its two roles and runs every migration) and its own login role `reconciler_reader`, which
 can execute two read functions and nothing else. `docs/D64_RECONCILER_DESIGN.md` is the design;

@@ -186,7 +186,7 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
     kept = None
     if action.reason_code == vocab.RUN_UNKNOWN_OUTCOME and not proxy:
         try:                                    # before the intent: no evidence, no intent, no call
-            kept = evidence.save(container, evidence_dir)
+            kept = evidence.save(container, evidence_dir, action.expected_owner)
         except evidence.EvidenceError:
             log.error("reconciler: evidence of a container whose run is unknown was not kept; "
                       "the container stays")

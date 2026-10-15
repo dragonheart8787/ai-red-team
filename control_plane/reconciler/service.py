@@ -57,7 +57,7 @@ from docker.errors import DockerException
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from control_plane.audit.logger import AuditWriteError
-from control_plane.reconciler import act, emit, observe, vocab
+from control_plane.reconciler import act, emit, evidence, flags, observe, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
 from control_plane.reconciler.model import US, Observation, name_hash_n
@@ -173,6 +173,17 @@ class Reconciler:
         if not self.audits:                         # a dry run: no lock, no audit, no state
             self.started = True
             return
+        if flags.CONTAINER in self.settings.enabled:
+            try:                                    # before the lock: nothing held or started
+                evidence.probe(self.settings.evidence_dir)
+            except evidence.EvidenceError:
+                try:
+                    emit.emit(emit.START_REFUSED, {"instance_id": self.instance_id,
+                                                   "reason_code": emit.CONFIG_REFUSED},
+                              subject_type="reconciler", subject_id=self.instance_id)
+                except Exception:  # noqa: BLE001 - refusing to start needs no further record
+                    pass
+                raise StopService(emit.CONFIG_REFUSED, EXIT_CONFIG_REFUSED) from None
         try:
             got = self.lock.acquire()
         except Exception as exc:  # noqa: BLE001
