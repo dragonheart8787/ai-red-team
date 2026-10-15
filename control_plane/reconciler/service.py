@@ -53,7 +53,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from docker.errors import DockerException
+from docker.errors import APIError, DockerException
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from control_plane.audit.logger import AuditWriteError
@@ -96,6 +96,16 @@ class StopService(Exception):  # noqa: N818 - a control-flow signal, not an erro
 
 
 def _translate(exc: BaseException) -> StopService:
+    """Why the service stops for an exception that reached its top, and with which exit code.
+
+    **Docker: the daemon is lost, or it is not** (ACCEPTANCE 5.107). *Lost* (``docker_lost``, 5)
+    means the daemon cannot be spoken to: a connection refused, reset or timed out, a socket that is
+    not there (``OSError`` and the SDK's errors that carry no HTTP answer), or an answer that is a
+    server error (HTTP 5xx). *Not lost* means the daemon answered: an answer of 4xx -- ``NotFound``
+    first of them -- is a daemon that is there, and an error that reached this far is a defect
+    (``unexpected_error``, 1), never a reason to say Docker has gone. An object that is not there
+    any more is handled where the call is made (``observe`` drops it from a listing, ``act_docker``
+    returns ``gone``); it must not get here."""
     if isinstance(exc, StopService):
         return exc
     if isinstance(exc, AuditWriteError | emit.PayloadRejected):
@@ -104,6 +114,10 @@ def _translate(exc: BaseException) -> StopService:
         return StopService(emit.STOP_DB_LOST)
     if isinstance(exc, FileNotFoundError | PermissionError | NotADirectoryError):
         return StopService(emit.STOP_UNEXPECTED)        # the configured directory, not the daemon
+    if isinstance(exc, APIError):
+        status = exc.status_code
+        return StopService(emit.STOP_DOCKER_LOST if status is None or status >= 500
+                           else emit.STOP_UNEXPECTED)
     if isinstance(exc, DockerException | OSError):
         return StopService(emit.STOP_DOCKER_LOST)
     return StopService(emit.STOP_UNEXPECTED)

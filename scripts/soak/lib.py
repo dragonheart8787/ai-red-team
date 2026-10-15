@@ -195,3 +195,53 @@ def docker_counts(client, tmp_dir: str, evidence_dir: Path | None) -> dict:
         evidence = sum(1 for p in evidence_dir.rglob("*") if p.is_file())
     return {"tools": tools, "proxies": proxies, "networks": len(networks), "files": len(files),
             "evidence_files": evidence}
+
+
+# ---------------------------------------------------------------------------------------------
+# the host, for the hourly sample point and the resource caps
+# ---------------------------------------------------------------------------------------------
+
+def rss_of_named(name: str) -> dict:
+    """Resident memory (kB) and number of processes of every process whose name is exactly
+    ``name`` (``dockerd``, ``containerd``, ``postgres``)."""
+    total, count = 0, 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            comm = Path(f"/proc/{entry}/comm").read_text().strip()
+            if comm != name:
+                continue
+            for line in Path(f"/proc/{entry}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1])
+            count += 1
+        except OSError:
+            continue
+    return {"rss_kb": total, "processes": count}
+
+
+def dir_size_mb(path: Path) -> float:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
+    return round(total / 1048576, 2)
+
+
+def disk_free_mb(path: str = "/") -> float:
+    stat = os.statvfs(path)
+    return round(stat.f_bavail * stat.f_frsize / 1048576, 1)
+
+
+def db_sizes() -> dict:
+    """Row counts and on-disk size of the tables a soak grows."""
+    out = {}
+    for table in ("action_proposals", "tool_runs", "capabilities", "approvals", "evidence",
+                  "audit_log"):
+        rows = psql(f"SELECT count(*), pg_total_relation_size('{table}') FROM {table}")[0]
+        out[table] = {"rows": int(rows[0]), "mb": round(int(rows[1]) / 1048576, 2)}
+    return out

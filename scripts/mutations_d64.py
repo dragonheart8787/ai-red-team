@@ -688,7 +688,7 @@ CATALOGUE += [
         targets=("test_real_a_container_at_rest_is_removed_and_seen_gone_a_running_one_is_not",)),
     Mutation(
         "D64-6c-l", "a network is removed with a container attached", ACT_TESTS,
-        edits=(Edit(DOCKER_PY, "    if client.containers.list(all=True, filters={\"network\": network.name}):\n"
+        edits=(Edit(DOCKER_PY, "    if client.containers.list(all=True, filters={\"network\": network.name}, ignore_removed=True):\n"
                     "        return Result(action, CHANGED, IN_USE)\n", ""),),
         targets=("test_real_a_network_with_a_container_of_any_state_is_kept",)),
     Mutation(
@@ -699,7 +699,8 @@ CATALOGUE += [
         targets=("test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",)),
     Mutation(
         "D64-6c-n", "a removal is verified by get alone, not by the listing", ACT_TESTS,
-        edits=(Edit(DOCKER_PY, "        return not client.containers.list(all=True, filters={\"id\": action.subject_id})",
+        edits=(Edit(DOCKER_PY, "        return not client.containers.list(all=True, filters={\"id\": action.subject_id},\n"
+                    "                                          ignore_removed=True)",
                     "        return True"),),
         targets=("test_a_container_listed_after_get_says_not_found_is_still_not_gone",)),
     Mutation(
@@ -1880,6 +1881,61 @@ CATALOGUE += [
         "D64-C5-za", "the test run is not in a process group of its own", MUTATION_SAFETY_TESTS,
         edits=(Edit(MUTCHECK_PY, "text=True, env={**os.environ, **(env or {})}, start_new_session=True)", "text=True, env={**os.environ, **(env or {})})"),),
         targets=("test_the_children_of_the_test_run_are_in_the_group_that_is_stopped",)),
+]
+
+# --- F1 (ACCEPTANCE 5.107): an object that is gone between two calls is gone; a lost daemon is lost -----
+
+VANISH_TESTS = ("tests/test_reconciler_vanishing.py",)
+SANDBOX_PY2 = "tool_gateway/sandbox.py"
+
+CATALOGUE += [
+    Mutation(
+        "D64-F1-a", "a container removed while the reconciler lists is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '        for container in client.containers.list(all=True, filters={"label": label},\n                                                ignore_removed=True):', '        for container in client.containers.list(all=True, filters={"label": label}):'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_between_the_list_and_the_inspect_is_not_listed_40_times",)),
+    Mutation(
+        "D64-F1-b", "a network removed between the list and its inspect is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '        try:\n            network.reload()\n        except NotFound:                  # removed between the list and the inspect: not there\n            continue', '        network.reload()'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_network_removed_between_the_list_and_its_inspect_is_not_listed_40_times",)),
+    Mutation(
+        "D64-F1-c", "a container on a network removed while its members are read is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '                    client.containers.list(all=True, filters={"network": network.name},\n                                           ignore_removed=True))', '                    client.containers.list(all=True, filters={"network": network.name}))'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_attached_to_a_network_that_vanishes_while_its_members_are_read_40_times",)),
+    Mutation(
+        "D64-F1-d", "a container removed while mount sources are read (observe) is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '    for container in client.containers.list(all=True, ignore_removed=True):\n        if container.attrs.get("State", {}).get("Status") in LIVE_STATES:', '    for container in client.containers.list(all=True):\n        if container.attrs.get("State", {}).get("Status") in LIVE_STATES:'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[observe]",)),
+    Mutation(
+        "D64-F1-e", "a container removed while mount sources are read (act) is a failure again", VANISH_TESTS,
+        edits=(Edit(DOCKER_PY, '    for container in client.containers.list(all=True, ignore_removed=True):\n        status = container.attrs.get("State", {}).get("Status")', '    for container in client.containers.list(all=True):\n        status = container.attrs.get("State", {}).get("Status")'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[act_docker]",)),
+    Mutation(
+        "D64-F1-f", "a container on a network removed while the network is removed is a failure again", VANISH_TESTS,
+        edits=(Edit(DOCKER_PY, '    if client.containers.list(all=True, filters={"network": network.name}, ignore_removed=True):', '    if client.containers.list(all=True, filters={"network": network.name}):'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_on_a_network_that_vanishes_while_the_network_is_removed_40_times",)),
+    Mutation(
+        "D64-F1-g", "the sandbox's exclusivity check fails on a container that vanished", VANISH_TESTS,
+        edits=(Edit(SANDBOX_PY2, '                try:\n                    other.reload()\n                except NotFound:         # removed since it was listed: it is not on the network\n                    continue', '                other.reload()'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_that_vanishes_while_the_sandbox_checks_exclusivity_40_times",)),
+    Mutation(
+        "D64-F1-h", "a NotFound that reaches the top is a lost daemon again", VANISH_TESTS,
+        edits=(Edit(SERVICE_PY, '    if isinstance(exc, APIError):\n        status = exc.status_code\n        return StopService(emit.STOP_DOCKER_LOST if status is None or status >= 500\n                           else emit.STOP_UNEXPECTED)\n', ''),),
+        targets=("test_the_classification_rule", "test_a_notfound_is_a_defect_if_it_reaches_the_top_never_a_lost_daemon")),
+    Mutation(
+        "D64-F1-i", "a server error of the daemon is no longer a lost daemon", VANISH_TESTS,
+        edits=(Edit(SERVICE_PY, "STOP_DOCKER_LOST if status is None or status >= 500", "STOP_DOCKER_LOST if status is None"),),
+        targets=("test_the_classification_rule",)),
+    Mutation(
+        "D64-F1-j", "a conflict the daemon answered is a lost daemon", VANISH_TESTS,
+        edits=(Edit(SERVICE_PY, "STOP_DOCKER_LOST if status is None or status >= 500", "STOP_DOCKER_LOST if status is None or status >= 400"),),
+        targets=("test_the_classification_rule",)),
 ]
 
 

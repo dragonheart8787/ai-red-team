@@ -105,6 +105,29 @@ Also a finding: a service that exits with no fault that explains it (the worker 
 a fault: it must survive them), a service that exits four times in two minutes, the database or Docker
 not back after five minutes, a worker exception that is not a database or Docker failure.
 
+## 3a. How an exit is read, the resource caps, the hourly sample point (added after the pilots, before the four hours)
+
+**Exits.** A service that stops is classified by the conductor: a `kill -9` it sent; a documented code *after a fault that
+explains it* (`postgres_restart`: 4 "database lost" or 6 "lock lost"; `docker_restart`: 5 "Docker lost"); anything else is
+`unexplained` and a finding. Since F1 (5.107) exit 5 *means* what it says -- the reconciler's `_translate` returns it only for a daemon
+that cannot be spoken to or answers 5xx; an object that vanished while it listed is dropped, a 4xx that reaches the top is exit 1 -- so
+an exit 5 with no restart of `dockerd` in force is a real finding and is not explained away. The worker is never explained by a fault.
+
+**Caps** (`CAPS` in `conductor.py`, fixed before the run; a breach is a finding and stops the run): resident memory 512 MB for the
+scheduler and the reconciler, 1 GB for the worker and the conductor; 1,024 descriptors and 20 connections to Postgres per process;
+80 backends in the database; 150 containers of the soak and 20 sandbox networks; the run directory 2 GB, `events.jsonl` 512 MB; 2 GB
+free on `/`.
+
+**The hourly sample point** (`hourly.jsonl`, one record at the start, each full hour and the end): per process RSS, descriptors,
+threads and connections; `dockerd`, `containerd` and Postgres resident memory; backends by role; containers, networks, temp files and
+evidence files; rows and megabytes of `action_proposals`, `tool_runs`, `capabilities`, `approvals`, `evidence` and `audit_log`;
+the size of the run directory and the free disk; faults so far by kind. The report prints them as a table, and the per-incarnation
+trends (first, last, maximum, slope) from the one-minute samples beside it.
+
+**All six kinds** are drawn from a shuffled bag (every kind before any is repeated), so a four-hour run with a fault every 10-20
+minutes (12 to 24 faults) injects each kind at least twice; the report has a table of how many of each were applied and took
+effect (a pause with no running container to pause is "could not be applied" and says so), and names any kind that never took effect.
+
 ## 4. The end
 
 After the time is up the injector and the worker stop; the scheduler, the reconciler and the approver

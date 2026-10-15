@@ -58,6 +58,21 @@ RECONCILER_ENV = {
     "RECONCILER_SUMMARY_PERIOD_S": "600",
 }
 
+#: Resource caps, fixed before the run. A breach is a finding (the run stops): a soak that needs
+#: more than this is not a soak of something that holds still. Memory is resident set; descriptors
+#: and connections are per process; the rest are the host and the run directory.
+CAPS = {
+    "rss_mb": {"scheduler": 512, "reconciler": 512, "worker": 1024, "conductor": 1024},
+    "fds": 1024,
+    "pg_connections_per_process": 20,
+    "pg_backends_total": 80,
+    "containers_total": 150,
+    "networks": 20,
+    "run_dir_mb": 2048,
+    "events_file_mb": 512,
+    "disk_free_mb_min": 2048,
+}
+
 FAULT_ATTRIBUTION_S = services.ATTRIBUTION_S
 RECOVERY_TIMEOUT_S = 20 * 60
 
@@ -88,6 +103,7 @@ class Conductor:
         self.lock = threading.Lock()
         self.pending_seen: dict[str, float] = {}
         self._events_offset = 0
+        self.hourly_points: list[dict] = []
 
     # -- findings ---------------------------------------------------------------------------
 
@@ -413,7 +429,63 @@ class Conductor:
             sample = self.sample_once()
             self.samples.append(sample)
             self.journal.write("sample", **{k: v for k, v in sample.items() if k != "ts"})
+            for breach in self.caps_breached(sample):
+                self.finding("resource_cap", breach)
             self.shutdown.wait(self.args.sample_s)
+
+    def caps_breached(self, sample: dict) -> list[str]:
+        out = []
+        for name, stats in (sample.get("procs") or {}).items():
+            if not stats:
+                continue
+            cap = CAPS["rss_mb"].get(name)
+            if cap is not None and stats["rss_kb"] / 1024 > cap:
+                out.append(f"{name} resident memory {stats['rss_kb'] / 1024:.0f} MB > {cap} MB")
+            if stats["fds"] > CAPS["fds"]:
+                out.append(f"{name} holds {stats['fds']} descriptors > {CAPS['fds']}")
+            if stats["pg_connections"] > CAPS["pg_connections_per_process"]:
+                out.append(f"{name} holds {stats['pg_connections']} connections to Postgres "
+                           f"> {CAPS['pg_connections_per_process']}")
+        pg = sample.get("pg")
+        if pg and pg["total"] > CAPS["pg_backends_total"]:
+            out.append(f"{pg['total']} backends in the database > {CAPS['pg_backends_total']}")
+        dk = sample.get("docker")
+        if dk:
+            total = sum(dk["tools"].values()) + sum(dk["proxies"].values())
+            if total > CAPS["containers_total"]:
+                out.append(f"{total} containers of the soak > {CAPS['containers_total']}")
+            if dk["networks"] > CAPS["networks"]:
+                out.append(f"{dk['networks']} sandbox networks > {CAPS['networks']}")
+        size = lib.dir_size_mb(self.run_dir)
+        if size > CAPS["run_dir_mb"]:
+            out.append(f"the run directory is {size} MB > {CAPS['run_dir_mb']} MB")
+        events_mb = self.journal.path.stat().st_size / 1048576
+        if events_mb > CAPS["events_file_mb"]:
+            out.append(f"events.jsonl is {events_mb:.0f} MB > {CAPS['events_file_mb']} MB")
+        free = lib.disk_free_mb("/")
+        if free < CAPS["disk_free_mb_min"]:
+            out.append(f"{free} MB free on / < {CAPS['disk_free_mb_min']} MB")
+        return out
+
+    def hourly(self, number: int) -> None:
+        """The hourly sample point: everything the trends are read from, once an hour, in one
+        record (``hourly.jsonl``; the report's table is made from it)."""
+        point = {"hour": number, "at": lib.stamp(), "sample": self.sample_once()}
+        try:
+            point["db"] = lib.db_sizes()
+        except Exception as exc:  # noqa: BLE001
+            point["db"] = {"error": f"{type(exc).__name__}: {str(exc)[:120]}"}
+        point["host"] = {"dockerd": lib.rss_of_named("dockerd"),
+                         "containerd": lib.rss_of_named("containerd"),
+                         "postgres": lib.rss_of_named("postgres"),
+                         "run_dir_mb": lib.dir_size_mb(self.run_dir),
+                         "disk_free_mb": lib.disk_free_mb("/")}
+        point["faults_so_far"] = {k: sum(1 for f in self.faults_done if f["kind"] == k)
+                                  for k in faults.KINDS}
+        point["findings"] = len(self.findings)
+        self.hourly_points.append(point)
+        lib.Journal(self.run_dir / "hourly.jsonl").write("hourly", **point)
+        self.journal.write("hourly", hour=number)
 
     # -- checking ---------------------------------------------------------------------------
 
@@ -470,7 +542,13 @@ class Conductor:
         injector.start()
         end = self.started + self.args.hours * 3600
         next_check = self.started + self.args.check_every * 60
+        next_hour, hour = self.started + 3600, 1
+        self.hourly(0)
         while not self.stop.is_set() and lib.now() < end:
+            if lib.now() >= next_hour:
+                self.hourly(hour)
+                next_hour += 3600
+                hour += 1
             if lib.now() >= next_check:
                 self.run_checks(f"t+{int((lib.now() - self.started) / 60)}min")
                 next_check += self.args.check_every * 60
@@ -490,6 +568,7 @@ class Conductor:
         if not halted:
             self.drain()
         final = self.final_checks("final" if not halted else "final-after-finding")
+        self.hourly(len(self.hourly_points))                   # the last point: after the drain
         self.shutdown.set()
         self.sup.stop_all()
         tear = {}

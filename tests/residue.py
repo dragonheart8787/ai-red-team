@@ -151,7 +151,7 @@ def snapshot() -> Snapshot:
         started_us=database_now_us(),
         layers=frozenset(row[0] for row in _active_unbound_layers()),
         containers=None if client is None else frozenset(
-            c.id for c in client.containers.list(all=True)),
+            c.id for c in client.containers.list(all=True, ignore_removed=True)),
         networks=None if client is None else frozenset(
             n.name for n in client.networks.list() if n.name.startswith(NETWORK_PREFIX)),
     )
@@ -166,7 +166,8 @@ def leftovers(before: Snapshot) -> Leftovers:
     if client is None or before.containers is None:
         return found
     found.containers = [f"{c.name} ({c.short_id}) {c.status}"
-                        for c in client.containers.list(all=True) if c.id not in before.containers]
+                        for c in client.containers.list(all=True, ignore_removed=True)
+                        if c.id not in before.containers]
     for network in client.networks.list():
         if network.name.startswith(NETWORK_PREFIX) and network.name not in (before.networks or ()):
             try:

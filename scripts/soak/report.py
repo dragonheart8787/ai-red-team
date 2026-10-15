@@ -109,6 +109,18 @@ def write(conductor, final_results, teardown) -> None:
                      f"{r.get('allow_recorded')} | {r.get('scheduler_dispatched')} | "
                      f"{f.get('recovered_s')} |")
 
+    lines.append("\n## Were all six kinds of fault injected?\n")
+    lines.append("| fault | applied | applied and effective | could not be applied |")
+    lines.append("|---|---|---|---|")
+    for kind in faults_kinds():
+        rows = by_kind.get(kind, [])
+        effective = [r for r in rows if r.get("ok", True) is not False]
+        lines.append(f"| {kind} | {len(rows)} | {len(effective)} | {len(rows) - len(effective)} |")
+    not_done = [k for k in faults_kinds() if not any(
+        r.get("ok", True) is not False for r in by_kind.get(k, []))]
+    lines.append("\n" + (f"**Kinds never effectively injected: {not_done}.**" if not_done else
+                         "Every kind was injected at least once and took effect."))
+
     lines.append("\n## Services\n")
     lines.append("| service | starts | exits (cause: count) |")
     lines.append("|---|---|---|")
@@ -170,6 +182,13 @@ def write(conductor, final_results, teardown) -> None:
                      f"longest idle-in-transaction "
                      f"{max(p['idle_in_transaction_max_age_s'] for p in pg)} s")
 
+    lines.append("\n## The hourly sample points\n")
+    lines.append("| hour | at | proposals | runs | audit rows | DB MB | RSS MB: scheduler / "
+                 "reconciler / worker / conductor | RSS MB: dockerd / containerd / postgres | "
+                 "containers | networks | backends | run dir MB | disk free MB | faults so far |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines += [_hourly_row(p) for p in conductor.hourly_points]
+
     lines.append("\n## Host residue over time (window floors, 15 min windows)\n")
     dk = [s for s in conductor.samples if s.get("docker")]
     window = conductor.args.check_every * 60
@@ -202,6 +221,28 @@ def write(conductor, final_results, teardown) -> None:
     summary = {"findings": conductor.findings, "faults": faults, "checks": conductor.check_results,
                "trends": trends(conductor.samples), "teardown": teardown}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+
+
+def _mb(kb: int) -> int:
+    return round(kb / 1024)
+
+
+def _hourly_row(p: dict) -> str:
+    s, db, host = p["sample"], p.get("db", {}), p["host"]
+    procs = s.get("procs") or {}
+    rss = " / ".join(str(_mb((procs.get(n) or {}).get("rss_kb", 0)))
+                     for n in ("scheduler", "reconciler", "worker", "conductor"))
+    daemons = " / ".join(str(_mb(host[n]["rss_kb"])) for n in ("dockerd", "containerd", "postgres"))
+    dk = s.get("docker") or {}
+    containers = (sum((dk.get("tools") or {}).values()) + sum((dk.get("proxies") or {}).values())
+                  if dk else "-")
+    rows = [db.get(t, {}).get("rows") for t in ("action_proposals", "tool_runs", "audit_log")]
+    size = ("-" if "error" in db else
+            round(sum(v.get("mb", 0) for v in db.values()), 1))
+    return (f"| {p['hour']} | {p['at']} | {rows[0]} | {rows[1]} | {rows[2]} | {size} | {rss} | "
+            f"{daemons} | {containers} | {dk.get('networks', '-')} | "
+            f"{(s.get('pg') or {}).get('total', '-')} | {host['run_dir_mb']} | "
+            f"{host['disk_free_mb']} | {sum(p['faults_so_far'].values())} |")
 
 
 def faults_kinds() -> tuple[str, ...]:

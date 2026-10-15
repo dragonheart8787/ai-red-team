@@ -595,10 +595,14 @@ class DockerSandbox:
         for network_name in network_names:
             for other in client.containers.list(
                 all=True, filters={"label": OWNER_LABEL, "network": network_name},
+                ignore_removed=True,
             ):
                 if other.id == container.id:
                     continue
-                other.reload()
+                try:
+                    other.reload()
+                except NotFound:         # removed since it was listed: it is not on the network
+                    continue
                 other_owner = (other.labels or {}).get(OWNER_LABEL, NO_OWNER)
                 if other_owner == owner or other.status not in _LIVE_STATES:
                     continue

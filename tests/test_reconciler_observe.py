@@ -254,7 +254,7 @@ class FakeClient:
         client = self
 
         class Containers:
-            def list(self, all=False, filters=None):
+            def list(self, all=False, filters=None, ignore_removed=False):
                 client.calls.append(("containers.list", all, filters))
                 label = (filters or {}).get("label")
                 network = (filters or {}).get("network")

@@ -276,8 +276,9 @@ CATALOGUE = [
         "D63-m", "the residue check ignores containers", ("tests/test_residue_check.py",),
         edits=(Edit("tests/residue.py",
                     '    found.containers = [f"{c.name} ({c.short_id}) {c.status}"\n'
-                    '                        for c in client.containers.list(all=True) '
-                    'if c.id not in before.containers]\n', "    found.containers = []\n"),),
+                    '                        for c in client.containers.list(all=True, ignore_removed=True)\n'
+                    '                        if c.id not in before.containers]\n',
+                    "    found.containers = []\n"),),
         targets=("test_a_container_is_residue_even_if_it_never_started",)),
     Mutation(
         "D63-n", "the residue check ignores global policy layers", ("tests/test_residue_check.py",),

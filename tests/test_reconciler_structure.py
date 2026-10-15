@@ -67,7 +67,9 @@ ALLOWED_PURE_IMPORTS = {
 ALLOWED_CONFIG_IMPORTS = {"__future__", "collections.abc", "dataclasses", "docker.constants",
                           "control_plane.policy.ceiling"}
 ALLOWED_OBSERVE_IMPORTS = {"__future__", "os", "stat", "collections.abc", "dataclasses",
-                           "datetime", "typing", "sqlalchemy", "control_plane.reconciler.vocab",
+                           "datetime", "typing", "sqlalchemy",
+                           "docker.errors",          # (NotFound: a vanished object, 5.107)
+                           "control_plane.reconciler.vocab",
                            "control_plane.reconciler.model"}
 
 
