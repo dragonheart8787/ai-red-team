@@ -352,8 +352,8 @@ call report success without doing it and require `action_failed`, not `*_removed
 
 **Implemented (D64 step 6c, ACCEPTANCE 5.82).** The table above is `act.py`, `act_docker.py`, `act_files.py`; the waits are
 `verify_wait_s`. Deletions (kill, remove, unlink) exist and are tested, and are behind five switches — `kill`, `container`,
-`proxy`, `network`, `file` — each off, each turned on by `--enable <name>` and a phrase typed at a terminal, and the last
-two refused in this version (ACCEPTANCE 5.92; the first three drilled on a real daemon, 5.95).
+`proxy`, `network`, `file` — each off by default, each turned on by `--enable <name>` and a phrase typed at a terminal, and
+the last two refused in this version (ACCEPTANCE 5.92; the first three drilled on a real daemon, 5.95).
 
 A failed action is retried after `RETRY_AFTER_FAILURE_S` (any kind, since completion 3: ACCEPTANCE 5.94); to keep a stuck object from filling the audit log, a given
 `(object, reason_code)` is audited once per process lifetime and counted thereafter (a restart reports once

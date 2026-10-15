@@ -134,10 +134,14 @@ Where the file must live, and why, is in `tool_gateway/deadline/README.md`.
 `scripts/run_reconciler.py --mode dry-run|state-only [--once] [--interval 60]` finds what a crash or a lapse
 left behind. There is no default mode. `dry-run` changes nothing and writes no audit record. `state-only`
 moves stuck proposals to a terminal stage (each by one compare-and-set, each audited) and **does not kill,
-remove or delete anything**: those are five switches, **all off**, and no environment variable, configuration
-key or default turns one on. A person turns one on from the command line, for one run, by typing back a phrase
-at a terminal (`--enable kill`, `--enable container`, `--enable proxy`; `network` and `file` are refused in this
-version). `--enable container` also needs `--evidence-dir DIR` -- a directory of yours, mode 0700 -- because a
+remove or delete anything**: those are five switches, each **off by default** -- no environment variable,
+configuration key or default turns one on, and nothing that ships starts the reconciler with one. A person turns
+one on from the command line, for one run, by typing back a phrase at a terminal (`--enable kill`,
+`--enable container`, `--enable proxy`; `network` and `file` are refused in this version). "Off" is a default,
+not a state of the world: the drills (`scripts/drill_reconciler_*.py`) and the soak (`docs/D66_SOAK.md`) turn
+the first three on -- the first drill only after a dry run had shown that every object in the plan was one it
+had made, the others limited to their own engagements (`--engagement`) -- and nothing else has ever been run
+with one. `--enable container` also needs `--evidence-dir DIR` -- a directory of yours, mode 0700 -- because a
 container whose run ended in an unknown outcome is removed only after its `docker inspect` output and logs are
 written there (in a 0700 subdirectory per engagement) and their SHA-256 are in the audit trail. Those files are
 **raw data**, not redacted, as sensitive as the engagement; the service refuses to start if it cannot write one
