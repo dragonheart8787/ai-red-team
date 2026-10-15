@@ -208,6 +208,9 @@ FILE_REGISTRY = {
     "scripts/drill_reconciler_full_chain.py":
         "runs the real pipeline in a child process to `dispatching`, then only reads the stages "
         "the command line moves the proposal through (`dispatching`, `recorded`); moves none",
+    "scripts/drill_reconciler_late_result.py":
+        "runs the real pipeline in a child process to `dispatching`, then reads the stages the "
+        "reconciler and the late result move it through; it moves none itself",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",

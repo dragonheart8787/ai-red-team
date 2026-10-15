@@ -1,0 +1,156 @@
+[
+ {
+  "audit_id": 677762,
+  "t": -0.1,
+  "event": "proposal.submitted",
+  "subject": "PROP-c301a1bfbf",
+  "actor": "drill",
+  "payload": {
+   "action": "network.scan",
+   "target": "ip:10.130.73.251",
+   "task_id": null,
+   "discovery": {
+    "source": "explicit_scope"
+   },
+   "authorization": {
+    "source": "engagement_scope",
+    "scope_object_id": "SCOPE-c2d9163b"
+   }
+  }
+ },
+ {
+  "audit_id": 677763,
+  "t": -0.1,
+  "event": "policy_reviewer.opinion",
+  "subject": "PROP-c301a1bfbf",
+  "actor": "honest-fake-reviewer",
+  "payload": {
+   "note": "advisory only; may tighten the decision, never satisfy a prerequisite (I6b)",
+   "opinion": {
+    "risk_hint": "low",
+    "reviewer_id": "honest-fake-reviewer",
+    "semantic_risk_hints": [],
+    "recommended_escalation": false,
+    "possible_sensitive_data_hint": []
+   },
+   "authoritative_classification": {
+    "known": false,
+    "authority": "UNKNOWN",
+    "data_class": []
+   }
+  }
+ },
+ {
+  "audit_id": 677764,
+  "t": -0.0,
+  "event": "policy.decided",
+  "subject": "PROP-c301a1bfbf",
+  "actor": "orchestrator",
+  "payload": {
+   "engine_error": null,
+   "authorization": {
+    "reasons": [],
+    "authorized": true,
+    "scope_object": {
+     "id": "SCOPE-c2d9163b",
+     "type": "cidr",
+     "value": "10.130.73.248/29",
+     "version": 1,
+     "allowed_actions": [
+      "network.scan"
+     ]
+    },
+    "scope_object_id": "SCOPE-c2d9163b"
+   },
+   "reviewer_opinion": {
+    "risk_hint": "low",
+    "reviewer_id": "honest-fake-reviewer",
+    "semantic_risk_hints": [],
+    "recommended_escalation": false,
+    "possible_sensitive_data_hint": []
+   },
+   "resource_metadata": {
+    "known": false,
+    "asset_id": null,
+    "data_class": [],
+    "observations": [],
+    "classification": {
+     "source": null,
+     "version": null,
+     "authority": "UNKNOWN"
+    },
+    "resource_class": []
+   }
+  }
+ },
+ {
+  "audit_id": 677766,
+  "t": 0.0,
+  "event": "tool_run.started",
+  "subject": "RUN-40321b9b3f65",
+  "actor": "orchestrator",
+  "payload": {
+   "tool": "nmap",
+   "target": "10.130.73.251",
+   "command": [
+    "/usr/bin/nmap",
+    "-sT",
+    "-n",
+    "--unprivileged",
+    "-Pn",
+    "-p",
+    "8080",
+    "--host-timeout",
+    "25s",
+    "10.130.73.251"
+   ],
+   "capability_id": "CAP-67bbf73e4a",
+   "network_allowlist": [
+    "10.130.73.248/29"
+   ]
+  }
+ },
+ {
+  "audit_id": 677768,
+  "t": 1255.8,
+  "event": "reconciler.dispatch_unknown_outcome",
+  "subject": "PROP-c301a1bfbf",
+  "actor": "reconciler",
+  "payload": {
+   "proposal_id": "PROP-c301a1bfbf",
+   "reason_code": "unknown_outcome"
+  }
+ },
+ {
+  "audit_id": 677770,
+  "t": 1325.9,
+  "event": "tool_run.succeeded",
+  "subject": "RUN-40321b9b3f65",
+  "actor": "orchestrator",
+  "payload": {
+   "image": "cyberorch/nmap:local",
+   "exit_code": 0,
+   "timed_out": false,
+   "evidence_id": "NMAP-e8e2b732b889",
+   "late_result": true,
+   "duration_seconds": 1325.758,
+   "network_allowlist": [
+    "10.130.73.248/29"
+   ]
+  }
+ },
+ {
+  "audit_id": 677771,
+  "t": 1325.9,
+  "event": "run.late_result",
+  "subject": "RUN-40321b9b3f65",
+  "actor": "orchestrator",
+  "payload": {
+   "run_id": "RUN-40321b9b3f65",
+   "status": "succeeded",
+   "previous": "unknown_outcome",
+   "evidence_id": "NMAP-e8e2b732b889",
+   "proposal_id": "PROP-c301a1bfbf"
+  }
+ }
+]
