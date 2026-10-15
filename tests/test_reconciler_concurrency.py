@@ -275,7 +275,10 @@ def test_ct3_kill_minus_nine_in_the_middle_of_a_pass_then_a_clean_run(engagement
 # ---------------------------------------------------------------------------------------------
 
 def test_ct5_a_live_run_inside_its_deadline_is_not_touched_and_an_overdue_one_is_killed(
-        engagement_id):
+        engagement_id, tmp_path):
+    # (`container` is enabled, so the service wants a place for evidence and tries it at start)
+    vault = tmp_path / "evidence"
+    vault.mkdir(mode=0o700)
     client = docker.from_env()
     client.ping()
     make_room_in_the_page()           # a fresh row must be within the first 5,000 stuck rows
@@ -302,7 +305,8 @@ def test_ct5_a_live_run_inside_its_deadline_is_not_touched_and_an_overdue_one_is
             freshen(engagement_id, pid)                      # inside its own B + P + Q: not stale
         time.sleep(3)                                         # the budget of 1 s + the margin pass
         quick = Thresholds(**{**TH.__dict__, "kill_margin_s": 1})
-        r = recon(engagement_id, settings=Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING),
+        r = recon(engagement_id, settings=Settings(Mode.STATE_ONLY, enabled=flags.EVERYTHING,
+                                                   evidence_dir=str(vault)),
                   th=quick, client=client)
         r.begin()
         try:
