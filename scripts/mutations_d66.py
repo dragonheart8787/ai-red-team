@@ -1,0 +1,77 @@
+# ruff: noqa: E501  -- the edits quote source lines verbatim; they must match exactly
+"""The mutations of D66-F3 (ACCEPTANCE 5.109), as runnable checks (see ``mutation_check.py``).
+
+``python scripts/mutations_d66.py --list`` names them. The shared classification of "is Docker lost"
+(``control_plane/docker_health.py``) and the two services that use it: each mutation breaks one rule
+of it, or lets a service classify on its own, and a named test must be red.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from mutation_check import Edit, Mutation, main  # noqa: E402
+
+HEALTH = "control_plane/docker_health.py"
+SCHEDULER = "control_plane/scheduler/service.py"
+RECONCILER = "control_plane/reconciler/service.py"
+TESTS = ("tests/test_docker_health.py", "tests/test_docker_health_structure.py")
+STRUCTURE = ("tests/test_docker_health_structure.py",)
+TABLE = ("tests/test_docker_health.py",)
+
+CATALOGUE = [
+    Mutation("D66-F3-a", "the scheduler no longer asks the shared classification (back to F3: exit 1)",
+             TESTS,
+             edits=(Edit(SCHEDULER, "    if docker_health.is_lost(exc):\n        return StopService(vocab.STOP_DOCKER_LOST)\n",
+                         "    if False:\n        return StopService(vocab.STOP_DOCKER_LOST)\n"),),
+             targets=("test_the_scheduler_exits_5_not_1_for_a_daemon_that_is_gone",
+                      "test_a_daemon_that_dies_under_a_dispatch_in_flight_stops_the_scheduler_with_exit_5",
+                      "test_each_service_imports_the_shared_classification_and_calls_it_in_translate")),
+    Mutation("D66-F3-b", "the reconciler no longer asks the shared classification",
+             TESTS,
+             edits=(Edit(RECONCILER, "    if docker_health.is_lost(exc):\n        return StopService(emit.STOP_DOCKER_LOST)\n",
+                         "    if False:\n        return StopService(emit.STOP_DOCKER_LOST)\n"),),
+             targets=("test_the_scheduler_and_the_reconciler_give_the_same_answer",
+                      "test_each_service_imports_the_shared_classification_and_calls_it_in_translate")),
+    Mutation("D66-F3-c", "a builtin connection error (an OSError) is not a lost daemon",
+             TABLE,
+             edits=(Edit(HEALTH, "    if isinstance(exc, OSError):          # builtin ConnectionError, TimeoutError, a bare socket\n        return LOST\n",
+                         "    if isinstance(exc, OSError):\n        return None\n"),),
+             targets=("test_the_classification",)),
+    Mutation("D66-F3-d", "an HTTP 5xx from the daemon is an answer, not a lost daemon",
+             TABLE,
+             edits=(Edit(HEALTH, "return LOST if status is None or status >= 500 else ANSWERED",
+                         "return LOST if status is None else ANSWERED"),),
+             targets=("test_the_classification",)),
+    Mutation("D66-F3-e", "the cause chain is not looked through (requests around urllib3 around FileNotFoundError)",
+             TABLE,
+             edits=(Edit(HEALTH, "        current = current.__cause__ or current.__context__\n",
+                         "        current = None\n"),),
+             targets=("test_the_classification",)),
+    Mutation("D66-F3-f", "a container that vanished (NotFound) is a lost daemon again (back to F1)",
+             TABLE,
+             edits=(Edit(HEALTH, "    if isinstance(exc, NotFound):\n        return GONE\n",
+                         "    if isinstance(exc, NotFound):\n        return LOST\n"),),
+             targets=("test_the_classification",)),
+    Mutation("D66-F3-g", "a host file-system error outside a Docker error is called Docker's",
+             TABLE,
+             edits=(Edit(HEALTH, "    if isinstance(exc, _HOST_FILE_ERRORS):\n        return None\n",
+                         "    if isinstance(exc, _HOST_FILE_ERRORS):\n        return LOST\n"),),
+             targets=("test_the_classification",)),
+    Mutation("D66-F3-h", "the scheduler imports Docker's exceptions to classify on its own",
+             STRUCTURE,
+             edits=(Edit(SCHEDULER, "from control_plane import docker_health\n",
+                         "from control_plane import docker_health\nfrom docker.errors import APIError  # noqa: F401\n"),),
+             targets=("test_no_service_imports_docker_or_requests_or_names_a_docker_exception",)),
+    Mutation("D66-F3-i", "the reconciler imports requests to classify on its own",
+             STRUCTURE,
+             edits=(Edit(RECONCILER, "from control_plane import docker_health\n",
+                         "from control_plane import docker_health\nimport requests  # noqa: F401\n"),),
+             targets=("test_no_service_imports_docker_or_requests_or_names_a_docker_exception",)),
+]
+
+if __name__ == "__main__":
+    main({m.id: m for m in CATALOGUE})
