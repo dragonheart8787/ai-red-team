@@ -359,3 +359,46 @@ def test_a_session_start_after_a_rows_last_touch_makes_it_not_the_sessions(monke
     before = residue.snapshot()
     later = replace(before, started_us=before.started_us + 10 * 60 * 1_000_000)
     assert residue.close_session_rows(later).unregistered == []
+
+
+# --- scheduler enrollments (ACCEPTANCE 5.109) ----------------------------------------------------
+
+def test_an_enrollment_made_after_the_snapshot_is_residue_and_one_before_it_is_not(engagement_id):
+    from tests import scheduler_support as sup
+    sup.enroll(engagement_id)
+    try:
+        before = residue.snapshot()                              # it is live now: not residue
+        assert engagement_id in before.enrollments
+        assert residue.leftovers(before).enrollments == []
+        other = "ENG-RESIDUE-" + uuid.uuid4().hex[:8]
+        from tests.helpers import make_engagement
+        make_engagement(other)
+        sup.enroll(other)
+        try:
+            found = residue.leftovers(before)
+            assert found.enrollments == [other]
+            assert any(other in line for line in found.failures())
+        finally:
+            sup.withdraw(other)
+    finally:
+        sup.withdraw(engagement_id)
+    assert residue.leftovers(residue.snapshot()).enrollments == []
+
+
+def test_the_end_of_a_test_withdraws_what_it_enrolled_and_nothing_that_was_live_before(
+        engagement_id):
+    from tests import scheduler_support as sup
+    from tests.helpers import make_engagement
+    older = "ENG-RESIDUE-" + uuid.uuid4().hex[:8]
+    make_engagement(older)
+    sup.enroll(older)
+    try:
+        before = residue.live_enrollments()
+        sup.enroll(engagement_id)
+        assert residue.finish_test_enrollments(before) == 1
+        live = residue.live_enrollments()
+        assert engagement_id not in live and older in live
+        assert residue.finish_test_enrollments(before) == 0       # nothing more to withdraw
+    finally:
+        sup.withdraw(older)
+        sup.withdraw(engagement_id)

@@ -89,6 +89,12 @@ def _nothing_is_left_behind(request):
                      f"at the end of the test that made them, in {len(top)} file(s): "
                      + ", ".join(f"{f.removeprefix('tests/')} {n}" for f, n in top[:6])
                      + (" ..." if len(top) > 6 else ""))
+    if residue.WITHDRAWN_AT_TEST_END:
+        top = sorted(residue.WITHDRAWN_AT_TEST_END.items(), key=lambda kv: -kv[1])
+        total = sum(residue.WITHDRAWN_AT_TEST_END.values())
+        lines.append(f"residue: {total} scheduler enrollment(s) were withdrawn at the end of the "
+                     f"test that made them, in {len(top)} file(s): "
+                     + ", ".join(f"{f.removeprefix('tests/')} {n}" for f, n in top[:6]))
     if reporter is not None and lines:
         # (written past the capture of the fixture's teardown, so that a passing run shows it too)
         with capture.global_and_fixture_disabled() if capture else contextlib.nullcontext():
@@ -106,10 +112,12 @@ def _each_test_finishes_what_it_started():
     engagements, which later tests still use, are not closed early. What this does not reach is
     counted at the session end, per file, against ``FILE_CAP``."""
     before = set(residue.CREATED)
+    enrolled_before = residue.live_enrollments()
     yield
     made = residue.CREATED - before
     if made:
         residue.finish_test(made)
+    residue.finish_test_enrollments(enrolled_before)
 
 
 @pytest.fixture(scope="session", autouse=True)
