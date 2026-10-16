@@ -109,8 +109,8 @@ not back after five minutes, a worker exception that is not a database or Docker
 
 **Exits.** A service that stops is classified by the conductor: a `kill -9` it sent; a documented code *after a fault that
 explains it* (`postgres_restart`: 4 "database lost" or 6 "lock lost"; `docker_restart`: 5 "Docker lost"); anything else is
-`unexplained` and a finding. Since F1 (5.107) exit 5 *means* what it says -- the reconciler's `_translate` returns it only for a daemon
-that cannot be spoken to or answers 5xx; an object that vanished while it listed is dropped, a 4xx that reaches the top is exit 1 -- so
+`unexplained` and a finding. Since F1 (5.107) and F3 (5.109) exit 5 *means* what it says in both services -- they share one classification
+(`control_plane/docker_health.py`), which returns it only for a daemon that cannot be spoken to or answers 5xx; an object that vanished while it listed is dropped, a 4xx that reaches the top is exit 1 -- so
 an exit 5 with no restart of `dockerd` in force is a real finding and is not explained away. The worker is never explained by a fault.
 
 **Caps** (`CAPS` in `conductor.py`, fixed before the run; a breach is a finding and stops the run): resident memory 512 MB for the
@@ -127,6 +127,43 @@ trends (first, last, maximum, slope) from the one-minute samples beside it.
 **All six kinds** are drawn from a shuffled bag (every kind before any is repeated), so a four-hour run with a fault every 10-20
 minutes (12 to 24 faults) injects each kind at least twice; the report has a table of how many of each were applied and took
 effect (a pause with no running container to pause is "could not be applied" and says so), and names any kind that never took effect.
+
+## 3b. What is read after the run, and what is known before it (added after F3, before the four hours)
+
+The checks above are questions fixed in advance. Two sections of the report ask the run what it
+contains instead; neither judges or stops anything.
+
+**Logs, classified after the run** (`scripts/soak/logscan.py`; `python -m scripts.soak.logscan RUN_DIR`
+reruns it). Every warning and error in the services' logs, the Docker daemon's log (`/tmp/dockerd.log`)
+and the Postgres server log between the first and the last event of the run is normalised (ids,
+numbers, addresses, hashes replaced) and grouped by source, level and shape. A group is `explained`
+only if *every* occurrence lies inside a fault's window (from its start to its recovery plus 60 s;
+600 s if it never recovered); that says *when*, never *why*. A group with one occurrence outside every
+window is `not_explained`; a source with no timestamps (the services' logs) is `untimed`. All three
+classes are printed with counts, the fault kinds that cover them, first and last time, and raw samples.
+The report then states, in prose, what each unexplained group is -- after reading it.
+
+**Observed, and not covered by any check** (`not_covered` in `report.py`). Each item says what was
+looked at, so that an empty item is an answer: log groups not explained; reconciler actions whose
+outcome was not `done`; reconciler passes that were limited, held back or truncated; exit codes of tool
+containers that died; gaps in the sampler; recoveries slower than twice their kind's median; the
+approver's counts and errors; runs by refusal code and status; denied proposals without provenance.
+A person then adds what they saw while reading, under the heading *Reviewer's notes* in the report.
+
+**Known before the run** (so that it is not discovered as a surprise, and not "fixed" to make the
+report quiet):
+
+* The approver of this harness denies a proposal through `tests.helpers.committing_scope`, an
+  **autocommit** connection. `deny_approval` takes a savepoint to record provenance, and on an
+  autocommit connection Postgres answers `SAVEPOINT can only be used in transaction blocks`; the
+  product catches `SQLAlchemyError`, logs "provenance for denied ... was not recorded" and goes on.
+  So in a soak every denied `HUMAN_APPROVAL` proposal has **no provenance**, and the Postgres log has
+  one such `ERROR` per denial (8 of 8 in pilot 4). It is a property of the harness's connection, not
+  evidence about the product's own path (which runs inside `engagement_scope`'s transaction); the soak
+  therefore does not exercise that path. The report counts the denials and the missing provenance.
+* The Postgres server log is shared with everything else on the machine. Nothing else may run during a
+  soak (no tests, no mutation sweep, no drills); the scan is cut by the run's own start and end, so a
+  line from outside it is not read, but one from inside it that came from something else would be.
 
 ## 4. The end
 

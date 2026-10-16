@@ -6,7 +6,7 @@ import json
 import statistics
 from collections import Counter, defaultdict
 
-from scripts.soak import checks, lib
+from scripts.soak import checks, lib, logscan
 
 
 def slope_per_hour(points: list[tuple[float, float]]) -> float | None:
@@ -205,6 +205,17 @@ def write(conductor, final_results, teardown) -> None:
                      f"{max((p[1] for p in pts), default=0):.0f}, last "
                      f"{pts[-1][1] if pts else '-'}")
 
+    groups = logscan.scan(run_dir, journal)
+    classes = json.dumps(logscan.summary(groups))
+    lines += ["\n## Logs, classified after the run\n",
+              "Every warning and error of the services' logs, the Docker daemon's log and the "
+              "Postgres log between the first and the last event of the run, normalised and "
+              f"grouped (`scripts/soak/logscan.py`; classes: {classes}). `explained` means "
+              "*every* occurrence lies inside a fault's window, which says when and not why.\n"]
+    lines += logscan.render(groups)
+    lines.append("\n## Observed, and not covered by any check\n")
+    lines += not_covered(conductor, journal, groups)
+
     lines.append("\n## What needed a person\n")
     needed = [f for f in conductor.findings
               if f["kind"] in ("dependencies_down", "no_recovery", "crash_loop",
@@ -221,6 +232,87 @@ def write(conductor, final_results, teardown) -> None:
     summary = {"findings": conductor.findings, "faults": faults, "checks": conductor.check_results,
                "trends": trends(conductor.samples), "teardown": teardown}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+
+
+def _docker_events(run_dir) -> list[dict]:
+    path = run_dir / "docker_events.jsonl"
+    out = []
+    for line in (path.read_text().splitlines() if path.exists() else []):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
+def not_covered(conductor, journal: list[dict], groups: list[logscan.Group]) -> list[str]:
+    """What the run showed that no invariant asks about. Listed, never judged: a person reads it.
+
+    Each item says what was looked at, so that an empty one is an answer and not an omission."""
+    out: list[str] = []
+    odd = [g for g in groups if g.klass != "explained"]
+    out.append(f"* **Log groups not explained by a fault window:** {len(odd)} "
+               f"({sum(len(g.entries) for g in odd)} lines) -- the rows marked `not_explained` or "
+               "`untimed` above, with raw samples.")
+    bad = [r for r in journal if r["kind"] == "reconciler.action" and r.get("outcome") != "done"]
+    by_outcome = Counter((r.get("action"), r.get("outcome"), r.get("reason")) for r in bad)
+    out.append("* **Reconciler actions whose outcome was not `done`:** " + (
+        ", ".join(f"{k[0]}/{k[1]}/{k[2]} x{n}" for k, n in sorted(by_outcome.items(), key=str))
+        if by_outcome else "none"))
+    passes = [r for r in journal if r["kind"] == "reconciler.pass"]
+    capped = [r for r in passes if r.get("limited") or r.get("held_back") or r.get("truncated")]
+    out.append(f"* **Reconciler passes that were limited, held back or truncated:** "
+               f"{len(capped)} of {len(passes)}")
+    dies = [r for r in _docker_events(conductor.run_dir)
+            if r.get("action") == "die" and not r.get("proxy")]
+    codes = Counter(str(r.get("exit_code")) for r in dies)
+    out.append(f"* **Exit codes of tool containers that died** ({len(dies)}): " + (
+        ", ".join(f"{c} x{n}" for c, n in sorted(codes.items())) or "none") +
+        " (0 = the tool ended; 137 = killed, 143 = stopped: by the reconciler, a fault or the "
+        "daemon's restart)")
+    pairs = zip(conductor.samples, conductor.samples[1:], strict=False)
+    gaps = [b["ts"] - a["ts"] for a, b in pairs]
+    if gaps:
+        median = statistics.median(gaps)
+        long_gaps = [g for g in gaps if g > 3 * max(median, 1.0)]
+        out.append(f"* **Sampler gaps** (one-minute samples; median {median:.0f} s): "
+                   f"{len(long_gaps)} longer than three times that, longest {max(gaps):.0f} s")
+    slow = []
+    by_kind: dict[str, list[dict]] = defaultdict(list)
+    for fault in conductor.faults_done:
+        by_kind[fault["kind"]].append(fault)
+    for kind, rows in by_kind.items():
+        times = [r["recovered_s"] for r in rows if r.get("recovered_s") is not None]
+        if len(times) >= 3:
+            median = statistics.median(times)
+            slow += [f"{kind} {t:.0f} s (median {median:.0f})" for t in times if t > 2 * median]
+    out.append("* **Recoveries slower than twice their kind's median:** " + (
+        "; ".join(slow) if slow else "none"))
+    errors = Counter(r.get("type") for r in journal if r["kind"] == "approver.error")
+    out.append("* **Approver:** " + ", ".join(
+        f"{k} {sum(1 for r in journal if r['kind'] == k)}" for k in
+        ("approver.granted", "approver.denied", "approver.refused", "approver.error")) +
+        (f"; errors by type {dict(errors)}" if errors else ""))
+    try:
+        arr = checks._quote(conductor.eids)
+        refused = lib.psql("SELECT coalesce(refusal_code, '-'), status, count(*) FROM tool_runs "
+                           "WHERE engagement_id = ANY(" + arr + ") GROUP BY 1, 2 ORDER BY 3 DESC")
+        out.append("* **Runs by refusal code and status:** " + ", ".join(
+            f"{c}/{s} {n}" for c, s, n in refused))
+        provenance = lib.psql(
+            "SELECT count(*) FILTER (WHERE pipeline_stage = 'closed' AND stage_detail = "
+            "'approval_denied'), count(*) FILTER (WHERE pipeline_stage = 'closed' AND stage_detail "
+            "= 'approval_denied' AND NOT EXISTS (SELECT 1 FROM provenance_edges e WHERE "
+            "e.from_id = action_proposals.proposal_id OR e.to_id = "
+            "action_proposals.proposal_id)) FROM action_proposals WHERE engagement_id = ANY("
+            + arr + ")")
+        out.append(f"* **Denied proposals, and how many of them have no provenance:** "
+                   f"{provenance[0][0]} / {provenance[0][1]} (the approver of this harness denies "
+                   "through an autocommit connection, on which `deny_approval`'s savepoint cannot "
+                   "be taken: see D66_SOAK.md, \"Known before the run\")")
+    except Exception as exc:  # noqa: BLE001
+        out.append(f"* (could not read the database: {exc})")
+    return out
 
 
 def _mb(kb: int) -> int:

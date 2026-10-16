@@ -175,7 +175,8 @@ class Conductor:
                     out.write("docker", action=event.get("Action", "").split(":")[0],
                               id=(event.get("Actor") or {}).get("ID", "")[:12],
                               run_id=attrs.get(lib.RUN_LABEL), owner=attrs.get(lib.OWNER_LABEL),
-                              proxy=lib.PROXY_LABEL in attrs, name=attrs.get("name"))
+                              proxy=lib.PROXY_LABEL in attrs, name=attrs.get("name"),
+                              exit_code=attrs.get("exitCode"))
             finally:
                 proc.kill()
                 proc.wait()
