@@ -6,7 +6,7 @@ import json
 import statistics
 from collections import Counter, defaultdict
 
-from scripts.soak import checks, lib, logscan
+from scripts.soak import checks, heartbeat, lib, logscan
 
 
 def slope_per_hour(points: list[tuple[float, float]]) -> float | None:
@@ -74,6 +74,9 @@ def write(conductor, final_results, teardown) -> None:
              f"* seed `{conductor.args.seed}`, engagements {len(eids)}, worker threads "
              f"{conductor.args.threads}, mean gap {conductor.args.mean_gap} s, run budget "
              f"{conductor.args.budget} s",
+             f"* host: boot id `{heartbeat.boot_id()}`, "
+             f"kernel `{heartbeat.host_identity()['kernel']}`; heartbeat file "
+             f"`{heartbeat.FILE}` every {heartbeat.PERIOD_S:.0f} s",
              f"* outcome: **{'FINDING - stopped' if conductor.findings else 'no finding'}**\n"]
 
     lines.append("## Findings\n")

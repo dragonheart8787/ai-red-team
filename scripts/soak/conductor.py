@@ -42,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.soak import checks, faults, lib, report, services  # noqa: E402
+from scripts.soak import checks, faults, heartbeat, lib, report, services  # noqa: E402
 from scripts.soak import world as world_mod  # noqa: E402
 
 #: the reconciler's thresholds for the soak. Everything not named here is ``.env.example``'s (the
@@ -144,7 +144,7 @@ class Conductor:
                          "--seed", str(self.args.seed)])
         self.journal.write("soak.setup", engagements=self.eids, seed=self.args.seed,
                            hours=self.args.hours, reconciler_env=RECONCILER_ENV,
-                           pid=os.getpid())
+                           pid=os.getpid(), host=heartbeat.host_identity())
 
     # -- the witness ------------------------------------------------------------------------
 
@@ -529,8 +529,22 @@ class Conductor:
 
     # -- the run ----------------------------------------------------------------------------
 
+    def beat(self) -> None:
+        """The heartbeat file, every ``heartbeat.PERIOD_S`` seconds, until the very end."""
+        while True:
+            phase = ("draining" if self.stop.is_set() else "running")
+            try:
+                heartbeat.write(self.run_dir, phase=phase, started_at=self.started,
+                                last_sample_at=(self.samples[-1]["ts"] if self.samples else None),
+                                faults_done=len(self.faults_done), findings=len(self.findings))
+            except OSError:
+                pass                                     # a full disk is the caps' to report
+            if self.shutdown.wait(heartbeat.PERIOD_S):
+                return
+
     def run(self) -> int:
         self.setup()
+        threading.Thread(target=self.beat, daemon=True, name="beat").start()
         threading.Thread(target=self.witness, daemon=True, name="witness").start()
         time.sleep(2)
         # the reconciler first (the convention of its documentation), then the scheduler, then the
@@ -579,6 +593,8 @@ class Conductor:
         except Exception as exc:  # noqa: BLE001
             tear = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         self.journal.write("soak.teardown", **tear)
+        heartbeat.write(self.run_dir, phase="ended", started_at=self.started,
+                        faults_done=len(self.faults_done), findings=len(self.findings))
         report.write(self, final, tear)
         return 3 if self.findings else 0
 
