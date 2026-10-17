@@ -1,0 +1,67 @@
+name: soak-report
+
+# Prints the report of a finished soak run into this job's log (the artifact cannot be fetched from the
+# development machine; the log can be read). Started by a push of `.github/soak-report-request.json`
+# (`{"run_id": N}`) to the development branch. Reads only; changes nothing.
+
+on:
+  push:
+    branches: ['claude/mvp-kernel-cybersecurity-platform-su841g']
+    paths: ['.github/soak-report-request.json']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which run
+        id: which
+        run: echo "run_id=$(python3 -c 'import json;print(json.load(open(".github/soak-report-request.json"))["run_id"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Download the artifact of that run
+        uses: actions/download-artifact@v4
+        with:
+          name: soak-run
+          path: soak-run
+          run-id: ${{ steps.which.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The files
+        run: ls -la soak-run | head -40
+
+      - name: Findings, stops, exits, what the smoke did not enforce
+        run: |
+          cd soak-run
+          echo "=== findings and stops"; grep -E '"kind": "(FINDING|soak.stopping|soak.setup|soak.teardown)"' events.jsonl | cut -c1-700
+          echo "=== service exits"; grep -E '"kind": "service.exited"' events.jsonl | python3 -c "
+          import sys, json, collections
+          c = collections.Counter()
+          for l in sys.stdin:
+              r = json.loads(l); c[(r['service'], r['cause'], r['code'])] += 1
+          for k, v in sorted(c.items(), key=str): print(v, k)"
+          echo "=== not enforced"; grep -c '"kind": "smoke.not_enforced"' events.jsonl || true
+          echo "=== approver / worker"; grep -cE '"kind": "approver\.' events.jsonl || true
+          grep -E '"kind": "(worker\.|approver\.(error|refused))' events.jsonl | cut -c1-200 | head -20
+
+      - name: The report, from the section after the log classification
+        run: |
+          cd soak-run
+          python3 - <<'PY'
+          text = open("report.md").read()
+          i = text.index("## Logs, classified after the run")
+          print(text[i:i + 60000])
+          PY
+
+      - name: The hourly points and the per-process trends, raw
+        run: |
+          cd soak-run
+          python3 -c "
+          import json
+          for l in open('hourly.jsonl'):
+              r = json.loads(l); print(json.dumps({k: r[k] for k in r if k in ('hour','at','procs','host','db','docker','faults')}, sort_keys=True)[:900])
+          " || cat hourly.jsonl | cut -c1-900
