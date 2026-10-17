@@ -109,6 +109,18 @@ CATALOGUE = [
              edits=(Edit("scripts/manage_scheduler_enrollment.py", "    return value if emit.is_plain_id(value) else repr(value)\n",
                          "    return value\n"),),
              targets=("test_the_listing_shows_an_old_row_with_an_odd_name_quoted",)),
+    # ---- the denial's provenance on an autocommit connection (5.110)
+    Mutation("D66-P-a", "the denial records its provenance without a savepoint",
+             ("tests/test_deny_provenance_connection.py",),
+             edits=(Edit("control_plane/api/approvals.py",
+                         "        with conn.begin_nested():\n            graph.record_provenance(conn, engagement_id=engagement_id, proposal_id=proposal_id)\n",
+                         "        if True:\n            graph.record_provenance(conn, engagement_id=engagement_id, proposal_id=proposal_id)\n"),),
+             targets=("test_a_denial_on_an_autocommit_connection_closes_the_proposal_without_provenance_and_logs",)),
+    Mutation("D66-P-b", "a failed provenance takes the denial with it (the error is not caught)",
+             ("tests/test_deny_provenance_connection.py",),
+             edits=(Edit("control_plane/api/approvals.py", "    except SQLAlchemyError:\n        logger.error(\"provenance for denied",
+                         "    except ZeroDivisionError:\n        logger.error(\"provenance for denied"),),
+             targets=("test_a_denial_on_an_autocommit_connection_closes_the_proposal_without_provenance_and_logs",)),
 ]
 
 if __name__ == "__main__":

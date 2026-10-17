@@ -161,6 +161,7 @@ report quiet):
   one such `ERROR` per denial (8 of 8 in pilot 4). It is a property of the harness's connection, not
   evidence about the product's own path (which runs inside `engagement_scope`'s transaction); the soak
   therefore does not exercise that path. The report counts the denials and the missing provenance.
+  ACCEPTANCE 5.110 pins both halves with tests (`tests/test_deny_provenance_connection.py`).
 * The Postgres server log is shared with everything else on the machine. Nothing else may run during a
   soak (no tests, no mutation sweep, no drills); the scan is cut by the run's own start and end, so a
   line from outside it is not read, but one from inside it that came from something else would be.
@@ -185,3 +186,53 @@ enrollments are withdrawn and what is stuck is moved to a terminal state; rows a
   but only the connection counts are judged. There is no threshold for memory, because none was set
   before the run.
 * The 15-minute windows give the rising-floor rule its first verdict after an hour (four windows).
+
+## 6. Interrupted runs: what happened on 2026-10-16/17, and the rule since
+
+**A run that stops without ending itself is marked *interrupted*. It is not resumed, not joined to
+another run, and not counted.** The verdict is read from the run directory by
+`python -m scripts.soak.heartbeat RUN_DIR` (`clean`, `running`, `interrupted`,
+`interrupted_host_restart`, `no_heartbeat`); the conductor rewrites `RUN_DIR/heartbeat.json` every
+30 s (pid, host boot id, kernel, host uptime, phase, last sample) and puts the host's identity in
+`soak.setup`. At most two attempts are made in one environment; if both are interrupted the soak is
+moved to a scheduled workflow on a CI runner and not retried by hand.
+
+**Attempt 1 -- interrupted by a real host event.** Started 2026-10-16 about 02:31 UTC from commit
+99ad336 (CI green), seed `d66`, 4 h. The last event in `events.jsonl` is a `reconciler.pass` at
+02:37:58; there is no `FINDING`, no `soak.stopping`, no `soak.teardown`. At 03:24:11 the host reported
+`up 0 min` with no process of the soak, Postgres and Docker not running; the files of the run were
+still on disk. No fault had been injected yet (the first is drawn 10-20 minutes in), so nothing in the
+run's own data points at the product. Roughly 6.5 minutes of a 4-hour run: **no result, none counted.**
+
+**What was done and what could not be.** The recovery steps asked for -- `assert_coherent` and a
+reconciler dry-run over the stuck proposals and runs *before* touching anything, then
+`reconciler --mode state-only` to close them, the enrollment withdrawn through the CLI, and the
+checks (transitions = audit events, no schema difference, no abandoned proposal with a capability)
+-- could not be done on that state, because it no longer existed when work resumed (next
+paragraph). Nothing was edited by hand. The reconciler dry-run was run on the database that is
+there, and its plan is empty (`{"summary": {}, "outcomes": {}}`, exit 0); the database holds 0
+engagements, 0 proposals, 0 runs, 0 audit rows, 0 enrollments. That is what was verified, and it
+says nothing about the state that was lost.
+
+**The second event (2026-10-17 03:19 UTC): the machine was replaced, not restarted.** Observed
+at 03:21: `uptime` 1-2 min; kernel `6.18.44-fc-v139` (the earlier boot was `v114`); a Firecracker
+micro-VM (the kernel command line and the ACPI tables say so); the repository checkout's birth time
+is 2026-10-16 02:29:17, the start of the session, and it was at a commit from before the session's
+work (the pushed branch had everything); the Postgres data directory is from 2026-10-03 and holds
+only the default databases; there is no `.venv`, no `.env`, no scratch directory (so no
+`soak_main/` with its last resource sample), no `/var/lib/docker`, no Docker images, no `opa`;
+`last -x` has no entry; journald has no files; the kernel log of this boot has no OOM kill, panic
+or filesystem error; `/` is 24 % full. The environment was rebuilt from the repository
+(`make setup`, `scripts/init_db.sh`, `dockerd`, the nmap image, OPA 1.9.0 -- 58/58).
+
+**Cause: not determinable from inside the machine.** What the evidence supports: the root file
+system was restored to an earlier image by the platform (a snapshot restore or a replaced VM);
+nothing seen supports a cause inside the guest (no OOM, no panic, a disk with room). What it cannot
+say: why, or when exactly -- the guest logs of the earlier boots are not on this disk. What was
+*not* done and should have been: the last one-minute sample of attempt 1 (containers, networks,
+memory, connections at the time it stopped) was not read before the disk was replaced; the counts of
+containers and networks at that moment are therefore **unknown**. On the rebuilt machine there are
+0 containers and 0 networks before the first image was built. The lesson is the heartbeat file and
+a rule of this document: read the last sample and the kernel log of a stopped run *first*, before
+any other step.
+
