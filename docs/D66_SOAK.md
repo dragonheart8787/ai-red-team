@@ -194,8 +194,8 @@ another run, and not counted.** The verdict is read from the run directory by
 `python -m scripts.soak.heartbeat RUN_DIR` (`clean`, `running`, `interrupted`,
 `interrupted_host_restart`, `no_heartbeat`); the conductor rewrites `RUN_DIR/heartbeat.json` every
 30 s (pid, host boot id, kernel, host uptime, phase, last sample) and puts the host's identity in
-`soak.setup`. At most two attempts are made in one environment; if both are interrupted the soak is
-moved to a scheduled workflow on a CI runner and not retried by hand.
+`soak.setup`. After the interrupted attempt 1, at most **two re-runs** are made in one environment; if both are
+interrupted the soak is moved to a scheduled workflow on a CI runner and not retried by hand.
 
 **Attempt 1 -- interrupted by a real host event.** Started 2026-10-16 about 02:31 UTC from commit
 99ad336 (CI green), seed `d66`, 4 h. The last event in `events.jsonl` is a `reconciler.pass` at
