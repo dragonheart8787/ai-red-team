@@ -163,6 +163,20 @@ jobs:
           sudo cp /var/log/postgresql/*.log "$RUN_DIR/" 2>/dev/null || true
           sudo chown -R "$(id -u):$(id -g)" "$RUN_DIR" || true
 
+      - name: What matters, printed to the log (the artifact is also uploaded)
+        if: always()
+        run: |
+          echo "=== findings and stops"
+          grep -E '"kind": "(FINDING|soak.stopping)"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-900 || true
+          echo "=== service exits"
+          grep -E '"kind": "service.exited"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-300 || true
+          echo "=== faults"
+          grep -E '"kind": "fault\.(begin|applied|recovery)"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-260 || true
+          echo "=== smoke: checks not enforced"
+          grep -E '"kind": "smoke.not_enforced"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-300 | head -5 || true
+          echo "=== report (head)"
+          head -c 14000 "$RUN_DIR/report.md" 2>/dev/null || echo "no report.md"
+
       - name: Summary
         if: always()
         run: |
