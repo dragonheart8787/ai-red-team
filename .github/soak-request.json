@@ -1,1 +1,1 @@
-{"hours": 0.2, "attempt": 4, "purpose": "smoke run of .github/workflows/soak.yml (ACCEPTANCE 5.113): all six fault kinds, every check counted, caps measured on the runner; not a soak"}
+{"hours": 4, "attempt": 1, "purpose": "the four-hour soak on a runner (ACCEPTANCE 5.113), requested after the smoke run passed; an invariant that fails stops it, nothing is repaired or relaxed"}
