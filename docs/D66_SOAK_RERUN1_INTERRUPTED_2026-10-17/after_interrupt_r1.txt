@@ -1,0 +1,41 @@
+Sat Oct 17 04:33:44 UTC 2026
+ 04:33:44 up 1 min,  0 user,  load average: 0.22, 0.08, 0.03
+boot_id_now=54825409-808c-4805-91a5-71c4413ef746
+6.18.44-fc-v139
+
+--- heartbeat
+{"at": "2026-10-17T04:20:07Z", "boot_id": "5ecd084d-dc52-46c7-a4f5-16c672e19458", "faults_done": 0, "findings": 0, "host_uptime_s": 3636.3, "kernel": "6.18.44-fc-v139", "last_sample_at": 1792210788.9923522, "phase": "running", "pid": 31302, "started_at": 1792210476.0133877, "ts": 1792210807.169}
+--- last 3 events
+{"at": "2026-10-17T04:19:59Z", "kind": "approver.granted", "proposal": "PROP-c280104125", "ts": 1792210799.14}
+{"at": "2026-10-17T04:20:02Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210802.14}
+{"at": "2026-10-17T04:20:22Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210822.225}
+--- last sample
+{"at": "2026-10-17T04:19:49Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 1}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 10, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 18}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73564, "state": "S", "threads": 8}, "reconciler": {"fds": 31, "pg_connections": 3, "pid": 31326, "rss_kb": 63868, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72580, "state": "S", "threads": 2}, "worker": {"fds": 17, "pg_connections": 5, "pid": 31358, "rss_kb": 75896, "state": "S", "threads": 5}}, "stages": {"awaiting_approval": 2, "closed": 19, "dispatching": 1, "recorded": 133}, "ts": 1792210789.162}
+--- counts of kinds
+{'soak.setup': 1, 'service.started': 3, 'reconciler.pass': 18, 'worker.started': 1, 'sample': 6, 'hourly': 1, 'approver.granted': 43, 'approver.denied': 6}
+--- dmesg
+[    0.000000] Command line: deferred_init=lazy dhash_entries=131072 ihash_entries=65536 console=ttyS0 reboot=k panic=1 nomodule random.trust_cpu=1 ipv6.disable=1 swiotlb=noforce psi=1 rdinit=/process_api -- --firecracker-init --addr 0.0.0.0:2024 --max-ws-buffer-size 32768 --block-local-connections --listen-vsock-port 2024 --log-vsock-port 5002
+[    0.253290] Kernel command line: mitigations=auto,no_guest_host,no_guest_guest deferred_init=lazy dhash_entries=131072 ihash_entries=65536 console=ttyS0 reboot=k panic=1 nomodule random.trust_cpu=1 ipv6.disable=1 swiotlb=noforce psi=1 rdinit=/process_api -- --firecracker-init --addr 0.0.0.0:2024 --max-ws-buffer-size 32768 --block-local-connections --listen-vsock-port 2024 --log-vsock-port 5002
+367
+--- docker/pg
+/var/run/postgresql:5432 - no response
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+-rw------- 1 root root 2366 Oct 17 03:22 /home/user/ai-red-team/.env
+
+/home/user/ai-red-team/.venv:
+total 24
+drwxr-xr-x  5 root root 4096 Oct 17 03:22 .
+/dev/vda        252G   13G   27G  33% /
+               total        used        free      shared  buff/cache   available
+Mem:           16093         463       15496          14         349       15629
+--- last sample (04:19:49Z) in full, trimmed
+at "2026-10-17T04:19:49Z"
+docker {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 1}}
+kind "sample"
+pg {"by_role": {"cyberorch_app": 10, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 18}
+ proc conductor {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73564, "state": "S", "threads": 8}
+ proc reconciler {"fds": 31, "pg_connections": 3, "pid": 31326, "rss_kb": 63868, "state": "S", "threads": 2}
+ proc scheduler {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72580, "state": "S", "threads": 2}
+ proc worker {"fds": 17, "pg_connections": 5, "pid": 31358, "rss_kb": 75896, "state": "S", "threads": 5}
+stages {"awaiting_approval": 2, "closed": 19, "dispatching": 1, "recorded": 133}
+ts 1792210789.162
