@@ -116,6 +116,8 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -q --upgrade pip
           .venv/bin/pip install -q -e '.[dev]'
+          # init_db.sh reads db/roles.sql as the postgres user, which cannot enter the runner's home
+          sudo chmod a+x "$HOME"
           sudo --preserve-env=PATH ./scripts/init_db.sh
           sudo chown "$(id -u):$(id -g)" .env && chmod 600 .env
 
