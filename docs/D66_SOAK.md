@@ -269,3 +269,41 @@ no container exists, the three sandbox networks remain (kept by design, one per 
 **Not done:** the "schema is identical" comparison of `scripts/check_reconciler_run.py` needs a
 `before` snapshot taken before the reconciler ran and none was; what can be said is that Alembic is at
 the head (`0026`) and no DDL ran.
+
+**Re-run 2 -- interrupted by a third host restart (2026-10-17); both re-runs are used.** Started
+04:52:06 UTC from commit eed3db6 (the tree of 51c87f8 plus evidence). Last heartbeat 04:58:07, last event
+04:58:33 -- six minutes in again, no fault injected, no finding. At 05:38:45 the host reported `up 0 min`
+and a new boot id (`54825409...` -> `5539106d...`), same kernel, disk intact. Read first
+(`docs/D66_SOAK_RERUN2_INTERRUPTED_2026-10-17/`): the last sample (04:58:20) was ordinary again -- 63-76 MB
+per process, at most 31 descriptors, 18 backends, no tool container running, 6 sandbox networks, 207
+proposals terminal; the new boot's kernel log has no OOM kill, panic or file-system error. **Cause: not
+determinable from inside.** The boot it died in had lasted about 26 minutes (heartbeat host uptime
+1534 s).
+
+**The three interruptions side by side** (UTC, 2026-10-16/17): the host stopped answering at ~02:38 and was
+a fresh boot at 03:24 (a gap of at least 46 min); at ~04:20 and was a fresh boot by 04:33 (about 13 min);
+at ~04:58 and was a fresh boot at 05:38 (about 40 min). The boots lasted: unknown, about 61 min, about 26
+min. Each time the last sample was ordinary and the kernel log of the next boot was empty of faults; the
+first interruption was followed by a replaced disk, the other two were not. Nothing seen ties them to the
+soak (each came before the first fault could be injected), to a resource cap, or to the product. They
+are a property of the environment, and a four-hour run cannot be completed in it. No claim is made
+about *why* the host is restarted.
+
+**Recovery of re-run 2's state** (same order, no SQL): the five checks held before any change (218
+proposals, 188 runs, audit = transitions) and a dry-run planned nothing. Five proposals were open: three
+`awaiting_approval` (a person's) and two `approved` with no run yet (the scheduler's to dispatch). The
+reconciler in `state-only` (600 s, 0 actions) left all five, as designed. The two approved ones were
+dispatched by the product's own scheduler run for 75 s (188 -> 190 runs, both `succeeded`); the three
+waiting ones were denied with `scripts/approvals.py deny`; the enrollments were withdrawn with the CLI;
+the baseline layer was retired with the soak teardown's helper. After: the same five checks hold, every
+proposal is terminal, no run in flight, no live enrollment, no container.
+
+**Where the soak goes now.** `.github/workflows/soak.yml` runs it on a GitHub-hosted runner: weekly
+(Sunday 02:17 UTC) and on demand (`hours` input; 0.2 only tries the workflow). A local PostgreSQL, the
+Docker daemon started by hand (so that the `docker_restart` fault can restart it; systemd's socket
+activation is stopped), the nmap image, the pinned deadline helper; the conductor runs as root; the report
+is the step summary and the run directory (minus the raw container evidence) is an artifact for 30 days.
+**It has not been run.** Its first run is a smoke run (`hours` = 0.2) to see that the setup works on a
+runner; the faults assume things about the machine that a runner may not grant (the `docker_restart` and
+`postgres_restart` faults, resource caps tuned for this host), and what the first runs show about that is
+the next finding, not a result about the product. There is no four-hour result in this repository yet.

@@ -1,0 +1,131 @@
+name: soak
+
+# D66. The four-hour soak (docs/D66_SOAK.md) moved here after both re-runs on the development
+# machine were interrupted by host restarts (ACCEPTANCE 5.111, docs/D66_SOAK.md section 6): that
+# machine could not be kept up for four hours, a runner is a fresh machine for exactly as long as the
+# job. It is not part of `test` and does not run on a push.
+#
+# * `schedule`: once a week, Sunday 02:17 UTC.
+# * `workflow_dispatch`: `hours` (default 4). A short value (0.2) is a smoke run of the workflow
+#   itself, not a soak; the report says how long it was.
+#
+# The job fails when the conductor exits non-zero (an invariant failed, a service exited with nothing
+# to explain it, a cap was breached) and also when the run directory's heartbeat says the run was
+# interrupted (a runner that was lost produces no artifact at all, and GitHub reports that itself).
+# Nothing in this file relaxes a check; the checks are the conductor's.
+
+on:
+  schedule:
+    - cron: '17 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Hours of traffic and faults (4 for a soak; 0.2 only to try the workflow)'
+        default: '4'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deadline-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deadline helper and compare it with SHA256SUMS
+        run: ./tool_gateway/deadline/build.sh --check 2>&1 | tee /tmp/deadline-build.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadline-helper
+          path: tool_gateway/deadline/bin/
+          if-no-files-found: error
+
+  soak:
+    needs: deadline-helper
+    runs-on: ubuntu-latest
+    # four hours of traffic, up to 45 minutes of drain, setup and the report: inside the 6 h a job may run
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the deadline helper built and verified by the previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: deadline-helper
+          path: tool_gateway/deadline/bin
+
+      - run: chmod 0755 tool_gateway/deadline/bin/cyberorch-deadline-linux-*
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: A local PostgreSQL (the soak restarts it with `service postgresql restart`), nmap, ncat
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql postgresql-client nmap ncat curl
+          sudo service postgresql start
+          pg_isready
+
+      - name: The Docker daemon, started by hand so that the soak can restart it
+        # The soak's `docker_restart` fault sends SIGTERM to dockerd, waits, and starts `dockerd`
+        # again. The runner's own daemon is socket-activated by systemd, which would take the
+        # socket back; so systemd's units are stopped and the daemon is started the way the fault
+        # starts it.
+        run: |
+          sudo systemctl stop docker.service docker.socket containerd.service || true
+          sudo rm -f /var/run/docker.sock
+          (sudo setsid nohup dockerd >> /tmp/dockerd.log 2>&1 < /dev/null &)
+          for i in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && break; sleep 2; done
+          sudo chmod 666 /var/run/docker.sock
+          docker version --format '{{.Server.Version}}'
+
+      - name: Install the project and create the database
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q --upgrade pip
+          .venv/bin/pip install -q -e '.[dev]'
+          sudo --preserve-env=PATH ./scripts/init_db.sh
+
+      - name: Build the images the soak's workload uses
+        run: |
+          docker pull python:3.12-slim
+          ./tool_gateway/images/build_nmap_image.sh
+
+      - name: The soak
+        # As root: the faults restart Postgres and the Docker daemon and kill processes of other
+        # users. The environment (.env) is read by the conductor itself.
+        run: |
+          sudo --preserve-env=PATH,PYTHONPATH \
+            .venv/bin/python -m scripts.soak.conductor \
+              --run-dir "$RUNNER_TEMP/soak" \
+              --hours "${{ github.event.inputs.hours || '4' }}"
+
+      - name: What the heartbeat says about the run
+        if: always()
+        run: |
+          sudo .venv/bin/python -m scripts.soak.heartbeat "$RUNNER_TEMP/soak" || true
+          sudo cp /tmp/dockerd.log "$RUNNER_TEMP/soak/dockerd.log" 2>/dev/null || true
+          sudo cp /var/log/postgresql/*.log "$RUNNER_TEMP/soak/" 2>/dev/null || true
+          sudo chmod -R a+rX "$RUNNER_TEMP/soak" || true
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/soak/report.md" ]; then
+            head -c 60000 "$RUNNER_TEMP/soak/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report.md: the run did not reach its end." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-run
+          path: |
+            ${{ runner.temp }}/soak
+            !${{ runner.temp }}/soak/evidence
+          # the raw container evidence of the run is not uploaded; the report, the journal, the
+          # samples and the logs are
+          retention-days: 30
+          if-no-files-found: warn

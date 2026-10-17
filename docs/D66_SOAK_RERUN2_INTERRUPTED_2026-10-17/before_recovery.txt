@@ -1,0 +1,11 @@
+=== BEFORE
+coherence OK - 218 proposals in 3 engagements
+no capability on an abandoned proposal OK - 0 abandoned proposals
+I7 database: no proposal and no capability with two runs OK - 188 runs
+audit events match state transitions OK - state/audit subjects: proposal.submitted 218/218, policy.decided 218/218, capability.issued 188/188, tool_run.started 188/188, tool_run.refused 0/0, tool_run.succeeded 188/188, tool_run.failed 0/0, evidence.recorded 188/188, approval.granted 61/61, reconciler.
+unresolved reconciler intents (listed, not judged) OK - 0: []
+{"held_back": 0, "limited": 0, "outcomes": {}, "reports": 0, "summary": {}, "truncated": false}
+reconciler stopped (exit 0)
+ENG-SOAK-1017045206-0 open: [('approved/APPR-49a70cccff', 1), ('awaiting_approval/', 2)] runs in flight: []
+ENG-SOAK-1017045206-1 open: [] runs in flight: []
+ENG-SOAK-1017045206-2 open: [('approved/APPR-63f60f86fc', 1), ('awaiting_approval/', 1)] runs in flight: []

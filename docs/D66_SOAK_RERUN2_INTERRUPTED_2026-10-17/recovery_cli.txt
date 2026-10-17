@@ -1,0 +1,10 @@
+deny ENG-SOAK-1017045206-0 PROP-7da76c4ddf
+denied PROP-7da76c4ddf; no capability issued.
+deny ENG-SOAK-1017045206-0 PROP-58ec8e22e6
+denied PROP-58ec8e22e6; no capability issued.
+deny ENG-SOAK-1017045206-2 PROP-37839ceb02
+denied PROP-37839ceb02; no capability issued.
+withdrawn ENG-SOAK-1017045206-0
+withdrawn ENG-SOAK-1017045206-1
+withdrawn ENG-SOAK-1017045206-2
+baseline layer 4567 retired
