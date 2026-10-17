@@ -186,3 +186,13 @@ def test_only_the_residue_check_is_not_enforced_and_only_in_a_smoke_run():
     assert not checks.is_finding(residue, smoke=True)          # a smoke run: recorded, not enforced
     assert checks.is_finding(other, smoke=True) and checks.is_finding(other, smoke=False)
     assert not checks.is_finding(checks.Result(checks.SMOKE_NOT_ENFORCED[0], True), smoke=False)
+
+
+# -- a run that exercised nothing --------------------------------------------------------------
+
+def test_a_run_in_which_every_request_was_refused_exercised_nothing():
+    assert checks.workload_exercised(10, 3) == []
+    assert checks.workload_exercised(0, 3) == [
+        "no ALLOW proposal was ever recorded: the sandbox was not exercised"]
+    assert checks.workload_exercised(10, 0)[0].startswith("no HUMAN_APPROVAL proposal")
+    assert len(checks.workload_exercised(0, 0)) == 2

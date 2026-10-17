@@ -159,6 +159,10 @@ CATALOGUE = [
              ("tests/test_soak_environment.py",),
              edits=(Edit("scripts/soak/checks.py", "    return not result.ok and not (smoke and result.name in SMOKE_NOT_ENFORCED)", "    return not result.ok and result.name not in SMOKE_NOT_ENFORCED"),),
              targets=("test_only_the_residue_check_is_not_enforced_and_only_in_a_smoke_run",)),
+    Mutation("D66-S-j", "a run with no ALLOW proposal recorded passes the workload check",
+             ("tests/test_soak_environment.py",),
+             edits=(Edit("scripts/soak/checks.py", "    if allow_recorded == 0:\n", "    if allow_recorded < 0:\n"),),
+             targets=("test_a_run_in_which_every_request_was_refused_exercised_nothing",)),
 ]
 
 if __name__ == "__main__":

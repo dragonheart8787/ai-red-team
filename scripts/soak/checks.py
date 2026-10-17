@@ -76,6 +76,20 @@ def is_finding(result: Result, *, smoke: bool) -> bool:
     return not result.ok and not (smoke and result.name in SMOKE_NOT_ENFORCED)
 
 
+def workload_exercised(allow_recorded: int, human_recorded: int) -> list[str]:
+    """What a run must have shown before it can say anything: ALLOW proposals that reached a
+    container and were recorded, and HUMAN_APPROVAL ones that were approved and dispatched by the
+    scheduler. A run whose every request was refused (a policy engine that was not there denies
+    everything) exercised nothing, whatever its checks said."""
+    problems = []
+    if allow_recorded == 0:
+        problems.append("no ALLOW proposal was ever recorded: the sandbox was not exercised")
+    if human_recorded == 0:
+        problems.append("no HUMAN_APPROVAL proposal was ever dispatched and recorded: the "
+                        "scheduler's path was not exercised")
+    return problems
+
+
 def never_ran(results: list[dict], *, expect_drain: bool) -> list[str]:
     """Names of the checks with no execution (or, for the judged ones, no judgement) in a run."""
     wanted = list(CYCLE_CHECKS) + ([DRAIN_CHECK] if expect_drain else [])

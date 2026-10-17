@@ -136,6 +136,16 @@ jobs:
           echo "SOAK_PSQL_URL=postgresql://soak_monitor:$PW@127.0.0.1:5432/cyberorch" >> "$GITHUB_ENV"
           sudo chmod -R a+rX /var/log/postgresql || true
 
+      - name: OPA, the policy engine (without it every request is denied, and nothing is exercised)
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/opa \
+            "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static"
+          sudo chmod +x /usr/local/bin/opa
+          opa version
+          opa test control_plane/policy/rego policy_tests | tail -1
+        env:
+          OPA_VERSION: 1.9.0
+
       - name: Build the images the soak's workload uses
         run: |
           docker pull python:3.12-slim

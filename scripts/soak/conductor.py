@@ -616,6 +616,13 @@ class Conductor:
         a fault kind that never took effect in a run long enough to have drawn all six."""
         for line in checks.never_ran(self.check_results, expect_drain=True):
             self.finding("check_never_ran", line)
+        arr = checks._quote(self.eids)
+        rows = lib.psql(
+            "SELECT count(*) FILTER (WHERE decision = 'ALLOW' AND pipeline_stage = 'recorded'), "
+            "count(*) FILTER (WHERE decision = 'HUMAN_APPROVAL' AND pipeline_stage = 'recorded') "
+            "FROM action_proposals WHERE engagement_id = ANY(" + arr + ")")
+        for line in checks.workload_exercised(int(rows[0][0]), int(rows[0][1])):
+            self.finding("workload_not_exercised", line)
         done = [f for f in self.faults_done]
         # a smoke run (0.2 h or more) exists to inject all six; a run too short to draw them is
         # not asked to
