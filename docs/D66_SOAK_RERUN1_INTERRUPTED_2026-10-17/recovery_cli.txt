@@ -1,0 +1,11 @@
+--- deny the one proposal that was waiting for a person (operator CLI)
+denied PROP-8c19d09840; no capability issued.
+--- withdraw ENG-SOAK-1017041436-0
+--yes given: proceeding without asking.
+withdrawn ENG-SOAK-1017041436-0
+--- withdraw ENG-SOAK-1017041436-1
+--yes given: proceeding without asking.
+withdrawn ENG-SOAK-1017041436-1
+--- withdraw ENG-SOAK-1017041436-2
+--yes given: proceeding without asking.
+withdrawn ENG-SOAK-1017041436-2

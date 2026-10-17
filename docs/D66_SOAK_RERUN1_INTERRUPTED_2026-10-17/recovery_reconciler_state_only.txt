@@ -1,0 +1,3 @@
+open at start: [('PROP-8c19d09840', 'awaiting_approval', '')]
+open at end: [('PROP-8c19d09840', 'awaiting_approval', '')] reconciler exit 0 seconds 901
+[]

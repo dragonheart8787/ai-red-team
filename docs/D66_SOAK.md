@@ -236,3 +236,36 @@ containers and networks at that moment are therefore **unknown**. On the rebuilt
 a rule of this document: read the last sample and the kernel log of a stopped run *first*, before
 any other step.
 
+
+**Re-run 1 -- interrupted by a second host restart (2026-10-17).** Started 04:14:36 UTC from commit
+51c87f8. Last heartbeat 04:20:07, last event 04:20:22, six minutes in, no fault yet injected and no
+finding. At 04:33:36 the host reported `up 1 min`, a new boot id (`5ecd084d...` -> `54825409...`),
+the same kernel (`6.18.44-fc-v139`), and **the disk intact** this time (checkout, `.venv`, `.env`, run
+directory, Postgres and Docker storage). The previous boot had begun about 03:19:30, so it had lasted
+about 61 minutes. Read first, before anything else (`docs/D66_SOAK_RERUN1_INTERRUPTED_2026-10-17/`):
+the last sample (04:19:49) was ordinary -- resident memory 62-74 MB per process, at most 31
+descriptors, 18 Postgres backends, none idle in a transaction, 1 running tool container, 0 exited,
+3 sandbox networks; the kernel log of the new boot shows no OOM kill, panic or file-system error;
+the disk is 33 % full, 15 GB free. **Cause: again not determinable from inside**; nothing points at the
+soak or the product (the run had injected no fault). Two events of this kind in a day (02:38 and
+04:20-04:33), one of which replaced the machine, make "the host is not stable for four hours" the
+working conclusion, and it is a conclusion about the environment, not about the code. The run is
+marked **interrupted**; it is not resumed, joined or counted. It is the first of the two re-runs.
+
+**Recovery of re-run 1's state, in the order asked** (the state existed this time):
+before any change, `assert_coherent` (175 proposals in 3 engagements), no capability on an abandoned
+proposal, I7 in the database (153 runs), audit events = state transitions (proposal.submitted 175/175,
+policy.decided 175/175, capability.issued 153/153, tool_run.started 153/153, tool_run.succeeded
+152/152, tool_run.refused 1/1, evidence.recorded 152/152, approval.granted 43/43) and the unresolved-
+intent list (0) all held, and a reconciler dry-run planned nothing. One proposal was open:
+`awaiting_approval` (a person's, which the reconciler leaves alone by design,
+D64 design: "`awaiting_approval` is a person's, not a fault; untouched"); `reconciler --mode
+state-only` (the soak's switches, 901 s, 0 actions) left it as designed. It was then denied through the
+operator CLI (`scripts/approvals.py deny`, the transactional path, so its provenance is recorded), the
+three enrollments were withdrawn through `scripts/manage_scheduler_enrollment.py withdraw`, and the
+baseline policy layer was retired with the same helper the soak's own teardown uses (there is no CLI
+for the test baseline). No SQL was written. After: the same five checks hold, no enrollment is live,
+no container exists, the three sandbox networks remain (kept by design, one per allowlist).
+**Not done:** the "schema is identical" comparison of `scripts/check_reconciler_run.py` needs a
+`before` snapshot taken before the reconciler ran and none was; what can be said is that Alembic is at
+the head (`0026`) and no DDL ran.

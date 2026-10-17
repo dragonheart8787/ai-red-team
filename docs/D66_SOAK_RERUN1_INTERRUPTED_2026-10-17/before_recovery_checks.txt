@@ -1,0 +1,5 @@
+coherence OK - 175 proposals in 3 engagements
+no capability on an abandoned proposal OK - 0 abandoned proposals
+I7 database: no proposal and no capability with two runs OK - 153 runs
+audit events match state transitions OK - state/audit subjects: proposal.submitted 175/175, policy.decided 175/175, capability.issued 153/153, tool_run.started 153/153, tool_run.refused 1/1, tool_run.succeeded 152/152, tool_run.failed 0/0, evidence.recorded 152/152, approval.granted 43/43, reconciler.proposal_abandoned 0/0, reconciler.proposal_closed 0/0; scheduler.dispatched with no capability: 0; allowed by a fault window: 0
+unresolved reconciler intents (listed, not judged) OK - 0: []
