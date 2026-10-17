@@ -1039,3 +1039,41 @@ ST7); `alembic downgrade`/`upgrade` over the real data left 0 differences (E18).
 ACCEPTANCE 5.75); the template copy only for manual and destructive experiments, run by a superuser with no other
 sessions on the source, as the experiments of this revision (E18, E19, E20) were. Revision 2's E10 changed the
 development database directly — which is how the COMMENT was lost.
+
+## 10. After a whole-machine restart the reconciler may do nothing, and that is correct (D66, ACCEPTANCE 5.112)
+
+Observed three times on the development machine (2026-10-16/17), and recovered each time by the product's
+own paths, not by the reconciler alone. When the machine under a running system stops and comes back, the
+state it comes back to is whatever the last committed transaction left, and the reconciler, in `state-only`,
+acts only on what its table of transitions covers (§1) **and whose time has passed**. After a restart that
+is often nothing:
+
+* a proposal in **`awaiting_approval`** is a person's (§1.4): the reconciler never touches it, however old;
+  the approver (a person, or the soak's approver) decides it, or it is denied with `scripts/approvals.py`;
+* a proposal in **`approved`** with no run is the scheduler's (§1.4, R4/R5 only for engagements the
+  scheduler cannot reach): the scheduler dispatches it when it is started again;
+* a run in flight whose container is gone becomes `unknown_outcome` only after B + P + Q (§1.2) -- about
+  21 minutes for the soak's run budget -- so a reconciler started at once after the restart has, for that
+  long, nothing to do for it;
+* an object the reconciler has no row for (a network, an exited container inside its retention) is not
+  its to remove (§1.5, §1.7).
+
+Measured: re-run 2 of the soak, 5 open proposals (3 `awaiting_approval`, 2 `approved`), reconciler
+`--mode state-only` for 600 s: **0 actions** (`docs/D66_SOAK_RERUN2_INTERRUPTED_2026-10-17/`); re-run 1,
+1 open proposal, 901 s: **0 actions**. A pass planned "nothing" both times and exited 0. This is not a
+fault of the reconciler and must not be read as "the state is clean": **recovery after a whole-machine
+restart depends on the scheduler (for `approved`) and on a person (for `awaiting_approval`)**, and the
+reconciler is the third thing, which ends what has timed out.
+
+**The closing procedure is fixed, and contains a schema comparison before and after.** For a database that a
+restart interrupted: (1) bring Postgres and Docker back; (2) **before anything else**, `python
+scripts/check_reconciler_run.py before --state STATE.json` (records `snapshot_schema()` and the database's
+row counters) and `assert_coherent` and a `--mode dry-run` pass over the stuck engagements, outputs kept;
+(3) start the scheduler (it dispatches what was `approved`) and the reconciler in `state-only`; decide the
+`awaiting_approval` ones with `scripts/approvals.py`; withdraw the enrollments with the CLI; never edit a
+row; (4) `check_reconciler_run.py after`, which fails unless the schema is identical to the one recorded
+and every transition has its audit event. The soak does the schema half itself: it takes
+`snapshot_schema()` at the start and compares at every check and at the end (check "schema is identical to
+the one at the start"). On 2026-10-17 step (2)'s schema snapshot was not taken before the reconciler ran
+and the comparison could not be made; that is stated in ACCEPTANCE 5.111 and is what this paragraph fixes.
+

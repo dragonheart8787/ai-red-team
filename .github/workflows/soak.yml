@@ -1,18 +1,27 @@
 name: soak
 
-# D66. The four-hour soak (docs/D66_SOAK.md) moved here after both re-runs on the development
-# machine were interrupted by host restarts (ACCEPTANCE 5.111, docs/D66_SOAK.md section 6): that
-# machine could not be kept up for four hours, a runner is a fresh machine for exactly as long as the
-# job. It is not part of `test` and does not run on a push.
+# D66. The soak (docs/D66_SOAK.md) runs here because the development machine could not be kept up for
+# four hours (three host interruptions in one day: ACCEPTANCE 5.112). Not part of `test`; it does not
+# run on an ordinary push.
 #
-# * `schedule`: once a week, Sunday 02:17 UTC.
-# * `workflow_dispatch`: `hours` (default 4). A short value (0.2) is a smoke run of the workflow
-#   itself, not a soak; the report says how long it was.
+# How it is started:
+# * `workflow_dispatch` -- `hours` (4 for a soak; 0.2 is a smoke run of this workflow, with the fault
+#   interval cut to about a minute so that all six kinds are injected once).
+#   GitHub only lists a workflow for dispatch once the file is on the default branch.
+# * `push` of `.github/soak-request.json` to the development branch -- the same thing before the
+#   file is on the default branch: the request names the hours.
+# * `schedule` -- every Sunday at 02:17 UTC, 4 hours.
 #
-# The job fails when the conductor exits non-zero (an invariant failed, a service exited with nothing
-# to explain it, a cap was breached) and also when the run directory's heartbeat says the run was
-# interrupted (a runner that was lost produces no artifact at all, and GitHub reports that itself).
-# Nothing in this file relaxes a check; the checks are the conductor's.
+# What it enforces, none of it relaxed here:
+# * the conductor runs as the unprivileged runner user; `sudo` is used for the restart of PostgreSQL and
+#   for the restart of the Docker daemon, and (in the setup steps, before the run) to install and
+#   configure; the conductor's own code asks for it in exactly those two places;
+# * the database is read through a monitoring role (BYPASSRLS, pg_monitor, SELECT) -- not as a
+#   superuser;
+# * the runner is measured first and the soak's resource caps are derived from the measurement
+#   (scripts/soak/measure.py) and printed as the caps of this environment;
+# * the report lists how many times each check ran; zero is a failure;
+# * the artifact and the summary are produced `if: always()`.
 
 on:
   schedule:
@@ -20,9 +29,12 @@ on:
   workflow_dispatch:
     inputs:
       hours:
-        description: 'Hours of traffic and faults (4 for a soak; 0.2 only to try the workflow)'
+        description: 'Hours of traffic and faults (4 = a soak; 0.2 = a smoke run of the workflow)'
         default: '4'
         required: true
+  push:
+    branches: ['claude/mvp-kernel-cybersecurity-platform-su841g']
+    paths: ['.github/soak-request.json']
 
 permissions:
   contents: read
@@ -45,8 +57,24 @@ jobs:
     runs-on: ubuntu-latest
     # four hours of traffic, up to 45 minutes of drain, setup and the report: inside the 6 h a job may run
     timeout-minutes: 345
+    env:
+      RUN_DIR: ${{ github.workspace }}/soak-run
     steps:
       - uses: actions/checkout@v4
+
+      - name: How long, and whether this is a smoke run
+        id: plan
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) H="${{ github.event.inputs.hours }}" ;;
+            push) H="$(python3 -c 'import json;print(json.load(open(".github/soak-request.json"))["hours"])')" ;;
+            *) H=4 ;;
+          esac
+          SMOKE=""
+          if python3 -c "import sys; sys.exit(0 if float('$H') <= 0.5 else 1)"; then SMOKE="--smoke"; fi
+          echo "hours=$H" >> "$GITHUB_OUTPUT"
+          echo "smoke=$SMOKE" >> "$GITHUB_OUTPUT"
+          echo "hours=$H smoke='${SMOKE}' event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fetch the deadline helper built and verified by the previous job
         uses: actions/download-artifact@v4
@@ -60,7 +88,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: A local PostgreSQL (the soak restarts it with `service postgresql restart`), nmap, ncat
+      - name: A local PostgreSQL (the soak restarts it), nmap, ncat
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends postgresql postgresql-client nmap ncat curl
@@ -68,16 +96,19 @@ jobs:
           pg_isready
 
       - name: The Docker daemon, started by hand so that the soak can restart it
-        # The soak's `docker_restart` fault sends SIGTERM to dockerd, waits, and starts `dockerd`
-        # again. The runner's own daemon is socket-activated by systemd, which would take the
-        # socket back; so systemd's units are stopped and the daemon is started the way the fault
-        # starts it.
+        # The `docker_restart` fault sends SIGTERM to dockerd, waits, and starts `dockerd` again. The
+        # runner's own daemon is socket-activated by systemd, which would take the socket back, so
+        # systemd's units are stopped and the daemon is started the way the fault starts it, with
+        # the runner's group on the socket (daemon.json) so that the unprivileged conductor can
+        # still use it after a restart.
         run: |
           sudo systemctl stop docker.service docker.socket containerd.service || true
           sudo rm -f /var/run/docker.sock
+          sudo mkdir -p /etc/docker
+          echo "{\"group\": \"$(id -gn)\"}" | sudo tee /etc/docker/daemon.json
+          sudo touch /tmp/dockerd.log && sudo chmod 666 /tmp/dockerd.log
           (sudo setsid nohup dockerd >> /tmp/dockerd.log 2>&1 < /dev/null &)
-          for i in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && break; sleep 2; done
-          sudo chmod 666 /var/run/docker.sock
+          for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 2; done
           docker version --format '{{.Server.Version}}'
 
       - name: Install the project and create the database
@@ -86,34 +117,55 @@ jobs:
           .venv/bin/pip install -q --upgrade pip
           .venv/bin/pip install -q -e '.[dev]'
           sudo --preserve-env=PATH ./scripts/init_db.sh
+          sudo chown "$(id -u):$(id -g)" .env && chmod 600 .env
+
+      - name: The monitoring role the soak reads the database as
+        # Not a superuser: it reads every row (BYPASSRLS), the server's activity (pg_monitor) and
+        # the schema, and writes nothing.
+        run: |
+          PW="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          echo "::add-mask::$PW"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -d cyberorch <<SQL
+          CREATE ROLE soak_monitor LOGIN BYPASSRLS PASSWORD '$PW';
+          GRANT pg_monitor TO soak_monitor;
+          GRANT USAGE ON SCHEMA public TO soak_monitor;
+          GRANT SELECT ON ALL TABLES IN SCHEMA public TO soak_monitor;
+          SQL
+          echo "SOAK_PSQL_URL=postgresql://soak_monitor:$PW@127.0.0.1:5432/cyberorch" >> "$GITHUB_ENV"
+          sudo chmod -R a+rX /var/log/postgresql || true
 
       - name: Build the images the soak's workload uses
         run: |
           docker pull python:3.12-slim
           ./tool_gateway/images/build_nmap_image.sh
 
-      - name: The soak
-        # As root: the faults restart Postgres and the Docker daemon and kill processes of other
-        # users. The environment (.env) is read by the conductor itself.
+      - name: Measure the runner, and derive the caps from the measurement
         run: |
-          sudo --preserve-env=PATH,PYTHONPATH \
-            .venv/bin/python -m scripts.soak.conductor \
-              --run-dir "$RUNNER_TEMP/soak" \
-              --hours "${{ github.event.inputs.hours || '4' }}"
+          mkdir -p "$RUN_DIR"
+          set -a; . ./.env; set +a
+          .venv/bin/python -m scripts.soak.measure --dir "$RUN_DIR" | tee /tmp/caps.txt
+          { echo '### The runner, measured'; echo '```json'; cat "$RUN_DIR/caps.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: What the heartbeat says about the run
+      - name: The soak (unprivileged; sudo only for the two restarts)
+        run: |
+          set -a; . ./.env; set +a
+          .venv/bin/python -m scripts.soak.conductor \
+            --run-dir "$RUN_DIR" --caps-file "$RUN_DIR/caps.json" \
+            --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }}
+
+      - name: What the heartbeat says about the run, and the logs of the daemons
         if: always()
         run: |
-          sudo .venv/bin/python -m scripts.soak.heartbeat "$RUNNER_TEMP/soak" || true
-          sudo cp /tmp/dockerd.log "$RUNNER_TEMP/soak/dockerd.log" 2>/dev/null || true
-          sudo cp /var/log/postgresql/*.log "$RUNNER_TEMP/soak/" 2>/dev/null || true
-          sudo chmod -R a+rX "$RUNNER_TEMP/soak" || true
+          .venv/bin/python -m scripts.soak.heartbeat "$RUN_DIR" || true
+          cp /tmp/dockerd.log "$RUN_DIR/dockerd.log" 2>/dev/null || true
+          sudo cp /var/log/postgresql/*.log "$RUN_DIR/" 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "$RUN_DIR" || true
 
       - name: Summary
         if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/soak/report.md" ]; then
-            head -c 60000 "$RUNNER_TEMP/soak/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUN_DIR/report.md" ]; then
+            head -c 60000 "$RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No report.md: the run did not reach its end." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -122,10 +174,10 @@ jobs:
         if: always()
         with:
           name: soak-run
+          # the raw container evidence of the run is not uploaded; the report, the journal, the samples
+          # and the logs are
           path: |
-            ${{ runner.temp }}/soak
-            !${{ runner.temp }}/soak/evidence
-          # the raw container evidence of the run is not uploaded; the report, the journal, the
-          # samples and the logs are
+            ${{ github.workspace }}/soak-run
+            !${{ github.workspace }}/soak-run/evidence
           retention-days: 30
           if-no-files-found: warn

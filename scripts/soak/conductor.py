@@ -42,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.soak import checks, faults, heartbeat, lib, report, services  # noqa: E402
+from scripts.soak import checks, faults, heartbeat, lib, measure, report, services  # noqa: E402
 from scripts.soak import world as world_mod  # noqa: E402
 
 #: the reconciler's thresholds for the soak. Everything not named here is ``.env.example``'s (the
@@ -61,17 +61,7 @@ RECONCILER_ENV = {
 #: Resource caps, fixed before the run. A breach is a finding (the run stops): a soak that needs
 #: more than this is not a soak of something that holds still. Memory is resident set; descriptors
 #: and connections are per process; the rest are the host and the run directory.
-CAPS = {
-    "rss_mb": {"scheduler": 512, "reconciler": 512, "worker": 1024, "conductor": 1024},
-    "fds": 1024,
-    "pg_connections_per_process": 20,
-    "pg_backends_total": 80,
-    "containers_total": 150,
-    "networks": 20,
-    "run_dir_mb": 2048,
-    "events_file_mb": 512,
-    "disk_free_mb_min": 2048,
-}
+CAPS = measure.DEFAULT_CAPS
 
 FAULT_ATTRIBUTION_S = services.ATTRIBUTION_S
 RECOVERY_TIMEOUT_S = 20 * 60
@@ -104,6 +94,17 @@ class Conductor:
         self.pending_seen: dict[str, float] = {}
         self._events_offset = 0
         self.hourly_points: list[dict] = []
+        self.caps = self._load_caps()
+        self.schema_before: dict[str, str] = {}
+
+    def _load_caps(self) -> dict:
+        """The default caps, or the ones measured on this machine (``scripts/soak/measure.py``)."""
+        self.caps_document = None
+        path = getattr(self.args, "caps_file", None)
+        if not path:
+            return measure.DEFAULT_CAPS
+        self.caps_document = json.loads(Path(path).read_text())
+        return self.caps_document["caps"]
 
     # -- findings ---------------------------------------------------------------------------
 
@@ -142,9 +143,15 @@ class Conductor:
             worker_args=["--threads", str(self.args.threads), "--mean-gap",
                          str(self.args.mean_gap), "--budget", str(self.args.budget),
                          "--seed", str(self.args.seed)])
+        self.schema_before = checks.schema_now()
         self.journal.write("soak.setup", engagements=self.eids, seed=self.args.seed,
                            hours=self.args.hours, reconciler_env=RECONCILER_ENV,
-                           pid=os.getpid(), host=heartbeat.host_identity())
+                           pid=os.getpid(), host=heartbeat.host_identity(),
+                           caps=self.caps, caps_source=(self.caps_document or {}).get(
+                               "source", "defaults of the development machine"),
+                           measured=(self.caps_document or {}).get("measured"),
+                           schema_facts=len(self.schema_before),
+                           smoke=bool(getattr(self.args, "smoke", False)))
 
     # -- the witness ------------------------------------------------------------------------
 
@@ -440,33 +447,33 @@ class Conductor:
         for name, stats in (sample.get("procs") or {}).items():
             if not stats:
                 continue
-            cap = CAPS["rss_mb"].get(name)
+            cap = self.caps["rss_mb"].get(name)
             if cap is not None and stats["rss_kb"] / 1024 > cap:
                 out.append(f"{name} resident memory {stats['rss_kb'] / 1024:.0f} MB > {cap} MB")
-            if stats["fds"] > CAPS["fds"]:
-                out.append(f"{name} holds {stats['fds']} descriptors > {CAPS['fds']}")
-            if stats["pg_connections"] > CAPS["pg_connections_per_process"]:
+            if stats["fds"] > self.caps["fds"]:
+                out.append(f"{name} holds {stats['fds']} descriptors > {self.caps['fds']}")
+            if stats["pg_connections"] > self.caps["pg_connections_per_process"]:
                 out.append(f"{name} holds {stats['pg_connections']} connections to Postgres "
-                           f"> {CAPS['pg_connections_per_process']}")
+                           f"> {self.caps['pg_connections_per_process']}")
         pg = sample.get("pg")
-        if pg and pg["total"] > CAPS["pg_backends_total"]:
-            out.append(f"{pg['total']} backends in the database > {CAPS['pg_backends_total']}")
+        if pg and pg["total"] > self.caps["pg_backends_total"]:
+            out.append(f"{pg['total']} backends in the database > {self.caps['pg_backends_total']}")
         dk = sample.get("docker")
         if dk:
             total = sum(dk["tools"].values()) + sum(dk["proxies"].values())
-            if total > CAPS["containers_total"]:
-                out.append(f"{total} containers of the soak > {CAPS['containers_total']}")
-            if dk["networks"] > CAPS["networks"]:
-                out.append(f"{dk['networks']} sandbox networks > {CAPS['networks']}")
+            if total > self.caps["containers_total"]:
+                out.append(f"{total} containers of the soak > {self.caps['containers_total']}")
+            if dk["networks"] > self.caps["networks"]:
+                out.append(f"{dk['networks']} sandbox networks > {self.caps['networks']}")
         size = lib.dir_size_mb(self.run_dir)
-        if size > CAPS["run_dir_mb"]:
-            out.append(f"the run directory is {size} MB > {CAPS['run_dir_mb']} MB")
+        if size > self.caps["run_dir_mb"]:
+            out.append(f"the run directory is {size} MB > {self.caps['run_dir_mb']} MB")
         events_mb = self.journal.path.stat().st_size / 1048576
-        if events_mb > CAPS["events_file_mb"]:
-            out.append(f"events.jsonl is {events_mb:.0f} MB > {CAPS['events_file_mb']} MB")
+        if events_mb > self.caps["events_file_mb"]:
+            out.append(f"events.jsonl is {events_mb:.0f} MB > {self.caps['events_file_mb']} MB")
         free = lib.disk_free_mb("/")
-        if free < CAPS["disk_free_mb_min"]:
-            out.append(f"{free} MB free on / < {CAPS['disk_free_mb_min']} MB")
+        if free < self.caps["disk_free_mb_min"]:
+            out.append(f"{free} MB free on / < {self.caps['disk_free_mb_min']} MB")
         return out
 
     def hourly(self, number: int) -> None:
@@ -507,6 +514,7 @@ class Conductor:
             lambda: checks.residue_does_not_grow(self.samples, window),
             lambda: checks.no_connection_leak(self.samples, window),
             lambda: checks.unresolved_intents(self.eids),
+            lambda: checks.schema_unchanged(self.schema_before),
         ]
         for step in steps:
             for attempt in range(3):
@@ -523,8 +531,11 @@ class Conductor:
         for result in results:
             self.journal.write("check", label=label, **result.as_dict())
             self.check_results.append({"label": label, "at": lib.stamp(), **result.as_dict()})
-            if not result.ok:
+            if checks.is_finding(result, smoke=bool(getattr(self.args, "smoke", False))):
                 self.finding("invariant", f"{result.name}: {result.detail}", label=label)
+            elif not result.ok:
+                self.journal.write("smoke.not_enforced", check=result.name, detail=result.detail,
+                                   label=label)
         return results
 
     # -- the run ----------------------------------------------------------------------------
@@ -584,6 +595,8 @@ class Conductor:
         if not halted:
             self.drain()
         final = self.final_checks("final" if not halted else "final-after-finding")
+        if not halted:
+            self.completeness_findings()
         self.hourly(len(self.hourly_points))                   # the last point: after the drain
         self.shutdown.set()
         self.sup.stop_all()
@@ -597,6 +610,21 @@ class Conductor:
                         faults_done=len(self.faults_done), findings=len(self.findings))
         report.write(self, final, tear)
         return 3 if self.findings else 0
+
+    def completeness_findings(self) -> None:
+        """A check that never ran, or never judged anything, has verified nothing: a finding. So is
+        a fault kind that never took effect in a run long enough to have drawn all six."""
+        for line in checks.never_ran(self.check_results, expect_drain=True):
+            self.finding("check_never_ran", line)
+        done = [f for f in self.faults_done]
+        # a smoke run (0.2 h or more) exists to inject all six; a run too short to draw them is
+        # not asked to
+        smoke_long_enough = bool(getattr(self.args, "smoke", False)) and self.args.hours >= 0.2
+        if (len(done) >= len(faults.KINDS) or smoke_long_enough) and not self.args.faults:
+            for kind in faults.KINDS:
+                if not any(f["kind"] == kind and f.get("ok", True) is not False for f in done):
+                    self.finding("fault_kind_never_effective",
+                                 f"{kind} was never injected and effective in {len(done)} faults")
 
     def drain(self) -> None:
         """Let the scheduler and the reconciler finish what is in flight: every proposal terminal
@@ -684,10 +712,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="only these kinds (a diagnostic run; the real soak draws all six)")
     parser.add_argument("--scheduler-script", type=Path,
                         help="a different script for the scheduler (a diagnostic wrapper)")
+    parser.add_argument("--caps-file", type=Path,
+                        help="caps measured on this machine (scripts/soak/measure.py)")
+    parser.add_argument("--smoke", action="store_true",
+                        help="a try of the workflow, not a soak: faults about a minute apart, "
+                             "checks every two minutes, a short drain")
     parser.add_argument("--seed", default="d66")
     parser.add_argument("--reuse-world", action="store_true")
     parser.add_argument("--halt-on-finding", action="store_true", default=True)
     args = parser.parse_args(argv)
+    if args.smoke:
+        args.fault_min, args.fault_max, args.first_fault_s = 0.7, 1.0, 30.0
+        args.check_every, args.sample_s, args.drain_minutes = 2.0, 15.0, 35.0
     conductor = Conductor(args)
     signal.signal(signal.SIGTERM, lambda *_: conductor.stop.set())
     signal.signal(signal.SIGINT, lambda *_: conductor.stop.set())

@@ -144,6 +144,16 @@ def write(conductor, final_results, teardown) -> None:
         failed = sum(1 for r in rows if not r["ok"])
         lines.append(f"| {name} | {len(rows)} | {failed} | {rows[-1]['detail'][:200]} |")
 
+    lines += _check_counts(conductor)
+    not_enforced = [r for r in journal if r["kind"] == "smoke.not_enforced"]
+    if not_enforced:
+        lines.append(f"\n**Smoke run: {len(not_enforced)} failed result(s) of "
+                     f"`{not_enforced[0]['check']}` were recorded and not enforced** (see "
+                     "`checks.SMOKE_NOT_ENFORCED`: the reconciler's timers, B + P + Q about 21 "
+                     "minutes, cannot be compressed, so exited tool containers outlive a smoke "
+                     "run). Last: " + not_enforced[-1]["detail"][:200])
+    lines += _caps_section(conductor)
+
     lines.append("\n## Traffic\n")
     try:
         arr = checks._quote(eids)
@@ -216,6 +226,9 @@ def write(conductor, final_results, teardown) -> None:
               f"grouped (`scripts/soak/logscan.py`; classes: {classes}). `explained` means "
               "*every* occurrence lies inside a fault's window, which says when and not why.\n"]
     lines += logscan.render(groups)
+    if logscan.SKIPPED:
+        lines.append("\n**Log sources that could not be read, and so are not in the table above:** "
+                     + "; ".join(sorted(set(logscan.SKIPPED))))
     lines.append("\n## Observed, and not covered by any check\n")
     lines += not_covered(conductor, journal, groups)
 
@@ -235,6 +248,36 @@ def write(conductor, final_results, teardown) -> None:
     summary = {"findings": conductor.findings, "faults": faults, "checks": conductor.check_results,
                "trends": trends(conductor.samples), "teardown": teardown}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+
+
+def _check_counts(conductor) -> list[str]:
+    out = ["\n## How many times each check ran\n",
+           "A check with no execution -- or one executed and never given enough to judge (a series "
+           "shorter than its windows) -- has verified nothing, and is a failure "
+           "(`check_never_ran`).\n",
+           "| check | executions | judged | verdict |", "|---|---|---|---|"]
+    missing = checks.never_ran(conductor.check_results, expect_drain=not conductor.halted)
+    for name, runs, judged in checks.execution_counts(conductor.check_results):
+        failed = [m for m in missing if m.startswith(name + ":")]
+        if failed:
+            verdict = f"**FAILED: {failed[0]}**"
+        elif name == checks.DRAIN_CHECK and not runs:
+            verdict = "not expected: the run stopped before the drain"
+        else:
+            verdict = "ok"
+        shown = "n/a (listed)" if name in checks.NOT_JUDGED_BY_DESIGN else judged
+        out.append(f"| {name} | {runs} | {shown} | {verdict} |")
+    return out
+
+
+def _caps_section(conductor) -> list[str]:
+    doc = conductor.caps_document
+    source = (doc or {}).get("source", "the defaults of the development machine (not measured)")
+    out = ["\n## The caps of this environment\n", f"source: **{source}**\n"]
+    if doc:
+        out.append("measured: `" + json.dumps(doc["measured"], sort_keys=True) + "`\n")
+    out.append("caps used: `" + json.dumps(conductor.caps, sort_keys=True) + "`")
+    return out
 
 
 def _docker_events(run_dir) -> list[dict]:

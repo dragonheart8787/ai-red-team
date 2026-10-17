@@ -128,10 +128,16 @@ def alive(pid: int | None) -> bool:
 # ---------------------------------------------------------------------------------------------
 
 def psql(statement: str, *, timeout: float = 30.0) -> list[list[str]]:
-    done = subprocess.run(
-        ["su", "postgres", "-c", f"psql -d cyberorch -At -F '|' -v ON_ERROR_STOP=1 -c "
-                                  f"\"{statement}\""],
-        capture_output=True, text=True, timeout=timeout)
+    """The statement as a role that reads every row (a superuser on a workstation, as ``su
+    postgres``; on a runner the monitoring role named by ``SOAK_PSQL_URL``: ``BYPASSRLS``,
+    ``pg_monitor``, ``SELECT`` and nothing else)."""
+    url = os.environ.get("SOAK_PSQL_URL")
+    if url:
+        command = ["psql", url, "-At", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", statement]
+    else:
+        command = ["su", "postgres", "-c", f"psql -d cyberorch -At -F '|' -v ON_ERROR_STOP=1 -c "
+                                           f"\"{statement}\""]
+    done = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if done.returncode != 0:
         raise RuntimeError(f"psql failed: {done.stderr.strip()[-300:]}")
     return [line.split("|") for line in done.stdout.splitlines() if line]

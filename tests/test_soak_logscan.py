@@ -72,8 +72,23 @@ def test_the_dockerd_log_keeps_warnings_and_errors_inside_the_run_only(tmp_path)
         "panic: runtime error: invalid memory address",
     ]) + "\n")
     entries = logscan.read_dockerd(path, T0, T0 + 100)
+    # (a line with no time of its own takes the time of the line before it)
     assert [(e.level, e.ts is None) for e in entries] == [
-        ("warning", False), ("error", False), ("unparsed", True)]
+        ("warning", False), ("error", False), ("unparsed", False)]
+    assert entries[-1].ts == entries[-2].ts
+
+
+def test_an_unparsed_dockerd_line_after_a_line_outside_the_run_is_not_read(tmp_path):
+    path = tmp_path / "dockerd.log"
+    path.write_text(f'time="{at(-500)}" level=error msg="an old build failed"\n'
+                    "panic: from the old build\n")
+    assert logscan.read_dockerd(path, T0, T0 + 100) == []
+
+
+def test_the_shutdown_of_the_run_is_a_window_of_its_own():
+    events = journal()                       # (its last event is the teardown, at T0 + 7200)
+    windows = [w for w in logscan.fault_windows(events) if w[2] == "shutdown"]
+    assert len(windows) == 1 and windows[0][0] < T0 + 7200 < windows[0][1]
 
 
 def test_service_logs_keep_error_lines_and_actions_that_were_not_done(tmp_path):
@@ -113,7 +128,8 @@ def test_a_group_wholly_inside_a_window_is_explained_and_one_line_outside_is_not
 def test_the_window_runs_from_the_fault_to_its_recovery_plus_the_grace_and_opens_when_unrecovered():
     windows = logscan.fault_windows(journal(("docker_restart", 100, 150), ("kill9_scheduler", 500,
                                                                            None)))
-    (s1, e1, k1), (s2, e2, k2) = windows
+    (s1, e1, k1), (s2, e2, k2), (_s3, _e3, k3) = windows
+    assert k3 == "shutdown"
     assert (k1, k2) == ("docker_restart", "kill9_scheduler")
     assert s1 < T0 + 100 < T0 + 150 < e1 == T0 + 150 + logscan.GRACE_S
     assert e2 == T0 + 500 + logscan.OPEN_WINDOW_S + logscan.GRACE_S

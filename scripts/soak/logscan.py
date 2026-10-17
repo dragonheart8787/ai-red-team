@@ -16,8 +16,9 @@ A line is **normalised** (ids, numbers, hashes, addresses replaced) and grouped 
 the same source, level and shape. A group is then put in exactly one class:
 
 * ``explained`` -- every occurrence lies inside the window of a fault (from its start to its
-  recovery, plus ``GRACE_S``). The fault kinds that cover it are named. This says *when*, not *why*:
-  a line inside a window is not thereby understood, only expected to be near a fault.
+  recovery, plus ``GRACE_S``) or of the run's shutdown. The fault kinds that cover it are named.
+  This says *when*, not *why*: a line inside a window is not thereby understood, only expected to
+  be near a fault.
 * ``not_explained`` -- at least one occurrence outside every window. Listed with its first and last
   time, its count inside and outside windows, and samples.
 * ``untimed`` -- the source has no timestamps (the services' logs). Listed; not placed.
@@ -66,6 +67,10 @@ _NORMALISE = [
 ]
 
 
+#: sources that could not be read in this process (so that a report never reads as "nothing there")
+SKIPPED: list[str] = []
+
+
 def normalise(text: str) -> str:
     for pattern, token in _NORMALISE:
         text = pattern.sub(token, text)
@@ -112,7 +117,8 @@ def read_postgres(paths: list[Path], since: float, until: float) -> list[Entry]:
         current: Entry | None = None
         try:
             lines = path.read_text(errors="replace").splitlines()
-        except OSError:
+        except OSError as exc:
+            SKIPPED.append(f"{path}: {exc.strerror}")
             continue
         for line in lines:
             head = _PG_HEAD.match(line)
@@ -140,16 +146,21 @@ def read_dockerd(path: Path, since: float, until: float) -> list[Entry]:
     out: list[Entry] = []
     try:
         lines = path.read_text(errors="replace").splitlines()
-    except OSError:
+    except OSError as exc:
+        SKIPPED.append(f"{path}: {exc.strerror}")
         return out
+    last_ts: float | None = None
     for line in lines:
         m = _DOCKERD.match(line)
         if not m:
-            if _ERRORISH.search(line):                # panics and stack traces have no level
-                out.append(Entry("dockerd", "unparsed", line.strip()[:240], None, line))
+            # panics and stack traces have no level and no time of their own: they belong to the
+            # line before them, and are read only if that one was inside the run
+            if _ERRORISH.search(line) and last_ts is not None and since <= last_ts <= until:
+                out.append(Entry("dockerd", "unparsed", line.strip()[:240], last_ts, line))
             continue
         stamp, level, message, _rest = m.groups()
         ts = _utc(stamp)
+        last_ts = ts
         if ts < since or ts > until or level not in ("warning", "error", "fatal", "panic"):
             continue
         out.append(Entry("dockerd", level, message, ts, line))
@@ -193,6 +204,10 @@ def fault_windows(journal: list[dict]) -> list[tuple[float, float, str]]:
                  and float(r["ts"]) >= start]
         end = (float(after[0]["ts"]) if after else start + OPEN_WINDOW_S) + GRACE_S
         out.append((start - 5.0, end, str(begin.get("fault"))))
+    # the end of a run stops its services and closes their connections: a window of its own
+    for end_event in (r for r in journal if r.get("kind") == "soak.teardown"):
+        at = float(end_event["ts"])
+        out.append((at - 90.0, at + GRACE_S, "shutdown"))
     return out
 
 

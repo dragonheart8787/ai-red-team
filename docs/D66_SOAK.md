@@ -307,3 +307,39 @@ is the step summary and the run directory (minus the raw container evidence) is 
 runner; the faults assume things about the machine that a runner may not grant (the `docker_restart` and
 `postgres_restart` faults, resource caps tuned for this host), and what the first runs show about that is
 the next finding, not a result about the product. There is no four-hour result in this repository yet.
+
+## 7. Running it on a runner: measured caps, unprivileged, counted checks, a smoke run (ACCEPTANCE 5.112)
+
+* **Where.** `.github/workflows/soak.yml`. Started by `workflow_dispatch` (`hours`), by a push of
+  `.github/soak-request.json` to the development branch (GitHub lists a workflow for dispatch only once
+  the file is on the default branch, which it is not yet: 404 from the API on 2026-10-17), or weekly.
+* **The runner is measured before the run** (`scripts/soak/measure.py`): memory, cores, free disk, the
+  descriptor limit, Postgres' `max_connections`, what the idle daemons weigh. The caps are derived from
+  the measurement by rules fixed in that module (a fraction of the memory, a quarter of the connections,
+  25 containers per core, a quarter of the free disk ...), **never above the development defaults**, and
+  are printed in the report as *the caps of this environment*, with the measurements and their source.
+  They are a statement about that machine, not something chosen to make a run pass.
+* **Unprivileged.** The conductor and everything it starts run as the runner user. `sudo` is used for
+  exactly two things, the restart of PostgreSQL and the restart of the Docker daemon (and, in the setup
+  steps before the run, to install and configure). `scripts/soak/faults.privileged` is the only place the
+  word appears, and `tests/test_soak_environment.py` fails if any other function of the soak asks for it.
+  The database is read through a monitoring role (`BYPASSRLS`, `pg_monitor`, `SELECT`), not a
+  superuser (`SOAK_PSQL_URL`); on a workstation the old `su postgres` is used. The runner's own
+  blanket `sudo` is not removed.
+* **Every check is counted.** The report lists, for every check, how many times it ran and how many
+  times it had enough to judge. A check that never ran, or that ran and never had enough to judge (a
+  series shorter than its windows), is a failure (`check_never_ran`); so is a fault kind that never took
+  effect in a run long enough to draw all six (`fault_kind_never_effective`). The "unresolved
+  intents" check is listed by design and is exempt from the second half.
+* **A schema comparison is a check.** `snapshot_schema()` at the start, compared at every check and at the
+  end. Nothing in a soak runs DDL.
+* **The smoke run (`hours` <= 0.5).** `--smoke`: the first fault after 30 s and then one every 42-60 s
+  (all six kinds within the first six), checks and windows of two minutes, samples every 15 s, a 35-minute
+  drain (the reconciler's B + P + Q is about 21 minutes and cannot be shortened). It tries the workflow;
+  it is not a soak. **One check is recorded and not enforced in it**, and the report says so: "residue
+  does not grow". Reason, measured on the development machine on 2026-10-17: a worker killed or a daemon
+  restarted leaves a run the reconciler can declare `unknown_outcome` only after about 21 minutes; at one
+  such fault a minute, exited tool containers went 0, 1, 2, 4, 6 over eight minutes with no reconciler
+  action yet (nothing was due), the floor rose in four windows in a row, and the invariant -- correctly,
+  for that regime -- failed. In a soak the faults are 10-20 minutes apart and the windows 15 minutes; the
+  check is an invariant there, unchanged.

@@ -1,0 +1,1 @@
+{"hours": 0.2, "purpose": "smoke run of .github/workflows/soak.yml (ACCEPTANCE 5.113): all six fault kinds, every check counted, caps measured on the runner; not a soak"}

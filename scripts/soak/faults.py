@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import random
-import signal
 import subprocess
 import time
 
@@ -43,10 +42,20 @@ class Bag:
         return self.items.pop()
 
 
+def privileged(command: list[str]) -> list[str]:
+    """``sudo -n`` in front of a command, unless this process already is root.
+
+    **The only two places in the soak that need more than the user it runs as are here: the restart
+    of PostgreSQL and the restart of the Docker daemon** (``tests/test_soak_privilege.py`` keeps
+    it so). Everything else -- the services, the faults on processes of its own, Docker through
+    its socket, the database through a role -- runs unprivileged."""
+    return command if os.geteuid() == 0 else ["sudo", "-n", *command]
+
+
 def postgres_restart() -> dict:
     started = time.monotonic()
-    done = subprocess.run(["service", "postgresql", "restart"], capture_output=True, text=True,
-                          timeout=180)
+    done = subprocess.run(privileged(["service", "postgresql", "restart"]), capture_output=True,
+                          text=True, timeout=180)
     return {"ok": done.returncode == 0, "action_s": round(time.monotonic() - started, 1),
             "detail": (done.stdout + done.stderr).strip()[-200:]}
 
@@ -60,19 +69,19 @@ def docker_restart() -> dict:
     started = time.monotonic()
     pids = _dockerd_pids()
     for pid in pids:
-        os.kill(pid, signal.SIGTERM)
+        subprocess.run(privileged(["kill", "-TERM", str(pid)]), capture_output=True)
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline and _dockerd_pids():
         time.sleep(1)
     killed_hard = False
     for pid in _dockerd_pids():
-        os.kill(pid, signal.SIGKILL)
+        subprocess.run(privileged(["kill", "-KILL", str(pid)]), capture_output=True)
         killed_hard = True
     time.sleep(2)
     # (the way this machine starts it: detached, its own session, its log kept)
     log = open("/tmp/dockerd.log", "ab")
-    subprocess.Popen(["dockerd"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                     start_new_session=True)
+    subprocess.Popen(privileged(["dockerd"]), stdout=log, stderr=subprocess.STDOUT,
+                     stdin=subprocess.DEVNULL, start_new_session=True)
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline and not lib.docker_reachable():
         time.sleep(1)
