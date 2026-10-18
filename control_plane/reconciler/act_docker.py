@@ -186,7 +186,7 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
     kept = None
     if action.reason_code == vocab.RUN_UNKNOWN_OUTCOME and not proxy:
         try:                                    # before the intent: no evidence, no intent, no call
-            kept = evidence.save(container, evidence_dir)
+            kept = evidence.save(container, evidence_dir, action.expected_owner)
         except evidence.EvidenceError:
             log.error("reconciler: evidence of a container whose run is unknown was not kept; "
                       "the container stays")
@@ -200,7 +200,8 @@ def _remove_container(action: Action, container: Any, client: Any, th: Threshold
             return False
         except NotFound:
             pass
-        return not client.containers.list(all=True, filters={"id": action.subject_id})
+        return not client.containers.list(all=True, filters={"id": action.subject_id},
+                                          ignore_removed=True)
 
     try:
         container.remove(force=proxy)      # a tool container is removed only if it is at rest
@@ -239,7 +240,7 @@ def _remove_network(action: Action, client: Any, th: Thresholds, sleep, clock,
             or ALLOWLIST_LABEL not in (network.attrs.get("Labels") or {})):
         return Result(action, CHANGED, NOT_OURS)
     # Docker refuses only for running and paused containers; ours is the stricter rule (§1.5)
-    if client.containers.list(all=True, filters={"network": network.name}):
+    if client.containers.list(all=True, filters={"network": network.name}, ignore_removed=True):
         return Result(action, CHANGED, IN_USE)
     if (blocked := declared(action, intend)) is not None:
         return blocked
@@ -271,7 +272,7 @@ def live_mount_sources(client: Any) -> frozenset[str]:
     """Host paths mounted into any container that could still read them: created, running, paused
     or restarting. Re-read by the file half immediately before an unlink (D64-12)."""
     sources: set[str] = set()
-    for container in client.containers.list(all=True):
+    for container in client.containers.list(all=True, ignore_removed=True):
         status = container.attrs.get("State", {}).get("Status")
         if status in LIVE_STATES or status == "created":
             for mount in container.attrs.get("Mounts") or ():

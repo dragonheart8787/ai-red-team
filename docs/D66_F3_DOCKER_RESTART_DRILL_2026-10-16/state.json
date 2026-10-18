@@ -1,0 +1,381 @@
+{
+ "eid": "ENG-RESTART-5a6b43",
+ "cidr": "10.140.87.0/24",
+ "rounds": [
+  {
+   "round": 1,
+   "proposal": "PROP-ce245d7ced",
+   "container": "0c44a6e49d6722f0bc207dda8cf12e8bccca5f5cf42574cafa9dbe794d14582e",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.2,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 6.3
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 6.3,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-390b022df489",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 2,
+   "proposal": "PROP-05476777ab",
+   "container": "9869dfa26a2a1a7614fbd797a681b3a4d443c325a21e639594bcd856c5bbf8c3",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.2
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.2,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-8ca22512e3f3",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 3,
+   "proposal": "PROP-73e6611a1e",
+   "container": "06b3497494af067ab8b19e47ce1daacf525e234f0544572c88d44ad9ad1dfeb2",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.3
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.3,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-ee43c0f510ff",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 4,
+   "proposal": "PROP-005b3533fa",
+   "container": "0cf93c9ead6541dcb8aa24ef96a713c5f042e7a3fe964510024c6f1bb36ad245",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.3
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.3,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-a62ab9c6dde6",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 5,
+   "proposal": "PROP-d312efa32d",
+   "container": "74b223874ec00a4445e65e5f589087b3659bc14736571bd4078833a9b537a3da",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.2,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.3
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.3,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-3e1853885040",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 6,
+   "proposal": "PROP-8f66ad3363",
+   "container": "e927d62adef98176398be81bdbb9b88b396d0d901beacd9aa5c15d3eb14b9a2e",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.4
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.4,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "revived_by_hand": {
+    "status_after": "running"
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-6cbbd2c09a2c",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 7,
+   "proposal": "PROP-2e9d81ade8",
+   "container": "97a589aacd209ca639e5bac7b1d74fa4c437d7d19a7680fb5f5ac7a9b5ccaa05",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.2
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.2,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "revived_by_hand": {
+    "status_after": "running"
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-91b793c09218",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 8,
+   "proposal": "PROP-6890945028",
+   "container": "1648b52eb0246a3c7dd71297bdef980889654945533eb1c89778ccf40c33900f",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.3
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.3,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "revived_by_hand": {
+    "status_after": "running"
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-b0488ce89d55",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 9,
+   "proposal": "PROP-6c4d5fca01",
+   "container": "1a426fe690aebe9b697cdd6d9d1bde0b864b55e96581c837281f43661cb66ce1",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.2
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.2,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "revived_by_hand": {
+    "status_after": "running"
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-5941abc1de22",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  },
+  {
+   "round": 10,
+   "proposal": "PROP-d5f487495b",
+   "container": "528316027d0ecc7d9437676548340d39bd9d7a8d0b89cfd06d7def8b76103fb3",
+   "restart_policy": {
+    "Name": "no",
+    "MaximumRetryCount": 0
+   },
+   "alive_s_before_restart": 0.4,
+   "docker_restart": {
+    "ok": true,
+    "action_s": 5.2
+   },
+   "scheduler_exit": 5,
+   "scheduler_exit_after_s": 5.2,
+   "container_after": {
+    "status": "exited",
+    "exit_code": 143,
+    "restarted_by_daemon": false
+   },
+   "revived_by_hand": {
+    "status_after": "running"
+   },
+   "second_scheduler_exit": 0,
+   "containers_with_the_runs_label_now": 1,
+   "stage": [
+    "dispatching",
+    "",
+    "running"
+   ],
+   "runs": [
+    [
+     "RUN-7f20dc842482",
+     "running"
+    ]
+   ],
+   "dispatch_records": 1,
+   "containers_created_for_the_run": 1
+  }
+ ]
+}

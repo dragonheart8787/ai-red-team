@@ -67,7 +67,9 @@ ALLOWED_PURE_IMPORTS = {
 ALLOWED_CONFIG_IMPORTS = {"__future__", "collections.abc", "dataclasses", "docker.constants",
                           "control_plane.policy.ceiling"}
 ALLOWED_OBSERVE_IMPORTS = {"__future__", "os", "stat", "collections.abc", "dataclasses",
-                           "datetime", "typing", "sqlalchemy", "control_plane.reconciler.vocab",
+                           "datetime", "typing", "sqlalchemy",
+                           "docker.errors",          # (NotFound: a vanished object, 5.107)
+                           "control_plane.reconciler.vocab",
                            "control_plane.reconciler.model"}
 
 
@@ -346,22 +348,27 @@ def test_kill_and_remove_are_called_in_act_docker_only_and_unlink_in_act_files_o
     assert {n for n in EVERY if "unlink" in _attribute_calls(n)} == {"act_files", "evidence"}
 
 
-def test_evidence_unlinks_only_the_partial_file_it_made_and_links_only_into_its_directory():
-    """The one place besides ``act_files`` that removes a file: the name ``temporary``, which is
-    ``.<name>.<pid>.partial`` in the evidence directory, built in the same function. And the one
-    ``os.link`` makes the final name from that same file (so that an existing file is never
-    replaced)."""
+def test_evidence_unlinks_only_the_files_it_made_itself_and_links_only_into_its_directory():
+    """The one place besides ``act_files`` that removes a file: ``temporary``
+    (``.<name>.<pid>.partial`` in the evidence directory, built in the same function) and the
+    start-up probe's own ``name`` (``.probe.<pid>``). And the one ``os.link`` makes the final name
+    from that same partial file (so that an existing file is never replaced). The one ``os.mkdir``
+    makes an engagement's subdirectory ``0o700``."""
     tree = _tree("evidence")
     unlinks = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                and isinstance(n.func, ast.Attribute) and n.func.attr == "unlink"]
-    assert len(unlinks) == 1
-    assert ast.unparse(unlinks[0].args[0]) == "temporary"
+    assert sorted(ast.unparse(u.args[0]) for u in unlinks) == ["name", "temporary"]
+    mkdirs = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "mkdir"]
+    assert [[ast.unparse(a) for a in n.args] for n in mkdirs] == [["path", "448"]] or [
+        [ast.unparse(a) for a in n.args] for n in mkdirs] == [["path", "0o700"]]
     links = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute) and n.func.attr == "link"]
     assert [[ast.unparse(a) for a in n.args] for n in links] == [["temporary", "final"]]
     source = (PKG / "evidence.py").read_text()
     assert "os.path.join(directory, f\".{name}.{os.getpid()}.partial\")" in source
     assert "os.path.join(directory, name)" in source
+    assert "os.path.join(directory, f\".probe.{os.getpid()}\")" in source
 
 
 def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
@@ -374,7 +381,7 @@ def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
         if name == "lock":        # starts its own watchdog *thread*: nothing in Docker or on disk
             continue
         # the evidence file it writes, and the hash it feeds (5.97)
-        allowed = {"write", "link", "update"} if name == "evidence" else set()
+        allowed = {"write", "link", "update", "mkdir"} if name == "evidence" else set()
         assert not _attribute_calls(name) & forbidden - allowed, (
             name, _attribute_calls(name) & forbidden)
     for name in EVERY:        # and nothing in `os` that changes the filesystem, but act_files
@@ -383,7 +390,7 @@ def test_nothing_in_the_package_creates_runs_starts_stops_or_prunes():
                     and n.func.value.id == "os"}
         assert not os_calls & {"replace", "rename", "remove", "rmdir", "removedirs", "mkdir",
                                "makedirs", "chmod", "chown", "symlink", "link", "truncate",
-                               "utime"} - ({"link"} if name == "evidence" else set()), name
+                               "utime"} - ({"link", "mkdir"} if name == "evidence" else set()), name
         assert "unlink" not in os_calls or name in ("act_files", "evidence"), name
 
 

@@ -22,6 +22,15 @@ ACTOR = "scheduler"
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
+def is_plain_id(value: object) -> bool:
+    """The one rule for an identifier in a scheduler record -- and so for anything a person types
+    that ends up in one (``--by``, an engagement id): letters, digits, ``.``, ``_``, ``:`` and
+    ``-``, starting with a letter or a digit, at most 128 long. The operator CLI asks this *before*
+    it asks for a confirmation (ACCEPTANCE 5.109), so a person is never asked to approve something
+    the audit trail would refuse."""
+    return isinstance(value, str) and bool(_ID.fullmatch(value))
+
+
 class PayloadRejected(ValueError):
     """A scheduler payload carried something the whitelist does not allow."""
 

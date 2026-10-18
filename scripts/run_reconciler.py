@@ -15,13 +15,13 @@ There is no default mode, and only two:
                  Killing and removing Docker objects and deleting files are **off** unless a
                  category is named with ``--enable`` (below).
 
-**Irreversible actions** (ACCEPTANCE 5.92) are five categories, each off: ``kill``, ``container``,
-``proxy``, ``network``, ``file``. Only the command line turns one on -- ``--enable kill``, repeated
-for more -- only with ``state-only``, and only after a person at a terminal types back the phrase
-the program shows (``enable`` and the sorted names). There is no ``--yes``: a pipe, a cron job or a
-service manager cannot answer. In this version ``network`` and ``file`` are refused (exit 7) before
-the configuration is read; so is any other word, and so is a run that cannot be confirmed. What was
-enabled is written to ``reconciler.started``.
+**Irreversible actions** (ACCEPTANCE 5.92) are five categories, each off by default:
+``kill``, ``container``, ``proxy``, ``network``, ``file``. Only the command line turns one on --
+``--enable kill``, repeated for more -- only with ``state-only``, and only after a person at a
+terminal types back the phrase the program shows (``enable`` and the sorted names). There is no
+``--yes``: a pipe, a cron job or a service manager cannot answer. In this version ``network`` and
+``file`` are refused (exit 7) before the configuration is read; so is any other word, and so is a
+run that cannot be confirmed. What was enabled is written to ``reconciler.started``.
 
 ``container`` also needs ``--evidence-dir DIR`` (exit 7 without it): a container whose run's outcome
 is unknown is removed only after its ``docker inspect`` and its logs were written there and their

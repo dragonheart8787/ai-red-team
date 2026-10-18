@@ -15,7 +15,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from control_plane.audit.query import list_global_audit
-from control_plane.scheduler import vocab
+from control_plane.scheduler import emit, vocab
 from control_plane.state.db import global_auditor_scope, scheduler_admin_scope
 from tests import scheduler_support as sup
 
@@ -111,3 +111,80 @@ def test_awaiting_dispatch_says_why_a_skipped_proposal_has_not_run(engagement_id
                               "awaiting-dispatch").stdout)
     (row,) = as_json
     assert (row["proposal_id"], row["skip_reason"]) == (stuck, vocab.SCOPE_TOO_NARROW)
+
+
+# --- the characters --by and the engagement id may have (ACCEPTANCE 5.109) ---------------------
+
+BAD_NAMES = ["alice; DROP TABLE x", "", " alice", "alice\nadmin", "alice\n", "al ice", "a" * 129,
+             "alicé", "../x", "-alice", "alice'--", "alice\x1b[2J", "al/ice"]
+GOOD_NAMES = ["alice", "Alice.Smith", "a_b-c:d", "0day", "a" * 128]
+
+
+def _enrollment_audit_count(engagement_id) -> int:
+    with global_auditor_scope() as conn:
+        return len([e for e in list_global_audit(
+            conn, event_types=[vocab.ENROLLED, vocab.WITHDRAWN], limit=500)
+            if e.payload.get("engagement_id") == engagement_id])
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("name", BAD_NAMES, ids=[repr(n)[:30] for n in BAD_NAMES])
+def test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked(
+        engagement_id, name):
+    """Even with no terminal and no --yes -- the order is: the rule, then the confirmation. The
+    exit is 1 (refused), not 2 (not confirmed); no enrollment, no audit record."""
+    before = _enrollment_audit_count(engagement_id)
+    for command in ("enroll", "withdraw"):
+        done = _run(ENROLL, command, engagement_id, f"--by={name}")
+        assert done.returncode == 1, (command, done.stderr)
+        assert "not a plain identifier" in done.stderr
+        assert "no terminal" not in done.stderr
+    assert not _live(engagement_id)
+    assert _enrollment_audit_count(engagement_id) == before
+
+
+def test_the_rule_itself_refuses_what_an_argument_vector_cannot_carry():
+    for bad in ("alice\x00", "alice\x00admin", "alice\n", None, 7, b"alice"):
+        assert not emit.is_plain_id(bad)
+
+
+def test_an_engagement_id_that_is_not_a_plain_identifier_is_refused_the_same_way():
+    for bad in ("ENG; DROP TABLE x", "ENG\nX", "", "x" * 200):
+        done = _run(ENROLL, "enroll", bad, "--by", "alice", "--yes")
+        assert done.returncode == 1 and "not a plain identifier" in done.stderr, bad
+
+
+@pytest.mark.parametrize("name", GOOD_NAMES, ids=[n[:12] for n in GOOD_NAMES])
+def test_a_plain_identifier_is_accepted_and_is_what_the_audit_trail_and_the_table_hold(
+        engagement_id, name):
+    try:
+        done = _run(ENROLL, "enroll", engagement_id, "--by", name, "--yes")
+        assert done.returncode == 0, done.stderr
+        with scheduler_admin_scope() as conn:
+            stored = conn.execute(text(
+                "SELECT enrolled_by FROM scheduler_enrollment WHERE engagement_id = :e "
+                "AND withdrawn_at IS NULL"), {"e": engagement_id}).scalar_one()
+        assert stored == name
+        with global_auditor_scope() as conn:
+            actors = {e.actor for e in list_global_audit(
+                conn, event_types=[vocab.ENROLLED], limit=200)
+                if e.payload.get("engagement_id") == engagement_id}
+        assert actors == {name}
+    finally:
+        sup.withdraw(engagement_id)
+
+
+def test_the_listing_shows_an_old_row_with_an_odd_name_quoted(engagement_id):
+    """Rows written before the rule was asked at the door (six were found, two named
+    "alice; DROP TABLE x") are still listed, and listed so that they cannot pose as anything."""
+    odd = "alice\x1b[2Jfake line"
+    sup.enroll(engagement_id, by=odd)  # (the helper writes the table directly)
+    try:
+        shown = _run(ENROLL, "list").stdout
+        line = next(row for row in shown.splitlines() if engagement_id in row)
+        assert "\x1b" not in line
+        assert repr(odd) in line
+    finally:
+        sup.withdraw(engagement_id)

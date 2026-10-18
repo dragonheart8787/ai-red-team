@@ -688,7 +688,7 @@ CATALOGUE += [
         targets=("test_real_a_container_at_rest_is_removed_and_seen_gone_a_running_one_is_not",)),
     Mutation(
         "D64-6c-l", "a network is removed with a container attached", ACT_TESTS,
-        edits=(Edit(DOCKER_PY, "    if client.containers.list(all=True, filters={\"network\": network.name}):\n"
+        edits=(Edit(DOCKER_PY, "    if client.containers.list(all=True, filters={\"network\": network.name}, ignore_removed=True):\n"
                     "        return Result(action, CHANGED, IN_USE)\n", ""),),
         targets=("test_real_a_network_with_a_container_of_any_state_is_kept",)),
     Mutation(
@@ -699,7 +699,8 @@ CATALOGUE += [
         targets=("test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",)),
     Mutation(
         "D64-6c-n", "a removal is verified by get alone, not by the listing", ACT_TESTS,
-        edits=(Edit(DOCKER_PY, "        return not client.containers.list(all=True, filters={\"id\": action.subject_id})",
+        edits=(Edit(DOCKER_PY, "        return not client.containers.list(all=True, filters={\"id\": action.subject_id},\n"
+                    "                                          ignore_removed=True)",
                     "        return True"),),
         targets=("test_a_container_listed_after_get_says_not_found_is_still_not_gone",)),
     Mutation(
@@ -1538,7 +1539,7 @@ _SERVICE_TRAIL = "test_service_the_trail_has_intent_evidence_and_removal_in_that
 CATALOGUE += [
     Mutation(
         "D64-C4-a", "the evidence is not kept before the removal", EVIDENCE_TESTS,
-        edits=(Edit(DOCKER_PY, "            kept = evidence.save(container, evidence_dir)", "            kept = None"),),
+        edits=(Edit(DOCKER_PY, "            kept = evidence.save(container, evidence_dir, action.expected_owner)", "            kept = None"),),
         targets=(_ORDER, _FAIL_CLOSED, _SERVICE_TRAIL, "test_real_a_container_with_output_is_kept_and_then_removed")),
     Mutation(
         "D64-C4-b", "a failure to keep the evidence is ignored and the container is removed", EVIDENCE_TESTS,
@@ -1579,7 +1580,7 @@ CATALOGUE += [
         targets=("test_a_log_too_large_to_keep_is_refused_not_cut",)),
     Mutation(
         "D64-C4-k", "the file is not synced before it is trusted", EVIDENCE_TESTS,
-        edits=(Edit(EVIDENCE_PY, "            os.fsync(handle.fileno())", "            pass"),),
+        edits=(Edit(EVIDENCE_PY, "            handle.flush()\n            os.fsync(handle.fileno())\n        written = _sha256_of(temporary)", "            handle.flush()\n            pass\n        written = _sha256_of(temporary)"),),
         targets=("test_a_file_or_directory_that_cannot_be_synced_is_not_evidence",)),
     Mutation(
         "D64-C4-l", "an unknown-outcome container is removed as soon as its run is over, retention or not", (*EVIDENCE_TESTS, "tests/test_reconciler_plan.py"),
@@ -1740,6 +1741,201 @@ CATALOGUE += [
         "D64-C4-aq", "a raised ceiling is not noticed", RESIDUE_TESTS,
         edits=(Edit("tests/test_residue_check.py", "            if ceiling > main.get(file, 0)]", "            if False]"),),
         targets=("test_the_comparison_with_the_main_line_says_which_ceiling_is_raised",)),
+]
+
+
+CATALOGUE += [
+    Mutation(
+        "D64-C5-a", "an engagement's evidence subdirectory may be open to others", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "or info.st_uid != os.getuid() or info.st_mode & 0o077:", "or info.st_uid != os.getuid():"),),
+        targets=("test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused",)),
+    Mutation(
+        "D64-C5-b", "an engagement name is not checked, so it can be a path", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "not _ENGAGEMENT_NAME.fullmatch(engagement_id):", "not engagement_id:"),),
+        targets=("test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made",)),
+    Mutation(
+        "D64-C5-c", "every engagement's evidence goes into the same directory", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "    path = os.path.join(directory, engagement_id)\n", "    path = directory\n"),),
+        targets=("test_each_engagement_has_its_own_private_subdirectory_and_the_files_are_in_it",)),
+    Mutation(
+        "D64-C5-d", "the start-up probe checks nothing", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "    directory = check_directory(directory)\n    name = os.path.join(directory, f\".probe.{os.getpid()}\")", "    return\n    name = os.path.join(directory, f\".probe.{os.getpid()}\")"),),
+        targets=("test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file",)),
+    Mutation(
+        "D64-C5-e", "the service does not run the start-up probe", EVIDENCE_TESTS,
+        edits=(Edit(SERVICE_PY, "                evidence.probe(self.settings.evidence_dir)", "                pass"),),
+        targets=("test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start",)),
+    Mutation(
+        "D64-C5-f", "the service probes the evidence directory even where container is off", EVIDENCE_TESTS,
+        edits=(Edit(SERVICE_PY, "        if flags.CONTAINER in self.settings.enabled:\n            try:", "        if True:\n            try:"),),
+        targets=("test_a_reconciler_without_container_enabled_does_not_look_at_the_evidence_directory",)),
+    Mutation(
+        "D64-C5-g", "the start-up probe leaves its file behind", EVIDENCE_TESTS,
+        edits=(Edit(EVIDENCE_PY, "            os.unlink(name)\n", "            pass\n"),),
+        targets=("test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing",)),
+]
+
+# --- completion 5, part 2: a stopped or killed mutation sweep puts back what it changed ------------
+
+MUTCHECK_PY = "scripts/mutation_check.py"
+HYGIENE_PY = "tests/db_hygiene.py"
+RESIDUE_PY = "tests/residue.py"
+MUTATION_SAFETY_TESTS = ("tests/test_mutation_safety.py",)
+
+CATALOGUE += [
+    Mutation(
+        "D64-C5-h", "snapshot_schema() leaves the database's ACL out of the fact", SNAPSHOT_TESTS,
+        edits=(Edit(SNAPSHOT_PY, " || ' acl=' || coalesce(datacl::text, '')", ""),),
+        targets=("test_the_snapshot_notices_the_database_acl_and_names_it",)),
+    Mutation(
+        "D64-C5-i", "the 0023 downgrade does not give TEMPORARY back (the round trip sees the database)",
+        ("tests/test_migrations_roundtrip.py::test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all",),
+        edits=(Edit("db/migrations/versions/0023_reconciler_reader.py",
+                    "            EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', current_database());",
+                    "            NULL;"),),
+        targets=("test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all",)),
+    Mutation(
+        "D64-C5-j", "a scratch schema left by a round trip is not a problem", MUTATION_SAFETY_TESTS,
+        edits=(Edit(HYGIENE_PY, "    found = [f\"a scratch schema of a round-trip test was left: {name}\"\n             for name in scratch_schemas(conn)]",
+                    "    found = []"),),
+        targets=("test_a_scratch_schema_of_a_round_trip_is_a_problem",
+                 "test_the_session_end_check_fails_the_run_on_either")),
+    Mutation(
+        "D64-C5-k", "TEMPORARY held by PUBLIC is not a problem", MUTATION_SAFETY_TESTS,
+        edits=(Edit(HYGIENE_PY, "number >= REVOKES_TEMPORARY_FROM and public_holds_temporary(conn):",
+                    "number >= REVOKES_TEMPORARY_FROM and False:"),),
+        targets=("test_temporary_held_by_public_is_a_problem_once_0023_is_applied",
+                 "test_the_session_end_check_fails_the_run_on_either")),
+    Mutation(
+        "D64-C5-l", "the session-end check does not look at the database", MUTATION_SAFETY_TESTS,
+        edits=(Edit(RESIDUE_PY, "database=db_hygiene.current_problems(),", "database=[],"),),
+        targets=("test_the_session_end_check_fails_the_run_on_either",)),
+    Mutation(
+        "D64-C5-m", "the runner does not drop a scratch schema a killed test left", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "                conn.execute(text(f'DROP SCHEMA \"{name}\" CASCADE'))", "                pass"),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+                 "test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned")),
+    Mutation(
+        "D64-C5-n", "the runner does not revoke the TEMPORARY grant a killed test left", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, '            _superuser_sql("REVOKE TEMPORARY ON DATABASE cyberorch FROM PUBLIC")', "            pass"),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",)),
+    Mutation(
+        "D64-C5-o", "the runner does not say what it cleaned", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, '    return [f"CLEANED: {line}" for line in found] + [f"STILL WRONG: {line}" for line in still]',
+                    '    return [f"STILL WRONG: {line}" for line in still]'),),
+        targets=("test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+                 "test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned")),
+    Mutation(
+        "D64-C5-p", "recover() does not put the files back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            path.write_bytes(original)\n            said.append", "            said.append"),),
+        targets=("test_a_killed_run_s_files_are_put_back_at_the_next_start",
+                 "test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone")),
+    Mutation(
+        "D64-C5-q", "recover() does not undo the database change", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            _owner_sql(*payload[\"sql_down\"])", "            pass"),),
+        targets=("test_the_database_change_of_a_killed_run_is_undone_once",)),
+    Mutation(
+        "D64-C5-r", "recover() undoes a database change that was never made", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "\"sql_down\": list(sql_down) if applied_sql else []", "\"sql_down\": list(sql_down)"),),
+        targets=("test_a_change_that_was_never_applied_is_not_undone",)),
+    Mutation(
+        "D64-C5-s", "recover() forgets the journal even when the database could not be put back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        return said                                   # the journal stays: nothing is lost",
+                    "        _journal_clear()\n        return said"),),
+        targets=("test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said",)),
+    Mutation(
+        "D64-C5-t", "recover() keeps the journal after it has put everything back", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "    _journal_clear()\n    return said\n\n\ndef hygiene", "    return said\n\n\ndef hygiene"),),
+        targets=("test_a_killed_run_s_files_are_put_back_at_the_next_start",)),
+    Mutation(
+        "D64-C5-u", "the journal is written after the files are changed, not before", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "    _journal_write(originals, sql_down, mutation.cleanup_sql,\n                   bool(mutation.sql_up or mutation.build_sql))\n    try:\n",
+                    "    try:\n"),
+               Edit(MUTCHECK_PY, "        for path in originals:\n            why = _compiles(path)",
+                    "        _journal_write(originals, sql_down, mutation.cleanup_sql,\n                       bool(mutation.sql_up or mutation.build_sql))\n        for path in originals:\n            why = _compiles(path)")),
+        targets=("test_the_journal_is_on_disk_before_the_first_byte_of_a_file_is_changed",)),
+    Mutation(
+        "D64-C5-v", "run() clears the journal even when a restore failed", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        if not any(p.startswith((\"RESTORE FAILED\", \"RECOVERY\")) or \"was not restored\" in p\n                   for p in result.problems):\n            _journal_clear()",
+                    "        _journal_clear()"),),
+        targets=("test_a_restore_that_fails_keeps_the_journal_and_makes_the_mutation_invalid",)),
+    Mutation(
+        "D64-C5-w", "run() does not clean up after a test run that left the database dirty", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "        for line in hygiene():\n            result.problems.append(line)              # a test left it: the mutation is not valid",
+                    "        pass"),),
+        targets=("test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",)),
+    Mutation(
+        "D64-C5-x", "an interrupted test run is killed at once, its fixtures never run", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            os.killpg(proc.pid, signal.SIGINT)\n", "            pass\n"),),
+        targets=("test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",)),
+    Mutation(
+        "D64-C5-y", "an interrupted test run that does not stop is never killed", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "                os.killpg(proc.pid, signal.SIGKILL)\n            except ProcessLookupError:\n                pass\n            proc.wait()",
+                    "                pass\n            except ProcessLookupError:\n                pass\n            proc.wait(timeout=5)"),),
+        targets=("test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates",)),
+    Mutation(
+        "D64-C5-z", "an interrupt is swallowed instead of raised again", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "            proc.wait()\n        raise\n    return subprocess.CompletedProcess", "            proc.wait()\n        return subprocess.CompletedProcess(cmd, -2, \"\", \"\")\n    return subprocess.CompletedProcess"),),
+        targets=("test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",)),
+    Mutation(
+        "D64-C5-za", "the test run is not in a process group of its own", MUTATION_SAFETY_TESTS,
+        edits=(Edit(MUTCHECK_PY, "text=True, env={**os.environ, **(env or {})}, start_new_session=True)", "text=True, env={**os.environ, **(env or {})})"),),
+        targets=("test_the_children_of_the_test_run_are_in_the_group_that_is_stopped",)),
+]
+
+# --- F1 (ACCEPTANCE 5.107): an object that is gone between two calls is gone; a lost daemon is lost -----
+
+VANISH_TESTS = ("tests/test_reconciler_vanishing.py",)
+SANDBOX_PY2 = "tool_gateway/sandbox.py"
+
+CATALOGUE += [
+    Mutation(
+        "D64-F1-a", "a container removed while the reconciler lists is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '        for container in client.containers.list(all=True, filters={"label": label},\n                                                ignore_removed=True):', '        for container in client.containers.list(all=True, filters={"label": label}):'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_between_the_list_and_the_inspect_is_not_listed_40_times",)),
+    Mutation(
+        "D64-F1-b", "a network removed between the list and its inspect is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '        try:\n            network.reload()\n        except NotFound:                  # removed between the list and the inspect: not there\n            continue', '        network.reload()'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_network_removed_between_the_list_and_its_inspect_is_not_listed_40_times",)),
+    Mutation(
+        "D64-F1-c", "a container on a network removed while its members are read is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '                    client.containers.list(all=True, filters={"network": network.name},\n                                           ignore_removed=True))', '                    client.containers.list(all=True, filters={"network": network.name}))'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_attached_to_a_network_that_vanishes_while_its_members_are_read_40_times",)),
+    Mutation(
+        "D64-F1-d", "a container removed while mount sources are read (observe) is a failure again", VANISH_TESTS,
+        edits=(Edit(OBSERVE_PY2, '    for container in client.containers.list(all=True, ignore_removed=True):\n        if container.attrs.get("State", {}).get("Status") in LIVE_STATES:', '    for container in client.containers.list(all=True):\n        if container.attrs.get("State", {}).get("Status") in LIVE_STATES:'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[observe]",)),
+    Mutation(
+        "D64-F1-e", "a container removed while mount sources are read (act) is a failure again", VANISH_TESTS,
+        edits=(Edit(DOCKER_PY, '    for container in client.containers.list(all=True, ignore_removed=True):\n        status = container.attrs.get("State", {}).get("Status")', '    for container in client.containers.list(all=True):\n        status = container.attrs.get("State", {}).get("Status")'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[act_docker]",)),
+    Mutation(
+        "D64-F1-f", "a container on a network removed while the network is removed is a failure again", VANISH_TESTS,
+        edits=(Edit(DOCKER_PY, '    if client.containers.list(all=True, filters={"network": network.name}, ignore_removed=True):', '    if client.containers.list(all=True, filters={"network": network.name}):'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_on_a_network_that_vanishes_while_the_network_is_removed_40_times",)),
+    Mutation(
+        "D64-F1-g", "the sandbox's exclusivity check fails on a container that vanished", VANISH_TESTS,
+        edits=(Edit(SANDBOX_PY2, '                try:\n                    other.reload()\n                except NotFound:         # removed since it was listed: it is not on the network\n                    continue', '                other.reload()'),),
+        allowed_errors=("NotFound",),
+        targets=("test_gone_a_container_that_vanishes_while_the_sandbox_checks_exclusivity_40_times",)),
+    Mutation(
+        "D64-F1-h", "a NotFound that reaches the top is a lost daemon again", VANISH_TESTS,
+        edits=(Edit("control_plane/docker_health.py", "    if isinstance(exc, NotFound):\n        return GONE\n", "    if isinstance(exc, NotFound):\n        return LOST\n"),),
+        targets=("test_the_classification_rule", "test_a_notfound_is_a_defect_if_it_reaches_the_top_never_a_lost_daemon")),
+    Mutation(
+        "D64-F1-i", "a server error of the daemon is no longer a lost daemon", VANISH_TESTS,
+        edits=(Edit("control_plane/docker_health.py", "return LOST if status is None or status >= 500 else ANSWERED", "return LOST if status is None else ANSWERED"),),
+        targets=("test_the_classification_rule",)),
+    Mutation(
+        "D64-F1-j", "a conflict the daemon answered is a lost daemon", VANISH_TESTS,
+        edits=(Edit("control_plane/docker_health.py", "return LOST if status is None or status >= 500 else ANSWERED", "return LOST if status is None or status >= 400 else ANSWERED"),),
+        targets=("test_the_classification_rule",)),
 ]
 
 

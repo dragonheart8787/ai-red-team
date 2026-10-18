@@ -506,8 +506,8 @@ def check(client, state, out, starts, watch, loop, bound, vault, retention, f_id
             problems.append(f"F: audit order {order}")
         if len(evidence) == 1:
             payload = evidence[0][2]
-            inspect_path = vault / (f_id + ".inspect.json")
-            logs_path = vault / (f_id + ".logs")
+            inspect_path = vault / state["engagements"]["F"] / (f_id + ".inspect.json")
+            logs_path = vault / state["engagements"]["F"] / (f_id + ".logs")
             for key, path in (("inspect_sha256", inspect_path), ("logs_sha256", logs_path)):
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 say(f"  {key} in the trail {payload[key][:16]}...  "
@@ -518,7 +518,8 @@ def check(client, state, out, starts, watch, loop, bound, vault, retention, f_id
                 problems.append("a path is in the audit trail")
             if oct(os.stat(inspect_path).st_mode & 0o777) != "0o600":
                 problems.append("the inspect file is not 0600")
-            say(f"  files: {sorted(p.name[:14] + '...' + p.suffix for p in vault.iterdir())}")
+            kept_files = sorted(p.name[:14] + p.suffix for p in inspect_path.parent.iterdir())
+            say(f"  files: {kept_files}")
         else:
             problems.append("no single evidence_saved event for F")
         try:

@@ -44,3 +44,38 @@ def test_a_session_that_leaves_a_global_layer_behind_fails(db_available, tmp_pat
 def test_a_session_that_leaves_nothing_behind_passes(db_available, tmp_path):
     done = _session("probe_leaves_nothing.py", tmp_path / "unused")
     assert done.returncode == 0, (done.stdout + done.stderr)[-800:]
+
+
+def _live(eid: str) -> bool:
+    from tests import residue
+    return eid in residue.live_enrollments()
+
+
+def test_a_session_that_leaves_a_scheduler_enrollment_behind_fails(db_available, tmp_path):
+    out = tmp_path / "engagement"
+    done = _session("probe_leaves_an_enrollment.py", out)
+    eid = out.read_text() if out.exists() else None
+    try:
+        output = done.stdout + done.stderr
+        assert done.returncode != 0, output[-800:]
+        assert "scheduler enrollments left live by the session" in output, output[-800:]
+        assert eid and eid in output
+        assert "1 passed" in output and "1 error" in output
+    finally:
+        if eid:
+            from tests import residue
+            residue.withdraw_enrollments([eid])                  # the probe's mess is not kept
+
+
+def test_a_test_that_enrolls_an_engagement_has_it_withdrawn_when_it_ends(db_available, tmp_path):
+    out = tmp_path / "engagement"
+    done = _session("probe_enrolls_then_forgets.py", out)
+    eid = out.read_text() if out.exists() else None
+    try:
+        assert done.returncode == 0, (done.stdout + done.stderr)[-800:]
+        assert eid and not _live(eid)
+        assert "scheduler enrollment(s) were withdrawn at the end of the test" in done.stdout
+    finally:
+        if eid:
+            from tests import residue
+            residue.withdraw_enrollments([eid])

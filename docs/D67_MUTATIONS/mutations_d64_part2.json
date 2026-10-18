@@ -1,0 +1,716 @@
+[
+ {
+  "id": "D64-C5-d",
+  "summary": "the start-up probe checks nothing",
+  "verdict": "valid",
+  "seconds": 24.3,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 70,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[missing]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[open]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_sync]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_create]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE StopService"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-e",
+  "summary": "the service does not run the start-up probe",
+  "verdict": "valid",
+  "seconds": 9.8,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE StopService"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-f",
+  "summary": "the service probes the evidence directory even where container is off",
+  "verdict": "valid",
+  "seconds": 9.5,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_reconciler_without_container_enabled_does_not_look_at_the_evidence_directory",
+    "kind": "target",
+    "message": "Failed: it should not have looked: StopService"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-g",
+  "summary": "the start-up probe leaves its file behind",
+  "verdict": "valid",
+  "seconds": 8.7,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 73,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert ['.probe.2537'] == []"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_sync]",
+    "kind": "target",
+    "message": "assert False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-h",
+  "summary": "snapshot_schema() leaves the database's ACL out of the fact",
+  "verdict": "valid",
+  "seconds": 8.7,
+  "tests": [
+   "tests/test_schema_snapshot.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_schema_snapshot::test_the_snapshot_notices_the_database_acl_and_names_it",
+    "kind": "target",
+    "message": "AssertionError: []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-j",
+  "summary": "a scratch schema left by a round trip is not a problem",
+  "verdict": "valid",
+  "seconds": 20.7,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_scratch_schema_of_a_round_trip_is_a_problem",
+    "kind": "target",
+    "message": "assert False"
+   },
+   {
+    "test": "test_mutation_safety::test_the_session_end_check_fails_the_run_on_either",
+    "kind": "target",
+    "message": "AssertionError: PUBLIC holds TEMPORARY on the database although migration 0023 or later is applied (a round trip was killed below 0023)"
+   },
+   {
+    "test": "test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+    "kind": "target",
+    "message": "AssertionError: ['CLEANED: PUBLIC holds TEMPORARY on the database although migration 0023 or later is applied (a round trip was killed below 0023)']"
+   },
+   {
+    "test": "test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",
+    "kind": "target",
+    "message": "AssertionError: assert 'valid' == 'INVALID'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-k",
+  "summary": "TEMPORARY held by PUBLIC is not a problem",
+  "verdict": "valid",
+  "seconds": 10.3,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 19,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_temporary_held_by_public_is_a_problem_once_0023_is_applied",
+    "kind": "target",
+    "message": "assert False"
+   },
+   {
+    "test": "test_mutation_safety::test_the_session_end_check_fails_the_run_on_either",
+    "kind": "target",
+    "message": "AssertionError: a scratch schema of a round-trip test was left: migtest_250e5070"
+   },
+   {
+    "test": "test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+    "kind": "target",
+    "message": "AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_9d6aca27']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-l",
+  "summary": "the session-end check does not look at the database",
+  "verdict": "valid",
+  "seconds": 10.3,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_session_end_check_fails_the_run_on_either",
+    "kind": "target",
+    "message": "AssertionError: "
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-m",
+  "summary": "the runner does not drop a scratch schema a killed test left",
+  "verdict": "valid",
+  "seconds": 10.3,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+    "kind": "target",
+    "message": "AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_245e4afa', 'CLEANED: PUBLIC holds TEMPORARY on the ...(a round trip was killed below 0023)', 'STILL WRONG: a scratch schema of a round-tr"
+   },
+   {
+    "test": "test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",
+    "kind": "target",
+    "message": "AssertionError: assert ['a scratch s...est_44a041d3'] == []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-n",
+  "summary": "the runner does not revoke the TEMPORARY grant a killed test left",
+  "verdict": "valid",
+  "seconds": 10.4,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+    "kind": "target",
+    "message": "AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_de902317', 'CLEANED: PUBLIC holds TEMPORARY on the ...BLIC holds TEMPORARY on the database although migration 0023 or later is applied (a"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-o",
+  "summary": "the runner does not say what it cleaned",
+  "verdict": "valid",
+  "seconds": 10.4,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so",
+    "kind": "target",
+    "message": "AssertionError: []"
+   },
+   {
+    "test": "test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",
+    "kind": "target",
+    "message": "AssertionError: assert 'valid' == 'INVALID'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-p",
+  "summary": "recover() does not put the files back",
+  "verdict": "valid",
+  "seconds": 10.6,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_killed_run_s_files_are_put_back_at_the_next_start",
+    "kind": "target",
+    "message": "AssertionError: assert b'original = ...he mutation\\n' == b'original = 1\\n'"
+   },
+   {
+    "test": "test_mutation_safety::test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone",
+    "kind": "target",
+    "message": "AssertionError: assert (b'VALUE = 2\\n', False) == (b'VALUE = 1\\n', False)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-q",
+  "summary": "recover() does not undo the database change",
+  "verdict": "valid",
+  "seconds": 10.5,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_database_change_of_a_killed_run_is_undone_once",
+    "kind": "target",
+    "message": "AssertionError: assert [('su', 'DELETE FROM t')] == [('su', 'DELE...', 'SELECT 2']"
+   },
+   {
+    "test": "test_mutation_safety::test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said",
+    "kind": "target",
+    "message": "AssertionError: ['RECOVERED the database change of a killed run']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-r",
+  "summary": "recover() undoes a database change that was never made",
+  "verdict": "valid",
+  "seconds": 10.5,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_change_that_was_never_applied_is_not_undone",
+    "kind": "target",
+    "message": "AssertionError: assert ['DROP TRIGGER mutated'] == []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-s",
+  "summary": "recover() forgets the journal even when the database could not be put back",
+  "verdict": "valid",
+  "seconds": 10.6,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said",
+    "kind": "target",
+    "message": "AssertionError: assert False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-t",
+  "summary": "recover() keeps the journal after it has put everything back",
+  "verdict": "valid",
+  "seconds": 10.9,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_killed_run_s_files_are_put_back_at_the_next_start",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_mutation_safety::test_a_file_that_is_already_right_is_not_touched_and_not_reported",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_mutation_safety::test_the_database_change_of_a_killed_run_is_undone_once",
+    "kind": "target",
+    "message": "AssertionError: assert (['RECOVERED t...a killed run'] == []"
+   },
+   {
+    "test": "test_mutation_safety::test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone",
+    "kind": "target",
+    "message": "AssertionError: assert (b'VALUE = 1\\n', True) == (b'VALUE = 1\\n', False)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-u",
+  "summary": "the journal is written after the files are changed, not before",
+  "verdict": "valid",
+  "seconds": 10.7,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_the_journal_is_on_disk_before_the_first_byte_of_a_file_is_changed",
+    "kind": "target",
+    "message": "assert [False] == [True]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-v",
+  "summary": "run() clears the journal even when a restore failed",
+  "verdict": "valid",
+  "seconds": 10.5,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_restore_that_fails_keeps_the_journal_and_makes_the_mutation_invalid",
+    "kind": "target",
+    "message": "AssertionError: assert False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-w",
+  "summary": "run() does not clean up after a test run that left the database dirty",
+  "verdict": "valid",
+  "seconds": 10.2,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned",
+    "kind": "target",
+    "message": "AssertionError: assert 'valid' == 'INVALID'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-x",
+  "summary": "an interrupted test run is killed at once, its fixtures never run",
+  "verdict": "valid",
+  "seconds": 31.6,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",
+    "kind": "target",
+    "message": "AssertionError: SIGINT did not reach the test run: its teardown did not run"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-y",
+  "summary": "an interrupted test run that does not stop is never killed",
+  "verdict": "valid",
+  "seconds": 15.4,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates",
+    "kind": "target",
+    "message": "AssertionError: TimeoutExpired(['/home/user/ai-red-team/.venv/bin/python', '/tmp/pytest-of-root/pytest-141/test_one_that_does_not_stop_is0/child.py', '/tmp/pytest-of-root/pytest-141/test_one_that_does_not_stop_is0/marker"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-z",
+  "summary": "an interrupt is swallowed instead of raised again",
+  "verdict": "valid",
+  "seconds": 10.3,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 19,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",
+    "kind": "target",
+    "message": "AssertionError: None"
+   },
+   {
+    "test": "test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates",
+    "kind": "target",
+    "message": "AssertionError: None"
+   },
+   {
+    "test": "test_mutation_safety::test_the_children_of_the_test_run_are_in_the_group_that_is_stopped",
+    "kind": "target",
+    "message": "AssertionError: None"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-za",
+  "summary": "the test run is not in a process group of its own",
+  "verdict": "valid",
+  "seconds": 94.5,
+  "tests": [
+   "tests/test_mutation_safety.py"
+  ],
+  "passed": 19,
+  "failures": [
+   {
+    "test": "test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run",
+    "kind": "target",
+    "message": "AssertionError: SIGINT did not reach the test run: its teardown did not run"
+   },
+   {
+    "test": "test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates",
+    "kind": "target",
+    "message": "assert (422.909686554 - 392.868518575) < 20"
+   },
+   {
+    "test": "test_mutation_safety::test_the_children_of_the_test_run_are_in_the_group_that_is_stopped",
+    "kind": "target",
+    "message": "AssertionError: a helper of the stopped test run was left running"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-a",
+  "summary": "a container removed while the reconciler lists is a failure again",
+  "verdict": "valid",
+  "seconds": 170.0,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_removed_between_the_list_and_the_inspect_is_not_listed_40_times",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/6f78020cf17903359c40139c1380ea96ab3e1b6d5606aa5cd3682d6e26333285/json: Not Found (\"No such container: 6f78020cf17903359c40139c1380ea96"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-b",
+  "summary": "a network removed between the list and its inspect is a failure again",
+  "verdict": "valid",
+  "seconds": 72.3,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_network_removed_between_the_list_and_its_inspect_is_not_listed_40_times",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/networks/aa0f319659b55d7830d2374dafa18fa9bc4120c3d27a61522e4011e2d6bfbbef: Not Found (\"network aa0f319659b55d7830d2374dafa18fa9bc4120c3d27a61522e"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-c",
+  "summary": "a container on a network removed while its members are read is a failure again",
+  "verdict": "valid",
+  "seconds": 69.6,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_attached_to_a_network_that_vanishes_while_its_members_are_read_40_times",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/9aa687d166e1e1b14fa36ee3cb9bf5ce92b752f2e098f0c981aa7cbd760050db/json: Not Found (\"No such container: 9aa687d166e1e1b14fa36ee3cb9bf5ce"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-d",
+  "summary": "a container removed while mount sources are read (observe) is a failure again",
+  "verdict": "valid",
+  "seconds": 78.7,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[observe]",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/cc6e491f7c395ec01d132cbeeb55881a3a430e0ca49d48eedf211d2bdad58877/json: Not Found (\"No such container: cc6e491f7c395ec01d132cbeeb55881a"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-e",
+  "summary": "a container removed while mount sources are read (act) is a failure again",
+  "verdict": "valid",
+  "seconds": 81.4,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[act_docker]",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/9a75def9c146ce841b2b0e7cac79322105632f5800234f75dcedf2a3dfa0c6b3/json: Not Found (\"No such container: 9a75def9c146ce841b2b0e7cac793221"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-f",
+  "summary": "a container on a network removed while the network is removed is a failure again",
+  "verdict": "valid",
+  "seconds": 79.7,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_on_a_network_that_vanishes_while_the_network_is_removed_40_times",
+    "kind": "target",
+    "message": "AssertionError: Result(action=Action(kind='remove_network', reason_code='idle_sweep', subject_id='49ac118336a61e840b50334ce6991562c823...ner=None, name='cyberorch-allow-936c30dd68f7', directory=None), outcome='failed', d"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-g",
+  "summary": "the sandbox's exclusivity check fails on a container that vanished",
+  "verdict": "valid",
+  "seconds": 75.4,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_gone_a_container_that_vanishes_while_the_sandbox_checks_exclusivity_40_times",
+    "kind": "target",
+    "message": "docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/c45dcb2510e50e999af43e76a135834c8b029e582d7087a3c4193ef9bab42fcb/json: Not Found (\"No such container: c45dcb2510e50e999af43e76a135834c"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-h",
+  "summary": "a NotFound that reaches the top is a lost daemon again",
+  "verdict": "valid",
+  "seconds": 92.7,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 17,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_the_classification_rule[a container that is not there]",
+    "kind": "target",
+    "message": "AssertionError: a container that is not there"
+   },
+   {
+    "test": "test_reconciler_vanishing::test_a_notfound_is_a_defect_if_it_reaches_the_top_never_a_lost_daemon",
+    "kind": "target",
+    "message": "AssertionError: assert 'docker_lost' != 'docker_lost'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-i",
+  "summary": "a server error of the daemon is no longer a lost daemon",
+  "verdict": "valid",
+  "seconds": 89.3,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 17,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_the_classification_rule[a server error of the daemon]",
+    "kind": "target",
+    "message": "AssertionError: a server error of the daemon"
+   },
+   {
+    "test": "test_reconciler_vanishing::test_the_classification_rule[a bad gateway]",
+    "kind": "target",
+    "message": "AssertionError: a bad gateway"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-F1-j",
+  "summary": "a conflict the daemon answered is a lost daemon",
+  "verdict": "valid",
+  "seconds": 91.8,
+  "tests": [
+   "tests/test_reconciler_vanishing.py"
+  ],
+  "passed": 17,
+  "failures": [
+   {
+    "test": "test_reconciler_vanishing::test_the_classification_rule[a conflict the daemon answered]",
+    "kind": "target",
+    "message": "AssertionError: a conflict the daemon answered"
+   },
+   {
+    "test": "test_reconciler_vanishing::test_the_classification_rule[a bad request the daemon answered]",
+    "kind": "target",
+    "message": "AssertionError: a bad request the daemon answered"
+   }
+  ],
+  "problems": []
+ }
+]

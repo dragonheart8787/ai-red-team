@@ -1,0 +1,3 @@
+open at start: [('PROP-48972077cb', 'approved', 'APPR-49a70cccff'), ('PROP-7da76c4ddf', 'awaiting_approval', ''), ('PROP-58ec8e22e6', 'awaiting_approval', ''), ('PROP-698fc2af57', 'approved', 'APPR-63f60f86fc'), ('PROP-37839ceb02', 'awaiting_approval', '')]
+open at end: [('PROP-48972077cb', 'approved', 'APPR-49a70cccff'), ('PROP-7da76c4ddf', 'awaiting_approval', ''), ('PROP-58ec8e22e6', 'awaiting_approval', ''), ('PROP-698fc2af57', 'approved', 'APPR-63f60f86fc'), ('PROP-37839ceb02', 'awaiting_approval', '')] reconciler exit 0 seconds 601
+[]

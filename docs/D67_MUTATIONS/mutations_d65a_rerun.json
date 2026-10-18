@@ -1,0 +1,481 @@
+[
+ {
+  "id": "D65A-P2",
+  "summary": "the check happens once per path, not before every run",
+  "verdict": "valid",
+  "seconds": 105.6,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 52,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_a_correct_copy_is_accepted_and_verified_again_on_every_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: 37.115612"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P3",
+  "summary": "a helper that fails its check is skipped and the run goes ahead without one",
+  "verdict": "valid",
+  "seconds": 39.5,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 47,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_a_correct_copy_is_accepted_and_verified_again_on_every_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_missing_file_stops_the_run_before_a_container_exists",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_an_unreadable_path_stops_the_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_right_bytes_without_an_execute_bit_for_everyone_stop_the_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_binary_for_another_architecture_has_no_pin_and_stops_the_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_pin_file_without_an_entry_stops_the_run",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_helper_that_is_not_the_pinned_one_is_refused_even_if_it_works",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P4",
+  "summary": "every exit 124 is taken to be the deadline",
+  "verdict": "valid",
+  "seconds": 37.7,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 49,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[0.2-False]",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[37.9-False]",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_discriminator_follows_the_budget_not_a_fixed_number",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_container_whose_timestamps_cannot_be_read_is_not_called_timed_out",
+    "kind": "target",
+    "message": "AssertionError: assert (True is False)"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_tool_that_exits_124_on_its_own_is_a_failed_run_not_a_timeout",
+    "kind": "target",
+    "message": "AssertionError: assert (-1 == 124)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P5",
+  "summary": "the exit-124 test is strict at the boundary (> instead of >=)",
+  "verdict": "valid",
+  "seconds": 36.8,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 53,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P6",
+  "summary": "the tolerance is ten seconds instead of two",
+  "verdict": "valid",
+  "seconds": 37.9,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 53,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[37.9-False]",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P7",
+  "summary": "an image's own entrypoint is dropped from the wrapped command",
+  "verdict": "valid",
+  "seconds": 35.5,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 52,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced",
+    "kind": "target",
+    "message": "AssertionError: assert ['/cyberorch-...', '40', '--'] == ['/cyberorch-.../bin/semgrep']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper",
+    "kind": "target",
+    "message": "Failed: the run was refused (tool_command_not_executable) where a result was expected"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P8",
+  "summary": "any exit 127 is taken for the helper's refusal",
+  "verdict": "valid",
+  "seconds": 38.1,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 49,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[]",
+    "kind": "target",
+    "message": "Failed: taken for the helper's refusal (tool_command_not_executable)"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[sh: 1: foo: not found\\n]",
+    "kind": "target",
+    "message": "Failed: taken for the helper's refusal (tool_command_not_executable)"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[cyberorch-deadline: cannot execute x: gone\\nand then the tool wrote more\\n]",
+    "kind": "target",
+    "message": "Failed: taken for the helper's refusal (tool_command_not_executable)"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[the tool wrote first\\ncyberorch-deadline: cannot execute x: gone\\n]",
+    "kind": "target",
+    "message": "Failed: taken for the helper's refusal (tool_command_not_executable)"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_tool_that_simply_exits_127_is_a_result_not_a_refusal",
+    "kind": "target",
+    "message": "Failed: the run was refused (tool_command_not_executable) where a result was expected"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P9",
+  "summary": "the container is not labelled with its deadline",
+  "verdict": "valid",
+  "seconds": 37.7,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 50,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: assert None == '27'"
+   },
+   {
+    "test": "test_deadline_sandbox::test_opting_out_is_explicit_and_the_label_says_none",
+    "kind": "target",
+    "message": "AssertionError: assert None == 'none'"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_container_is_labelled_with_its_deadline_while_it_runs",
+    "kind": "target",
+    "message": "AssertionError: assert ([<Container: 60f8684b50c1>] and None == '30')"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_tool_container_is_created_in_exactly_one_place_and_it_sets_the_entrypoint",
+    "kind": "target",
+    "message": "assert False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P11",
+  "summary": "the deadline helper is off unless a caller turns it on",
+  "verdict": "valid",
+  "seconds": 69.9,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 36,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_the_helper_is_the_entrypoint_and_the_tools_command_follows_it",
+    "kind": "target",
+    "message": "AssertionError: assert None == ['/cyberorch-deadline', '40', '--']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced",
+    "kind": "target",
+    "message": "AssertionError: assert None == ['/cyberorch-deadline', '40', '--', '/usr/local/bin/semgrep']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: assert None == {'bind': '/cyberorch-deadline', 'mode': 'ro'}"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_mount_that_would_cover_the_helpers_path_is_refused_before_anything_is_created",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[40.3-True]",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[200.0-True]",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_discriminator_follows_the_budget_not_a_fixed_number",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_helpers_cannot_execute_line_is_a_not_started",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ToolNotExecutable"
+   },
+   {
+    "test": "test_deadline_sandbox::test_pid_1_of_a_tool_container_is_the_helper_with_the_budget_plus_slack",
+    "kind": "target",
+    "message": "AssertionError: assert [b'python3', b'-u', b'-c'] == [b'/cyberorch... b'40', b'--']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_container_is_labelled_with_its_deadline_while_it_runs",
+    "kind": "target",
+    "message": "AssertionError: assert ([<Container: 25bced0c2ece>] and 'none' == '30'"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_exit_code_the_tool_chose_is_the_containers",
+    "kind": "target",
+    "message": "AssertionError: assert 0 == 137"
+   },
+   {
+    "test": "test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same",
+    "kind": "target",
+    "message": "AssertionError: 6.270015483999941"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_tools_stdout_is_not_disturbed_by_the_helpers_stderr_line",
+    "kind": "target",
+    "message": "AssertionError: assert False"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_command_that_does_not_exist_is_a_not_started_and_leaves_no_container",
+    "kind": "other",
+    "message": "tool_gateway.sandbox.ContainerStartRefused: docker refused to start the container; nothing of this run executed"
+   },
+   {
+    "test": "test_deadline_sandbox::test_orphans_that_end_after_their_parent_are_reaped_not_left_as_zombies",
+    "kind": "target",
+    "message": "AssertionError: zombies 3 processes 4"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: the container was still running 30 s after its parent died"
+   },
+   {
+    "test": "test_deadline_sandbox::test_run_has_no_default_that_turns_the_deadline_off",
+    "kind": "target",
+    "message": "AssertionError: opting out must be spelled out by the caller, never the default"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P12",
+  "summary": "the helper is mounted read-write",
+  "verdict": "valid",
+  "seconds": 38.5,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 53,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: assert {'bind': '/cy... 'mode': 'rw'} == {'bind': '/cy... 'mode': 'ro'}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P13",
+  "summary": "a mount that covers the helper's path is not noticed",
+  "verdict": "valid",
+  "seconds": 37.4,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 53,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_a_mount_that_would_cover_the_helpers_path_is_refused_before_anything_is_created",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE DeadlineHelperUnavailable"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P15",
+  "summary": "a deadline exit leaves exit_code at 124 instead of -1",
+  "verdict": "valid",
+  "seconds": 37.5,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 50,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]",
+    "kind": "target",
+    "message": "AssertionError: assert 124 == -1"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[40.3-True]",
+    "kind": "target",
+    "message": "AssertionError: assert 124 == -1"
+   },
+   {
+    "test": "test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[200.0-True]",
+    "kind": "target",
+    "message": "AssertionError: assert 124 == -1"
+   },
+   {
+    "test": "test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same",
+    "kind": "target",
+    "message": "AssertionError: assert (True is True and 124 == -1)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D65A-P16",
+  "summary": "the helper is no longer the entrypoint (the command is not wrapped)",
+  "verdict": "valid",
+  "seconds": 70.5,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 43,
+  "failures": [
+   {
+    "test": "test_deadline_sandbox::test_the_helper_is_the_entrypoint_and_the_tools_command_follows_it",
+    "kind": "target",
+    "message": "AssertionError: assert None == ['/cyberorch-deadline', '40', '--']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced",
+    "kind": "target",
+    "message": "AssertionError: assert None == ['/cyberorch-deadline', '40', '--', '/usr/local/bin/semgrep']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_pid_1_of_a_tool_container_is_the_helper_with_the_budget_plus_slack",
+    "kind": "target",
+    "message": "AssertionError: assert [b'python3', b'-u', b'-c'] == [b'/cyberorch... b'40', b'--']"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_exit_code_the_tool_chose_is_the_containers",
+    "kind": "target",
+    "message": "AssertionError: assert 0 == 137"
+   },
+   {
+    "test": "test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same",
+    "kind": "target",
+    "message": "AssertionError: 6.275794202999805"
+   },
+   {
+    "test": "test_deadline_sandbox::test_the_tools_stdout_is_not_disturbed_by_the_helpers_stderr_line",
+    "kind": "target",
+    "message": "AssertionError: assert False"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_command_that_does_not_exist_is_a_not_started_and_leaves_no_container",
+    "kind": "other",
+    "message": "tool_gateway.sandbox.ContainerStartRefused: docker refused to start the container; nothing of this run executed"
+   },
+   {
+    "test": "test_deadline_sandbox::test_orphans_that_end_after_their_parent_are_reaped_not_left_as_zombies",
+    "kind": "target",
+    "message": "AssertionError: zombies 3 processes 4"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline",
+    "kind": "target",
+    "message": "AssertionError: the container was still running 30 s after its parent died"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_helper_on_a_noexec_filesystem_is_a_start_refusal_that_ran_nothing",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ContainerStartRefused"
+   },
+   {
+    "test": "test_deadline_sandbox::test_a_tool_container_is_created_in_exactly_one_place_and_it_sets_the_entrypoint",
+    "kind": "target",
+    "message": "AssertionError: assert {'command', '...s', 'volumes'} <= {'cap_drop', ...network', ...}"
+   }
+  ],
+  "problems": []
+ }
+]

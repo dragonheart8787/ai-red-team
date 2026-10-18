@@ -713,8 +713,37 @@ def _temp_privilege(scratch: Scratch) -> bool:
         )).scalar_one()
 
 
+def _set_temp_privilege(scratch: Scratch, granted: bool) -> None:
+    """Put the database's ``TEMPORARY`` grant to PUBLIC where the schema under test expects it.
+
+    The grant is a fact of the database, not of the scratch schema, so a test that moves the schema
+    below 0023 has to make the database agree first, and put it back however the test ends: the
+    migrations leave it revoked, and a test killed in between must not leave it granted (the
+    hygiene check of the mutation sweep and ``tests/residue.py`` look for exactly that)."""
+    verb = "GRANT TEMPORARY ON DATABASE {db} TO PUBLIC" if granted else (
+        "REVOKE TEMPORARY ON DATABASE {db} FROM PUBLIC")
+    with scratch.admin.begin() as conn:
+        database = conn.execute(text("SELECT quote_ident(current_database())")).scalar_one()
+        conn.execute(text(verb.format(db=database)))
+
+
 def test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_all(scratch):
     scratch.alembic("upgrade", "0022")
+    _set_temp_privilege(scratch, True)                  # what a database at 0022 looks like
+    try:
+        _check_0023_round_trip(scratch)
+    finally:
+        _set_temp_privilege(scratch, False)             # what the migrations leave
+    assert not _temp_privilege(scratch)
+
+
+def line_has_revoked_temporary(line: str) -> bool:
+    """The one changed ``database:acl`` line: PUBLIC's entry went from ``=Tc`` to ``=c``."""
+    before, after = line.split("] -> [", 1)
+    return "=Tc/" in before and "=c/" in after and "=Tc/" not in after
+
+
+def _check_0023_round_trip(scratch: Scratch) -> None:
     eid, ids = _seed_stages(scratch, {**SHAPES_0021, "abandoned": ABANDONED_SHAPE})
     s22 = scratch.snapshot()
 
@@ -735,6 +764,9 @@ def test_0023_adds_exactly_the_reader_s_objects_and_the_downgrade_removes_them_a
         assert ("owner=reconciler_fn_owner secdef=true "
                 'config={"search_path=pg_catalog, <schema>, pg_temp"}') in definition
     assert not _temp_privilege(scratch), "TEMP was not revoked from PUBLIC"
+    changed = snapshot_diff(s22, s23)
+    acl = [line for line in changed if "database:acl" in line]
+    assert len(acl) == 1 and line_has_revoked_temporary(acl[0]), changed
 
     # --- the functions work in the schema the migration ran in, and see the stuck rows only
     with scratch.engine.begin() as conn:

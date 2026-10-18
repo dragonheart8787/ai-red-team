@@ -1,0 +1,79 @@
+{"at": "2026-10-17T04:14:37Z", "engagements": ["ENG-SOAK-1017041436-0", "ENG-SOAK-1017041436-1", "ENG-SOAK-1017041436-2"], "host": {"boot_id": "5ecd084d-dc52-46c7-a4f5-16c672e19458", "host_uptime_s": 3306.27, "kernel": "6.18.44-fc-v139"}, "hours": 4.0, "kind": "soak.setup", "pid": 31302, "reconciler_env": {"RECONCILER_BACKOFF_MAX_S": "60", "RECONCILER_RETENTION_S": "300", "RECONCILER_RETRY_AFTER_FAILURE_S": "120", "RECONCILER_STAGE_GRACE_S": "300", "RECONCILER_SUMMARY_PERIOD_S": "600"}, "seed": "d66", "ts": 1792210477.143}
+{"at": "2026-10-17T04:14:39Z", "kind": "service.started", "pid": 31326, "reason": "soak_start", "service": "reconciler", "start_number": 1, "ts": 1792210479.15}
+{"at": "2026-10-17T04:14:40Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210480.086}
+{"at": "2026-10-17T04:14:42Z", "kind": "service.started", "pid": 31353, "reason": "soak_start", "service": "scheduler", "start_number": 1, "ts": 1792210482.153}
+{"at": "2026-10-17T04:14:45Z", "kind": "service.started", "pid": 31358, "reason": "soak_start", "service": "worker", "start_number": 1, "ts": 1792210485.155}
+{"at": "2026-10-17T04:14:45Z", "kind": "worker.started", "pid": 31358, "retried": 0, "ts": 1792210485.207, "unfinished": 0}
+{"at": "2026-10-17T04:14:48Z", "docker": {"evidence_files": 0, "files": 0, "networks": 2, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 2}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 12, "global_policy_admin": 1, "postgres": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2}, "idle_in_transaction_max_age_s": 0, "total": 20}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73040, "state": "R", "threads": 8}, "reconciler": {"fds": 12, "pg_connections": 3, "pid": 31326, "rss_kb": 63552, "state": "S", "threads": 2}, "scheduler": {"fds": 6, "pg_connections": 3, "pid": 31353, "rss_kb": 70968, "state": "S", "threads": 2}, "worker": {"fds": 33, "pg_connections": 8, "pid": 31358, "rss_kb": 74324, "state": "S", "threads": 5}}, "stages": {"awaiting_approval": 1, "closed": 1, "dispatching": 2}, "ts": 1792210488.391}
+{"at": "2026-10-17T04:14:48Z", "hour": 0, "kind": "hourly", "ts": 1792210488.833}
+{"at": "2026-10-17T04:15:00Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210500.152}
+{"at": "2026-10-17T04:15:03Z", "kind": "approver.granted", "proposal": "PROP-8e1a4e7003", "ts": 1792210503.265}
+{"at": "2026-10-17T04:15:06Z", "kind": "approver.granted", "proposal": "PROP-9157fee574", "ts": 1792210506.291}
+{"at": "2026-10-17T04:15:09Z", "kind": "approver.granted", "proposal": "PROP-5894444245", "ts": 1792210509.325}
+{"at": "2026-10-17T04:15:20Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210520.226}
+{"at": "2026-10-17T04:15:27Z", "kind": "approver.granted", "proposal": "PROP-6f79cfa9dc", "ts": 1792210527.393}
+{"at": "2026-10-17T04:15:30Z", "kind": "approver.granted", "proposal": "PROP-f200dda373", "ts": 1792210530.415}
+{"at": "2026-10-17T04:15:36Z", "kind": "approver.denied", "proposal": "PROP-a11f3e004a", "ts": 1792210536.462}
+{"at": "2026-10-17T04:15:39Z", "kind": "approver.granted", "proposal": "PROP-4f38354c27", "ts": 1792210539.482}
+{"at": "2026-10-17T04:15:39Z", "kind": "approver.granted", "proposal": "PROP-9001065d68", "ts": 1792210539.499}
+{"at": "2026-10-17T04:15:40Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210540.424}
+{"at": "2026-10-17T04:15:48Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 1}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 13, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 21}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73364, "state": "S", "threads": 8}, "reconciler": {"fds": 20, "pg_connections": 3, "pid": 31326, "rss_kb": 63688, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72476, "state": "S", "threads": 2}, "worker": {"fds": 20, "pg_connections": 8, "pid": 31358, "rss_kb": 75656, "state": "S", "threads": 5}}, "stages": {"awaiting_approval": 3, "closed": 6, "dispatching": 1, "recorded": 28}, "ts": 1792210548.536}
+{"at": "2026-10-17T04:15:48Z", "kind": "approver.granted", "proposal": "PROP-0b4caa04f7", "ts": 1792210548.546}
+{"at": "2026-10-17T04:15:51Z", "kind": "approver.denied", "proposal": "PROP-92392b5e73", "ts": 1792210551.575}
+{"at": "2026-10-17T04:15:57Z", "kind": "approver.granted", "proposal": "PROP-3470ea0704", "ts": 1792210557.619}
+{"at": "2026-10-17T04:16:00Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210560.604}
+{"at": "2026-10-17T04:16:03Z", "kind": "approver.granted", "proposal": "PROP-937e06f8f7", "ts": 1792210563.655}
+{"at": "2026-10-17T04:16:03Z", "kind": "approver.granted", "proposal": "PROP-684e75cc01", "ts": 1792210563.668}
+{"at": "2026-10-17T04:16:06Z", "kind": "approver.granted", "proposal": "PROP-4023766ee5", "ts": 1792210566.699}
+{"at": "2026-10-17T04:16:09Z", "kind": "approver.granted", "proposal": "PROP-1c1dbebd1d", "ts": 1792210569.723}
+{"at": "2026-10-17T04:16:20Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210580.668}
+{"at": "2026-10-17T04:16:36Z", "kind": "approver.granted", "proposal": "PROP-9fa3be4fec", "ts": 1792210596.831}
+{"at": "2026-10-17T04:16:36Z", "kind": "approver.granted", "proposal": "PROP-67d1c3103e", "ts": 1792210596.847}
+{"at": "2026-10-17T04:16:39Z", "kind": "approver.granted", "proposal": "PROP-39754741d5", "ts": 1792210599.881}
+{"at": "2026-10-17T04:16:40Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210600.87}
+{"at": "2026-10-17T04:16:42Z", "kind": "approver.granted", "proposal": "PROP-2fbf7bf279", "ts": 1792210602.9}
+{"at": "2026-10-17T04:16:48Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 0}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 13, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 21}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73428, "state": "S", "threads": 8}, "reconciler": {"fds": 25, "pg_connections": 3, "pid": 31326, "rss_kb": 63772, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72508, "state": "S", "threads": 2}, "worker": {"fds": 11, "pg_connections": 8, "pid": 31358, "rss_kb": 75692, "state": "S", "threads": 5}}, "stages": {"approved": 1, "awaiting_approval": 1, "closed": 12, "recorded": 54}, "ts": 1792210608.674}
+{"at": "2026-10-17T04:16:48Z", "kind": "approver.granted", "proposal": "PROP-4cabe9950d", "ts": 1792210608.941}
+{"at": "2026-10-17T04:17:00Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210620.96}
+{"at": "2026-10-17T04:17:13Z", "kind": "approver.denied", "proposal": "PROP-4a5b5deb30", "ts": 1792210633.032}
+{"at": "2026-10-17T04:17:16Z", "kind": "approver.granted", "proposal": "PROP-acde3b13df", "ts": 1792210636.055}
+{"at": "2026-10-17T04:17:21Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210641.079}
+{"at": "2026-10-17T04:17:28Z", "kind": "approver.granted", "proposal": "PROP-a1f5c90901", "ts": 1792210648.112}
+{"at": "2026-10-17T04:17:41Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210661.192}
+{"at": "2026-10-17T04:17:43Z", "kind": "approver.granted", "proposal": "PROP-6cf3bbd145", "ts": 1792210663.18}
+{"at": "2026-10-17T04:17:48Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 0}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 13, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 21}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73456, "state": "S", "threads": 8}, "reconciler": {"fds": 28, "pg_connections": 3, "pid": 31326, "rss_kb": 63800, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72540, "state": "S", "threads": 2}, "worker": {"fds": 11, "pg_connections": 8, "pid": 31358, "rss_kb": 75776, "state": "S", "threads": 5}}, "stages": {"closed": 15, "recorded": 74}, "ts": 1792210668.817}
+{"at": "2026-10-17T04:18:01Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210681.28}
+{"at": "2026-10-17T04:18:04Z", "kind": "approver.granted", "proposal": "PROP-3dc1e4d6e7", "ts": 1792210684.29}
+{"at": "2026-10-17T04:18:13Z", "kind": "approver.granted", "proposal": "PROP-aaf392e5be", "ts": 1792210693.345}
+{"at": "2026-10-17T04:18:16Z", "kind": "approver.granted", "proposal": "PROP-46e20b0ab3", "ts": 1792210696.389}
+{"at": "2026-10-17T04:18:21Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210701.465}
+{"at": "2026-10-17T04:18:28Z", "kind": "approver.granted", "proposal": "PROP-39439325ac", "ts": 1792210708.452}
+{"at": "2026-10-17T04:18:31Z", "kind": "approver.granted", "proposal": "PROP-28957fd331", "ts": 1792210711.469}
+{"at": "2026-10-17T04:18:31Z", "kind": "approver.granted", "proposal": "PROP-3fbcc31832", "ts": 1792210711.484}
+{"at": "2026-10-17T04:18:34Z", "kind": "approver.denied", "proposal": "PROP-88d47eae36", "ts": 1792210714.502}
+{"at": "2026-10-17T04:18:40Z", "kind": "approver.granted", "proposal": "PROP-53677be84a", "ts": 1792210720.55}
+{"at": "2026-10-17T04:18:41Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210721.562}
+{"at": "2026-10-17T04:18:46Z", "kind": "approver.granted", "proposal": "PROP-e6854983b8", "ts": 1792210726.593}
+{"at": "2026-10-17T04:18:48Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 1}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 10, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 18}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73492, "state": "S", "threads": 8}, "reconciler": {"fds": 31, "pg_connections": 3, "pid": 31326, "rss_kb": 63840, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72572, "state": "S", "threads": 2}, "worker": {"fds": 16, "pg_connections": 5, "pid": 31358, "rss_kb": 75892, "state": "S", "threads": 5}}, "stages": {"approved": 1, "awaiting_approval": 5, "closed": 16, "dispatching": 1, "recorded": 103}, "ts": 1792210728.992}
+{"at": "2026-10-17T04:18:52Z", "kind": "approver.granted", "proposal": "PROP-27a55da2d1", "ts": 1792210732.629}
+{"at": "2026-10-17T04:18:52Z", "kind": "approver.granted", "proposal": "PROP-1fdc8751a9", "ts": 1792210732.645}
+{"at": "2026-10-17T04:18:55Z", "kind": "approver.granted", "proposal": "PROP-1286f4cb97", "ts": 1792210735.669}
+{"at": "2026-10-17T04:18:55Z", "kind": "approver.granted", "proposal": "PROP-38c0ee8afd", "ts": 1792210735.68}
+{"at": "2026-10-17T04:18:55Z", "kind": "approver.granted", "proposal": "PROP-beabd6c0b5", "ts": 1792210735.695}
+{"at": "2026-10-17T04:19:01Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210741.701}
+{"at": "2026-10-17T04:19:04Z", "kind": "approver.granted", "proposal": "PROP-4bb1ead98d", "ts": 1792210744.758}
+{"at": "2026-10-17T04:19:07Z", "kind": "approver.granted", "proposal": "PROP-91b147dfe8", "ts": 1792210747.785}
+{"at": "2026-10-17T04:19:07Z", "kind": "approver.denied", "proposal": "PROP-91a89aea91", "ts": 1792210747.798}
+{"at": "2026-10-17T04:19:13Z", "kind": "approver.denied", "proposal": "PROP-c47e27b036", "ts": 1792210753.83}
+{"at": "2026-10-17T04:19:16Z", "kind": "approver.granted", "proposal": "PROP-0ff63020db", "ts": 1792210756.867}
+{"at": "2026-10-17T04:19:21Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210761.79}
+{"at": "2026-10-17T04:19:34Z", "kind": "approver.granted", "proposal": "PROP-e91b628c6a", "ts": 1792210774.959}
+{"at": "2026-10-17T04:19:34Z", "kind": "approver.granted", "proposal": "PROP-9bf13c9543", "ts": 1792210774.977}
+{"at": "2026-10-17T04:19:34Z", "kind": "approver.granted", "proposal": "PROP-03e64e08aa", "ts": 1792210774.988}
+{"at": "2026-10-17T04:19:41Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210781.923}
+{"at": "2026-10-17T04:19:49Z", "docker": {"evidence_files": 0, "files": 0, "networks": 3, "proxies": {"exited": 0, "other": 0, "paused": 0, "running": 0}, "tools": {"exited": 0, "other": 0, "paused": 0, "running": 1}}, "kind": "sample", "pg": {"by_role": {"cyberorch_app": 10, "global_policy_admin": 1, "reconciler_reader": 2, "registry_admin": 1, "scheduler_admin": 1, "scheduler_reader": 2, "scheduler_state_writer": 1}, "idle_in_transaction_max_age_s": 0, "total": 18}, "procs": {"conductor": {"fds": 12, "pg_connections": 5, "pid": 31302, "rss_kb": 73564, "state": "S", "threads": 8}, "reconciler": {"fds": 31, "pg_connections": 3, "pid": 31326, "rss_kb": 63868, "state": "S", "threads": 2}, "scheduler": {"fds": 8, "pg_connections": 5, "pid": 31353, "rss_kb": 72580, "state": "S", "threads": 2}, "worker": {"fds": 17, "pg_connections": 5, "pid": 31358, "rss_kb": 75896, "state": "S", "threads": 5}}, "stages": {"awaiting_approval": 2, "closed": 19, "dispatching": 1, "recorded": 133}, "ts": 1792210789.162}
+{"at": "2026-10-17T04:19:50Z", "kind": "approver.granted", "proposal": "PROP-48e2a15de0", "ts": 1792210790.062}
+{"at": "2026-10-17T04:19:53Z", "kind": "approver.granted", "proposal": "PROP-8e3a4457b7", "ts": 1792210793.095}
+{"at": "2026-10-17T04:19:59Z", "kind": "approver.granted", "proposal": "PROP-c280104125", "ts": 1792210799.14}
+{"at": "2026-10-17T04:20:02Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210802.14}
+{"at": "2026-10-17T04:20:22Z", "held_back": 0, "kind": "reconciler.pass", "limited": 0, "outcomes": {}, "planned": {}, "reports": 0, "truncated": false, "ts": 1792210822.225}

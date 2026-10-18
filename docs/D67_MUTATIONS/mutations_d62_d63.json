@@ -1,0 +1,336 @@
+[
+ {
+  "id": "M4",
+  "summary": "the audit payload whitelist is relaxed (any payload accepted)",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "M5",
+  "summary": "a skip raises the exit-7 stop",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "M7",
+  "summary": "a skip is recorded every tick",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "M8",
+  "summary": "dispatch before the decision is recorded",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "M11",
+  "summary": "no Docker reachability check before a dispatch",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "M12",
+  "summary": "tick does not check that the lock is still held",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]"
+  ]
+ },
+ {
+  "id": "D63-m",
+  "summary": "the residue check ignores containers",
+  "verdict": "valid",
+  "seconds": 10.9,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_container_is_residue_even_if_it_never_started",
+    "kind": "target",
+    "message": "assert False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D63-n",
+  "summary": "the residue check ignores global policy layers",
+  "verdict": "valid",
+  "seconds": 5.7,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_an_active_global_layer_is_residue_and_is_not_cleaned_up",
+    "kind": "target",
+    "message": "assert [] == [8900]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D63-o",
+  "summary": "the session does not fail on residue (conftest)",
+  "verdict": "valid",
+  "seconds": 18.0,
+  "tests": [
+   "tests/test_residue_wiring.py"
+  ],
+  "passed": 2,
+  "failures": [
+   {
+    "test": "test_residue_wiring::test_a_session_that_leaves_a_global_layer_behind_fails",
+    "kind": "target",
+    "message": "AssertionError: .                                                                        [100%]"
+   },
+   {
+    "test": "test_residue_wiring::test_a_session_that_leaves_a_scheduler_enrollment_behind_fails",
+    "kind": "target",
+    "message": "AssertionError: .                                                                        [100%]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D63-s",
+  "summary": "a test names busybox:latest, which CI does not have",
+  "verdict": "valid",
+  "seconds": 8.2,
+  "tests": [
+   "tests/test_image_literals.py"
+  ],
+  "passed": 6,
+  "failures": [
+   {
+    "test": "test_image_literals::test_every_image_a_test_names_is_one_ci_builds_or_pulls",
+    "kind": "target",
+    "message": "AssertionError: tests name Docker images that CI neither builds nor pulls (so they pass on a workstation that has them and fail in CI): {'busybox:latest': ['tests/test_residue_check.py:24']}. Add the build to .github/wor"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D58-7-2",
+  "summary": "daemon errors are not translated into DaemonUnreachable",
+  "verdict": "valid",
+  "seconds": 59.7,
+  "tests": [
+   "tests/test_sandbox_not_started.py",
+   "tests/test_network_isolation.py",
+   "tests/test_dispatch.py"
+  ],
+  "passed": 44,
+  "failures": [
+   {
+    "test": "test_sandbox_not_started::test_a_cached_client_with_a_dead_daemon_raises_the_typed_error_not_a_raw_one",
+    "kind": "target",
+    "message": "requests.exceptions.ConnectionError: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /v1.43/images/cyberorch/nmap:local/json (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', po"
+   },
+   {
+    "test": "test_sandbox_not_started::test_a_cached_client_with_a_dead_daemon_is_failed_through_propose_action",
+    "kind": "target",
+    "message": "requests.exceptions.ConnectionError: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /v1.43/images/cyberorch/nmap:local/json (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', po"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D58-7-3",
+  "summary": "client() raises an untyped error when the daemon is unreachable",
+  "verdict": "valid",
+  "seconds": 29.9,
+  "tests": [
+   "tests/test_sandbox_not_started.py",
+   "tests/test_network_isolation.py",
+   "tests/test_dispatch.py"
+  ],
+  "passed": 43,
+  "failures": [
+   {
+    "test": "test_sandbox_not_started::test_an_unreachable_daemon_is_a_typed_refusal",
+    "kind": "target",
+    "message": "RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError(\"HTTPConnection(host='12"
+   },
+   {
+    "test": "test_sandbox_not_started::test_an_unreachable_daemon_is_failed_and_retryable_not_unknown_outcome",
+    "kind": "target",
+    "message": "RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError(\"HTTPConnection(host='12"
+   },
+   {
+    "test": "test_sandbox_not_started::test_the_same_proposal_runs_once_the_daemon_is_back",
+    "kind": "target",
+    "message": "RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError(\"HTTPConnection(host='12"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D58-7-5",
+  "summary": "(follow-up) start() is untyped again",
+  "verdict": "valid",
+  "seconds": 29.3,
+  "tests": [
+   "tests/test_sandbox_not_started.py",
+   "tests/test_network_isolation.py",
+   "tests/test_dispatch.py"
+  ],
+  "passed": 43,
+  "failures": [
+   {
+    "test": "test_sandbox_not_started::test_a_start_refused_by_the_daemon_is_typed_when_the_container_never_ran",
+    "kind": "target",
+    "message": "docker.errors.APIError: 500 Server Error for http+docker://localhost/v1.56/containers/b5ecc9c8e4d481e1b44998abb4a59752e05ff002175ce5467a4afacdb561ff4e/start: Internal Server Error (\"failed to set up container networking:"
+   },
+   {
+    "test": "test_sandbox_not_started::test_a_refused_start_through_propose_action_is_failed_and_closed_not_stuck_dispatching",
+    "kind": "target",
+    "message": "docker.errors.APIError: 500 Server Error for http+docker://localhost/v1.56/containers/115538833fc83ea37dc5e2c293eb4ef8d5498e861595497ba8a9f8f3b5697cc7/start: Internal Server Error (\"failed to set up container networking:"
+   },
+   {
+    "test": "test_sandbox_not_started::test_a_refusal_is_typed_only_on_proof_the_container_never_ran",
+    "kind": "target",
+    "message": "docker.errors.APIError: daemon said no (\"start failed\")"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D58-7-6",
+  "summary": "(follow-up) the proof that the container never ran is dropped",
+  "verdict": "valid",
+  "seconds": 29.4,
+  "tests": [
+   "tests/test_sandbox_not_started.py",
+   "tests/test_network_isolation.py",
+   "tests/test_dispatch.py"
+  ],
+  "passed": 45,
+  "failures": [
+   {
+    "test": "test_sandbox_not_started::test_a_refusal_is_typed_only_on_proof_the_container_never_ran",
+    "kind": "target",
+    "message": "Failed: typed as 'not started' without proof that the container never ran"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D58-7-7",
+  "summary": "(follow-up) a failed inspection is typed as not started",
+  "verdict": "valid",
+  "seconds": 30.4,
+  "tests": [
+   "tests/test_sandbox_not_started.py",
+   "tests/test_network_isolation.py",
+   "tests/test_dispatch.py"
+  ],
+  "passed": 45,
+  "failures": [
+   {
+    "test": "test_sandbox_not_started::test_a_refusal_whose_inspection_fails_stays_unplaced",
+    "kind": "target",
+    "message": "Failed: typed as 'not started' without proof that the container never ran"
+   }
+  ],
+  "problems": []
+ }
+]

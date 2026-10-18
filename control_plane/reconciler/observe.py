@@ -17,6 +17,7 @@ from dataclasses import fields
 from datetime import datetime
 from typing import Any
 
+from docker.errors import NotFound
 from sqlalchemy import text
 
 from control_plane.reconciler import vocab
@@ -229,10 +230,16 @@ def container_obs(container: Any) -> ContainerObs:
 
 
 def list_containers(client: Any) -> tuple[ContainerObs, ...]:
-    """Every container carrying a sandbox run label or the proxy label, in any state."""
+    """Every container carrying a sandbox run label or the proxy label, in any state.
+
+    **A container that is removed between the two calls a listing is made of -- the daemon's list
+    of ids, then an inspect of each -- is not there:** ``ignore_removed`` drops it (ACCEPTANCE
+    5.107). Docker as a whole not answering still raises, and is ``docker_lost``
+    (``service._translate``)."""
     seen: dict[str, Any] = {}
     for label in (RUN_LABEL, PROXY_LABEL):
-        for container in client.containers.list(all=True, filters={"label": label}):
+        for container in client.containers.list(all=True, filters={"label": label},
+                                                ignore_removed=True):
             seen[container.id] = container
     return tuple(container_obs(c) for _, c in sorted(seen.items()))
 
@@ -246,9 +253,13 @@ def list_networks(client: Any, containers_of: Callable[[str], Iterable[Any]] | N
     for network in client.networks.list():
         if not network.name.startswith(NETWORK_PREFIX):
             continue
-        network.reload()
+        try:
+            network.reload()
+        except NotFound:                  # removed between the list and the inspect: not there
+            continue
         attached = (containers_of(network.name) if containers_of is not None else
-                    client.containers.list(all=True, filters={"network": network.name}))
+                    client.containers.list(all=True, filters={"network": network.name},
+                                           ignore_removed=True))
         out.append(NetworkObs(
             network_id=network.id, name=network.name,
             has_allowlist_label=ALLOWLIST_LABEL in (network.attrs.get("Labels") or {}),
@@ -265,7 +276,7 @@ def live_mount_sources(client: Any) -> frozenset[str]:
     """Host paths mounted into any container that could still read them (D64-12): created,
     running, paused or restarting -- an exited one no longer needs the file."""
     sources: set[str] = set()
-    for container in client.containers.list(all=True):
+    for container in client.containers.list(all=True, ignore_removed=True):
         if container.attrs.get("State", {}).get("Status") in LIVE_STATES:
             for mount in container.attrs.get("Mounts") or ():
                 if mount.get("Source"):

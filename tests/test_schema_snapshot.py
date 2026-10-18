@@ -114,6 +114,24 @@ def test_the_snapshot_notices(schema, what):
     assert any(key in line for line in lines), (what, lines)
 
 
+def test_the_snapshot_notices_the_database_acl_and_names_it(schema):
+    """TEMPORARY granted to PUBLIC on the database -- what an interrupted round trip left."""
+    name, engine = schema
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            database = conn.execute(text("SELECT current_database()")).scalar_one()
+            before = snapshot_schema(conn, name)
+            assert "database:acl" in before and "owner=migration_owner" in before["database:acl"]
+            conn.execute(text(f'GRANT TEMPORARY ON DATABASE "{database}" TO PUBLIC'))
+            lines = diff(before, snapshot_schema(conn, name))
+        finally:
+            trans.rollback()
+    assert any("database:acl" in line and "T" in line for line in lines), lines
+    with engine.connect() as conn:                         # and it was only a transaction
+        assert diff(before, snapshot_schema(conn, name)) == []
+
+
 def test_an_unchanged_schema_has_an_empty_diff_and_the_snapshot_is_stable(schema):
     name, engine = schema
     with engine.connect() as conn:

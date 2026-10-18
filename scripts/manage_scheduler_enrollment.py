@@ -48,6 +48,13 @@ def _confirm(summary: str, word: str, assume_yes: bool) -> bool:
     return answer == word
 
 
+def _shown(value: str) -> str:
+    """A stored name as it is printed: a name that is not a plain identifier (an old row, written
+    before the rule was asked at the door) is shown quoted, so that it cannot move the cursor or
+    pose as another line."""
+    return value if emit.is_plain_id(value) else repr(value)
+
+
 def _list() -> int:
     with scheduler_admin_scope() as conn:
         rows = conn.execute(text(
@@ -57,10 +64,22 @@ def _list() -> int:
         print("no enrollments")
     for r in rows:
         state = ("live" if r["withdrawn_at"] is None
-                 else f"withdrawn by {r['withdrawn_by']} at {r['withdrawn_at']}")
-        print(f"#{r['enrollment_id']} {r['engagement_id']}  enrolled by {r['enrolled_by']} "
+                 else f"withdrawn by {_shown(r['withdrawn_by'])} at {r['withdrawn_at']}")
+        print(f"#{r['enrollment_id']} {r['engagement_id']}  enrolled by {_shown(r['enrolled_by'])} "
               f"at {r['enrolled_at']}  [{state}]")
     return 0
+
+
+def _refuse_unless_plain(args: argparse.Namespace) -> int | None:
+    """``--by`` and the engagement id are written to the enrollment table and to the audit trail,
+    and printed back to the next operator. They must be plain identifiers (``emit.is_plain_id``),
+    and this is asked first: before the confirmation, before the database."""
+    for what, value in (("the engagement id", args.engagement), ("--by", args.by)):
+        if not emit.is_plain_id(value):
+            print(f"refused: {what} is not a plain identifier (letters, digits, . _ : -; "
+                  "at most 128)", file=sys.stderr)
+            return 1
+    return None
 
 
 def _enroll(args: argparse.Namespace) -> int:
@@ -127,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     if args.command == "list":
         return _list()
+    refused = _refuse_unless_plain(args)
+    if refused is not None:
+        return refused
     return _enroll(args) if args.command == "enroll" else _withdraw(args)
 
 

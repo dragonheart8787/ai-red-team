@@ -17,7 +17,7 @@ merge audit:
 | D58-6b what an L2 hold is | **NOT built** | — |
 | D58-7 `UNKNOWN_OUTCOME` | **built, option B** (the mislabel fixed; "never auto-retry" kept; the retry half is not taken) | `D58_7_SANDBOX_NOT_STARTED_REPORT.md`, 5.58 |
 | D58-8 lease / approved-proposal dispatch | **built** (D61, H-A) with the approval re-derivation | `D61_JIT_CAPABILITY_REPORT.md`, 5.56 |
-| D58-9 recovery / reconciler | **NOT built** (the singleton lock of its scope is built, under D58-2). **Design checkpoint written (revision 3), decisions open (D63 → D64):** scope, identity/permissions, relation to the scheduler, audit; thirteen decisions D64-1…13. **Prerequisite and first in order: D65-A, a deadline inside the tool container (design written, decisions open).** Two defects found while designing it are ACCEPTANCE 5.74 and 5.75 | `D64_RECONCILER_DESIGN.md`, `D65A_CONTAINER_DEADLINE_DESIGN.md`, 5.72, 5.74, 5.75 |
+| D58-9 recovery / reconciler | **built** (D64, after D65-A's deadline inside the tool container): `scripts/run_reconciler.py`, modes `dry-run` and `state-only`; the proposal transitions (abandon, close, mark `unknown_outcome`) in `state-only`; kill, remove a container and remove a proxy behind three switches that are **off by default** and turned on only from the command line by a person at a terminal; the network and file removals are built and refused in this version. Option (R-A) is what was built, with the singleton lock (D58-2; the reconciler has its own). **Not built from the recommendation: the off-host log sink.** The two defects found while designing it, ACCEPTANCE 5.74 and 5.75, are closed. **Run for real:** the drills of 5.103 and 5.104 (kill, unknown outcome, evidence, removal; the late result), and four hours inside a soak with its three switches on for the soak's own engagements (D66, 5.113: 8 `unknown_outcome` marks and 8 container removals, all `done`, 755 passes). **After a whole-machine restart it may do nothing**, and recovery then depends on the scheduler (for `approved`) and a person (for `awaiting_approval`): `D64_RECONCILER_DESIGN.md` section 10, ACCEPTANCE 5.111 | `D64_RECONCILER_DESIGN.md`, `D64_PREDELETION_COMPLETION.md`, `D65A_CONTAINER_DEADLINE_DESIGN.md`, 5.72, 5.74, 5.75, 5.82, 5.92, 5.95, 5.103, 5.104, 5.111, 5.113 |
 | D58-10 recording the defects X1–X16 | **done** (D63 closeout): X1–X5, X8, X11, X12 as they were closed (5.52, 5.53, 5.56–5.58); X6 residual, X7, X9, X10, X13, X14, X15, X16 as open rows 5.60–5.67 | ACCEPTANCE 5.60–5.67 |
 | D58-11 priority basis | not needed yet (serial scheduler) | — |
 | D58-12 planning / closed-directions ledger | **NOT built.** Its input vocabulary is now fixed: how each pipeline stage maps to "a direction the engagement closed" is entered below (D64 step 5) | the D58-12 entry under "A recency window is not a memory" (below), ACCEPTANCE 5.78 |
@@ -27,7 +27,7 @@ merge audit:
 | D58-16 unattended credentialed dispatch / kill | **NOT built** (the kill switch does not stop a running container) | — |
 | D58-17 secret residency / orphans | **NOT built** | — |
 
-Built: D58-1, -2, -3, -4, -5, -7, -8, -14; D58-10 done. Not built: -6, -6b, -9, -12, -13, -15, -16, -17.
+Built: D58-1, -2, -3, -4, -5, -7, -8, -9, -14; D58-10 done. Not built: -6, -6b, -12, -13, -15, -16, -17.
 Labels: commit `adc4632` is titled "D62" but is D58-7; the scheduler is D62 (the D58-7 report was relabelled).
 
 **Addendum (D59).** X12 / D58-14 (cross-engagement network reachability) was taken out of this document and

@@ -19,6 +19,18 @@ What the session made in an engagement it did not register (``CREATED``, filled 
 ``tests.helpers.make_engagement``) is *found* instead -- a stuck proposal newer than the session's
 start that belongs to no registered engagement fails the run, so the registration is not skipped.
 
+A sixth is **enrollments in the scheduler** (ACCEPTANCE 5.109): the scheduler reads every live
+enrollment on every tick, and a test that enrolls an engagement and does not withdraw it leaves the
+next scheduler to read it for ever (six were found live, two enrolled by "alice; DROP TABLE x",
+from tests and from mutation runs that were killed or that removed the guard). Each test withdraws
+what it enrolled when it ends (``finish_test_enrollments``; counted and reported), and the session
+end fails on any live enrollment that was not live when the session began.
+
+A fifth is **absolute**, not compared: the database itself (``tests/db_hygiene.py``). At the end
+no scratch schema of a migration round-trip test is left, and PUBLIC holds no ``TEMPORARY`` on the
+database although migration 0023 or later is applied -- the two things a test killed in the middle
+of a round trip leaves behind (an interrupted mutation sweep did, on 2026-10-14).
+
 Three kinds of thing are compared, **before** the session and **after** it:
 
 * **global policy layers** -- an active layer with no engagement applies to every engagement, so
@@ -43,7 +55,13 @@ from dataclasses import dataclass, field
 from sqlalchemy import create_engine, text
 
 from control_plane.reconciler import observe
-from control_plane.state.db import get_engine, global_policy_admin_scope, reconciler_reader_scope
+from control_plane.state.db import (
+    get_engine,
+    global_policy_admin_scope,
+    reconciler_reader_scope,
+    scheduler_admin_scope,
+)
+from tests import db_hygiene
 
 NETWORK_PREFIX = "cyberorch-"
 
@@ -92,6 +110,8 @@ class Snapshot:
     networks: frozenset[str] | None
     #: the database's clock when the session began, in microseconds since the epoch
     started_us: int = 0
+    #: the engagements live in the scheduler's enrollment when the session began
+    enrollments: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -100,9 +120,13 @@ class Leftovers:
     containers: list[str] = field(default_factory=list)                   # "name (id) status"
     networks_removed: list[str] = field(default_factory=list)
     networks_stuck: list[str] = field(default_factory=list)
+    #: state of the database itself a killed test leaves (tests/db_hygiene.py, ACCEPTANCE 5.71)
+    database: list[str] = field(default_factory=list)
+    #: engagements live in the scheduler's enrollment that were not when the session began
+    enrollments: list[str] = field(default_factory=list)
 
     def failures(self) -> list[str]:
-        out = []
+        out = list(self.database)
         if self.layers:
             out.append(f"active policy layers with no engagement left behind: {self.layers}")
         if self.containers:
@@ -110,6 +134,8 @@ class Leftovers:
         if self.networks_stuck:
             out.append(f"networks that could not be removed (something is attached): "
                        f"{self.networks_stuck}")
+        if self.enrollments:
+            out.append(f"scheduler enrollments left live by the session: {self.enrollments}")
         return out
 
 
@@ -137,13 +163,47 @@ def database_now_us() -> int:
                             ).scalar_one()
 
 
+def live_enrollments() -> frozenset[str]:
+    """The engagements the scheduler would read on its next tick."""
+    with scheduler_admin_scope() as conn:
+        return frozenset(r[0] for r in conn.execute(text(
+            "SELECT engagement_id FROM scheduler_enrollment WHERE withdrawn_at IS NULL")))
+
+
+def withdraw_enrollments(engagement_ids, *, by: str = "test-session-cleanup") -> int:
+    """Withdraw these engagements' live enrollments (the operator CLI's act, without its audit)."""
+    ids = sorted(engagement_ids)
+    if not ids:
+        return 0
+    with scheduler_admin_scope() as conn:
+        return conn.execute(text(
+            "UPDATE scheduler_enrollment SET withdrawn_at = now(), withdrawn_by = :by "
+            "WHERE engagement_id = ANY(:ids) AND withdrawn_at IS NULL"),
+            {"by": by, "ids": ids}).rowcount
+
+
+#: enrollments withdrawn at the end of the test that made them, by test file
+WITHDRAWN_AT_TEST_END: dict[str, int] = {}
+
+
+def finish_test_enrollments(before: frozenset[str]) -> int:
+    """The end of one test: what it enrolled is withdrawn (not what was live when it began)."""
+    new = live_enrollments() - before
+    done = withdraw_enrollments(new)
+    if done:
+        file = current_file()
+        WITHDRAWN_AT_TEST_END[file] = WITHDRAWN_AT_TEST_END.get(file, 0) + done
+    return done
+
+
 def snapshot() -> Snapshot:
     client = _docker()
     return Snapshot(
         started_us=database_now_us(),
+        enrollments=live_enrollments(),
         layers=frozenset(row[0] for row in _active_unbound_layers()),
         containers=None if client is None else frozenset(
-            c.id for c in client.containers.list(all=True)),
+            c.id for c in client.containers.list(all=True, ignore_removed=True)),
         networks=None if client is None else frozenset(
             n.name for n in client.networks.list() if n.name.startswith(NETWORK_PREFIX)),
     )
@@ -152,12 +212,15 @@ def snapshot() -> Snapshot:
 def leftovers(before: Snapshot) -> Leftovers:
     """Compare with ``before``; remove the sandbox networks the session made and say which."""
     found = Leftovers(layers=[
-        row for row in _active_unbound_layers() if row[0] not in before.layers])
+        row for row in _active_unbound_layers() if row[0] not in before.layers],
+        database=db_hygiene.current_problems(),
+        enrollments=sorted(live_enrollments() - before.enrollments))
     client = _docker()
     if client is None or before.containers is None:
         return found
     found.containers = [f"{c.name} ({c.short_id}) {c.status}"
-                        for c in client.containers.list(all=True) if c.id not in before.containers]
+                        for c in client.containers.list(all=True, ignore_removed=True)
+                        if c.id not in before.containers]
     for network in client.networks.list():
         if network.name.startswith(NETWORK_PREFIX) and network.name not in (before.networks or ()):
             try:

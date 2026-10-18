@@ -1,0 +1,8 @@
+coherence OK - 218 proposals in 3 engagements
+no capability on an abandoned proposal OK - 0 abandoned proposals
+I7 database: no proposal and no capability with two runs OK - 190 runs
+audit events match state transitions OK - state/audit subjects: proposal.submitted 218/218, policy.decided 218/218, capability.issued 190/190, tool_run.started 190/190, tool_run.refused 0/0, tool_run.succeeded 190/190, tool_run.failed 0/0, ev
+unresolved reconciler intents (listed, not judged) OK - 0: []
+ENG-SOAK-1017045206-0 open: [] runs in flight: []
+ENG-SOAK-1017045206-1 open: [] runs in flight: []
+ENG-SOAK-1017045206-2 open: [] runs in flight: []

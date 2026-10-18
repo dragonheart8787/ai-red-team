@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.exc import InterfaceError, OperationalError
 
+from control_plane import docker_health
 from control_plane.audit.logger import AuditWriteError
 from control_plane.scheduler import decide, emit, execute, state, vocab
 from control_plane.scheduler.lock import SingletonLock
@@ -46,12 +47,19 @@ class TickReport:
 
 
 def _translate(exc: BaseException) -> StopService:
+    """Why the service stops for an exception that reached its top.
+
+    Whether Docker is lost is decided by ``control_plane.docker_health`` and by nothing here
+    (ACCEPTANCE 5.109): a daemon that dies under a dispatch in flight raises a connection error out
+    of the sandbox, and that is ``docker_lost``, exit 5, the same as the reconciler's."""
     if isinstance(exc, StopService):
         return exc
     if isinstance(exc, AuditWriteError):
         return StopService(vocab.STOP_AUDIT_FAILED)
     if isinstance(exc, (OperationalError, InterfaceError)):
         return StopService(vocab.STOP_DB_LOST)
+    if docker_health.is_lost(exc):
+        return StopService(vocab.STOP_DOCKER_LOST)
     return StopService(vocab.STOP_UNEXPECTED)
 
 

@@ -1,0 +1,202 @@
+[
+ {
+  "id": "D65A-P2",
+  "summary": "the check happens once per path, not before every run",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P3",
+  "summary": "a helper that fails its check is skipped and the run goes ahead without one",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P4",
+  "summary": "every exit 124 is taken to be the deadline",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P5",
+  "summary": "the exit-124 test is strict at the boundary (> instead of >=)",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P6",
+  "summary": "the tolerance is ten seconds instead of two",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P7",
+  "summary": "an image's own entrypoint is dropped from the wrapped command",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P8",
+  "summary": "any exit 127 is taken for the helper's refusal",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P9",
+  "summary": "the container is not labelled with its deadline",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P11",
+  "summary": "the deadline helper is off unless a caller turns it on",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P12",
+  "summary": "the helper is mounted read-write",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P13",
+  "summary": "a mount that covers the helper's path is not noticed",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P15",
+  "summary": "a deadline exit leaves exit_code at 124 instead of -1",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-P16",
+  "summary": "the helper is no longer the entrypoint (the command is not wrapped)",
+  "verdict": "INVALID",
+  "seconds": 0.0,
+  "tests": [
+   "tests/test_deadline_sandbox.py"
+  ],
+  "passed": 0,
+  "failures": [],
+  "problems": [
+   "the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper"
+  ]
+ },
+ {
+  "id": "D65A-T6",
+  "summary": "ToolNotExecutable shares its code with another refusal",
+  "verdict": "valid",
+  "seconds": 15.5,
+  "tests": [
+   "tests/test_timeout_vs_not_started.py"
+  ],
+  "passed": 11,
+  "failures": [
+   {
+    "test": "test_timeout_vs_not_started::test_every_not_started_class_has_its_own_reason_and_none_is_the_timeout_code",
+    "kind": "target",
+    "message": "AssertionError: two NotStarted classes share a code: ['sandbox_not_started', 'docker_unreachable', 'tool_image_missing', 'container_start_refused', 'network_unavailable', 'deadline_helper_unavailable', 'network_in_use_by"
+   }
+  ],
+  "problems": []
+ }
+]

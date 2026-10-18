@@ -352,8 +352,8 @@ call report success without doing it and require `action_failed`, not `*_removed
 
 **Implemented (D64 step 6c, ACCEPTANCE 5.82).** The table above is `act.py`, `act_docker.py`, `act_files.py`; the waits are
 `verify_wait_s`. Deletions (kill, remove, unlink) exist and are tested, and are behind five switches — `kill`, `container`,
-`proxy`, `network`, `file` — each off, each turned on by `--enable <name>` and a phrase typed at a terminal, and the last
-two refused in this version (ACCEPTANCE 5.92; the first three drilled on a real daemon, 5.95).
+`proxy`, `network`, `file` — each off by default, each turned on by `--enable <name>` and a phrase typed at a terminal, and
+the last two refused in this version (ACCEPTANCE 5.92; the first three drilled on a real daemon, 5.95).
 
 A failed action is retried after `RETRY_AFTER_FAILURE_S` (any kind, since completion 3: ACCEPTANCE 5.94); to keep a stuck object from filling the audit log, a given
 `(object, reason_code)` is audited once per process lifetime and counted thereafter (a restart reports once
@@ -831,6 +831,8 @@ and failed actions; those are **logged, not audited**, except that a failed acti
 `(object, reason_code)` per process lifetime (a restart reports once more — stated, not hidden). If an operator
 needs "reported once, ever", that is a `reconciler_state` table like `scheduler_state` (D64-11).
 
+> **Revised at completion 5 (ACCEPTANCE 5.101).** The evidence files are `<evidence dir>/<engagement id>/<container id>.inspect.json` and `.logs`, the subdirectory `0700`; they are raw data (not redacted); the service probes the directory when it starts and refuses to start if it cannot write there.
+
 > **Revised at completion 4 (ACCEPTANCE 5.97, 5.98).** A container whose run ended in `unknown_outcome` is removed with reason `run_unknown_outcome`, and only after its inspect output and logs were written to the operator's `--evidence-dir` and their SHA-256 recorded in `reconciler.evidence_saved` (the order is archive, intent, `evidence_saved`, removal, `container_removed`; if the archive fails nothing else happens). `reconciler.failure_summary` also carries `reported`: for each `subject:reason` the plan reported and left alone, the number of distinct objects in the window.
 
 **Implemented (D64 step 6d, ACCEPTANCE 5.83):** `control_plane/reconciler/emit.py` is this table, with two differences:
@@ -1037,3 +1039,41 @@ ST7); `alembic downgrade`/`upgrade` over the real data left 0 differences (E18).
 ACCEPTANCE 5.75); the template copy only for manual and destructive experiments, run by a superuser with no other
 sessions on the source, as the experiments of this revision (E18, E19, E20) were. Revision 2's E10 changed the
 development database directly — which is how the COMMENT was lost.
+
+## 10. After a whole-machine restart the reconciler may do nothing, and that is correct (D66, ACCEPTANCE 5.112)
+
+Observed three times on the development machine (2026-10-16/17), and recovered each time by the product's
+own paths, not by the reconciler alone. When the machine under a running system stops and comes back, the
+state it comes back to is whatever the last committed transaction left, and the reconciler, in `state-only`,
+acts only on what its table of transitions covers (§1) **and whose time has passed**. After a restart that
+is often nothing:
+
+* a proposal in **`awaiting_approval`** is a person's (§1.4): the reconciler never touches it, however old;
+  the approver (a person, or the soak's approver) decides it, or it is denied with `scripts/approvals.py`;
+* a proposal in **`approved`** with no run is the scheduler's (§1.4, R4/R5 only for engagements the
+  scheduler cannot reach): the scheduler dispatches it when it is started again;
+* a run in flight whose container is gone becomes `unknown_outcome` only after B + P + Q (§1.2) -- about
+  21 minutes for the soak's run budget -- so a reconciler started at once after the restart has, for that
+  long, nothing to do for it;
+* an object the reconciler has no row for (a network, an exited container inside its retention) is not
+  its to remove (§1.5, §1.7).
+
+Measured: re-run 2 of the soak, 5 open proposals (3 `awaiting_approval`, 2 `approved`), reconciler
+`--mode state-only` for 600 s: **0 actions** (`docs/D66_SOAK_RERUN2_INTERRUPTED_2026-10-17/`); re-run 1,
+1 open proposal, 901 s: **0 actions**. A pass planned "nothing" both times and exited 0. This is not a
+fault of the reconciler and must not be read as "the state is clean": **recovery after a whole-machine
+restart depends on the scheduler (for `approved`) and on a person (for `awaiting_approval`)**, and the
+reconciler is the third thing, which ends what has timed out.
+
+**The closing procedure is fixed, and contains a schema comparison before and after.** For a database that a
+restart interrupted: (1) bring Postgres and Docker back; (2) **before anything else**, `python
+scripts/check_reconciler_run.py before --state STATE.json` (records `snapshot_schema()` and the database's
+row counters) and `assert_coherent` and a `--mode dry-run` pass over the stuck engagements, outputs kept;
+(3) start the scheduler (it dispatches what was `approved`) and the reconciler in `state-only`; decide the
+`awaiting_approval` ones with `scripts/approvals.py`; withdraw the enrollments with the CLI; never edit a
+row; (4) `check_reconciler_run.py after`, which fails unless the schema is identical to the one recorded
+and every transition has its audit event. The soak does the schema half itself: it takes
+`snapshot_schema()` at the start and compares at every check and at the end (check "schema is identical to
+the one at the start"). On 2026-10-17 step (2)'s schema snapshot was not taken before the reconciler ran
+and the comparison could not be made; that is stated in ACCEPTANCE 5.111 and is what this paragraph fixes.
+

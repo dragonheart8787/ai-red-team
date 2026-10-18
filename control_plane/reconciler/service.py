@@ -53,11 +53,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from docker.errors import DockerException
 from sqlalchemy.exc import InterfaceError, OperationalError
 
+from control_plane import docker_health
 from control_plane.audit.logger import AuditWriteError
-from control_plane.reconciler import act, emit, observe, vocab
+from control_plane.reconciler import act, emit, evidence, flags, observe, vocab
 from control_plane.reconciler.config import Thresholds
 from control_plane.reconciler.lock import SingletonLock
 from control_plane.reconciler.model import US, Observation, name_hash_n
@@ -96,15 +96,22 @@ class StopService(Exception):  # noqa: N818 - a control-flow signal, not an erro
 
 
 def _translate(exc: BaseException) -> StopService:
+    """Why the service stops for an exception that reached its top, and with which exit code.
+
+    **Whether Docker is lost is decided in one place, ``control_plane.docker_health``** (ACCEPTANCE
+    5.107, 5.109; the table is in its docstring): lost (``docker_lost``, 5) is a daemon that cannot
+    be spoken to or answers 5xx; a daemon that answered with a 4xx -- ``NotFound`` first of them --
+    is there, and an error that reached this far is a defect (``unexpected_error``, 1). An object
+    that is not there any more is handled where the call is made (``observe`` drops it from a
+    listing, ``act_docker`` returns ``gone``); it must not get here. This module does not classify
+    Docker's exceptions itself (a structure test holds it to that)."""
     if isinstance(exc, StopService):
         return exc
     if isinstance(exc, AuditWriteError | emit.PayloadRejected):
         return StopService(emit.STOP_AUDIT_FAILED)
     if isinstance(exc, OperationalError | InterfaceError):
         return StopService(emit.STOP_DB_LOST)
-    if isinstance(exc, FileNotFoundError | PermissionError | NotADirectoryError):
-        return StopService(emit.STOP_UNEXPECTED)        # the configured directory, not the daemon
-    if isinstance(exc, DockerException | OSError):
+    if docker_health.is_lost(exc):
         return StopService(emit.STOP_DOCKER_LOST)
     return StopService(emit.STOP_UNEXPECTED)
 
@@ -173,6 +180,17 @@ class Reconciler:
         if not self.audits:                         # a dry run: no lock, no audit, no state
             self.started = True
             return
+        if flags.CONTAINER in self.settings.enabled:
+            try:                                    # before the lock: nothing held or started
+                evidence.probe(self.settings.evidence_dir)
+            except evidence.EvidenceError:
+                try:
+                    emit.emit(emit.START_REFUSED, {"instance_id": self.instance_id,
+                                                   "reason_code": emit.CONFIG_REFUSED},
+                              subject_type="reconciler", subject_id=self.instance_id)
+                except Exception:  # noqa: BLE001 - refusing to start needs no further record
+                    pass
+                raise StopService(emit.CONFIG_REFUSED, EXIT_CONFIG_REFUSED) from None
         try:
             got = self.lock.acquire()
         except Exception as exc:  # noqa: BLE001

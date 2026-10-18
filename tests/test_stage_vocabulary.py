@@ -202,9 +202,26 @@ MENTIONS = re.compile(
 #: fails until it is listed (the same device as ``NULL_IS_A_STATE``): the point is a person reading
 #: whether the new stage ``abandoned`` needs anything there.
 FILE_REGISTRY = {
+    "scripts/drill_scheduler_docker_restart.py":
+        "reads `dispatching` and the run's status after the daemon was restarted under a dispatch, "
+        "and the reconciler's `unknown_outcome`/`recorded` afterwards; it moves none itself",
     "scripts/drill_reconciler_docker.py":
         "seeds proposals at `dispatching` / `recorded` for the drill's containers and reads the "
         "stages the command line moved them to; it moves none itself",
+    "scripts/drill_reconciler_full_chain.py":
+        "runs the real pipeline in a child process to `dispatching`, then only reads the stages "
+        "the command line moves the proposal through (`dispatching`, `recorded`); moves none",
+    "scripts/drill_reconciler_late_result.py":
+        "runs the real pipeline in a child process to `dispatching`, then reads the stages the "
+        "reconciler and the late result move it through; it moves none itself",
+    "scripts/soak/audit_pairs.py":
+        "reads `pipeline_stage` to pair state rows with audit events; writes nothing",
+    "scripts/soak/checks.py":
+        "reads the stages to find an abandoned proposal with a capability; writes nothing",
+    "scripts/soak/conductor.py":
+        "reads the stages to know when everything is terminal at the end; moves none itself",
+    "scripts/soak/report.py":
+        "counts proposals by stage for the report; writes nothing",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",

@@ -1,0 +1,634 @@
+[
+ {
+  "id": "D66-F3-a",
+  "summary": "the scheduler no longer asks the shared classification (back to F3: exit 1)",
+  "verdict": "valid",
+  "seconds": 5.4,
+  "tests": [
+   "tests/test_docker_health.py",
+   "tests/test_docker_health_structure.py"
+  ],
+  "passed": 35,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a server error]",
+    "kind": "target",
+    "message": "AssertionError: a server error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bad gateway]",
+    "kind": "target",
+    "message": "AssertionError: a bad gateway"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[an SDK error with no HTTP answer]",
+    "kind": "target",
+    "message": "AssertionError: an SDK error with no HTTP answer"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[the connection refused]",
+    "kind": "target",
+    "message": "AssertionError: the connection refused"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a read that timed out]",
+    "kind": "target",
+    "message": "AssertionError: a read that timed out"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a builtin connection error]",
+    "kind": "target",
+    "message": "AssertionError: a builtin connection error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a broken pipe]",
+    "kind": "target",
+    "message": "AssertionError: a broken pipe"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a timeout]",
+    "kind": "target",
+    "message": "AssertionError: a timeout"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[the socket file gone, as the SDK wraps it]",
+    "kind": "target",
+    "message": "AssertionError: the socket file gone, as the SDK wraps it"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a Docker error wrapping a host file error]",
+    "kind": "target",
+    "message": "AssertionError: a Docker error wrapping a host file error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (cause)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (cause)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_exits_5_not_1_for_a_daemon_that_is_gone[socket]",
+    "kind": "target",
+    "message": "AssertionError: assert ('unexpected_error', 1) == ('docker_lost', 5)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_exits_5_not_1_for_a_daemon_that_is_gone[refused]",
+    "kind": "target",
+    "message": "AssertionError: assert ('unexpected_error', 1) == ('docker_lost', 5)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_exits_5_not_1_for_a_daemon_that_is_gone[503]",
+    "kind": "target",
+    "message": "AssertionError: assert ('unexpected_error', 1) == ('docker_lost', 5)"
+   },
+   {
+    "test": "test_docker_health::test_a_daemon_that_dies_under_a_dispatch_in_flight_stops_the_scheduler_with_exit_5",
+    "kind": "target",
+    "message": "assert 1 == 5"
+   },
+   {
+    "test": "test_docker_health_structure::test_each_service_imports_the_shared_classification_and_calls_it_in_translate",
+    "kind": "target",
+    "message": "AssertionError: ('scheduler', {'StopService', 'isinstance'})"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-b",
+  "summary": "the reconciler no longer asks the shared classification",
+  "verdict": "valid",
+  "seconds": 2.9,
+  "tests": [
+   "tests/test_docker_health.py",
+   "tests/test_docker_health_structure.py"
+  ],
+  "passed": 39,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a server error]",
+    "kind": "target",
+    "message": "AssertionError: a server error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bad gateway]",
+    "kind": "target",
+    "message": "AssertionError: a bad gateway"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[an SDK error with no HTTP answer]",
+    "kind": "target",
+    "message": "AssertionError: an SDK error with no HTTP answer"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[the connection refused]",
+    "kind": "target",
+    "message": "AssertionError: the connection refused"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a read that timed out]",
+    "kind": "target",
+    "message": "AssertionError: a read that timed out"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a builtin connection error]",
+    "kind": "target",
+    "message": "AssertionError: a builtin connection error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a broken pipe]",
+    "kind": "target",
+    "message": "AssertionError: a broken pipe"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a timeout]",
+    "kind": "target",
+    "message": "AssertionError: a timeout"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[the socket file gone, as the SDK wraps it]",
+    "kind": "target",
+    "message": "AssertionError: the socket file gone, as the SDK wraps it"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a Docker error wrapping a host file error]",
+    "kind": "target",
+    "message": "AssertionError: a Docker error wrapping a host file error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (cause)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (cause)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   },
+   {
+    "test": "test_docker_health_structure::test_each_service_imports_the_shared_classification_and_calls_it_in_translate",
+    "kind": "target",
+    "message": "AssertionError: ('reconciler', {'StopService', 'isinstance'})"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-c",
+  "summary": "a builtin connection error (an OSError) is not a lost daemon",
+  "verdict": "valid",
+  "seconds": 4.7,
+  "tests": [
+   "tests/test_docker_health.py"
+  ],
+  "passed": 40,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_classification[a builtin connection error]",
+    "kind": "target",
+    "message": "AssertionError: a builtin connection error"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a broken pipe]",
+    "kind": "target",
+    "message": "AssertionError: a broken pipe"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a timeout]",
+    "kind": "target",
+    "message": "AssertionError: a timeout"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a builtin connection error]",
+    "kind": "target",
+    "message": "AssertionError: a builtin connection error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a broken pipe]",
+    "kind": "target",
+    "message": "AssertionError: a broken pipe"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a timeout]",
+    "kind": "target",
+    "message": "AssertionError: a timeout"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-d",
+  "summary": "an HTTP 5xx from the daemon is an answer, not a lost daemon",
+  "verdict": "valid",
+  "seconds": 2.4,
+  "tests": [
+   "tests/test_docker_health.py"
+  ],
+  "passed": 43,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_classification[a server error]",
+    "kind": "target",
+    "message": "AssertionError: a server error"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bad gateway]",
+    "kind": "target",
+    "message": "AssertionError: a bad gateway"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a server error]",
+    "kind": "target",
+    "message": "AssertionError: a server error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bad gateway]",
+    "kind": "target",
+    "message": "AssertionError: a bad gateway"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_exits_5_not_1_for_a_daemon_that_is_gone[503]",
+    "kind": "target",
+    "message": "AssertionError: assert ('unexpected_error', 1) == ('docker_lost', 5)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-e",
+  "summary": "the cause chain is not looked through (requests around urllib3 around FileNotFoundError)",
+  "verdict": "valid",
+  "seconds": 2.4,
+  "tests": [
+   "tests/test_docker_health.py"
+  ],
+  "passed": 42,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a lost daemon (cause)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (cause)"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a vanished container]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a vanished container"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a daemon's refusal]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a daemon's refusal"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (cause)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (cause)"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a lost daemon (context)]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a lost daemon (context)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-f",
+  "summary": "a container that vanished (NotFound) is a lost daemon again (back to F1)",
+  "verdict": "valid",
+  "seconds": 2.4,
+  "tests": [
+   "tests/test_docker_health.py"
+  ],
+  "passed": 44,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_classification[a container that is not there]",
+    "kind": "target",
+    "message": "AssertionError: a container that is not there"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps a vanished container]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a vanished container"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a container that is not there]",
+    "kind": "target",
+    "message": "AssertionError: a container that is not there"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps a vanished container]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps a vanished container"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-g",
+  "summary": "a host file-system error outside a Docker error is called Docker's",
+  "verdict": "valid",
+  "seconds": 2.5,
+  "tests": [
+   "tests/test_docker_health.py"
+  ],
+  "passed": 42,
+  "failures": [
+   {
+    "test": "test_docker_health::test_the_classification[a bug that wraps nothing of Docker's]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps nothing of Docker's"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a bare host file error]",
+    "kind": "target",
+    "message": "AssertionError: a bare host file error"
+   },
+   {
+    "test": "test_docker_health::test_the_classification[a permission error on a host directory]",
+    "kind": "target",
+    "message": "AssertionError: a permission error on a host directory"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bug that wraps nothing of Docker's]",
+    "kind": "target",
+    "message": "AssertionError: a bug that wraps nothing of Docker's"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a bare host file error]",
+    "kind": "target",
+    "message": "AssertionError: a bare host file error"
+   },
+   {
+    "test": "test_docker_health::test_the_scheduler_and_the_reconciler_give_the_same_answer[a permission error on a host directory]",
+    "kind": "target",
+    "message": "AssertionError: a permission error on a host directory"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-h",
+  "summary": "the scheduler imports Docker's exceptions to classify on its own",
+  "verdict": "valid",
+  "seconds": 3.3,
+  "tests": [
+   "tests/test_docker_health_structure.py"
+  ],
+  "passed": 3,
+  "failures": [
+   {
+    "test": "test_docker_health_structure::test_no_service_imports_docker_or_requests_or_names_a_docker_exception",
+    "kind": "target",
+    "message": "AssertionError: ('scheduler', {'docker.errors', 'docker.errors.APIError'})"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-F3-i",
+  "summary": "the reconciler imports requests to classify on its own",
+  "verdict": "valid",
+  "seconds": 2.0,
+  "tests": [
+   "tests/test_docker_health_structure.py"
+  ],
+  "passed": 3,
+  "failures": [
+   {
+    "test": "test_docker_health_structure::test_no_service_imports_docker_or_requests_or_names_a_docker_exception",
+    "kind": "target",
+    "message": "AssertionError: ('reconciler', {'requests'})"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-a",
+  "summary": "the end of a test no longer withdraws what the test enrolled",
+  "verdict": "valid",
+  "seconds": 22.7,
+  "tests": [
+   "tests/test_residue_check.py",
+   "tests/test_residue_wiring.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_residue_check::test_the_end_of_a_test_withdraws_what_it_enrolled_and_nothing_that_was_live_before",
+    "kind": "target",
+    "message": "AssertionError: assert 0 == 1"
+   },
+   {
+    "test": "test_residue_wiring::test_a_test_that_enrolls_an_engagement_has_it_withdrawn_when_it_ends",
+    "kind": "target",
+    "message": "AssertionError: .E                                                                       [100%]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-b",
+  "summary": "the end of a test withdraws every live enrollment, including ones that were there before it",
+  "verdict": "valid",
+  "seconds": 11.0,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_the_end_of_a_test_withdraws_what_it_enrolled_and_nothing_that_was_live_before",
+    "kind": "target",
+    "message": "AssertionError: assert 2 == 1"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-c",
+  "summary": "the session end does not look at enrollments",
+  "verdict": "valid",
+  "seconds": 11.0,
+  "tests": [
+   "tests/test_residue_check.py",
+   "tests/test_residue_wiring.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_residue_check::test_an_enrollment_made_after_the_snapshot_is_residue_and_one_before_it_is_not",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['ENG-RESIDUE-7ecba693']"
+   },
+   {
+    "test": "test_residue_wiring::test_a_session_that_leaves_a_scheduler_enrollment_behind_fails",
+    "kind": "target",
+    "message": "AssertionError: .                                                                        [100%]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-d",
+  "summary": "the snapshot does not record the enrollments that were live before the session",
+  "verdict": "valid",
+  "seconds": 5.3,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_an_enrollment_made_after_the_snapshot_is_residue_and_one_before_it_is_not",
+    "kind": "target",
+    "message": "AssertionError: assert 'ENG-TEST-f7bb74f2a723' in frozenset()"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-e",
+  "summary": "the CLI does not check --by or the engagement id before the confirmation",
+  "verdict": "valid",
+  "seconds": 38.4,
+  "tests": [
+   "tests/test_scheduler_cli.py"
+  ],
+  "passed": 12,
+  "failures": [
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alice; DROP TABLE x']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked[' alice']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alice\\\\nadmin']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alice\\\\n']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['al ice']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['aaaaaaaaaaaaaaaaaaaaaaaaaaaaa]",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alic\\xe9']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['../x']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['-alice']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked[\"alice'--\"]",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alice\\\\x1b[2J']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['al/ice']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_an_engagement_id_that_is_not_a_plain_identifier_is_refused_the_same_way",
+    "kind": "target",
+    "message": "AssertionError: ENG; DROP TABLE x"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-f",
+  "summary": "the rule matches a prefix (a name with a newline or a semicolon after a good start passes)",
+  "verdict": "valid",
+  "seconds": 21.4,
+  "tests": [
+   "tests/test_scheduler_cli.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_scheduler_cli::test_a_name_that_is_not_a_plain_identifier_is_refused_before_anything_is_asked['alice\\\\n']",
+    "kind": "target",
+    "message": "AssertionError: ('enroll', 'refusing: no terminal to confirm on (use --yes only if a person has already decided)."
+   },
+   {
+    "test": "test_scheduler_cli::test_the_rule_itself_refuses_what_an_argument_vector_cannot_carry",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D66-E-g",
+  "summary": "the listing prints an odd stored name as it is",
+  "verdict": "valid",
+  "seconds": 21.8,
+  "tests": [
+   "tests/test_scheduler_cli.py"
+  ],
+  "passed": 25,
+  "failures": [
+   {
+    "test": "test_scheduler_cli::test_the_listing_shows_an_old_row_with_an_odd_name_quoted",
+    "kind": "target",
+    "message": "AssertionError: assert '\\x1b' not in '#4640 ENG-T...0:00  [live]'"
+   }
+  ],
+  "problems": []
+ }
+]

@@ -3,15 +3,15 @@
 The plan hands over plain ``Action`` values; nothing here decides whether an action is warranted.
 What this half adds is **safety at the moment of acting**:
 
-* **two modes, and five switches that are off.** ``Mode.DRY_RUN`` changes nothing at all -- no
-  connection is opened, no Docker call made -- and says what it would have done. ``Mode.STATE_ONLY``
-  carries out the proposal transitions and *skips* every action that kills, removes or deletes a
-  Docker object or a host file (outcome ``skipped_deletions_off``) unless its category is in
-  ``Settings.enabled``: ``kill``, ``container``, ``proxy``, ``network``, ``file`` (``flags.py``,
-  ACCEPTANCE 5.92). ``enabled`` is empty by default, no setting or environment variable sets it, and
-  the one place that builds it from an operator's words is ``settings_for`` -- from the command
-  line's ``--enable``, confirmed by a person at a terminal, and refusing ``network`` and ``file`` in
-  this version;
+* **two modes, and five switches that are off by default.** ``Mode.DRY_RUN`` changes nothing at
+  all -- no connection is opened, no Docker call made -- and says what it would have done.
+  ``Mode.STATE_ONLY`` carries out the proposal transitions and *skips* every action that kills,
+  removes or deletes a Docker object or a host file (outcome ``skipped_deletions_off``) unless its
+  category is in ``Settings.enabled``: ``kill``, ``container``, ``proxy``, ``network``, ``file``
+  (``flags.py``, ACCEPTANCE 5.92). ``enabled`` is empty by default, no setting or environment
+  variable sets it, and the one place that builds it from an operator's words is ``settings_for``
+  -- from the command line's ``--enable``, confirmed by a person at a terminal, and refusing
+  ``network`` and ``file`` in this version;
 * **a state change is one conditional ``UPDATE``** inside ``engagement_scope(engagement_id)``, a
   compare-and-set on the stage *and* on the ``stage_updated_at`` the plan observed. Zero rows moved
   means someone else got there first: ``lost_race``, nothing is audited, nothing is retried. When
