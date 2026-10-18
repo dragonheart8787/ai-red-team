@@ -1,7 +1,6 @@
 # D66 -- the soak: method, definitions, limits
 
-*Written before the first run. Nothing here was changed after seeing a result; the results are in
-`docs/D66_SOAK_REPORT_<date>.md`.*
+*Written before the first run. Nothing here was changed after seeing a result, except where a section says it was added (3a, 3b, 6, 7). The results are not in a report of this name but in the directories beside this file: `D66_SOAK_PILOT_2026-10-15.md` (the pilots), `D66_SOAK_ATTEMPT_1_..`, `D66_SOAK_RERUN1_..`, `D66_SOAK_RERUN2_..` (the three interrupted runs), `D66_SOAK_RUNNER_SMOKE_2026-10-17/` and `D66_SOAK_RUNNER_4H_2026-10-17/` (the runner), and ACCEPTANCE 5.106-5.114.*
 
 A soak is a long run of the real parts together, under faults, with questions asked of the state
 at fixed times. It adds no feature: every process is the product's own command line, except the
@@ -303,10 +302,7 @@ proposal is terminal, no run in flight, no live enrollment, no container.
 Docker daemon started by hand (so that the `docker_restart` fault can restart it; systemd's socket
 activation is stopped), the nmap image, the pinned deadline helper; the conductor runs as root; the report
 is the step summary and the run directory (minus the raw container evidence) is an artifact for 30 days.
-**It has not been run.** Its first run is a smoke run (`hours` = 0.2) to see that the setup works on a
-runner; the faults assume things about the machine that a runner may not grant (the `docker_restart` and
-`postgres_restart` faults, resource caps tuned for this host), and what the first runs show about that is
-the next finding, not a result about the product. There is no four-hour result in this repository yet.
+*Update (2026-10-17/18): it has been run.* The smoke run and then the four hours passed with no finding (section 7, ACCEPTANCE 5.113). The sentences that stood here -- that it had not been run and that the faults assume things a runner may not grant -- were true when written; what the first runs showed about that was two setup faults of the workflow (an unreadable `roles.sql`, OPA not installed) and nothing about the product.
 
 ## 7. Running it on a runner: measured caps, unprivileged, counted checks, a smoke run (ACCEPTANCE 5.112)
 
@@ -343,3 +339,12 @@ the next finding, not a result about the product. There is no four-hour result i
   action yet (nothing was due), the floor rose in four windows in a row, and the invariant -- correctly,
   for that regime -- failed. In a soak the faults are 10-20 minutes apart and the windows 15 minutes; the
   check is an invariant there, unchanged.
+
+**The four-hour run (2026-10-17).** Run 39017478408, `hours` 4: no finding; the numbers are in
+`docs/D66_SOAK_RUNNER_4H_2026-10-17/README.md` and ACCEPTANCE 5.113. **Before any longer soak** the harness
+needs a memory cap derived from the trend it showed (the conductor grew 75 -> 109 MB in 251 minutes, 7.5 MB/h; the
+default cap, 1,024 MB, would be reached after about 120 hours) and the cause of the growth found
+(5.113). **Schedule:** merged to `main`, `soak.yml` runs every Sunday at 02:17 UTC for four hours with nobody
+watching; `soak-report.yml` and the `push` trigger of `soak.yml` name the development branch and do nothing on
+`main`; the file `.github/soak-request.json` (4 hours) only matters on that branch. What the run did not
+exercise (the late-result path of 5.74, migrations) is in 5.113.

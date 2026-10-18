@@ -1,0 +1,388 @@
+[
+ {
+  "id": "M4",
+  "summary": "the audit payload whitelist is relaxed (any payload accepted)",
+  "verdict": "valid",
+  "seconds": 156.3,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 193,
+  "failures": [
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra0]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra1]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra2]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra3]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra4]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra5]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[scan the payroll subnet and report]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[10.96.62.9; DROP TABLE x]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[line one\\nline two]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[ ]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[None]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[7]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[value8]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[value9]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_reason_code_that_is_valid_for_another_event_is_refused_here",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   },
+   {
+    "test": "test_scheduler_structure::test_a_counter_is_a_non_negative_integer",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "M5",
+  "summary": "a skip raises the exit-7 stop",
+  "verdict": "valid",
+  "seconds": 74.5,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 196,
+  "failures": [
+   {
+    "test": "test_scheduler_cli::test_awaiting_dispatch_says_why_a_skipped_proposal_has_not_run",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_skipped_proposal_over_many_ticks_does_not_stop_the_service_and_is_recorded_once",
+    "kind": "target",
+    "message": "assert 7 == 0"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_skip_does_not_hide_a_dispatchable_proposal_beside_it",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.0/30-10.96.66.2-scope_narrower_than_sandbox_minimum]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.8/31-10.96.66.9-scope_narrower_than_sandbox_minimum]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.16/32-10.96.66.16-scope_narrower_than_sandbox_minimum]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.9]",
+    "kind": "target",
+    "message": "assert 7 == 0"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.0]",
+    "kind": "target",
+    "message": "assert 7 == 0"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.20]",
+    "kind": "target",
+    "message": "assert 7 == 0"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.31]",
+    "kind": "target",
+    "message": "assert 7 == 0"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_with_a_real_docker_daemon_starts_nothing",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[network-10.96.68.0]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[gateway-10.96.68.1]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[broadcast-10.96.68.255]",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   },
+   {
+    "test": "test_scheduler_structure::test_what_the_scheduler_really_wrote_carries_no_goal_target_or_scope_text",
+    "kind": "target",
+    "message": "control_plane.scheduler.service.StopService: dispatch_did_not_advance"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "M7",
+  "summary": "a skip is recorded every tick",
+  "verdict": "valid",
+  "seconds": 81.3,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 201,
+  "failures": [
+   {
+    "test": "test_scheduler_skips::test_a_skipped_proposal_over_many_ticks_does_not_stop_the_service_and_is_recorded_once",
+    "kind": "target",
+    "message": "AssertionError: scheduler.skipped was written 12 times over 12 ticks"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_skip_does_not_hide_a_dispatchable_proposal_beside_it",
+    "kind": "target",
+    "message": "AssertionError: assert (['PROP-bc92632888'], []) == ([], [])"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.9]",
+    "kind": "target",
+    "message": "AssertionError: scheduler.skipped was written 6 times over 6 ticks"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.0]",
+    "kind": "target",
+    "message": "AssertionError: scheduler.skipped was written 6 times over 6 ticks"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.20]",
+    "kind": "target",
+    "message": "AssertionError: scheduler.skipped was written 6 times over 6 ticks"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.31]",
+    "kind": "target",
+    "message": "AssertionError: scheduler.skipped was written 6 times over 6 ticks"
+   },
+   {
+    "test": "test_scheduler_skips::test_an_ip_scope_with_a_real_docker_daemon_starts_nothing",
+    "kind": "target",
+    "message": "assert False"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[network-10.96.68.0]",
+    "kind": "target",
+    "message": "AssertionError: assert (['PROP-5505ba6f71'] == ['PROP-5505ba6f71']"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[gateway-10.96.68.1]",
+    "kind": "target",
+    "message": "AssertionError: assert (['PROP-a78a8dd45f'] == ['PROP-a78a8dd45f']"
+   },
+   {
+    "test": "test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[broadcast-10.96.68.255]",
+    "kind": "target",
+    "message": "AssertionError: assert (['PROP-b2d5028bc6'] == ['PROP-b2d5028bc6']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "M8",
+  "summary": "dispatch before the decision is recorded",
+  "verdict": "valid",
+  "seconds": 78.8,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 205,
+  "failures": [
+   {
+    "test": "test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[network.scan-nmap]",
+    "kind": "target",
+    "message": "assert 73447 < 73443"
+   },
+   {
+    "test": "test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[network.recon-nmap]",
+    "kind": "target",
+    "message": "assert 73461 < 73457"
+   },
+   {
+    "test": "test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]",
+    "kind": "target",
+    "message": "assert 73476 < 73472"
+   },
+   {
+    "test": "test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.secrets-gitleaks]",
+    "kind": "target",
+    "message": "assert 73491 < 73487"
+   },
+   {
+    "test": "test_scheduler_e2e::test_a_tick_dispatches_an_approved_proposal_and_a_real_container_runs_the_tool",
+    "kind": "target",
+    "message": "AssertionError: assert ([{'audit_id': 73550, 'event_type': 'capability.issued', 'actor': 'scheduler', 'subject_id': 'CAP-8232a3d5be', ...}] and 73554 < 73550)"
+   },
+   {
+    "test": "test_scheduler_service::test_if_the_decision_cannot_be_audited_nothing_is_dispatched",
+    "kind": "target",
+    "message": "assert 1 == 0"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "M11",
+  "summary": "no Docker reachability check before a dispatch",
+  "verdict": "valid",
+  "seconds": 83.9,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 210,
+  "failures": [
+   {
+    "test": "test_scheduler_service::test_an_unreachable_docker_stops_the_service_before_the_dispatch",
+    "kind": "target",
+    "message": "assert 0 == 5"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "M12",
+  "summary": "tick does not check that the lock is still held",
+  "verdict": "valid",
+  "seconds": 80.7,
+  "tests": [
+   "tests/test_scheduler_actions.py",
+   "tests/test_scheduler_allowlist.py",
+   "tests/test_scheduler_cli.py",
+   "tests/test_scheduler_e2e.py",
+   "tests/test_scheduler_policy_change.py",
+   "tests/test_scheduler_roles.py",
+   "tests/test_scheduler_service.py",
+   "tests/test_scheduler_skips.py",
+   "tests/test_scheduler_structure.py"
+  ],
+  "passed": 209,
+  "failures": [
+   {
+    "test": "test_scheduler_service::test_a_killed_lock_connection_stops_dispatching",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE StopService"
+   },
+   {
+    "test": "test_scheduler_service::test_run_returns_the_lock_lost_exit_code",
+    "kind": "target",
+    "message": "assert 0 == 6"
+   }
+  ],
+  "problems": []
+ }
+]

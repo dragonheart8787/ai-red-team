@@ -1808,7 +1808,7 @@ CATALOGUE += [
                  "test_the_session_end_check_fails_the_run_on_either")),
     Mutation(
         "D64-C5-l", "the session-end check does not look at the database", MUTATION_SAFETY_TESTS,
-        edits=(Edit(RESIDUE_PY, "database=db_hygiene.current_problems())", "database=[])"),),
+        edits=(Edit(RESIDUE_PY, "database=db_hygiene.current_problems(),", "database=[],"),),
         targets=("test_the_session_end_check_fails_the_run_on_either",)),
     Mutation(
         "D64-C5-m", "the runner does not drop a scratch schema a killed test left", MUTATION_SAFETY_TESTS,
@@ -1926,15 +1926,15 @@ CATALOGUE += [
         targets=("test_gone_a_container_that_vanishes_while_the_sandbox_checks_exclusivity_40_times",)),
     Mutation(
         "D64-F1-h", "a NotFound that reaches the top is a lost daemon again", VANISH_TESTS,
-        edits=(Edit(SERVICE_PY, '    if isinstance(exc, APIError):\n        status = exc.status_code\n        return StopService(emit.STOP_DOCKER_LOST if status is None or status >= 500\n                           else emit.STOP_UNEXPECTED)\n', ''),),
+        edits=(Edit("control_plane/docker_health.py", "    if isinstance(exc, NotFound):\n        return GONE\n", "    if isinstance(exc, NotFound):\n        return LOST\n"),),
         targets=("test_the_classification_rule", "test_a_notfound_is_a_defect_if_it_reaches_the_top_never_a_lost_daemon")),
     Mutation(
         "D64-F1-i", "a server error of the daemon is no longer a lost daemon", VANISH_TESTS,
-        edits=(Edit(SERVICE_PY, "STOP_DOCKER_LOST if status is None or status >= 500", "STOP_DOCKER_LOST if status is None"),),
+        edits=(Edit("control_plane/docker_health.py", "return LOST if status is None or status >= 500 else ANSWERED", "return LOST if status is None else ANSWERED"),),
         targets=("test_the_classification_rule",)),
     Mutation(
         "D64-F1-j", "a conflict the daemon answered is a lost daemon", VANISH_TESTS,
-        edits=(Edit(SERVICE_PY, "STOP_DOCKER_LOST if status is None or status >= 500", "STOP_DOCKER_LOST if status is None or status >= 400"),),
+        edits=(Edit("control_plane/docker_health.py", "return LOST if status is None or status >= 500 else ANSWERED", "return LOST if status is None or status >= 400 else ANSWERED"),),
         targets=("test_the_classification_rule",)),
 ]
 

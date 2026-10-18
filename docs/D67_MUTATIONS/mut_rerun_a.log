@@ -1,0 +1,124 @@
+
+## M4: valid  (target 18, broken 0, other 0; 193 passed; 156.3s)
+   the audit payload whitelist is relaxed (any payload accepted)
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra0]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra1]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra2]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra3]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra4]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_an_extra_key_is_refused_on_every_event[extra5]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[scan the payroll subnet and report]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[10.96.62.9; DROP TABLE x]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[line one\nline two]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[ ]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[None]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[7]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[value8]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_value_that_is_not_an_id_or_a_closed_code_is_refused[value9]
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_reason_code_that_is_valid_for_another_event_is_refused_here
+        Failed: DID NOT RAISE PayloadRejected
+   [target] test_scheduler_structure::test_a_counter_is_a_non_negative_integer
+        Failed: DID NOT RAISE PayloadRejected
+
+## M5: valid  (target 15, broken 0, other 0; 196 passed; 74.5s)
+   a skip raises the exit-7 stop
+   [target] test_scheduler_cli::test_awaiting_dispatch_says_why_a_skipped_proposal_has_not_run
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_skipped_proposal_over_many_ticks_does_not_stop_the_service_and_is_recorded_once
+        assert 7 == 0
+   [target] test_scheduler_skips::test_a_skip_does_not_hide_a_dispatchable_proposal_beside_it
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.0/30-10.96.66.2-scope_narrower_than_sandbox_minimum]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.8/31-10.96.66.9-scope_narrower_than_sandbox_minimum]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_cidr_scope_narrower_than_a_slash_29_is_skipped_and_a_slash_29_is_not[10.96.66.16/32-10.96.66.16-scope_narrower_than_sandbox_minimum]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.9]
+        assert 7 == 0
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.0]
+        assert 7 == 0
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.20]
+        assert 7 == 0
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.31]
+        assert 7 == 0
+   [target] test_scheduler_skips::test_an_ip_scope_with_a_real_docker_daemon_starts_nothing
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[network-10.96.68.0]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[gateway-10.96.68.1]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[broadcast-10.96.68.255]
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+   [target] test_scheduler_structure::test_what_the_scheduler_really_wrote_carries_no_goal_target_or_scope_text
+        control_plane.scheduler.service.StopService: dispatch_did_not_advance
+
+## M7: valid  (target 10, broken 0, other 0; 201 passed; 81.3s)
+   a skip is recorded every tick
+   [target] test_scheduler_skips::test_a_skipped_proposal_over_many_ticks_does_not_stop_the_service_and_is_recorded_once
+        AssertionError: scheduler.skipped was written 12 times over 12 ticks
+   [target] test_scheduler_skips::test_a_skip_does_not_hide_a_dispatchable_proposal_beside_it
+        AssertionError: assert (['PROP-bc92632888'], []) == ([], [])
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.9]
+        AssertionError: scheduler.skipped was written 6 times over 6 ticks
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.0]
+        AssertionError: scheduler.skipped was written 6 times over 6 ticks
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.20]
+        AssertionError: scheduler.skipped was written 6 times over 6 ticks
+   [target] test_scheduler_skips::test_an_ip_scope_is_skipped_whatever_the_address_and_never_widened[10.96.67.31]
+        AssertionError: scheduler.skipped was written 6 times over 6 ticks
+   [target] test_scheduler_skips::test_an_ip_scope_with_a_real_docker_daemon_starts_nothing
+        assert False
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[network-10.96.68.0]
+        AssertionError: assert (['PROP-5505ba6f71'] == ['PROP-5505ba6f71']
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[gateway-10.96.68.1]
+        AssertionError: assert (['PROP-a78a8dd45f'] == ['PROP-a78a8dd45f']
+   [target] test_scheduler_skips::test_a_target_on_a_reserved_address_is_skipped_and_nothing_is_started[broadcast-10.96.68.255]
+        AssertionError: assert (['PROP-b2d5028bc6'] == ['PROP-b2d5028bc6']
+
+## M8: valid  (target 6, broken 0, other 0; 205 passed; 78.8s)
+   dispatch before the decision is recorded
+   [target] test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[network.scan-nmap]
+        assert 73447 < 73443
+   [target] test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[network.recon-nmap]
+        assert 73461 < 73457
+   [target] test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+        assert 73476 < 73472
+   [target] test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.secrets-gitleaks]
+        assert 73491 < 73487
+   [target] test_scheduler_e2e::test_a_tick_dispatches_an_approved_proposal_and_a_real_container_runs_the_tool
+        AssertionError: assert ([{'audit_id': 73550, 'event_type': 'capability.issued', 'actor': 'scheduler', 'subject_id': 'CAP-8232a3d5be', ...}] and 73554 < 73550)
+   [target] test_scheduler_service::test_if_the_decision_cannot_be_audited_nothing_is_dispatched
+        assert 1 == 0
+
+## M11: valid  (target 1, broken 0, other 0; 210 passed; 83.9s)
+   no Docker reachability check before a dispatch
+   [target] test_scheduler_service::test_an_unreachable_docker_stops_the_service_before_the_dispatch
+        assert 0 == 5
+
+## M12: valid  (target 2, broken 0, other 0; 209 passed; 80.7s)
+   tick does not check that the lock is still held
+   [target] test_scheduler_service::test_a_killed_lock_connection_stops_dispatching
+        Failed: DID NOT RAISE StopService
+   [target] test_scheduler_service::test_run_returns_the_lock_lost_exit_code
+        assert 0 == 6
+
+6 valid, 0 not: []

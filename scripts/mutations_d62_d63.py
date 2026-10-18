@@ -285,8 +285,10 @@ CATALOGUE = [
         edits=(Edit("tests/residue.py",
                     "    found = Leftovers(layers=[\n"
                     "        row for row in _active_unbound_layers() if row[0] not in before.layers],\n"
-                    "        database=db_hygiene.current_problems())\n",
-                    "    found = Leftovers(layers=[], database=db_hygiene.current_problems())\n"),),
+                    "        database=db_hygiene.current_problems(),\n"
+                    "        enrollments=sorted(live_enrollments() - before.enrollments))\n",
+                    "    found = Leftovers(layers=[], database=db_hygiene.current_problems(),\n"
+                    "                      enrollments=sorted(live_enrollments() - before.enrollments))\n"),),
         targets=("test_an_active_global_layer_is_residue_and_is_not_cleaned_up",)),
     Mutation(
         "D63-o", "the session does not fail on residue (conftest)",

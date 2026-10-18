@@ -1,0 +1,165 @@
+
+## D65A-P2: valid  (target 2, broken 0, other 0; 52 passed; 105.6s)
+   the check happens once per path, not before every run
+   [target] test_deadline_sandbox::test_a_correct_copy_is_accepted_and_verified_again_on_every_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline
+        AssertionError: 37.115612
+
+## D65A-P3: valid  (target 7, broken 0, other 0; 47 passed; 39.5s)
+   a helper that fails its check is skipped and the run goes ahead without one
+   [target] test_deadline_sandbox::test_a_correct_copy_is_accepted_and_verified_again_on_every_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_a_missing_file_stops_the_run_before_a_container_exists
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_an_unreadable_path_stops_the_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_the_right_bytes_without_an_execute_bit_for_everyone_stop_the_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_a_binary_for_another_architecture_has_no_pin_and_stops_the_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_a_pin_file_without_an_entry_stops_the_run
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_a_helper_that_is_not_the_pinned_one_is_refused_even_if_it_works
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+
+## D65A-P4: valid  (target 5, broken 0, other 0; 49 passed; 37.7s)
+   every exit 124 is taken to be the deadline
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[0.2-False]
+        AssertionError: assert True is False
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[37.9-False]
+        AssertionError: assert True is False
+   [target] test_deadline_sandbox::test_the_discriminator_follows_the_budget_not_a_fixed_number
+        AssertionError: assert True is False
+   [target] test_deadline_sandbox::test_a_container_whose_timestamps_cannot_be_read_is_not_called_timed_out
+        AssertionError: assert (True is False)
+   [target] test_deadline_sandbox::test_a_tool_that_exits_124_on_its_own_is_a_failed_run_not_a_timeout
+        AssertionError: assert (-1 == 124)
+
+## D65A-P5: valid  (target 1, broken 0, other 0; 53 passed; 36.8s)
+   the exit-124 test is strict at the boundary (> instead of >=)
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]
+        AssertionError: assert False is True
+
+## D65A-P6: valid  (target 1, broken 0, other 0; 53 passed; 37.9s)
+   the tolerance is ten seconds instead of two
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[37.9-False]
+        AssertionError: assert True is False
+
+## D65A-P7: valid  (target 2, broken 0, other 0; 52 passed; 35.5s)
+   an image's own entrypoint is dropped from the wrapped command
+   [target] test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced
+        AssertionError: assert ['/cyberorch-...', '40', '--'] == ['/cyberorch-.../bin/semgrep']
+   [target] test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+        Failed: the run was refused (tool_command_not_executable) where a result was expected
+
+## D65A-P8: valid  (target 5, broken 0, other 0; 49 passed; 38.1s)
+   any exit 127 is taken for the helper's refusal
+   [target] test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[]
+        Failed: taken for the helper's refusal (tool_command_not_executable)
+   [target] test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[sh: 1: foo: not found\n]
+        Failed: taken for the helper's refusal (tool_command_not_executable)
+   [target] test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[cyberorch-deadline: cannot execute x: gone\nand then the tool wrote more\n]
+        Failed: taken for the helper's refusal (tool_command_not_executable)
+   [target] test_deadline_sandbox::test_a_127_that_is_not_only_the_helpers_line_is_the_tools_own_result[the tool wrote first\ncyberorch-deadline: cannot execute x: gone\n]
+        Failed: taken for the helper's refusal (tool_command_not_executable)
+   [target] test_deadline_sandbox::test_a_tool_that_simply_exits_127_is_a_result_not_a_refusal
+        Failed: the run was refused (tool_command_not_executable) where a result was expected
+
+## D65A-P9: valid  (target 4, broken 0, other 0; 50 passed; 37.7s)
+   the container is not labelled with its deadline
+   [target] test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline
+        AssertionError: assert None == '27'
+   [target] test_deadline_sandbox::test_opting_out_is_explicit_and_the_label_says_none
+        AssertionError: assert None == 'none'
+   [target] test_deadline_sandbox::test_the_container_is_labelled_with_its_deadline_while_it_runs
+        AssertionError: assert ([<Container: 60f8684b50c1>] and None == '30')
+   [target] test_deadline_sandbox::test_a_tool_container_is_created_in_exactly_one_place_and_it_sets_the_entrypoint
+        assert False
+
+## D65A-P11: valid  (target 17, broken 0, other 1; 36 passed; 69.9s)
+   the deadline helper is off unless a caller turns it on
+   [target] test_deadline_sandbox::test_the_helper_is_the_entrypoint_and_the_tools_command_follows_it
+        AssertionError: assert None == ['/cyberorch-deadline', '40', '--']
+   [target] test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced
+        AssertionError: assert None == ['/cyberorch-deadline', '40', '--', '/usr/local/bin/semgrep']
+   [target] test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline
+        AssertionError: assert None == {'bind': '/cyberorch-deadline', 'mode': 'ro'}
+   [target] test_deadline_sandbox::test_a_mount_that_would_cover_the_helpers_path_is_refused_before_anything_is_created
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]
+        AssertionError: assert False is True
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[40.3-True]
+        AssertionError: assert False is True
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[200.0-True]
+        AssertionError: assert False is True
+   [target] test_deadline_sandbox::test_the_discriminator_follows_the_budget_not_a_fixed_number
+        AssertionError: assert False is True
+   [target] test_deadline_sandbox::test_the_helpers_cannot_execute_line_is_a_not_started
+        Failed: DID NOT RAISE ToolNotExecutable
+   [target] test_deadline_sandbox::test_pid_1_of_a_tool_container_is_the_helper_with_the_budget_plus_slack
+        AssertionError: assert [b'python3', b'-u', b'-c'] == [b'/cyberorch... b'40', b'--']
+   [target] test_deadline_sandbox::test_the_container_is_labelled_with_its_deadline_while_it_runs
+        AssertionError: assert ([<Container: 25bced0c2ece>] and 'none' == '30'
+   [target] test_deadline_sandbox::test_the_exit_code_the_tool_chose_is_the_containers
+        AssertionError: assert 0 == 137
+   [target] test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same
+        AssertionError: 6.270015483999941
+   [target] test_deadline_sandbox::test_the_tools_stdout_is_not_disturbed_by_the_helpers_stderr_line
+        AssertionError: assert False
+   [other] test_deadline_sandbox::test_a_command_that_does_not_exist_is_a_not_started_and_leaves_no_container
+        tool_gateway.sandbox.ContainerStartRefused: docker refused to start the container; nothing of this run executed
+   [target] test_deadline_sandbox::test_orphans_that_end_after_their_parent_are_reaped_not_left_as_zombies
+        AssertionError: zombies 3 processes 4
+   [target] test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline
+        AssertionError: the container was still running 30 s after its parent died
+   [target] test_deadline_sandbox::test_run_has_no_default_that_turns_the_deadline_off
+        AssertionError: opting out must be spelled out by the caller, never the default
+
+## D65A-P12: valid  (target 1, broken 0, other 0; 53 passed; 38.5s)
+   the helper is mounted read-write
+   [target] test_deadline_sandbox::test_the_helper_is_mounted_read_only_and_the_container_is_labelled_with_its_deadline
+        AssertionError: assert {'bind': '/cy... 'mode': 'rw'} == {'bind': '/cy... 'mode': 'ro'}
+
+## D65A-P13: valid  (target 1, broken 0, other 0; 53 passed; 37.4s)
+   a mount that covers the helper's path is not noticed
+   [target] test_deadline_sandbox::test_a_mount_that_would_cover_the_helpers_path_is_refused_before_anything_is_created
+        Failed: DID NOT RAISE DeadlineHelperUnavailable
+
+## D65A-P15: valid  (target 4, broken 0, other 0; 50 passed; 37.5s)
+   a deadline exit leaves exit_code at 124 instead of -1
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[38.0-True]
+        AssertionError: assert 124 == -1
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[40.3-True]
+        AssertionError: assert 124 == -1
+   [target] test_deadline_sandbox::test_exit_124_is_the_deadline_only_if_the_container_ran_as_long_as_the_deadline[200.0-True]
+        AssertionError: assert 124 == -1
+   [target] test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same
+        AssertionError: assert (True is True and 124 == -1)
+
+## D65A-P16: valid  (target 10, broken 0, other 1; 43 passed; 70.5s)
+   the helper is no longer the entrypoint (the command is not wrapped)
+   [target] test_deadline_sandbox::test_the_helper_is_the_entrypoint_and_the_tools_command_follows_it
+        AssertionError: assert None == ['/cyberorch-deadline', '40', '--']
+   [target] test_deadline_sandbox::test_an_images_own_entrypoint_is_kept_and_wrapped_not_replaced
+        AssertionError: assert None == ['/cyberorch-deadline', '40', '--', '/usr/local/bin/semgrep']
+   [target] test_deadline_sandbox::test_pid_1_of_a_tool_container_is_the_helper_with_the_budget_plus_slack
+        AssertionError: assert [b'python3', b'-u', b'-c'] == [b'/cyberorch... b'40', b'--']
+   [target] test_deadline_sandbox::test_the_exit_code_the_tool_chose_is_the_containers
+        AssertionError: assert 0 == 137
+   [target] test_deadline_sandbox::test_when_the_helper_fires_first_the_run_is_a_timeout_just_the_same
+        AssertionError: 6.275794202999805
+   [target] test_deadline_sandbox::test_the_tools_stdout_is_not_disturbed_by_the_helpers_stderr_line
+        AssertionError: assert False
+   [other] test_deadline_sandbox::test_a_command_that_does_not_exist_is_a_not_started_and_leaves_no_container
+        tool_gateway.sandbox.ContainerStartRefused: docker refused to start the container; nothing of this run executed
+   [target] test_deadline_sandbox::test_orphans_that_end_after_their_parent_are_reaped_not_left_as_zombies
+        AssertionError: zombies 3 processes 4
+   [target] test_deadline_sandbox::test_a_container_outlives_a_killed_control_plane_only_until_its_deadline
+        AssertionError: the container was still running 30 s after its parent died
+   [target] test_deadline_sandbox::test_a_helper_on_a_noexec_filesystem_is_a_start_refusal_that_ran_nothing
+        Failed: DID NOT RAISE ContainerStartRefused
+   [target] test_deadline_sandbox::test_a_tool_container_is_created_in_exactly_one_place_and_it_sets_the_entrypoint
+        AssertionError: assert {'command', '...s', 'volumes'} <= {'cap_drop', ...network', ...}
+
+13 valid, 0 not: []

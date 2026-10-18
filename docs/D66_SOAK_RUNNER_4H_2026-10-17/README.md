@@ -19,6 +19,15 @@ cannot be fetched from the development machine. Nothing was repaired, relaxed or
 | reconciler | 755 passes, none limited/held back/truncated; 8 `mark_unknown_outcome` and 8 `remove_container`, all `done`, 8 evidence archives |
 | container exit codes | 0 x6,607, 143 x4 (the daemon's restarts), 137 x1 |
 
+**Audit event types of the run, with their counts** (from the report; this is the list 5.113 refers to):
+approval.denied 251, approval.granted 2,036, capability.issued 6,626, engagement.created 3,
+evidence.recorded 6,604, policy.decided 7,634, policy_layer.published 3, policy_reviewer.opinion 7,634,
+proposal.submitted 7,634, reconciler.action_intended 8, reconciler.container_removed 8,
+reconciler.dispatch_unknown_outcome 8, reconciler.evidence_saved 8, scheduler.dispatched 2,036,
+scope_object.registered 3, tool_run.failed 1, tool_run.refused 4, tool_run.started 6,616,
+tool_run.succeeded 6,603. **There is no `run.late_result`** (the event of the late-result path, 5.74): the
+run did not exercise it.
+
 ## Faults: 16, every kind at least twice, all took effect, none unrecovered
 
 | fault | times | recovery s (min / median / max) |

@@ -1,0 +1,59 @@
+
+## D65A-P2: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the check happens once per path, not before every run
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P3: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   a helper that fails its check is skipped and the run goes ahead without one
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P4: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   every exit 124 is taken to be the deadline
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P5: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the exit-124 test is strict at the boundary (> instead of >=)
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P6: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the tolerance is ten seconds instead of two
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P7: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   an image's own entrypoint is dropped from the wrapped command
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P8: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   any exit 127 is taken for the helper's refusal
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P9: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the container is not labelled with its deadline
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P11: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the deadline helper is off unless a caller turns it on
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P12: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the helper is mounted read-write
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P13: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   a mount that covers the helper's path is not noticed
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P15: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   a deadline exit leaves exit_code at 124 instead of -1
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-P16: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the helper is no longer the entrypoint (the command is not wrapped)
+   PROBLEM: the tests are not green before the mutation: red: test_deadline_sandbox::test_an_image_that_sets_an_entrypoint_runs_unchanged_under_the_helper
+
+## D65A-T6: valid  (target 1, broken 0, other 0; 11 passed; 15.5s)
+   ToolNotExecutable shares its code with another refusal
+   [target] test_timeout_vs_not_started::test_every_not_started_class_has_its_own_reason_and_none_is_the_timeout_code
+        AssertionError: two NotStarted classes share a code: ['sandbox_not_started', 'docker_unreachable', 'tool_image_missing', 'container_start_refused', 'network_unavailable', 'deadline_helper_unavailable', 'network_in_use_by
+
+1 valid, 13 not: ['D65A-P2', 'D65A-P3', 'D65A-P4', 'D65A-P5', 'D65A-P6', 'D65A-P7', 'D65A-P8', 'D65A-P9', 'D65A-P11', 'D65A-P12', 'D65A-P13', 'D65A-P15', 'D65A-P16']

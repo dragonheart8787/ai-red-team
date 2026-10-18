@@ -1,0 +1,216 @@
+START-UP: RECOVERED control_plane/reconciler/evidence.py: a killed run had left it changed
+
+## D64-C5-d: valid  (target 5, broken 0, other 0; 70 passed; 24.3s)
+   the start-up probe checks nothing
+   [target] test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[missing]
+        Failed: DID NOT RAISE EvidenceError
+   [target] test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[open]
+        Failed: DID NOT RAISE EvidenceError
+   [target] test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_sync]
+        Failed: DID NOT RAISE EvidenceError
+   [target] test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_create]
+        Failed: DID NOT RAISE EvidenceError
+   [target] test_reconciler_evidence::test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start
+        Failed: DID NOT RAISE StopService
+
+## D64-C5-e: valid  (target 1, broken 0, other 0; 74 passed; 9.8s)
+   the service does not run the start-up probe
+   [target] test_reconciler_evidence::test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start
+        Failed: DID NOT RAISE StopService
+
+## D64-C5-f: valid  (target 1, broken 0, other 0; 74 passed; 9.5s)
+   the service probes the evidence directory even where container is off
+   [target] test_reconciler_evidence::test_a_reconciler_without_container_enabled_does_not_look_at_the_evidence_directory
+        Failed: it should not have looked: StopService
+
+## D64-C5-g: valid  (target 2, broken 0, other 0; 73 passed; 8.7s)
+   the start-up probe leaves its file behind
+   [target] test_reconciler_evidence::test_the_start_up_probe_writes_syncs_and_removes_a_file_and_leaves_nothing
+        AssertionError: assert ['.probe.2537'] == []
+   [target] test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[cannot_sync]
+        assert False
+
+## D64-C5-h: valid  (target 1, broken 0, other 0; 21 passed; 8.7s)
+   snapshot_schema() leaves the database's ACL out of the fact
+   [target] test_schema_snapshot::test_the_snapshot_notices_the_database_acl_and_names_it
+        AssertionError: []
+
+## D64-C5-j: valid  (target 4, broken 0, other 0; 18 passed; 20.7s)
+   a scratch schema left by a round trip is not a problem
+   [target] test_mutation_safety::test_a_scratch_schema_of_a_round_trip_is_a_problem
+        assert False
+   [target] test_mutation_safety::test_the_session_end_check_fails_the_run_on_either
+        AssertionError: PUBLIC holds TEMPORARY on the database although migration 0023 or later is applied (a round trip was killed below 0023)
+   [target] test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so
+        AssertionError: ['CLEANED: PUBLIC holds TEMPORARY on the database although migration 0023 or later is applied (a round trip was killed below 0023)']
+   [target] test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned
+        AssertionError: assert 'valid' == 'INVALID'
+
+## D64-C5-k: valid  (target 3, broken 0, other 0; 19 passed; 10.3s)
+   TEMPORARY held by PUBLIC is not a problem
+   [target] test_mutation_safety::test_temporary_held_by_public_is_a_problem_once_0023_is_applied
+        assert False
+   [target] test_mutation_safety::test_the_session_end_check_fails_the_run_on_either
+        AssertionError: a scratch schema of a round-trip test was left: migtest_250e5070
+   [target] test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so
+        AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_9d6aca27']
+
+## D64-C5-l: valid  (target 1, broken 0, other 0; 21 passed; 10.3s)
+   the session-end check does not look at the database
+   [target] test_mutation_safety::test_the_session_end_check_fails_the_run_on_either
+        AssertionError: 
+
+## D64-C5-m: valid  (target 2, broken 0, other 0; 20 passed; 10.3s)
+   the runner does not drop a scratch schema a killed test left
+   [target] test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so
+        AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_245e4afa', 'CLEANED: PUBLIC holds TEMPORARY on the ...(a round trip was killed below 0023)', 'STILL WRONG: a scratch schema of a round-tr
+   [target] test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned
+        AssertionError: assert ['a scratch s...est_44a041d3'] == []
+
+## D64-C5-n: valid  (target 1, broken 0, other 0; 21 passed; 10.4s)
+   the runner does not revoke the TEMPORARY grant a killed test left
+   [target] test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so
+        AssertionError: ['CLEANED: a scratch schema of a round-trip test was left: migtest_de902317', 'CLEANED: PUBLIC holds TEMPORARY on the ...BLIC holds TEMPORARY on the database although migration 0023 or later is applied (a
+
+## D64-C5-o: valid  (target 2, broken 0, other 0; 20 passed; 10.4s)
+   the runner does not say what it cleaned
+   [target] test_mutation_safety::test_the_runner_drops_the_schema_and_revokes_the_grant_and_says_so
+        AssertionError: []
+   [target] test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned
+        AssertionError: assert 'valid' == 'INVALID'
+
+## D64-C5-p: valid  (target 2, broken 0, other 0; 20 passed; 10.6s)
+   recover() does not put the files back
+   [target] test_mutation_safety::test_a_killed_run_s_files_are_put_back_at_the_next_start
+        AssertionError: assert b'original = ...he mutation\n' == b'original = 1\n'
+   [target] test_mutation_safety::test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone
+        AssertionError: assert (b'VALUE = 2\n', False) == (b'VALUE = 1\n', False)
+
+## D64-C5-q: valid  (target 2, broken 0, other 0; 20 passed; 10.5s)
+   recover() does not undo the database change
+   [target] test_mutation_safety::test_the_database_change_of_a_killed_run_is_undone_once
+        AssertionError: assert [('su', 'DELETE FROM t')] == [('su', 'DELE...', 'SELECT 2']
+   [target] test_mutation_safety::test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said
+        AssertionError: ['RECOVERED the database change of a killed run']
+
+## D64-C5-r: valid  (target 1, broken 0, other 0; 21 passed; 10.5s)
+   recover() undoes a database change that was never made
+   [target] test_mutation_safety::test_a_change_that_was_never_applied_is_not_undone
+        AssertionError: assert ['DROP TRIGGER mutated'] == []
+
+## D64-C5-s: valid  (target 1, broken 0, other 0; 21 passed; 10.6s)
+   recover() forgets the journal even when the database could not be put back
+   [target] test_mutation_safety::test_when_the_database_cannot_be_put_back_the_journal_stays_and_it_is_said
+        AssertionError: assert False
+
+## D64-C5-t: valid  (target 4, broken 0, other 0; 18 passed; 10.9s)
+   recover() keeps the journal after it has put everything back
+   [target] test_mutation_safety::test_a_killed_run_s_files_are_put_back_at_the_next_start
+        AssertionError: assert not True
+   [target] test_mutation_safety::test_a_file_that_is_already_right_is_not_touched_and_not_reported
+        AssertionError: assert not True
+   [target] test_mutation_safety::test_the_database_change_of_a_killed_run_is_undone_once
+        AssertionError: assert (['RECOVERED t...a killed run'] == []
+   [target] test_mutation_safety::test_a_run_killed_while_the_tests_run_is_put_back_from_the_journal_alone
+        AssertionError: assert (b'VALUE = 1\n', True) == (b'VALUE = 1\n', False)
+
+## D64-C5-u: valid  (target 1, broken 0, other 0; 21 passed; 10.7s)
+   the journal is written after the files are changed, not before
+   [target] test_mutation_safety::test_the_journal_is_on_disk_before_the_first_byte_of_a_file_is_changed
+        assert [False] == [True]
+
+## D64-C5-v: valid  (target 1, broken 0, other 0; 21 passed; 10.5s)
+   run() clears the journal even when a restore failed
+   [target] test_mutation_safety::test_a_restore_that_fails_keeps_the_journal_and_makes_the_mutation_invalid
+        AssertionError: assert False
+
+## D64-C5-w: valid  (target 1, broken 0, other 0; 21 passed; 10.2s)
+   run() does not clean up after a test run that left the database dirty
+   [target] test_mutation_safety::test_a_mutation_that_leaves_a_scratch_schema_behind_is_not_valid_and_is_cleaned
+        AssertionError: assert 'valid' == 'INVALID'
+
+## D64-C5-x: valid  (target 1, broken 0, other 0; 21 passed; 31.6s)
+   an interrupted test run is killed at once, its fixtures never run
+   [target] test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run
+        AssertionError: SIGINT did not reach the test run: its teardown did not run
+
+## D64-C5-y: valid  (target 1, broken 0, other 0; 21 passed; 15.4s)
+   an interrupted test run that does not stop is never killed
+   [target] test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates
+        AssertionError: TimeoutExpired(['/home/user/ai-red-team/.venv/bin/python', '/tmp/pytest-of-root/pytest-141/test_one_that_does_not_stop_is0/child.py', '/tmp/pytest-of-root/pytest-141/test_one_that_does_not_stop_is0/marker
+
+## D64-C5-z: valid  (target 3, broken 0, other 0; 19 passed; 10.3s)
+   an interrupt is swallowed instead of raised again
+   [target] test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run
+        AssertionError: None
+   [target] test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates
+        AssertionError: None
+   [target] test_mutation_safety::test_the_children_of_the_test_run_are_in_the_group_that_is_stopped
+        AssertionError: None
+
+## D64-C5-za: valid  (target 3, broken 0, other 0; 19 passed; 94.5s)
+   the test run is not in a process group of its own
+   [target] test_mutation_safety::test_an_interrupted_test_run_is_asked_to_stop_so_its_fixtures_run
+        AssertionError: SIGINT did not reach the test run: its teardown did not run
+   [target] test_mutation_safety::test_one_that_does_not_stop_is_killed_after_the_wait_and_the_interrupt_still_propagates
+        assert (422.909686554 - 392.868518575) < 20
+   [target] test_mutation_safety::test_the_children_of_the_test_run_are_in_the_group_that_is_stopped
+        AssertionError: a helper of the stopped test run was left running
+
+## D64-F1-a: valid  (target 1, broken 0, other 0; 18 passed; 170.0s)
+   a container removed while the reconciler lists is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_container_removed_between_the_list_and_the_inspect_is_not_listed_40_times
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/6f78020cf17903359c40139c1380ea96ab3e1b6d5606aa5cd3682d6e26333285/json: Not Found ("No such container: 6f78020cf17903359c40139c1380ea96
+
+## D64-F1-b: valid  (target 1, broken 0, other 0; 18 passed; 72.3s)
+   a network removed between the list and its inspect is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_network_removed_between_the_list_and_its_inspect_is_not_listed_40_times
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/networks/aa0f319659b55d7830d2374dafa18fa9bc4120c3d27a61522e4011e2d6bfbbef: Not Found ("network aa0f319659b55d7830d2374dafa18fa9bc4120c3d27a61522e
+
+## D64-F1-c: valid  (target 1, broken 0, other 0; 18 passed; 69.6s)
+   a container on a network removed while its members are read is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_container_attached_to_a_network_that_vanishes_while_its_members_are_read_40_times
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/9aa687d166e1e1b14fa36ee3cb9bf5ce92b752f2e098f0c981aa7cbd760050db/json: Not Found ("No such container: 9aa687d166e1e1b14fa36ee3cb9bf5ce
+
+## D64-F1-d: valid  (target 1, broken 0, other 0; 18 passed; 78.7s)
+   a container removed while mount sources are read (observe) is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[observe]
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/cc6e491f7c395ec01d132cbeeb55881a3a430e0ca49d48eedf211d2bdad58877/json: Not Found ("No such container: cc6e491f7c395ec01d132cbeeb55881a
+
+## D64-F1-e: valid  (target 1, broken 0, other 0; 18 passed; 81.4s)
+   a container removed while mount sources are read (act) is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_container_removed_while_mount_sources_are_read_is_not_a_mount_40_times[act_docker]
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/9a75def9c146ce841b2b0e7cac79322105632f5800234f75dcedf2a3dfa0c6b3/json: Not Found ("No such container: 9a75def9c146ce841b2b0e7cac793221
+
+## D64-F1-f: valid  (target 1, broken 0, other 0; 18 passed; 79.7s)
+   a container on a network removed while the network is removed is a failure again
+   [target] test_reconciler_vanishing::test_gone_a_container_on_a_network_that_vanishes_while_the_network_is_removed_40_times
+        AssertionError: Result(action=Action(kind='remove_network', reason_code='idle_sweep', subject_id='49ac118336a61e840b50334ce6991562c823...ner=None, name='cyberorch-allow-936c30dd68f7', directory=None), outcome='failed', d
+
+## D64-F1-g: valid  (target 1, broken 0, other 0; 18 passed; 75.4s)
+   the sandbox's exclusivity check fails on a container that vanished
+   [target] test_reconciler_vanishing::test_gone_a_container_that_vanishes_while_the_sandbox_checks_exclusivity_40_times
+        docker.errors.NotFound: 404 Client Error for http+docker://localhost/v1.56/containers/c45dcb2510e50e999af43e76a135834c8b029e582d7087a3c4193ef9bab42fcb/json: Not Found ("No such container: c45dcb2510e50e999af43e76a135834c
+
+## D64-F1-h: valid  (target 2, broken 0, other 0; 17 passed; 92.7s)
+   a NotFound that reaches the top is a lost daemon again
+   [target] test_reconciler_vanishing::test_the_classification_rule[a container that is not there]
+        AssertionError: a container that is not there
+   [target] test_reconciler_vanishing::test_a_notfound_is_a_defect_if_it_reaches_the_top_never_a_lost_daemon
+        AssertionError: assert 'docker_lost' != 'docker_lost'
+
+## D64-F1-i: valid  (target 2, broken 0, other 0; 17 passed; 89.3s)
+   a server error of the daemon is no longer a lost daemon
+   [target] test_reconciler_vanishing::test_the_classification_rule[a server error of the daemon]
+        AssertionError: a server error of the daemon
+   [target] test_reconciler_vanishing::test_the_classification_rule[a bad gateway]
+        AssertionError: a bad gateway
+
+## D64-F1-j: valid  (target 2, broken 0, other 0; 17 passed; 91.8s)
+   a conflict the daemon answered is a lost daemon
+   [target] test_reconciler_vanishing::test_the_classification_rule[a conflict the daemon answered]
+        AssertionError: a conflict the daemon answered
+   [target] test_reconciler_vanishing::test_the_classification_rule[a bad request the daemon answered]
+        AssertionError: a bad request the daemon answered
+
+33 valid, 0 not: []

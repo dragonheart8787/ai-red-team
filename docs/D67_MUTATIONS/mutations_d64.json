@@ -1,0 +1,3374 @@
+[
+ {
+  "id": "D64-5-r",
+  "summary": "snapshot_schema() leaves constraint COMMENTs out",
+  "verdict": "valid",
+  "seconds": 8.8,
+  "tests": [
+   "tests/test_schema_snapshot.py"
+  ],
+  "passed": 18,
+  "failures": [
+   {
+    "test": "test_schema_snapshot::test_the_snapshot_notices[a constraint dropped and re-added loses its COMMENT]",
+    "kind": "target",
+    "message": "AssertionError: a constraint dropped and re-added loses its COMMENT: the snapshot did not change"
+   },
+   {
+    "test": "test_schema_snapshot::test_the_snapshot_notices[a constraint's COMMENT changes]",
+    "kind": "target",
+    "message": "AssertionError: a constraint's COMMENT changes: the snapshot did not change"
+   },
+   {
+    "test": "test_schema_snapshot::test_an_unchanged_schema_has_an_empty_diff_and_the_snapshot_is_stable",
+    "kind": "target",
+    "message": "assert False"
+   },
+   {
+    "test": "test_schema_snapshot::test_the_shared_schema_can_be_snapshotted_and_has_the_stage_checks_with_their_comments",
+    "kind": "target",
+    "message": "assert 'comment=NULL decision is legal at `received`' in \"c CHECK (((decision IS NOT NULL) OR (pipeline_stage = ANY (ARRAY['received'::text, 'abandoned'::text])))) validated=true deferrable=false\""
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-5-s",
+  "summary": "snapshot_schema() leaves FORCE ROW LEVEL SECURITY out",
+  "verdict": "valid",
+  "seconds": 4.1,
+  "tests": [
+   "tests/test_schema_snapshot.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_schema_snapshot::test_the_snapshot_notices[FORCE ROW LEVEL SECURITY is switched on]",
+    "kind": "target",
+    "message": "AssertionError: FORCE ROW LEVEL SECURITY is switched on: the snapshot did not change"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6b-w",
+  "summary": "observe: a stage the function should never return is accepted",
+  "verdict": "valid",
+  "seconds": 8.0,
+  "tests": [
+   "tests/test_reconciler_observe.py"
+  ],
+  "passed": 52,
+  "failures": [
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw0]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw1]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw2]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw3]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6b-x",
+  "summary": "observe: a changed column list is not noticed",
+  "verdict": "valid",
+  "seconds": 4.5,
+  "tests": [
+   "tests/test_reconciler_observe.py"
+  ],
+  "passed": 53,
+  "failures": [
+   {
+    "test": "test_reconciler_observe::test_a_function_that_returns_other_columns_is_refused[columns0]",
+    "kind": "target",
+    "message": "Failed: expected ObservationError, got ValueError: zip() argument 2 is longer than argument 1"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_function_that_returns_other_columns_is_refused[columns2]",
+    "kind": "target",
+    "message": "Failed: expected ObservationError, got ValueError: zip() argument 2 is shorter than argument 1"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_function_that_returns_other_columns_is_refused[columns3]",
+    "kind": "target",
+    "message": "Failed: expected ObservationError, got KeyError: 'x'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6b-y",
+  "summary": "observe: a symlink is followed when the file is stat'ed",
+  "verdict": "valid",
+  "seconds": 4.2,
+  "tests": [
+   "tests/test_reconciler_observe.py"
+  ],
+  "passed": 54,
+  "failures": [
+   {
+    "test": "test_reconciler_observe::test_files_are_listed_with_lstat_and_a_symlink_is_not_followed",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_file_that_vanishes_between_the_listing_and_the_stat_is_skipped",
+    "kind": "target",
+    "message": "AssertionError: assert (FileObs(dire...ainer=False),) == ()"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6b-za",
+  "summary": "observe.py gains a verb that deletes a file",
+  "verdict": "valid",
+  "seconds": 11.1,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_observe_calls_no_verb_that_changes_anything",
+    "kind": "target",
+    "message": "AssertionError: ('observe', {'unlink'})"
+   },
+   {
+    "test": "test_reconciler_structure::test_kill_and_remove_are_called_in_act_docker_only_and_unlink_in_act_files_only",
+    "kind": "target",
+    "message": "AssertionError: assert {'act_files',...e', 'observe'} == {'act_files', 'evidence'}"
+   },
+   {
+    "test": "test_reconciler_structure::test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",
+    "kind": "target",
+    "message": "AssertionError: observe"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6b-zb",
+  "summary": "observe.py gains a write to the database",
+  "verdict": "valid",
+  "seconds": 5.6,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 29,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_observe_opens_nothing_for_writing_and_its_only_sql_is_the_four_reads",
+    "kind": "target",
+    "message": "AssertionError: ['SELECT * FROM reconciler_stuck_proposals()', 'SELECT * FROM reconciler_stuck_proposals_after(:after_us, :after_id)',...nflicts(:window_s)', 'DELETE FROM tool_runs', 'SELECT run_id, status FROM reconcile"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-a",
+  "summary": "CLOSE no longer compares the stage_updated_at the plan observed",
+  "verdict": "valid",
+  "seconds": 26.2,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 67,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[decided-close-abandoned_after_decision-expected1]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[capability_issued-close-capability_not_live-expected2]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-approval_expired-expected3]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-approval_revoked-expected4]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-engagement_killed-expected5]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done' == 'lost_race'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-b",
+  "summary": "MARK_UNKNOWN no longer requires the stage the plan observed",
+  "verdict": "valid",
+  "seconds": 13.4,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_every_transition_needs_the_stage_the_plan_saw[dispatching-mark_unknown_outcome-unknown_outcome-expected6]",
+    "kind": "target",
+    "message": "AssertionError: assert 'done' == 'lost_race'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-c",
+  "summary": "a dispatch declared unknown leaves its runs in flight",
+  "verdict": "valid",
+  "seconds": 14.0,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 70,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_dispatch_declared_unknown_takes_its_runs_with_it",
+    "kind": "target",
+    "message": "AssertionError: assert 'failed' == 'done'"
+   },
+   {
+    "test": "test_reconciler_act::test_plan_then_act_moves_the_real_rows_and_a_second_pass_finds_nothing_left",
+    "kind": "target",
+    "message": "AssertionError: assert ['failed', 'd...done', 'done'] == ['done', 'don...done', 'done']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-d",
+  "summary": "the stage is not read back after the update",
+  "verdict": "valid",
+  "seconds": 13.8,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_an_update_that_does_not_stick_is_failed_not_done",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'n...after_update')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-e",
+  "summary": "the timestamp is compared to the millisecond only",
+  "verdict": "valid",
+  "seconds": 14.0,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_the_compare_and_set_matches_the_timestamp_to_the_last_microsecond",
+    "kind": "target",
+    "message": "AssertionError: assert 'lost_race' == 'done'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-f",
+  "summary": "state-only defaults to having the kill switch on",
+  "verdict": "valid",
+  "seconds": 31.8,
+  "tests": [
+   "tests/test_reconciler_act.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 95,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_the_flag_defaults_to_off_and_a_dry_run_cannot_carry_it",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'kill'}) == frozenset()"
+   },
+   {
+    "test": "test_reconciler_act::test_a_dry_run_opens_no_connection_makes_no_call_and_says_what_it_would_do",
+    "kind": "other",
+    "message": "ValueError: a dry run changes nothing, so it cannot also enable anything"
+   },
+   {
+    "test": "test_reconciler_act::test_state_only_skips_every_deletion_and_never_touches_docker_or_the_filesystem",
+    "kind": "target",
+    "message": "AssertionError: assert ['failed', 's...eletions_off'] == ['skipped_del...eletions_off']"
+   },
+   {
+    "test": "test_reconciler_act::test_an_action_outside_the_vocabulary_is_refused_in_every_mode[bad0]",
+    "kind": "other",
+    "message": "ValueError: a dry run changes nothing, so it cannot also enable anything"
+   },
+   {
+    "test": "test_reconciler_act::test_an_action_outside_the_vocabulary_is_refused_in_every_mode[bad1]",
+    "kind": "other",
+    "message": "ValueError: a dry run changes nothing, so it cannot also enable anything"
+   },
+   {
+    "test": "test_reconciler_act::test_an_action_outside_the_vocabulary_is_refused_in_every_mode[bad2]",
+    "kind": "other",
+    "message": "ValueError: a dry run changes nothing, so it cannot also enable anything"
+   },
+   {
+    "test": "test_reconciler_structure::test_every_switch_is_off_by_default_and_nothing_in_the_product_turns_one_on",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'kill'}) == frozenset()"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-g",
+  "summary": "state-only mode carries out deletions",
+  "verdict": "valid",
+  "seconds": 13.3,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_state_only_skips_every_deletion_and_never_touches_docker_or_the_filesystem",
+    "kind": "target",
+    "message": "AssertionError: assert ['failed', 'f...already_gone'] == ['skipped_del...eletions_off']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-h",
+  "summary": "a dry run acts",
+  "verdict": "valid",
+  "seconds": 12.8,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_dry_run_opens_no_connection_makes_no_call_and_says_what_it_would_do",
+    "kind": "target",
+    "message": "AssertionError: a dry run opened a database connection"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-i",
+  "summary": "a container may be addressed by a short id or a name",
+  "verdict": "valid",
+  "seconds": 13.0,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 68,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_real_only_a_full_id_is_a_handle[short id]",
+    "kind": "target",
+    "message": "AssertionError: assert ('changed_sin...', 'not_ours') == ('failed', 'invalid_action')"
+   },
+   {
+    "test": "test_reconciler_act::test_real_only_a_full_id_is_a_handle[name]",
+    "kind": "target",
+    "message": "AssertionError: assert ('changed_sin...', 'not_ours') == ('failed', 'invalid_action')"
+   },
+   {
+    "test": "test_reconciler_act::test_real_only_a_full_id_is_a_handle[empty]",
+    "kind": "other",
+    "message": "docker.errors.NullResource: Resource ID was not provided"
+   },
+   {
+    "test": "test_reconciler_act::test_real_only_a_full_id_is_a_handle[upper]",
+    "kind": "target",
+    "message": "AssertionError: assert ('already_gone', None) == ('failed', 'invalid_action')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-j",
+  "summary": "the labels are not checked again before acting",
+  "verdict": "valid",
+  "seconds": 13.3,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 69,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_real_labels_that_are_not_what_the_plan_saw_stop_the_action[change0]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('changed_sin...bels_changed')"
+   },
+   {
+    "test": "test_reconciler_act::test_real_labels_that_are_not_what_the_plan_saw_stop_the_action[change1]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('changed_sin...bels_changed')"
+   },
+   {
+    "test": "test_reconciler_act::test_real_a_proxy_label_is_part_of_what_the_plan_saw",
+    "kind": "target",
+    "message": "AssertionError: assert None == 'labels_changed'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-k",
+  "summary": "a running tool container is removed by force",
+  "verdict": "valid",
+  "seconds": 13.2,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_real_a_container_at_rest_is_removed_and_seen_gone_a_running_one_is_not",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('changed_sin...'not_at_rest')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-l",
+  "summary": "a network is removed with a container attached",
+  "verdict": "valid",
+  "seconds": 13.1,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_real_a_network_with_a_container_of_any_state_is_kept",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('changed_sin...an', 'in_use')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-m",
+  "summary": "a kill is not verified",
+  "verdict": "valid",
+  "seconds": 13.8,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 70,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 's...g_after_kill')"
+   },
+   {
+    "test": "test_reconciler_act::test_the_verification_waits_the_configured_time_and_not_more",
+    "kind": "target",
+    "message": "AssertionError: (3, 0.0)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-n",
+  "summary": "a removal is verified by get alone, not by the listing",
+  "verdict": "valid",
+  "seconds": 13.7,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_container_listed_after_get_says_not_found_is_still_not_gone",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'n...fter_removal')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-o",
+  "summary": "a network removal is not verified",
+  "verdict": "valid",
+  "seconds": 13.8,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_network_removal_that_does_nothing_is_failed_not_done",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'n...fter_removal')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-p",
+  "summary": "the verification wait ignores the configured time",
+  "verdict": "valid",
+  "seconds": 13.2,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 70,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",
+    "kind": "target",
+    "message": "assert ([] == []"
+   },
+   {
+    "test": "test_reconciler_act::test_the_verification_waits_the_configured_time_and_not_more",
+    "kind": "target",
+    "message": "AssertionError: (3, 1.0)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-v",
+  "summary": "the audit hook runs for results that were not verified",
+  "verdict": "valid",
+  "seconds": 15.1,
+  "tests": [
+   "tests/test_reconciler_act.py"
+  ],
+  "passed": 59,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_a_dry_run_opens_no_connection_makes_no_call_and_says_what_it_would_do",
+    "kind": "target",
+    "message": "AssertionError: assert [Result(actio...d=False), ...] == []"
+   },
+   {
+    "test": "test_reconciler_act::test_state_only_skips_every_deletion_and_never_touches_docker_or_the_filesystem",
+    "kind": "target",
+    "message": "AssertionError: assert [Result(actio...udited=False)] == []"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[received-abandon-undecided_past_grace-expected0]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[decided-close-abandoned_after_decision-expected1]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[capability_issued-close-capability_not_live-expected2]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-approval_expired-expected3]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-approval_revoked-expected4]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[approved-close-engagement_killed-expected5]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_every_transition_is_a_compare_and_set_on_the_observed_timestamp[dispatching-mark_unknown_outcome-unknown_outcome-expected6]",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_a_proposal_touched_since_the_plan_is_lost_race_and_left_alone",
+    "kind": "target",
+    "message": "AssertionError: assert ('lost_race' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_act::test_an_update_that_does_not_stick_is_failed_not_done",
+    "kind": "target",
+    "message": "AssertionError: assert [Result(actio...udited=False)] == []"
+   },
+   {
+    "test": "test_reconciler_act::test_a_kill_that_does_nothing_is_failed_after_the_wait_and_never_reaches_the_hook",
+    "kind": "target",
+    "message": "AssertionError: assert ([Result(actio...udited=False)] == []"
+   },
+   {
+    "test": "test_reconciler_act::test_an_unlink_that_leaves_the_file_is_failed_not_done",
+    "kind": "target",
+    "message": "AssertionError: assert ([Result(actio...udited=False)] == []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-w",
+  "summary": "the act half gains a DELETE statement",
+  "verdict": "valid",
+  "seconds": 5.8,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 29,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_the_act_half_has_exactly_four_sql_statements_each_of_a_known_shape",
+    "kind": "target",
+    "message": "AssertionError: {'PURGE_SQL'}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-x",
+  "summary": "the act half imports the plan",
+  "verdict": "valid",
+  "seconds": 5.4,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 29,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan",
+    "kind": "target",
+    "message": "AssertionError: ('act', ['control_plane.reconciler.plan'])"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-y",
+  "summary": "the act half can dispatch",
+  "verdict": "valid",
+  "seconds": 5.9,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 28,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_the_act_half_imports_the_one_scope_and_the_stage_helpers_and_nothing_of_the_plan",
+    "kind": "target",
+    "message": "AssertionError: ('act', ['control_plane.orchestrator.dispatch'])"
+   },
+   {
+    "test": "test_reconciler_structure::test_the_act_half_never_names_what_would_run_something_again_or_open_another_door",
+    "kind": "target",
+    "message": "AssertionError: ('act', {'ABANDON', 'ACTION_KINDS', 'AUDIT_FAILED', 'Action', 'Any', 'CATEGORY_OF', ...})"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-z",
+  "summary": "act_docker gains a way to start a container",
+  "verdict": "valid",
+  "seconds": 6.0,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 28,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",
+    "kind": "target",
+    "message": "AssertionError: ('act_docker', {'run'})"
+   },
+   {
+    "test": "test_reconciler_structure::test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list",
+    "kind": "target",
+    "message": "AssertionError: ('act_docker', ['containers.run'])"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6c-za",
+  "summary": "an operator's mode name switches the kill switch on",
+  "verdict": "valid",
+  "seconds": 51.8,
+  "tests": [
+   "tests/test_reconciler_act.py",
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 142,
+  "failures": [
+   {
+    "test": "test_reconciler_act::test_the_operator_can_choose_two_modes_and_neither_allows_deletions",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'kill'}) == frozenset()"
+   },
+   {
+    "test": "test_reconciler_flags::test_nothing_is_enabled_by_default_and_an_operator_with_no_words_enables_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'kill'}) == frozenset()"
+   },
+   {
+    "test": "test_reconciler_flags::test_the_first_three_can_be_named[container]",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'c...ner', 'kill'}) == frozenset({'container'})"
+   },
+   {
+    "test": "test_reconciler_flags::test_the_first_three_can_be_named[proxy]",
+    "kind": "target",
+    "message": "AssertionError: assert frozenset({'kill', 'proxy'}) == frozenset({'proxy'})"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_run_with_no_switch_needs_no_terminal_and_records_an_empty_list",
+    "kind": "target",
+    "message": "AssertionError: refused: nothing was confirmed, so nothing was started"
+   },
+   {
+    "test": "test_reconciler_flags::test_the_environment_cannot_turn_one_on",
+    "kind": "target",
+    "message": "AssertionError: refused: nothing was confirmed, so nothing was started"
+   },
+   {
+    "test": "test_reconciler_flags::test_exactly_one_place_in_the_product_builds_settings_from_words",
+    "kind": "target",
+    "message": "AssertionError: [('control_plane/reconciler/act.py', 'chosen | ({flags.KILL} if mode is Mode.STATE_ONLY else set())')]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-c",
+  "summary": "a dry run contends for the lock",
+  "verdict": "valid",
+  "seconds": 40.9,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_dry_run_takes_no_lock_moves_nothing_and_writes_no_audit_record",
+    "kind": "target",
+    "message": "Failed: a dry run contended for the lock: lock_held"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-e",
+  "summary": "a failed action is reported on every pass",
+  "verdict": "valid",
+  "seconds": 19.7,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 26,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_summary",
+    "kind": "target",
+    "message": "AssertionError: assert 6 == 2"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest",
+    "kind": "target",
+    "message": "AssertionError: assert 2 == 1"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-f",
+  "summary": "the failure summary ignores its period",
+  "verdict": "valid",
+  "seconds": 20.3,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 25,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_summary",
+    "kind": "target",
+    "message": "AssertionError: assert [{'event_type...'reconciler'}] == []"
+   },
+   {
+    "test": "test_reconciler_service::test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+    "kind": "target",
+    "message": "AssertionError: assert [{'event_type...'reconciler'}] == []"
+   },
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: [{'event_type': 'reconciler.failure_summary', 'payload': {'failed': {}, 'passes': 1, 'reported': {'proposal:unexpected... 'passes': 1, 'reported': {'proposal:unexpected_state': 2}, 'instance_id': 'RECON-8"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-g",
+  "summary": "an audit failure inside the hook is ignored",
+  "verdict": "valid",
+  "seconds": 20.4,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_transition_whose_record_cannot_be_written_is_not_made_and_the_service_stops",
+    "kind": "target",
+    "message": "assert 0 == 3"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-h",
+  "summary": "the lock is not checked before a pass",
+  "verdict": "valid",
+  "seconds": 19.9,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_lost_lock_stops_the_service_before_it_acts_exit_6",
+    "kind": "target",
+    "message": "AssertionError: assert 'abandoned' == 'received'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-i",
+  "summary": "a network is judged idle from its creation, not from when this process saw it",
+  "verdict": "valid",
+  "seconds": 19.0,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_network_is_not_planned_for_removal_in_the_first_idle_period_of_a_new_process",
+    "kind": "target",
+    "message": "AssertionError: assert 'remove_network:idle_sweep' not in {'remove_network:idle_sweep': 1, 'report:network_conflict_foreign': 1}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-m",
+  "summary": "a pass limited to engagements is not limited",
+  "verdict": "valid",
+  "seconds": 19.2,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_state_only_pass_moves_the_rows_audits_each_and_a_second_pass_does_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert (Counter() == {}"
+   },
+   {
+    "test": "test_reconciler_service::test_a_pass_limited_to_an_engagement_leaves_every_other_engagements_rows_alone",
+    "kind": "target",
+    "message": "AssertionError: assert Counter({'done': 10}) == {'done': 5}"
+   },
+   {
+    "test": "test_reconciler_service::test_a_dry_run_takes_no_lock_moves_nothing_and_writes_no_audit_record",
+    "kind": "target",
+    "message": "AssertionError: assert 6 == 5"
+   },
+   {
+    "test": "test_reconciler_service::test_a_failed_action_is_reported_once_per_object_and_counted_in_a_periodic_summary",
+    "kind": "target",
+    "message": "AssertionError: assert {'failed': {'...N-bfeb91cd4f'} == {'instance_id...reported': {}}"
+   },
+   {
+    "test": "test_reconciler_service::test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+    "kind": "target",
+    "message": "AssertionError: assert {'proposal:un...t_foreign': 1} == {'proposal:un...ted_state': 1}"
+   },
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: ('PROP-0000c8e11ce0', 'PROP-00003af0c978')"
+   },
+   {
+    "test": "test_reconciler_service::test_a_period_without_a_failure_writes_no_summary",
+    "kind": "target",
+    "message": "AssertionError: assert [{'event_type...'reconciler'}] == []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-n",
+  "summary": "the service writes the audit trail itself",
+  "verdict": "valid",
+  "seconds": 5.4,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 29,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_the_service_is_the_one_module_that_joins_the_halves",
+    "kind": "target",
+    "message": "AssertionError: assert {'emit', 'service'} == {'emit'}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-o",
+  "summary": "the lock-held exit code is another one",
+  "verdict": "valid",
+  "seconds": 19.1,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 26,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_second_reconciler_is_refused_with_exit_2_and_says_so",
+    "kind": "target",
+    "message": "assert 9 == 2"
+   },
+   {
+    "test": "test_reconciler_service::test_the_exit_codes_are_distinct_and_the_scheduler_s_where_they_overlap",
+    "kind": "target",
+    "message": "assert (0, 1, 9, 3, 4, 5, ...) == (0, 1, 2, 3, 4, 5, ...)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-p",
+  "summary": "a refused configuration exits 0",
+  "verdict": "valid",
+  "seconds": 18.2,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_refused_configuration_is_exit_8_naming_the_keys_and_nothing_else",
+    "kind": "target",
+    "message": "AssertionError: assert 0 == 8"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-q",
+  "summary": "the command line has a default mode",
+  "verdict": "valid",
+  "seconds": 17.6,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_there_is_no_default_mode_and_no_third_one",
+    "kind": "target",
+    "message": "AssertionError: assert (8 == 2)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-6d-r",
+  "summary": "the command line accepts a deletion option",
+  "verdict": "valid",
+  "seconds": 19.0,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_there_is_no_default_mode_and_no_third_one",
+    "kind": "target",
+    "message": "AssertionError: --allow-deletions"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-a",
+  "summary": "the transition's record is written after the commit, in a second transaction",
+  "verdict": "valid",
+  "seconds": 77.0,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 156,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_the_record_is_written_inside_the_transition_and_is_visible_only_with_it",
+    "kind": "target",
+    "message": "AssertionError: assert ('abandoned',...d_past_grace') == ('received', None)"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[received-abandon-undecided_past_grace]",
+    "kind": "other",
+    "message": "RuntimeError: text that must not reach the log: 10.0.0.5"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[decided-close-abandoned_after_decision]",
+    "kind": "other",
+    "message": "RuntimeError: text that must not reach the log: 10.0.0.5"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[dispatching-mark_unknown_outcome-unknown_outcome]",
+    "kind": "other",
+    "message": "RuntimeError: text that must not reach the log: 10.0.0.5"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_the_database_itself_refuses_rolls_the_transition_back",
+    "kind": "other",
+    "message": "control_plane.audit.logger.AuditWriteError: could not write audit record 'reconciler.proposal_abandoned' for None:None: (psycopg.errors.InsufficientPrivilege) new row violates row-level security policy for table \"audit_l"
+   },
+   {
+    "test": "test_reconciler_order::test_a_kill_9_leaves_the_change_and_its_record_together_or_neither[before_the_record-False]",
+    "kind": "target",
+    "message": "AssertionError: ('before_the_record', True, 0)"
+   },
+   {
+    "test": "test_reconciler_order::test_a_kill_9_leaves_the_change_and_its_record_together_or_neither[after_the_record_before_the_commit-False]",
+    "kind": "target",
+    "message": "AssertionError: ('after_the_record_before_the_commit', True, 0)"
+   },
+   {
+    "test": "test_reconciler_structure::test_the_transitions_record_is_written_inside_its_transaction_block",
+    "kind": "target",
+    "message": "AssertionError: the record hook is called once, in the block that makes the change"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transitions_event_is_written_in_the_transaction_that_makes_it",
+    "kind": "target",
+    "message": "AssertionError: received: the change was committed before its event"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transition_whose_record_cannot_be_written_is_not_made_and_the_service_stops",
+    "kind": "target",
+    "message": "AssertionError: dispatching"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-b",
+  "summary": "a record that fails is ignored: the transition commits without it",
+  "verdict": "valid",
+  "seconds": 38.6,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 161,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[received-abandon-undecided_past_grace]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None, True) == ('failed', 'a...ailed', False)"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[decided-close-abandoned_after_decision]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None, True) == ('failed', 'a...ailed', False)"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_that_raises_rolls_the_transition_back[dispatching-mark_unknown_outcome-unknown_outcome]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None, True) == ('failed', 'a...ailed', False)"
+   },
+   {
+    "test": "test_reconciler_order::test_a_record_the_database_itself_refuses_rolls_the_transition_back",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'n...after_update') == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transition_whose_record_cannot_be_written_is_not_made_and_the_service_stops",
+    "kind": "target",
+    "message": "AssertionError: received"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-d",
+  "summary": "a kill is made without its intent",
+  "verdict": "valid",
+  "seconds": 38.8,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 162,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_real_every_kind_of_irreversible_action_calls_intend_once_right_before_its_call",
+    "kind": "target",
+    "message": "AssertionError: kill_container"
+   },
+   {
+    "test": "test_reconciler_order::test_real_an_intent_that_cannot_be_written_means_no_call_is_made[kill]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_order::test_an_intent_is_written_even_when_the_call_then_fails_to_verify",
+    "kind": "target",
+    "message": "AssertionError: assert [] == [Action(kind=...rectory=None)]"
+   },
+   {
+    "test": "test_reconciler_order::test_a_failed_irreversible_action_is_not_attempted_again_until_the_wait_has_passed",
+    "kind": "target",
+    "message": "AssertionError: assert 0 == 2"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-e",
+  "summary": "the intent of a removal is written before the check that can decline it",
+  "verdict": "valid",
+  "seconds": 40.4,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 160,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_real_the_intent_is_written_after_the_checks_and_before_the_call",
+    "kind": "target",
+    "message": "AssertionError: assert [('intend', '...d', 'exited')] == [('intend', 'exited')]"
+   },
+   {
+    "test": "test_reconciler_order::test_real_every_kind_of_irreversible_action_calls_intend_once_right_before_its_call",
+    "kind": "target",
+    "message": "AssertionError: remove_container"
+   },
+   {
+    "test": "test_reconciler_order::test_real_an_action_that_is_declined_writes_no_intent[not_at_rest]",
+    "kind": "target",
+    "message": "AssertionError: assert [Action(kind=...rectory=None)] == []"
+   },
+   {
+    "test": "test_reconciler_order::test_real_a_removal_is_two_events_the_intent_then_the_result_and_nothing_is_unresolved",
+    "kind": "target",
+    "message": "AssertionError: assert ['reconciler....iner_removed'] == ['reconciler....iner_removed']"
+   },
+   {
+    "test": "test_reconciler_order::test_real_a_process_that_dies_after_the_call_leaves_a_visible_unresolved_intent",
+    "kind": "target",
+    "message": "AssertionError: assert ['reconciler....ion_intended'] == ['reconciler.action_intended']"
+   },
+   {
+    "test": "test_reconciler_structure::test_every_irreversible_call_comes_after_the_intent_in_the_same_function",
+    "kind": "target",
+    "message": "AssertionError: act_docker._remove_container: a decline comes after the intent was written"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-f",
+  "summary": "an intent that cannot be written is ignored: the call is made anyway",
+  "verdict": "valid",
+  "seconds": 39.1,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 161,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_real_an_intent_that_cannot_be_written_means_no_call_is_made[kill]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_order::test_real_an_intent_that_cannot_be_written_means_no_call_is_made[remove_container]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_order::test_real_an_intent_that_cannot_be_written_means_no_call_is_made[remove_proxy]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_order::test_real_an_intent_that_cannot_be_written_means_no_call_is_made[remove_network]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_order::test_an_intent_that_cannot_be_written_means_no_unlink",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-i",
+  "summary": "a failed object is attempted again at once (the hold-back is off)",
+  "verdict": "valid",
+  "seconds": 39.3,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 164,
+  "failures": [
+   {
+    "test": "test_reconciler_order::test_a_failed_irreversible_action_is_not_attempted_again_until_the_wait_has_passed",
+    "kind": "target",
+    "message": "AssertionError: assert (Counter({'failed': 1}) == {}"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest",
+    "kind": "target",
+    "message": "AssertionError: assert (Counter({'failed': 1}) == {'done': 1}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P4-j",
+  "summary": "the service writes a proposal's event a second time, and the writer would take it",
+  "verdict": "valid",
+  "seconds": 38.8,
+  "tests": [
+   "tests/test_reconciler_order.py",
+   "tests/test_reconciler_structure.py",
+   "tests/test_reconciler_service.py",
+   "tests/test_reconciler_emit.py"
+  ],
+  "passed": 162,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_state_only_pass_moves_the_rows_audits_each_and_a_second_pass_does_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert 10 == 5"
+   },
+   {
+    "test": "test_reconciler_service::test_a_transitions_event_is_written_in_the_transaction_that_makes_it",
+    "kind": "target",
+    "message": "AssertionError: assert 10 == 5"
+   },
+   {
+    "test": "test_reconciler_service::test_state_only_on_the_command_line_moves_the_rows_and_audits",
+    "kind": "target",
+    "message": "AssertionError: assert 10 == 5"
+   },
+   {
+    "test": "test_reconciler_emit::test_a_proposal_event_is_never_written_on_the_audit_paths_own_connection",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE PayloadRejected"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-d",
+  "summary": "a page that does not move past the one before is not an error",
+  "verdict": "valid",
+  "seconds": 38.7,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 113,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_a_page_that_does_not_move_past_the_one_before_is_an_error_not_a_loop",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ObservationError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-e",
+  "summary": "a proposal seen on two pages is counted twice",
+  "verdict": "valid",
+  "seconds": 13.5,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 113,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_a_row_seen_on_two_pages_counts_once_and_the_later_reading_wins",
+    "kind": "target",
+    "message": "AssertionError: assert 5001 == 5000"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-f",
+  "summary": "a read that stopped at max_pages never says it was truncated",
+  "verdict": "valid",
+  "seconds": 13.1,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 111,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_e23_five_thousand_rows_the_reconciler_leaves_alone_hide_one_it_must_close",
+    "kind": "target",
+    "message": "assert (False is True)"
+   },
+   {
+    "test": "test_reconciler_paging::test_reading_stops_after_max_pages_and_says_truncated",
+    "kind": "target",
+    "message": "assert (10000, False, 2) == (10000, True, 2)"
+   },
+   {
+    "test": "test_reconciler_paging::test_a_truncated_read_is_reported_by_the_pass",
+    "kind": "target",
+    "message": "AssertionError: assert False is True"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-g",
+  "summary": "max_pages is ignored: only the first page is ever read",
+  "verdict": "valid",
+  "seconds": 14.8,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 106,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_e23_five_thousand_rows_the_reconciler_leaves_alone_hide_one_it_must_close",
+    "kind": "target",
+    "message": "assert True is False"
+   },
+   {
+    "test": "test_reconciler_paging::test_reading_stops_at_the_first_page_that_is_not_full",
+    "kind": "target",
+    "message": "assert (5000, True, 1) == (5001, False, 2)"
+   },
+   {
+    "test": "test_reconciler_paging::test_a_full_page_followed_by_an_empty_one_is_not_truncated",
+    "kind": "target",
+    "message": "assert (5000, True, 1) == (5000, False, 2)"
+   },
+   {
+    "test": "test_reconciler_paging::test_reading_stops_after_max_pages_and_says_truncated",
+    "kind": "target",
+    "message": "assert (5000, True, 1) == (10000, True, 2)"
+   },
+   {
+    "test": "test_reconciler_paging::test_the_next_page_starts_after_the_last_row_of_the_one_before",
+    "kind": "target",
+    "message": "AssertionError: assert [] == [(5999, 'P-004999')]"
+   },
+   {
+    "test": "test_reconciler_paging::test_a_page_that_does_not_move_past_the_one_before_is_an_error_not_a_loop",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ObservationError"
+   },
+   {
+    "test": "test_reconciler_paging::test_a_row_seen_on_two_pages_counts_once_and_the_later_reading_wins",
+    "kind": "target",
+    "message": "AssertionError: assert 1000 == (10 ** 9)"
+   },
+   {
+    "test": "test_reconciler_paging::test_a_truncated_read_is_reported_by_the_pass",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-h",
+  "summary": "a pass carries out every planned action, whatever the cap",
+  "verdict": "valid",
+  "seconds": 13.3,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 112,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_a_pass_carries_out_at_most_the_configured_actions_and_the_next_does_the_rest",
+    "kind": "target",
+    "message": "AssertionError: assert (Counter({'done': 5}) == {'done': 2}"
+   },
+   {
+    "test": "test_reconciler_structure::test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap",
+    "kind": "target",
+    "message": "AssertionError: pass_once does not bound the actions it carries out by max_actions_per_pass"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-i",
+  "summary": "the back-off has no ceiling",
+  "verdict": "valid",
+  "seconds": 13.1,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 112,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_the_wait_doubles_after_a_backlog_that_got_nothing_done_up_to_the_cap",
+    "kind": "target",
+    "message": "assert [120.0, 240.0...920.0, 3840.0] == [120, 240, 480, 900, 900, 900]"
+   },
+   {
+    "test": "test_reconciler_paging::test_the_cap_never_makes_the_wait_shorter_than_the_interval",
+    "kind": "target",
+    "message": "assert [120.0, 240.0, 480.0] == [60, 60, 60]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-j",
+  "summary": "a pass that got something done is also made to wait longer",
+  "verdict": "valid",
+  "seconds": 13.5,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 113,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_a_pass_that_did_something_never_slows_down_and_resets_the_wait",
+    "kind": "target",
+    "message": "assert [120.0, 240.0, 480.0, 900] == [120, 240, 60, 120]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P6-k",
+  "summary": "the service reads one page whatever RECONCILER_MAX_PAGES says",
+  "verdict": "valid",
+  "seconds": 13.7,
+  "tests": [
+   "tests/test_reconciler_paging.py",
+   "tests/test_reconciler_reader.py",
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 112,
+  "failures": [
+   {
+    "test": "test_reconciler_paging::test_a_truncated_read_is_reported_by_the_pass",
+    "kind": "target",
+    "message": "AssertionError: assert True is False"
+   },
+   {
+    "test": "test_reconciler_structure::test_the_service_hands_observe_the_configured_page_count_and_the_act_half_the_configured_cap",
+    "kind": "target",
+    "message": "AssertionError: {'directory': 'self.directory', 'expected_uid': 'self.expected_uid', 'clock_us': 'self._wall_clock_us', 'max_pages': '1', ...}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-a",
+  "summary": "an unlisted Docker verb (container.logs) is added to observe",
+  "verdict": "valid",
+  "seconds": 5.8,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 29,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list",
+    "kind": "target",
+    "message": "AssertionError: ('observe', ['logs'])"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-b",
+  "summary": "act_docker calls an unlisted verb through an alias of the container",
+  "verdict": "valid",
+  "seconds": 5.3,
+  "tests": [
+   "tests/test_reconciler_structure.py"
+  ],
+  "passed": 28,
+  "failures": [
+   {
+    "test": "test_reconciler_structure::test_nothing_in_the_package_creates_runs_starts_stops_or_prunes",
+    "kind": "target",
+    "message": "AssertionError: ('act_docker', {'pause'})"
+   },
+   {
+    "test": "test_reconciler_structure::test_every_method_called_on_a_docker_handle_is_on_the_modules_allow_list",
+    "kind": "target",
+    "message": "AssertionError: ('act_docker', ['pause'])"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-e",
+  "summary": "the reconciler's close does not compare the stage or the timestamp",
+  "verdict": "valid",
+  "seconds": 70.7,
+  "tests": [
+   "tests/test_reconciler_concurrency.py"
+  ],
+  "passed": 19,
+  "failures": [
+   {
+    "test": "test_reconciler_concurrency::test_rt6_two_passes_acting_on_the_same_action_move_one_row_and_write_one_event",
+    "kind": "target",
+    "message": "AssertionError: assert ['done', 'done'] == ['done', 'lost_race']"
+   },
+   {
+    "test": "test_reconciler_concurrency::test_rt3_the_dispatch_takes_the_stage_first_and_the_reconciler_moves_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert 'done' == 'lost_race'"
+   },
+   {
+    "test": "test_reconciler_concurrency::test_rt3_genuinely_concurrent_the_reconciler_waits_on_the_dispatchs_row_lock",
+    "kind": "target",
+    "message": "AssertionError: assert 'done' == 'lost_race'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-f",
+  "summary": "a container removed by someone else while we removed it is a failure",
+  "verdict": "valid",
+  "seconds": 34.4,
+  "tests": [
+   "tests/test_reconciler_concurrency.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_reconciler_concurrency::test_rt8_scripted_a_refusal_followed_by_not_found_is_gone[remove_proxy]",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'daemon_error') == ('already_gone', None)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-g",
+  "summary": "Docker's 409 (removal in progress) on a removal is a failure",
+  "verdict": "valid",
+  "seconds": 32.4,
+  "tests": [
+   "tests/test_reconciler_concurrency.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_reconciler_concurrency::test_rt8_scripted_a_409_that_resolves_within_the_wait_is_gone",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'daemon_error') == ('already_gone', None)"
+   },
+   {
+    "test": "test_reconciler_concurrency::test_rt8_both_at_once_never_ends_in_a_failure[remove_proxy]",
+    "kind": "target",
+    "message": "AssertionError: [('failed', 'daemon_error'), ('failed', 'daemon_error'), ('failed', 'daemon_error'), ('failed', 'daemon_error'), ('done', None), ('done', None), ...]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-h",
+  "summary": "a start refused for a network that is gone is not typed as not started",
+  "verdict": "valid",
+  "seconds": 33.7,
+  "tests": [
+   "tests/test_reconciler_concurrency.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_reconciler_concurrency::test_rt9_a_network_removed_between_ensure_and_create_is_a_not_started_and_the_retry_works",
+    "kind": "target",
+    "message": "AssertionError: NotFound"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-P7-i",
+  "summary": "the observation lists every container that wears an owner label",
+  "verdict": "valid",
+  "seconds": 12.9,
+  "tests": [
+   "tests/test_reconciler_negative.py"
+  ],
+  "passed": 0,
+  "failures": [
+   {
+    "test": "test_reconciler_negative::test_e24_a_whole_host_pass_removes_the_forgers_container_and_touches_nothing_else",
+    "kind": "target",
+    "message": "AssertionError: assert not ({'46f76c4aa7b774cc809dead0b00704b8177d89e4a27bee3e6e33cd336ab3b261', 'd2dc47a2975d626602143f4464eabc465457d66316cc7f8f28f0aeccbe0c5ebe'} & {'46f76c4aa7b774cc809dead0b00704b8177d89e4a27bee3e6e3"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-r",
+  "summary": "observe: a boolean passes for an integer",
+  "verdict": "valid",
+  "seconds": 5.0,
+  "tests": [
+   "tests/test_reconciler_conflict_observe.py"
+  ],
+  "passed": 23,
+  "failures": [
+   {
+    "test": "test_reconciler_conflict_observe::test_a_value_outside_the_contract_stops_the_pass[bad10]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ObservationError"
+   },
+   {
+    "test": "test_reconciler_conflict_observe::test_a_value_outside_the_contract_stops_the_pass[bad11]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ObservationError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-s",
+  "summary": "observe: a hash wider than 48 bits is accepted",
+  "verdict": "valid",
+  "seconds": 2.9,
+  "tests": [
+   "tests/test_reconciler_conflict_observe.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_reconciler_conflict_observe::test_a_value_outside_the_contract_stops_the_pass[bad1]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ObservationError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-t",
+  "summary": "service: a failed removal counts against the cap",
+  "verdict": "valid",
+  "seconds": 2.8,
+  "tests": [
+   "tests/test_reconciler_conflict_observe.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_reconciler_conflict_observe::test_only_a_verified_removal_for_a_range_conflict_by_a_name_that_is_a_number_counts[other0]",
+    "kind": "target",
+    "message": "assert {1250999896491: 1} == {}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-u",
+  "summary": "service: a removal is never forgotten",
+  "verdict": "valid",
+  "seconds": 2.8,
+  "tests": [
+   "tests/test_reconciler_conflict_observe.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_reconciler_conflict_observe::test_a_removal_is_forgotten_after_twenty_four_hours_and_not_before",
+    "kind": "target",
+    "message": "assert {1250999896491: 1} == {}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-y",
+  "summary": "a network whose removal was refused while someone else removed it is 'in use'",
+  "verdict": "valid",
+  "seconds": 115.9,
+  "tests": [
+   "tests/test_reconciler_races.py"
+  ],
+  "passed": 11,
+  "failures": [
+   {
+    "test": "test_reconciler_races::test_network_scripted_a_refusal_while_someone_else_removes_it_is_gone_not_in_use",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'in_use') == ('already_gone', None)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-z",
+  "summary": "a real refusal to remove a network is no longer reported",
+  "verdict": "valid",
+  "seconds": 57.9,
+  "tests": [
+   "tests/test_reconciler_races.py"
+  ],
+  "passed": 11,
+  "failures": [
+   {
+    "test": "test_reconciler_races::test_network_scripted_a_refusal_that_is_real_is_still_in_use",
+    "kind": "target",
+    "message": "AssertionError: assert ('already_gone', None) == ('failed', 'in_use')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-za",
+  "summary": "residue: in-flight runs of the session's engagements are left as they were",
+  "verdict": "valid",
+  "seconds": 11.2,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",
+    "kind": "target",
+    "message": "AssertionError: assert ('running' == 'unknown_outcome'"
+   },
+   {
+    "test": "test_residue_check::test_the_rows_a_file_left_are_counted_per_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_...a.py': (3, 0)} == {'tests/test_...b.py': (1, 0)}"
+   },
+   {
+    "test": "test_residue_check::test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_...y.py': (2, 0)} == {'tests/test_...y.py': (2, 1)}"
+   },
+   {
+    "test": "test_residue_check::test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_a.py': 2} == {'tests/test_a.py': 3}"
+   },
+   {
+    "test": "test_residue_check::test_ends_one_and_by_the_next_test_it_has_been_closed",
+    "kind": "target",
+    "message": "AssertionError: {'RUN-4130c36dac7f': 'running'}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C2-zb",
+  "summary": "residue: a stuck row in an engagement nobody registered is not looked for",
+  "verdict": "valid",
+  "seconds": 5.9,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_an_engagement_nobody_registered_is_left_alone_and_its_new_stuck_row_is_found",
+    "kind": "target",
+    "message": "AssertionError: assert ({} == {}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-d",
+  "summary": "any enabled category enables every kind",
+  "verdict": "valid",
+  "seconds": 33.8,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 72,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_with_one_category_on_exactly_its_kinds_reach_the_act_half[kill]",
+    "kind": "target",
+    "message": "AssertionError: ('kill', 'remove_container', Result(action=Action(kind='remove_container', reason_code='run_finished', subject_id='sho...ed_us=None, expected_owner=None, name=None, directory=None), outcome='failed', deta"
+   },
+   {
+    "test": "test_reconciler_flags::test_with_one_category_on_exactly_its_kinds_reach_the_act_half[container]",
+    "kind": "target",
+    "message": "AssertionError: ('container', 'kill_container', Result(action=Action(kind='kill_container', reason_code='overran_deadline', subject_id...ed_us=None, expected_owner=None, name=None, directory=None), outcome='failed', deta"
+   },
+   {
+    "test": "test_reconciler_flags::test_with_one_category_on_exactly_its_kinds_reach_the_act_half[proxy]",
+    "kind": "target",
+    "message": "AssertionError: ('proxy', 'kill_container', Result(action=Action(kind='kill_container', reason_code='overran_deadline', subject_id='sh...ed_us=None, expected_owner=None, name=None, directory=None), outcome='failed', deta"
+   },
+   {
+    "test": "test_reconciler_flags::test_with_one_category_on_exactly_its_kinds_reach_the_act_half[network]",
+    "kind": "target",
+    "message": "AssertionError: ('network', 'kill_container', Result(action=Action(kind='kill_container', reason_code='overran_deadline', subject_id='...ed_us=None, expected_owner=None, name=None, directory=None), outcome='failed', deta"
+   },
+   {
+    "test": "test_reconciler_flags::test_with_one_category_on_exactly_its_kinds_reach_the_act_half[file]",
+    "kind": "target",
+    "message": "AssertionError: ('file', 'kill_container', Result(action=Action(kind='kill_container', reason_code='overran_deadline', subject_id='sho...ed_us=None, expected_owner=None, name=None, directory=None), outcome='failed', deta"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-e",
+  "summary": "the command line drops the words it was given",
+  "verdict": "valid",
+  "seconds": 20.7,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 63,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args0]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args1]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args2]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args3]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args4]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args5]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args6]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args7]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[absent]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[missing]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[open]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_pipe_is_refused_exit_7_and_nothing_is_started",
+    "kind": "target",
+    "message": "AssertionError: reconciler stopped (exit 0)"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started",
+    "kind": "target",
+    "message": "AssertionError: {\"held_back\": 0, \"limited\": 0, \"outcomes\": {}, \"reports\": 0, \"summary\": {}, \"truncated\": false}"
+   },
+   {
+    "test": "test_reconciler_flags::test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",
+    "kind": "target",
+    "message": "AssertionError: assert [[]] == [['container'...ll', 'proxy']]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-f",
+  "summary": "any answer confirms",
+  "verdict": "valid",
+  "seconds": 16.7,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 65,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[yes\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[y\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[enable kill\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[enable kill container\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[ENABLE container kill\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[enable  container kill\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[ enable container kill\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[enable container kill \\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_any_other_answer_does_not_confirm[enable all\\n]",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_wrong_phrase_at_a_terminal_is_exit_7_and_nothing_is_started",
+    "kind": "target",
+    "message": "AssertionError: This run may carry out, on real Docker objects and for real:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-g",
+  "summary": "a pipe may confirm",
+  "verdict": "valid",
+  "seconds": 15.8,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_a_pipe_cannot_confirm_even_with_the_right_phrase",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_stream_that_cannot_say_whether_it_is_a_terminal_is_not_one",
+    "kind": "target",
+    "message": "AssertionError: assert not True"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_pipe_is_refused_exit_7_and_nothing_is_started",
+    "kind": "target",
+    "message": "assert 'not one' in (\"This run may carry out, on real Docker objects and for real:\\n  kill       KILL a tool container still running past its run's budget plus the margin\\nIt will do nothing else, and everything else sta"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-i",
+  "summary": "reconciler.started does not say what was enabled",
+  "verdict": "valid",
+  "seconds": 16.7,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 75,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",
+    "kind": "target",
+    "message": "AssertionError: assert [[]] == [['container'...ll', 'proxy']]"
+   },
+   {
+    "test": "test_reconciler_flags::test_the_started_payload_is_what_the_service_writes",
+    "kind": "target",
+    "message": "AssertionError: assert [[]] == [['kill', 'proxy']]"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-k",
+  "summary": "Settings takes a word that is not a category",
+  "verdict": "valid",
+  "seconds": 17.8,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 76,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_settings_refuses_a_word_that_is_not_a_category_even_from_the_tests",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ValueError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-l",
+  "summary": "a dry run may carry a switch",
+  "verdict": "valid",
+  "seconds": 16.1,
+  "tests": [
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 75,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_a_dry_run_changes_nothing_so_it_cannot_carry_a_switch",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ValueError"
+   },
+   {
+    "test": "test_reconciler_flags::test_a_refused_word_is_exit_7_before_the_configuration_is_even_read[args7]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-m",
+  "summary": "a failed proposal transition is retried in every pass",
+  "verdict": "valid",
+  "seconds": 19.7,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_transition_the_database_refuses_is_tried_once_per_period_and_does_not_hold_up_the_rest",
+    "kind": "target",
+    "message": "AssertionError: assert (Counter({'failed': 1}) == {'done': 1}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-n",
+  "summary": "the memory of failures is never forgotten",
+  "verdict": "valid",
+  "seconds": 20.4,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_the_memory_of_failures_is_bounded_by_the_period",
+    "kind": "target",
+    "message": "AssertionError: assert {('abandon', ...c68'): 1000.0} == {}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-o",
+  "summary": "residue: no file is ever over its cap",
+  "verdict": "valid",
+  "seconds": 5.5,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it",
+    "kind": "target",
+    "message": "AssertionError: assert {} == {'tests/test_...y.py': (3, 0)}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-p",
+  "summary": "residue: every file's rows are counted under one name",
+  "verdict": "valid",
+  "seconds": 6.0,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 21,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",
+    "kind": "target",
+    "message": "AssertionError: assert (1 >= 1 and ['(outside a ...py FILE_CAP)'] == []"
+   },
+   {
+    "test": "test_residue_check::test_the_rows_a_file_left_are_counted_per_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'(outside a ...ure)': (4, 2)} == {'tests/test_...b.py': (1, 0)}"
+   },
+   {
+    "test": "test_residue_check::test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it",
+    "kind": "target",
+    "message": "AssertionError: assert {'(outside a ...ure)': (2, 1)} == {'tests/test_...y.py': (2, 1)}"
+   },
+   {
+    "test": "test_residue_check::test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'(outside a ... fixture)': 3} == {'tests/test_a.py': 3}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-q",
+  "summary": "residue: an engagement does not remember the file that made it",
+  "verdict": "valid",
+  "seconds": 5.6,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 23,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",
+    "kind": "target",
+    "message": "AssertionError: assert (1 >= 1 and ['(outside a ...py FILE_CAP)'] == []"
+   },
+   {
+    "test": "test_residue_check::test_an_engagement_remembers_the_test_file_that_made_it",
+    "kind": "target",
+    "message": "AssertionError: assert '(outside a t...sion fixture)' == 'tests/test_residue_check.py'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-u",
+  "summary": "a skew nobody could measure is zero",
+  "verdict": "valid",
+  "seconds": 5.8,
+  "tests": [
+   "tests/test_reconciler_clocks.py"
+  ],
+  "passed": 42,
+  "failures": [
+   {
+    "test": "test_reconciler_clocks::test_a_clock_the_daemon_does_not_give_is_unknown_not_zero[client0]",
+    "kind": "target",
+    "message": "assert 0 is None"
+   },
+   {
+    "test": "test_reconciler_clocks::test_a_clock_the_daemon_does_not_give_is_unknown_not_zero[client1]",
+    "kind": "target",
+    "message": "assert 0 is None"
+   },
+   {
+    "test": "test_reconciler_clocks::test_a_clock_the_daemon_does_not_give_is_unknown_not_zero[client2]",
+    "kind": "target",
+    "message": "assert 0 is None"
+   },
+   {
+    "test": "test_reconciler_clocks::test_a_clock_the_daemon_does_not_give_is_unknown_not_zero[client3]",
+    "kind": "target",
+    "message": "assert 0 is None"
+   },
+   {
+    "test": "test_reconciler_clocks::test_a_clock_the_daemon_does_not_give_is_unknown_not_zero[client4]",
+    "kind": "target",
+    "message": "assert 0 is None"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-x",
+  "summary": "the daemon's zone is ignored",
+  "verdict": "valid",
+  "seconds": 3.4,
+  "tests": [
+   "tests/test_reconciler_clocks.py"
+  ],
+  "passed": 35,
+  "failures": [
+   {
+    "test": "test_reconciler_clocks::test_the_daemons_time_is_read_in_any_zone_it_reports_in[2026-10-14T12:33:18.275269076+08:00-2026-10-14T04:33:18.275269+00:00]",
+    "kind": "target",
+    "message": "AssertionError: assert 1791981198275269 == ((1791952398 * 1000000) + 275269)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_daemons_time_is_read_in_any_zone_it_reports_in[2026-10-13T23:33:18.5-05:00-2026-10-14T04:33:18.500000+00:00]",
+    "kind": "other",
+    "message": "ValueError: Invalid isoformat string: '2026-10-13T23:33:18.5-05:0+00:00'"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[0]",
+    "kind": "target",
+    "message": "assert None == (0 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[1]",
+    "kind": "target",
+    "message": "assert None == (1 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[4]",
+    "kind": "target",
+    "message": "assert None == (4 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[5]",
+    "kind": "target",
+    "message": "assert None == (5 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[6]",
+    "kind": "target",
+    "message": "assert None == (6 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[3600]",
+    "kind": "target",
+    "message": "assert None == (3600 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[-3600]",
+    "kind": "target",
+    "message": "assert None == (-3600 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_skew_is_the_hosts_clock_minus_the_daemons[-1]",
+    "kind": "target",
+    "message": "assert None == (-1 * 1000000)"
+   },
+   {
+    "test": "test_reconciler_clocks::test_the_error_of_the_reading_is_at_most_half_the_round_trip",
+    "kind": "other",
+    "message": "TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'"
+   },
+   {
+    "test": "test_reconciler_clocks::test_a_daemon_zone_ten_hours_east_is_the_same_instant",
+    "kind": "target",
+    "message": "assert -36000000000 == 0"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C3-y",
+  "summary": "the skew is the host's time before the call, not its middle",
+  "verdict": "valid",
+  "seconds": 3.1,
+  "tests": [
+   "tests/test_reconciler_clocks.py"
+  ],
+  "passed": 46,
+  "failures": [
+   {
+    "test": "test_reconciler_clocks::test_the_reading_is_taken_at_the_middle_of_the_round_trip",
+    "kind": "target",
+    "message": "assert 1800000 == (2 * 1000000)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-a",
+  "summary": "the evidence is not kept before the removal",
+  "verdict": "valid",
+  "seconds": 19.5,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 62,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_order_is_archive_then_intent_then_evidence_record_then_removal",
+    "kind": "target",
+    "message": "AssertionError: assert ['intend'] == ['intend', 'saved']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[no_directory]",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'audit_failed') == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[bad_directory]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[log_error]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[too_large]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[cannot_sync]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[other_file_there]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_evidence_record_that_cannot_be_written_stops_the_removal",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_real_a_container_with_output_is_kept_and_then_removed",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['e1c627706af...b5ff74b.logs']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_real_a_container_that_cannot_be_archived_is_still_there_after",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_hashes_only",
+    "kind": "target",
+    "message": "AssertionError: assert ['reconciler....iner_removed'] == ['reconciler....iner_removed']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_said_once",
+    "kind": "target",
+    "message": "AssertionError: assert [('done', None)] == [('failed', '...e_not_saved')]"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_no_engagement_case_is_refused",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-b",
+  "summary": "a failure to keep the evidence is ignored and the container is removed",
+  "verdict": "valid",
+  "seconds": 9.8,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 66,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[no_directory]",
+    "kind": "target",
+    "message": "AssertionError: assert ('failed', 'audit_failed') == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[bad_directory]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[log_error]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[too_large]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[cannot_sync]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[other_file_there]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_real_a_container_that_cannot_be_archived_is_still_there_after",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_said_once",
+    "kind": "target",
+    "message": "AssertionError: assert [('done', None)] == [('failed', '...e_not_saved')]"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_no_engagement_case_is_refused",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-c",
+  "summary": "the hashes are never given to the audit trail",
+  "verdict": "valid",
+  "seconds": 9.8,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_order_is_archive_then_intent_then_evidence_record_then_removal",
+    "kind": "target",
+    "message": "AssertionError: assert ['intend'] == ['intend', 'saved']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_evidence_record_that_cannot_be_written_stops_the_removal",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_real_a_container_with_output_is_kept_and_then_removed",
+    "kind": "target",
+    "message": "assert (0 == 1)"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_hashes_only",
+    "kind": "target",
+    "message": "AssertionError: assert ['reconciler....iner_removed'] == ['reconciler....iner_removed']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-d",
+  "summary": "a hash record that cannot be written does not stop the removal",
+  "verdict": "valid",
+  "seconds": 9.7,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_an_evidence_record_that_cannot_be_written_stops_the_removal",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'audit_failed')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-e",
+  "summary": "a directory other people can use is accepted",
+  "verdict": "valid",
+  "seconds": 47.5,
+  "tests": [
+   "tests/test_reconciler_evidence.py",
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 146,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_directory_that_is_not_private_and_ours_is_refused[group]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_a_directory_that_is_not_private_and_ours_is_refused[world]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_container_cannot_be_enabled_without_a_private_directory",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ValueError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_start_up_probe_refuses_a_directory_that_cannot_take_a_file[open]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_a_reconciler_with_container_enabled_and_a_bad_evidence_directory_refuses_to_start",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE StopService"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[open]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-f",
+  "summary": "a directory that belongs to somebody else is accepted",
+  "verdict": "valid",
+  "seconds": 9.5,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_directory_that_is_not_private_and_ours_is_refused[other_owner]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-g",
+  "summary": "a link to a directory is followed",
+  "verdict": "valid",
+  "seconds": 9.3,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_directory_that_is_not_private_and_ours_is_refused[link]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-h",
+  "summary": "a file that is already there is replaced",
+  "verdict": "valid",
+  "seconds": 9.8,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 71,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_saving_the_same_container_twice_is_the_same_evidence_and_replaces_nothing",
+    "kind": "target",
+    "message": "AssertionError: assert 1632467 == 1632468"
+   },
+   {
+    "test": "test_reconciler_evidence::test_a_different_file_already_there_is_never_replaced_and_is_a_refusal",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_written",
+    "kind": "target",
+    "message": "AssertionError: assert '07c7468186a0896ef7a68f830cab069c451fe5ef6985fcca2ba275fcc9eaa864' != '07c7468186a0896ef7a68f830cab069c451fe5ef6985fcca2ba275fcc9eaa864'"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[other_file_there]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-i",
+  "summary": "the hash is of what was meant to be written, not of the file in place",
+  "verdict": "valid",
+  "seconds": 9.9,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_written",
+    "kind": "target",
+    "message": "AssertionError: assert '07c7468186a0...275fcc9eaa864' == '27b3e451d6b8...8f501901e07af'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-j",
+  "summary": "a log of any size is kept",
+  "verdict": "valid",
+  "seconds": 9.6,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 73,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_log_too_large_to_keep_is_refused_not_cut",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[too_large]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-k",
+  "summary": "the file is not synced before it is trusted",
+  "verdict": "valid",
+  "seconds": 9.8,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_file_or_directory_that_cannot_be_synced_is_not_evidence[the file]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-o",
+  "summary": "the service never gives the act half a place to record the hashes",
+  "verdict": "valid",
+  "seconds": 10.9,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_hashes_only",
+    "kind": "target",
+    "message": "AssertionError: assert ['reconciler....iner_removed'] == ['reconciler....iner_removed']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-p",
+  "summary": "container can be enabled without somewhere to keep the evidence",
+  "verdict": "valid",
+  "seconds": 25.4,
+  "tests": [
+   "tests/test_reconciler_evidence.py",
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 148,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_container_cannot_be_enabled_without_a_private_directory",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE ValueError"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[absent]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[missing]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   },
+   {
+    "test": "test_reconciler_flags::test_container_without_a_private_evidence_directory_is_exit_7_before_anything[open]",
+    "kind": "target",
+    "message": "AssertionError: (8, 'reconciler configuration refused:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-q",
+  "summary": "the command line drops the evidence directory",
+  "verdict": "valid",
+  "seconds": 23.0,
+  "tests": [
+   "tests/test_reconciler_evidence.py",
+   "tests/test_reconciler_flags.py"
+  ],
+  "passed": 151,
+  "failures": [
+   {
+    "test": "test_reconciler_flags::test_the_right_phrase_at_a_terminal_starts_and_the_record_says_what_was_enabled",
+    "kind": "target",
+    "message": "AssertionError: refused: enabling container needs --evidence-dir: an existing directory of yours that nobody else can read or write (0700)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-r",
+  "summary": "every container removal keeps evidence, even of a run that finished normally",
+  "verdict": "valid",
+  "seconds": 9.4,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 74,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_a_finished_run_needs_no_evidence_and_leaves_none",
+    "kind": "target",
+    "message": "AssertionError: assert (['ccccccccccc...ccccccc.logs'] == []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-v",
+  "summary": "a NULL has_decision is accepted",
+  "verdict": "valid",
+  "seconds": 8.9,
+  "tests": [
+   "tests/test_reconciler_plan.py",
+   "tests/test_reconciler_observe.py"
+  ],
+  "passed": 190,
+  "failures": [
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw18]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-w",
+  "summary": "has_decision may be an integer",
+  "verdict": "valid",
+  "seconds": 5.1,
+  "tests": [
+   "tests/test_reconciler_plan.py",
+   "tests/test_reconciler_observe.py"
+  ],
+  "passed": 189,
+  "failures": [
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw19]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   },
+   {
+    "test": "test_reconciler_observe::test_a_value_the_contract_does_not_allow_is_refused[kw21]",
+    "kind": "target",
+    "message": "Failed: the contract violation was accepted"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-x",
+  "summary": "the summary counts passes, not objects",
+  "verdict": "valid",
+  "seconds": 20.0,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 26,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+    "kind": "target",
+    "message": "AssertionError: assert {'proposal:un...ted_state': 3} == {'proposal:un...ted_state': 1}"
+   },
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: ('PROP-00008f24b816', 'PROP-0000d944d704')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-y",
+  "summary": "a window with reports and no failure writes no summary",
+  "verdict": "valid",
+  "seconds": 20.4,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 26,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+    "kind": "target",
+    "message": "AssertionError: []"
+   },
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-z",
+  "summary": "what was reported is carried into the next window",
+  "verdict": "valid",
+  "seconds": 20.0,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 27,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: assert 2 == 1"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-aa",
+  "summary": "the pass hands the plan's reports to nobody",
+  "verdict": "valid",
+  "seconds": 20.9,
+  "tests": [
+   "tests/test_reconciler_service.py"
+  ],
+  "passed": 26,
+  "failures": [
+   {
+    "test": "test_reconciler_service::test_a_received_proposal_with_a_decision_is_reported_not_acted_on_and_counted_in_the_summary",
+    "kind": "target",
+    "message": "AssertionError: []"
+   },
+   {
+    "test": "test_reconciler_service::test_what_is_reported_is_counted_as_objects_not_as_passes_and_the_window_starts_again",
+    "kind": "target",
+    "message": "AssertionError: []"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-af",
+  "summary": "the end of a test closes nothing",
+  "verdict": "valid",
+  "seconds": 5.2,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 22,
+  "failures": [
+   {
+    "test": "test_residue_check::test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file",
+    "kind": "target",
+    "message": "AssertionError: assert {} == {'tests/test_a.py': 3}"
+   },
+   {
+    "test": "test_residue_check::test_ends_one_and_by_the_next_test_it_has_been_closed",
+    "kind": "target",
+    "message": "AssertionError: {'PROP-a1767bdf9f21': 'approved/', 'PROP-abc9608dcba7': 'approved/'}"
+   },
+   {
+    "test": "test_residue_check::test_the_end_of_a_test_withdraws_what_it_enrolled_and_nothing_that_was_live_before",
+    "kind": "other",
+    "message": "failed on teardown with \"Failed: the test session left state behind:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-ag",
+  "summary": "the end of a test closes the module's engagements too",
+  "verdict": "valid",
+  "seconds": 6.6,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_module_two_and_the_first_test_did_not_close_it_early",
+    "kind": "target",
+    "message": "AssertionError: a test closed an engagement it did not make"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-ah",
+  "summary": "the end of a test is never reached",
+  "verdict": "valid",
+  "seconds": 5.2,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 23,
+  "failures": [
+   {
+    "test": "test_residue_check::test_ends_one_and_by_the_next_test_it_has_been_closed",
+    "kind": "target",
+    "message": "AssertionError: {'PROP-5b21f49e20f3': 'approved/', 'PROP-8fa8bf41e8fd': 'approved/'}"
+   },
+   {
+    "test": "test_residue_check::test_the_end_of_a_test_withdraws_what_it_enrolled_and_nothing_that_was_live_before",
+    "kind": "other",
+    "message": "failed on teardown with \"Failed: the test session left state behind:"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-ai",
+  "summary": "a file is given an allowance",
+  "verdict": "valid",
+  "seconds": 5.8,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_cap_is_never_above_the_ceiling",
+    "kind": "target",
+    "message": "AssertionError: tests/test_residue_check.py: cap 1 is above its ceiling 0; a cap is lowered, never raised -- fix the test that leaves the rows"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-aj",
+  "summary": "the rows are closed and the in-flight runs are not",
+  "verdict": "valid",
+  "seconds": 5.7,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_residue_check::test_a_registered_engagements_stuck_rows_and_in_flight_runs_are_closed",
+    "kind": "target",
+    "message": "AssertionError: assert ('running' == 'unknown_outcome'"
+   },
+   {
+    "test": "test_residue_check::test_the_rows_a_file_left_are_counted_per_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_...b.py': (1, 0)} == {'tests/test_...b.py': (1, 0)}"
+   },
+   {
+    "test": "test_residue_check::test_a_file_that_left_more_than_its_cap_fails_the_session_naming_it",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_...y.py': (2, 0)} == {'tests/test_...y.py': (2, 1)}"
+   },
+   {
+    "test": "test_residue_check::test_finishing_a_test_closes_what_its_engagements_left_and_says_which_file",
+    "kind": "target",
+    "message": "AssertionError: assert {'tests/test_a.py': 2} == {'tests/test_a.py': 3}"
+   },
+   {
+    "test": "test_residue_check::test_ends_one_and_by_the_next_test_it_has_been_closed",
+    "kind": "target",
+    "message": "AssertionError: {'RUN-9eaed935079c': 'running'}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-ak",
+  "summary": "an ACCEPTANCE number is used twice",
+  "verdict": "valid",
+  "seconds": 4.3,
+  "tests": [
+   "tests/test_acceptance_numbering.py"
+  ],
+  "passed": 59,
+  "failures": [
+   {
+    "test": "test_acceptance_numbering::test_the_rows_of_the_table_are_consecutive_each_number_once_and_in_order",
+    "kind": "target",
+    "message": "AssertionError: numbers are not consecutive: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63"
+   },
+   {
+    "test": "test_acceptance_numbering::test_every_acceptance_pointer_in_the_repository_names_an_item_that_exists",
+    "kind": "target",
+    "message": "AssertionError: pointers to items the document does not have: {'5.95': ['docs/D64_LIVE_OWNER_DRILL_2026-10-14.md', 'docs/D64_PREDELETION_COMPLETION.md']}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-al",
+  "summary": "an ACCEPTANCE row is lost from the table",
+  "verdict": "valid",
+  "seconds": 2.0,
+  "tests": [
+   "tests/test_acceptance_numbering.py"
+  ],
+  "passed": 58,
+  "failures": [
+   {
+    "test": "test_acceptance_numbering::test_the_rows_of_the_table_are_consecutive_each_number_once_and_in_order",
+    "kind": "target",
+    "message": "AssertionError: numbers are not consecutive: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63"
+   },
+   {
+    "test": "test_acceptance_numbering::test_every_acceptance_pointer_in_the_repository_names_an_item_that_exists",
+    "kind": "target",
+    "message": "AssertionError: pointers to items the document does not have: {'5.93': ['control_plane/reconciler/config.py', 'control_plane/reconciler/plan.py', 'docs/D64_CLOCKS.md']}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-am",
+  "summary": "a status in none of the document's words",
+  "verdict": "valid",
+  "seconds": 2.2,
+  "tests": [
+   "tests/test_acceptance_numbering.py"
+  ],
+  "passed": 60,
+  "failures": [
+   {
+    "test": "test_acceptance_numbering::test_every_row_from_5_58_on_starts_its_status_with_one_of_the_documents_words[5.830-5.97-]",
+    "kind": "target",
+    "message": "AssertionError: 5.97 (line 830) starts its status with 'Done at completion 4, item 2.** *Retenti'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-an",
+  "summary": "a file points at an ACCEPTANCE row that does not exist",
+  "verdict": "valid",
+  "seconds": 2.3,
+  "tests": [
+   "tests/test_acceptance_numbering.py"
+  ],
+  "passed": 59,
+  "failures": [
+   {
+    "test": "test_acceptance_numbering::test_the_table_reaches_the_latest_number_the_repository_points_at",
+    "kind": "target",
+    "message": "AssertionError: a file points at 5.196, the table ends at 5.114"
+   },
+   {
+    "test": "test_acceptance_numbering::test_every_acceptance_pointer_in_the_repository_names_an_item_that_exists",
+    "kind": "target",
+    "message": "AssertionError: pointers to items the document does not have: {'5.196': ['tests/residue.py']}"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-ao",
+  "summary": "a row says it was revised by a row that does not exist",
+  "verdict": "valid",
+  "seconds": 2.3,
+  "tests": [
+   "tests/test_acceptance_numbering.py"
+  ],
+  "passed": 60,
+  "failures": [
+   {
+    "test": "test_acceptance_numbering::test_every_revised_by_names_a_row_that_exists_and_comes_after_the_row_it_revises",
+    "kind": "target",
+    "message": "AssertionError: 5.92 says revised by 5.197, which is not a row"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C4-aq",
+  "summary": "a raised ceiling is not noticed",
+  "verdict": "valid",
+  "seconds": 6.0,
+  "tests": [
+   "tests/test_residue_check.py"
+  ],
+  "passed": 24,
+  "failures": [
+   {
+    "test": "test_residue_check::test_the_comparison_with_the_main_line_says_which_ceiling_is_raised",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['tests/test_a.py: 4 > 3']"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-a",
+  "summary": "an engagement's evidence subdirectory may be open to others",
+  "verdict": "valid",
+  "seconds": 9.6,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 73,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_said_once",
+    "kind": "target",
+    "message": "AssertionError: assert [('done', None)] == [('failed', '...e_not_saved')]"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused[open_mode]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-b",
+  "summary": "an engagement name is not checked, so it can be a path",
+  "verdict": "valid",
+  "seconds": 9.9,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 66,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[.]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[..]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[.hidden]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[../x]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[a b]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[a\\x00b]",
+    "kind": "other",
+    "message": "ValueError: embedded null byte"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_name_that_is_a_path_is_refused_and_nothing_is_made[.leading-dot]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_no_engagement_case_is_refused",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D64-C5-c",
+  "summary": "every engagement's evidence goes into the same directory",
+  "verdict": "valid",
+  "seconds": 10.1,
+  "tests": [
+   "tests/test_reconciler_evidence.py"
+  ],
+  "passed": 62,
+  "failures": [
+   {
+    "test": "test_reconciler_evidence::test_the_archive_is_two_private_files_named_by_the_id_and_hashed_as_they_are_on_disk",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['ccccccccccc...ccccccc.logs']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_saving_the_same_container_twice_is_the_same_evidence_and_replaces_nothing",
+    "kind": "other",
+    "message": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-root/pytest-119/test_saving_the_same_container0/evidence/ENG-U/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.logs'"
+   },
+   {
+    "test": "test_reconciler_evidence::test_a_different_file_already_there_is_never_replaced_and_is_a_refusal",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_hash_is_that_of_the_file_in_place_not_of_what_was_meant_to_be_written",
+    "kind": "other",
+    "message": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-root/pytest-119/test_the_hash_is_that_of_the_f0/evidence/ENG-U/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.logs'"
+   },
+   {
+    "test": "test_reconciler_evidence::test_the_order_is_archive_then_intent_then_evidence_record_then_removal",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['ccccccccccc...ccccccc.logs']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_no_evidence_no_intent_no_removal[other_file_there]",
+    "kind": "target",
+    "message": "AssertionError: assert ('done', None) == ('failed', 'e...ce_not_saved')"
+   },
+   {
+    "test": "test_reconciler_evidence::test_real_a_container_with_output_is_kept_and_then_removed",
+    "kind": "target",
+    "message": "AssertionError: assert [] == ['45a8bc31275...8538e3d.logs']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_the_trail_has_intent_evidence_and_removal_in_that_order_with_hashes_only",
+    "kind": "other",
+    "message": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-root/pytest-119/test_service_the_trail_has_int0/evidence/ENG-TEST-27cf9b49df72/df42ccab047288b1a288f058cdcc8f9a19dad6f65d32d6c0d123f35bfcfdd423.insp"
+   },
+   {
+    "test": "test_reconciler_evidence::test_service_when_the_evidence_cannot_be_kept_the_container_stays_and_it_is_said_once",
+    "kind": "target",
+    "message": "AssertionError: assert [('done', None)] == [('failed', '...e_not_saved')]"
+   },
+   {
+    "test": "test_reconciler_evidence::test_each_engagement_has_its_own_private_subdirectory_and_the_files_are_in_it",
+    "kind": "target",
+    "message": "AssertionError: assert ['aaaaaaaaaaa...bbbbbbb.logs'] == ['ENG-ONE', 'ENG-TWO']"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused[open_mode]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused[a_link]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   },
+   {
+    "test": "test_reconciler_evidence::test_an_engagement_subdirectory_that_is_not_private_and_ours_is_refused[a_file]",
+    "kind": "target",
+    "message": "Failed: DID NOT RAISE EvidenceError"
+   }
+  ],
+  "problems": []
+ }
+]

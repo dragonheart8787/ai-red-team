@@ -1,0 +1,83 @@
+
+## M4: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   the audit payload whitelist is relaxed (any payload accepted)
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## M5: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   a skip raises the exit-7 stop
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## M7: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   a skip is recorded every tick
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## M8: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   dispatch before the decision is recorded
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## M11: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   no Docker reachability check before a dispatch
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## M12: INVALID  (target 0, broken 0, other 0; 0 passed; 0.0s)
+   tick does not check that the lock is still held
+   PROBLEM: the tests are not green before the mutation: red: test_scheduler_actions::test_a_tick_dispatches_each_supported_action_to_its_own_tool[code.scan-semgrep]
+
+## D63-m: valid  (target 1, broken 0, other 0; 24 passed; 10.9s)
+   the residue check ignores containers
+   [target] test_residue_check::test_a_container_is_residue_even_if_it_never_started
+        assert False
+
+## D63-n: valid  (target 1, broken 0, other 0; 24 passed; 5.7s)
+   the residue check ignores global policy layers
+   [target] test_residue_check::test_an_active_global_layer_is_residue_and_is_not_cleaned_up
+        assert [] == [8900]
+
+## D63-o: valid  (target 2, broken 0, other 0; 2 passed; 18.0s)
+   the session does not fail on residue (conftest)
+   [target] test_residue_wiring::test_a_session_that_leaves_a_global_layer_behind_fails
+        AssertionError: .                                                                        [100%]
+   [target] test_residue_wiring::test_a_session_that_leaves_a_scheduler_enrollment_behind_fails
+        AssertionError: .                                                                        [100%]
+
+## D63-s: valid  (target 1, broken 0, other 0; 6 passed; 8.2s)
+   a test names busybox:latest, which CI does not have
+   [target] test_image_literals::test_every_image_a_test_names_is_one_ci_builds_or_pulls
+        AssertionError: tests name Docker images that CI neither builds nor pulls (so they pass on a workstation that has them and fail in CI): {'busybox:latest': ['tests/test_residue_check.py:24']}. Add the build to .github/wor
+
+## D58-7-2: valid  (target 2, broken 0, other 0; 44 passed; 59.7s)
+   daemon errors are not translated into DaemonUnreachable
+   [target] test_sandbox_not_started::test_a_cached_client_with_a_dead_daemon_raises_the_typed_error_not_a_raw_one
+        requests.exceptions.ConnectionError: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /v1.43/images/cyberorch/nmap:local/json (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', po
+   [target] test_sandbox_not_started::test_a_cached_client_with_a_dead_daemon_is_failed_through_propose_action
+        requests.exceptions.ConnectionError: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /v1.43/images/cyberorch/nmap:local/json (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', po
+
+## D58-7-3: valid  (target 3, broken 0, other 0; 43 passed; 29.9s)
+   client() raises an untyped error when the daemon is unreachable
+   [target] test_sandbox_not_started::test_an_unreachable_daemon_is_a_typed_refusal
+        RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError("HTTPConnection(host='12
+   [target] test_sandbox_not_started::test_an_unreachable_daemon_is_failed_and_retryable_not_unknown_outcome
+        RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError("HTTPConnection(host='12
+   [target] test_sandbox_not_started::test_the_same_proposal_runs_once_the_daemon_is_back
+        RuntimeError: docker is not reachable: Error while fetching server API version: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: /version (Caused by NewConnectionError("HTTPConnection(host='12
+
+## D58-7-5: valid  (target 3, broken 0, other 0; 43 passed; 29.3s)
+   (follow-up) start() is untyped again
+   [target] test_sandbox_not_started::test_a_start_refused_by_the_daemon_is_typed_when_the_container_never_ran
+        docker.errors.APIError: 500 Server Error for http+docker://localhost/v1.56/containers/b5ecc9c8e4d481e1b44998abb4a59752e05ff002175ce5467a4afacdb561ff4e/start: Internal Server Error ("failed to set up container networking:
+   [target] test_sandbox_not_started::test_a_refused_start_through_propose_action_is_failed_and_closed_not_stuck_dispatching
+        docker.errors.APIError: 500 Server Error for http+docker://localhost/v1.56/containers/115538833fc83ea37dc5e2c293eb4ef8d5498e861595497ba8a9f8f3b5697cc7/start: Internal Server Error ("failed to set up container networking:
+   [target] test_sandbox_not_started::test_a_refusal_is_typed_only_on_proof_the_container_never_ran
+        docker.errors.APIError: daemon said no ("start failed")
+
+## D58-7-6: valid  (target 1, broken 0, other 0; 45 passed; 29.4s)
+   (follow-up) the proof that the container never ran is dropped
+   [target] test_sandbox_not_started::test_a_refusal_is_typed_only_on_proof_the_container_never_ran
+        Failed: typed as 'not started' without proof that the container never ran
+
+## D58-7-7: valid  (target 1, broken 0, other 0; 45 passed; 30.4s)
+   (follow-up) a failed inspection is typed as not started
+   [target] test_sandbox_not_started::test_a_refusal_whose_inspection_fails_stays_unplaced
+        Failed: typed as 'not started' without proof that the container never ran
+
+9 valid, 6 not: ['M4', 'M5', 'M7', 'M8', 'M11', 'M12']
