@@ -1,8 +1,9 @@
 # D68 — Reviewer semantic plausibility validation: design checkpoint
 
-**Status: design only. Nothing is built, no code, no migration, no test.** This note answers the six parts
-of the D68 brief and ends with the decisions that are yours (section 7). It is to be confirmed before anyone
-talks about implementing it or splitting it into phases.
+**Status: design only. Nothing is built, no code, no migration, no test.** Direction approved (section 10):
+DP-1/2/3/5/6/7/8/9 as recommended; **DP-4 is open pending the survey in section 9.** This note answers the six
+parts of the D68 brief and ends with the decisions (section 7). Implementation scope and phasing are not
+discussed until DP-4 is decided.
 
 Claims are tagged: **[R]** read in code or a document (file named), **[E]** executed (nothing new was executed
 for this note; the one [E] cited is an earlier measurement), **[D]** derived from [R] facts by argument,
@@ -377,3 +378,57 @@ Not asked, because it is fixed by the brief: that the signal never allows and on
 | A fooled validator reproduces today's behaviour, not a new hole | [D] | section 0 (monotone + absorbing) |
 | `0/N` bounds a rate only to about `3/N` | [D] | rule of three |
 | Detection rate, false-positive rate, `insufficient_context` rate, second-backend cost, origin of task-less proposals | [N] | none exists; DP-4, DP-7 |
+
+## 9. DP-4 survey: who calls `propose_action` without a task
+
+*Done after the direction was approved, before any implementation. Method: an AST scan of every `.py` file for
+`ProposedAction(...)` constructions and whether they pass `task_id` [R], plus grep of every `propose_action`
+call site [R]; the HTTP surface was read route by route [R].*
+
+### 9.1 What exists
+
+| Group | Sites | Carries a task? | Notes |
+|---|---|---|---|
+| **In-tree production code** (`control_plane/`, `agents/`, `tool_gateway/`) that **calls** `propose_action` | **none** | -- | The only `ProposedAction` constructors there are the two Workers (`agents/llm/worker_base.py:736`, `agents/fake/fake_worker.py:40`: both take `task_id: str | None = None`, **default `None`**) and `control_plane/api/approved_dispatch.py:194, 279`, which rebuild a proposal from its stored row (see 9.4). There is no production harness yet (ACCEPTANCE 5.28) |
+| **G1 -- harness with a real Worker, task created first** | `scripts/live_run/live_run.py`, `d13_worker.py` (main path), `d40_three_role.py`, `tests/test_audit_coverage.py:441` | **yes** (`create_task` -> `worker.propose(task_id=...)` -> `propose_action`) | This is the shape a production harness will have |
+| **G2 -- scripted or synthetic proposals in live-run scripts** | `d13_worker.py:278` (synthetic fooled worker), `d15_lookalike.py` x2, `d17_supervisor.py:635` (a "closing worker" that proposes **after** its task was completed), `d45_ad_collection_e2e.py`, `verify_d12.py` | no | They exist to push one proposal through OPA layers and check the decision |
+| **G3 -- load and drill drivers** | `scripts/soak/worker.py` (via `tests/scheduler_support.proposal_for`), `scripts/drill_reconciler_full_chain.py`, `drill_reconciler_late_result.py`, `tests/scheduler_support.py`, `tests/crash_child.py` | no | Pipeline-mechanics drivers; the soak's `allow` requests must stay ALLOW |
+| **G4 -- tests** | **38 sites in 23 files** under `tests/` build a `ProposedAction` with no `task_id`; 1 passes it | no | Fixtures; many assert ALLOW |
+| Not a `propose_action` caller | `scripts/reviewer_baseline.py:55`, `tests/test_llm_reviewer.py`, `test_reviewer_backends.py` | no | They build a proposal only to hand it to a Reviewer |
+| **G5 -- a person acting directly** | **none** | -- | The web console's POST routes are `approve` and `deny` only (`control_plane/web/app.py` 202, 240); `scripts/approvals.py` grants approvals; neither proposes. No CLI proposes |
+
+### 9.2 `agent_id` cannot tell an agent from a person
+
+`agent_id` is a caller-supplied `TEXT NOT NULL` on `action_proposals` and `tasks`; there is no agents table and
+no authentication behind it (`worker-1`, `drill`, `soak-worker`, `synthetic-fooled-worker`, `d45-scripted-worker`
+are all free strings) [R]. The proposal row records no origin class either. So "escalate for agent-originated
+proposals only" (DP-4 option c) has nothing to key on: it would key on a field the caller writes.
+
+### 9.3 Classification
+
+| Should be escalated on `no_task` | Should not be, or cannot be told apart |
+|---|---|
+| Any proposal that comes from a Worker harness. **The reason is the bypass:** `BaseWorker.propose(task_id=None)` makes omission the default, so if `no_task` did nothing, an agent could defeat P1 by leaving `task_id` out -- the one thing P1 exists to stop. G1-shaped harnesses that omit the task, and G2's real-Worker cases, are in this class | **G3 and G4 are fixtures, not an origin class.** They are kept working by the enforcement switch being off (DP-7) or by giving the fixture a matching task, not by exempting `agent_id` values. **G5 is empty today**; if a person-driven path is ever added it needs an authenticated origin or must create a task |
+
+### 9.4 Two things the survey found that the design must carry
+
+1. **The approval re-derivation rebuilds the proposal without `task_id`** (`approved_dispatch.py:194`), and takes
+   the reviewer's hints from the stored `reviewer_hints` (`:192`). So `plan_fit` must be **stored with the
+   decision and replayed** there, as `risk_hint` is -- never recomputed from the rebuilt proposal, or every
+   approved proposal would look `no_task` at dispatch. A proposal decided **before** the feature has no stored
+   `plan_fit`; that must read as "absent" (no effect), not as `not_assessed`.
+2. **Enabling `no_task` escalation touches fixtures, not production**: 38 test sites in 23 files, the soak worker,
+   `scheduler_support.proposal_for`, two drills, and the G2 scripts would need a task or the switch off. Nothing
+   is touched while the switch is off (DP-7).
+
+### 9.5 Recommendation for DP-4 (revised from section 7)
+
+**(a) escalate every `no_task`, when enforcement is on.** Option (c), which section 7 preferred conditionally, is
+withdrawn: its condition ("origin recoverable from `agent_id`") is false (9.2). Option (b) (no effect) is
+withdrawn too: it makes P1 bypassable by omission (9.3). The cost of (a) is the fixture migration in 9.4 (2),
+which is deferred by DP-7. **Decision still yours; nothing is built.**
+
+## 10. Decisions taken
+
+DP-1, 2, 3, 5, 6, 7, 8, 9 approved as recommended in section 7. DP-4 is open pending section 9.
+Implementation scope and phasing are not discussed until DP-4 is decided.
