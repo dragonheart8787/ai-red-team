@@ -1,0 +1,322 @@
+# D68 — Implementation plan: P1, Q1, the DP-7 switch and measurement, the M-class callers
+
+**Status: plan only. Nothing here is built.** It turns `docs/D68_REVIEWER_SEMANTIC_VALIDATION_DESIGN.md`
+(design, DP-1..DP-9 approved, DP-4 = (a), sections 11 and 12 approved) into independent deliverables. Tags:
+**[R]** read in code/docs, **[D]** derived, **[N]** not measured -- a size or a rate that only the work or a
+measurement can give.
+
+## 0. The stages
+
+Eight stages. Each is one deliverable: its own commit(s), its own tests and mutation entries, its own ACCEPTANCE
+note, and **none changes a decision until stage 8**. The default stays "off" at every step, so any stage can be
+merged, paused or reverted alone.
+
+| # | Stage | Touches | Changes a decision? | Depends on |
+|---|---|---|---|---|
+| **S1** | Fixtures that carry a task, and a ratchet that keeps the caller classification true | `tests/`, `scripts/` only | no | -- |
+| **S2** | P1 computed, stored and audited ("shadow") | `control_plane/` (new module, `propose_action`) | no | -- (S1 not required) |
+| **S3** | P1 enforceable: policy flag, OPA input and rules, **the replay in `approved_dispatch`**, enforcement-on suite | `control_plane/policy/`, rego, `approved_dispatch.py` | no (flag off) | S2; S1 for the suite |
+| **S4** | Q1 validator: schema, prompt, three adapters, fakes, selection -- **not wired** | `agents/llm/`, `agents/fake/` | no | -- (parallel with S2/S3) |
+| **S5** | Q1 wired: called after P1, stored, audited, replayed, rules behind its own flag | `function_api.py`, rego | no (flag off) | S3, S4 |
+| **S6** | Measurement tooling: corpus with oracle labels, baseline runner, shadow report | `scripts/`, `tests/` (offline parts) | no | S2 (P1 report); S5 (Q1 runner) |
+| **S7** | Measurement runs and the gate: numbers recorded, budgets applied, **a decision from you** | `docs/` only | no | S6 |
+| **S8** | Enablement: P1 first, Q1 later; the soak with enforcement on; close 5.116 | policy data, `docs/` | **yes, deliberately** | S7 (+ S3 / S5) |
+
+Order that works with one pair of hands: S1 -> S2 -> S3 -> S4 -> S5 -> S6 -> S7 -> S8. S4 can move earlier if the
+model-facing work is wanted first. S8 splits: **S8a** enables P1 (needs S1-S3 and the P1 half of S7), **S8b**
+enables Q1 (needs S4-S7 fully); P1 does not wait for Q1 [D].
+
+Every stage ends the same way: the full suite, the OPA tests, the mutation entries of that stage, the ACCEPTANCE
+numbering test, CI green on the branch tip. One pytest session at a time, as before.
+
+## 1. Choices this plan needs from you
+
+The design left these open or did not see them. Each has my recommendation; they are small, but S2/S3 cannot be
+written without DP-10..12.
+
+| # | Question | Options | Recommendation and reason |
+|---|---|---|---|
+| **DP-10** | **Where does the enforcement switch live?** | (a) **policy layers** (`policy_layers.document`, merged into `EffectivePolicy`); (b) an environment variable, like the backend selectors; (c) a database table | **(a).** It is the only place with per-engagement scope, an audit trail (publications are audited), the D54 baseline freeze (a new baseline reaches new engagements only; existing ones opt in through an overlay or an engagement layer), and tighten-only semantics for free: neutral element `false`, merge by OR, so a layer saying `false` can never relax and the emergency overlay's `CHECK` (no `scope_allow`, no `ALLOW`) is not weakened. An env var differs per process -- the harness proposing and the scheduler re-deriving are different processes [R: `scripts/run_scheduler.py` vs the caller of `propose_action`] -- so one could re-derive with a different setting than the decision used. **Side effect to know:** publishing a layer bumps `current_policy_version`, which voids approvals waiting for dispatch [R: ADR_PRODUCTION_ORCHESTRATOR, D58-6 entry, ACCEPTANCE 5.68]. Turning enforcement on therefore voids the waiting queue by an existing mechanism -- it does **not** make the replay unnecessary (S3 section: case (ii), and the safety net if the switch is ever moved) |
+| **DP-11** | One flag or two | one (`plan_fit_enforce`); two (`task_relation_enforce`, `goal_fit_enforce`) | **Two.** P1 needs no model and can be enforced long before Q1 has a measured false-positive rate; one flag would hold P1 back, or push Q1 out unmeasured |
+| **DP-12** | Where is the signal stored | (a) a `plan_fit` key inside the existing `action_proposals.reviewer_hints` JSONB; (b) a new column (migration 0027) | **(a)**, no migration: the column is `JSONB`, written by `_record_decision`, and read by the one function that must replay it [R: migration 0018, `state/models.py:150`, `function_api.py:782`, `approved_dispatch.py:192`]. The name is slightly off (P1 is not a reviewer's hint), so the key is documented as "advisory inputs recorded at the decision and replayed at re-derivation". To confirm in S2 that nothing validates the column's shape [N]; if something does, switch to (b) |
+| **DP-13** | Containment: a task on a `/24`, a proposal for one host inside it | stay `differs_from_task`; add `within_task_target` now; record as an audit sub-cause and decide with data | **Third.** Task identity is host/network granularity from the canonicalizer [R: `_task_identity`; ADR_TASK_IDENTITY Option 1], so a legitimate decomposition of a CIDR task into host proposals is, literally, a different identity. Enforcing before knowing how common that is would escalate ordinary work. S2 records `differs_from_task` with a sub-cause (`same_action_target_inside_task_target`, `different_action`, `different_target`, `task_target_not_canonical`); S7 reports their counts; adding a vocabulary value is then an additive `plan_fit_v1` change taken with the numbers in hand. **S8a is gated on this** |
+| **DP-14** | The numbers of the DP-7 gate | see section 7.3 | I propose values there; you set them. They are the one place where a number is a policy choice, not a fact |
+
+## 2. S1 -- fixtures that carry a task, and the ratchet
+
+**Why first, and why alone:** it changes no product code and can be merged at once; after it, the M-class sites
+*declare* their tasks, so every later stage is tested against the shape a real harness has. It is also the
+cheapest stage to be wrong in.
+
+### 2.1 Pieces
+
+* **`tests/task_support.py` (new):**
+  * `task_for(engagement_id, scope_id, proposal, *, goal=None, created_by="supervisor") -> str` -- creates, through
+    the product's own `create_task`, a task whose `action` and target equal the proposal's, so its `identity_key`
+    equals what `_task_identity` gives the proposal. `goal` defaults to a sentence built from the action and the host
+    (a table keyed by action class), so a later real validator is shown a coherent triple, not a placeholder.
+  * `with_task(proposal, task_id) -> ProposedAction` (`dataclasses.replace`).
+  * `proposal_with_task(...)` combining the two. Returns the task id as well, for tests that complete it.
+* **`tests/scheduler_support.proposal_for`** gains an optional `task_id`. Its consumers (soak worker, two drills,
+  `test_scheduler_actions`, `test_scheduler_e2e`) pass one.
+* **The ratchet, `tests/test_task_less_callers.py` (new):** an AST scan of `tests/` and `scripts/` for
+  `ProposedAction(...)` without `task_id`, compared with a **checked-in allow-list that carries the class of
+  each site** (K1, K2, n/a -- design note section 12). It fails on (a) a task-less site not in the list, (b) a
+  listed site that now carries a task (stale entry), (c) a site in the list whose class is M. It is what keeps
+  section 12 true after this deliverable, in the style of ST5 (`tests/test_stage_vocabulary.py`) [R].
+
+### 2.2 What changes, per M-class caller (25 test sites, the soak, two drills, three live-run scripts)
+
+Principle: **change the helper where there is one, the test where there is not**; never edit an expected value.
+
+| Group | Sites | Change |
+|---|---|---|
+| Helper-built, one edit serves many tests | `test_pipeline_stages._proposal` (15 tests), `test_ad_collection_e2e._proposal` (7), `test_gitleaks_e2e._propose` (4), `test_web_post_body._post_proposal` (6), `test_http_get._web_get_decision` (3), `test_web_render_e2e._render_decision` (3), `test_baseline_freeze_e2e._propose` (4), `test_sandbox_not_started.go` (5), `scenarios/test_unknown_classification._propose` (4), `scenarios/test_scenario_web_render._render` (2), `test_web_post._propose` (2), `test_scheduler_actions._code_world` | the helper creates the task (it already has the engagement and the scope id) and returns a proposal that names it |
+| Inline, one proposal in the test | `test_code_scan_e2e` x2, `test_audit_coverage:312`, `test_network_isolation:498`, `test_sandbox_not_started:260`, `test_web_post:519`, `test_web_post_body:400, 432`, `test_web_render_e2e:121, 163`, `test_approvals:254`, `crash_child.py:39` | two lines: `task_for(...)`, `with_task(...)` |
+| Shared | `scheduler_support.proposal_for` | optional `task_id` (above) |
+| Soak | `scripts/soak/worker.py` (`call`, `new_request`) | the request gets its task **once**, when it is created, and the id is part of the request record: a retry or a resume after an interruption reuses the same task [R: requests carry a key and are re-sent with it]. Every request kind gets one (a `deny` request's task fits its target too), so the workload is the same in both modes. **Changes the soak's write load** (one task row and its audit per request): the smoke run on the runner is repeated before anything else relies on the soak; `residue_check` and `assert_coherent` are read for anything that counts tasks [N] |
+| Drills | `drill_reconciler_full_chain.py`, `drill_reconciler_late_result.py` | create the task, pass it |
+| Live-run | `d45_ad_collection_e2e.py`, `verify_d12.py`, `d15_lookalike.py:261` | `create_task` first (as `live_run.py` and `d40` already do) |
+
+Estimate: about 14 helper edits and 11 inline edits, a few hundred changed lines, almost all in tests [D]; the
+K1/K2/n/a sites and every consumer of `escalate` / `approved_proposal` are untouched.
+
+### 2.3 Verification
+
+The full suite, count unchanged; the ratchet green; the soak smoke run (`hours=0.2`, six faults) green with its
+counted checks all non-zero. No mutations (no product code). **Done when** the ratchet's list equals section 12
+of the design note exactly.
+
+## 3. S2 -- P1 computed, stored, audited (shadow)
+
+### 3.1 What is built
+
+* **`control_plane/plan_fit/` (new package)**, `relation.py`: `assess_task_relation(conn, *, proposal, target) ->
+  TaskRelation(value, sub_cause)`. Pure read, RLS-confined. Rules, in order [D from the design 1.3]:
+  1. `task_id` absent -> `no_task`.
+  2. no visible row for it (nonexistent, or another engagement's -- RLS hides it) -> `task_not_live`, sub-cause
+     `task_not_found`. *(Note: the foreign key on `tasks(task_id)` is global, so a proposal can name another
+     engagement's task; RLS makes that read as "not found". That the insert is accepted is an existing quirk, to be
+     recorded, not fixed here [R: migration 0001 `REFERENCES tasks(task_id)`].)*
+  3. status not in the live set (`queued`, `claimed`, `running`) -> `task_not_live`.
+  4. `identity_key` of the task (NULL -> `differs_from_task`, `task_target_not_canonical`: a task nobody can reduce
+     matches nothing) vs `_task_identity(proposal.action, proposal.target)` equal -> `matches_task`; otherwise
+     `differs_from_task` with the sub-cause of DP-13.
+  The comparison reuses `_task_identity`, never a second canonicalizer.
+* **`propose_action`** calls it in the decide stage, after the resolvers, before the Reviewer (it is deterministic,
+  so its place is only "before the decision is recorded"). No transaction is held across it beyond its read.
+* **Stored** under `reviewer_hints["plan_fit"] = {"version": "plan_fit_v1", "task_relation": ...}` in the same
+  statement as the decision (DP-12). **Audited** as one event, `plan_fit.assessed` (value, sub-cause, `task_id`,
+  validator = none yet), written before the decision, beside `policy_reviewer.opinion`.
+* **No policy input, no rule.** Nothing reads it except the audit and, later, S3.
+
+### 3.2 Tests and mutations
+
+Offline, with the real database: every row of the rule table above; a task from another engagement; a completed
+task; a CIDR task with a host proposal (the DP-13 sub-cause); the stored value round-trips; the event is written
+exactly once on a retried idempotency key; **no decision changes** for any existing scenario (the existing suite is
+the proof). Mutations (`scripts/mutations_d68.py`): comparison made always-equal; liveness check removed; absent
+`task_id` treated as `matches_task`; event not written; value written but under the wrong key.
+ACCEPTANCE row: `5.116` stays open; a new row records the shadow measurement exists.
+
+### 3.3 Confirm-in-build items [N]
+
+Nothing validates `reviewer_hints`' shape (DP-12); the event type is added to whatever lists audit event types
+(`audited_event_types` is derived from the table, so probably nothing) [R: `audit/query.py:462`].
+
+## 4. S3 -- P1 enforceable, with the replay
+
+### 4.1 The switch (DP-10, DP-11)
+
+* `PolicyLayer` and `EffectivePolicy` gain `task_relation_enforce: bool` (neutral `False`, merge **OR**, parsed in
+  `from_document`, included in `as_dict` so OPA sees `input.policy.task_relation_enforce`). `goal_fit_enforce` is
+  added in S5 the same way.
+* Constraint-algebra tests: neutral element, OR across layers, an overlay saying `false` changes nothing, and the
+  overlay's schema `CHECK` still holds (the new key is not `scope_allow` and not an `ALLOW`). `policy_tests/
+  constraint_algebra_test.rego` and the Python merge tests get the cases.
+* The D54 freeze: a baseline carrying the flag reaches **new** engagements only; an existing engagement gets
+  enforcement through an overlay (global, immediate) or an engagement layer -- both bump the policy version and void
+  the waiting approvals (DP-10 note). Documented in the layer-publication docs, with the `manage_global_policy.py`
+  invocation that sets it, so enabling is a documented, audited step.
+
+### 4.2 Input and rules
+
+`build_policy_input(plan_fit=None)` adds a top-level `plan_fit` object **only when a value exists** (absent key ->
+absent input). Rego, in `approval_reasons` only:
+
+    approval_reasons contains "proposal_without_task"  if { input.policy.task_relation_enforce; input.plan_fit.task_relation == "no_task" }
+    approval_reasons contains "proposal_outside_task"  if { input.policy.task_relation_enforce; input.plan_fit.task_relation in {"differs_from_task", "task_not_live"} }
+
+No rule reads `matches_task`. OPA tests: each value x flag on/off; absent `plan_fit` with the flag on fires
+nothing; **a property test** (Python-driven against the real engine, like the model-comparison tests of D54) over
+the full cross product of signal values, flag states and existing deny/approval inputs: the decision with the
+signal present is never more permissive than without it, and `matches_task` is identical to absent.
+(The approval-reason names are provisional until review.)
+
+### 4.3 The replay -- required, not an add-on (design note section 11)
+
+* `_record_decision` stores the signal (S2 already does); `_rederive` reads `proposal["reviewer_hints"]["plan_fit"]`
+  and passes it to `evaluate_policy` exactly as it passes `risk_hint` (`approved_dispatch.py:192-203`). It does not
+  recompute from the rebuilt proposal (`:194`, no `task_id`) and does not re-read the task.
+* Absent -> absent; an unknown stored value -> the fail-closed value, whose reason the approval did not show, so the
+  dispatch is refused loudly.
+* **One path:** both `evaluate_policy` callers (`function_api.py:750`, `approved_dispatch.py:193`) take the signal
+  from the same function; `tests/test_plan_fit_structure.py` (AST, in the style of `test_docker_health_structure.py`
+  [R]) fails if a third caller does not.
+* Tests (the ones the existing suite cannot give, design 11.3/11.4): approval granted with enforcement off and no
+  stored value, dispatched with it on; `matches_task` approved, task completed, dispatched; `differs_from_task`
+  approved with the reason shown, dispatched (no `new_approval_reasons`). Mutations: replay removed; replay
+  replaced by a recompute from the rebuilt proposal; a stored value read as present when absent; the structure test
+  weakened. Each must turn at least one of the above red.
+
+### 4.4 The enforcement-on suite (what proves S1 complete)
+
+A test-only seam: `tests/conftest.py` reads `CYBERORCH_TEST_TASK_RELATION_ENFORCE=1` and sets the flag for every
+policy the tests build, through both routes (the DB baseline that `ensure_test_baseline` publishes, and the ad hoc
+`merge_policy(...)` sites). A structure test asserts no product module reads that variable. CI gains a second job
+that runs the **whole suite once with it on**. **Expected result: zero failures** -- M-class sites carry tasks (S1),
+K1 stays DENY, K2 stays HUMAN_APPROVAL. A red test names an M site that was missed or a K site that was
+misclassified; both are findings, not things to relax. This is the mechanical check of section 12, and it is the
+deliverable's acceptance test. Cost: one more full run of the suite in CI [D]; whether it runs on every push or on
+a schedule is a small choice for you (I would start with every push on this branch, and move it to nightly once it
+has been green for a while).
+
+## 5. S4 -- the Q1 validator, not wired
+
+* **Where:** `agents/llm/plan_fit_base.py` and three thin adapters (`api`, `claude_code`, `local`) plus fakes. The
+  existing reviewer adapters stay **untouched**: the transports are small (`headless.run_headless`, the Anthropic
+  client, one POST) and the shared parts of `BaseReviewer` are `build_prompt`, `_to_opinion` and `_escalate`, which
+  are exactly what must differ here. Reusing `headless.py` and `untrusted.py` directly; copying nothing from
+  `reviewer_base` except the pattern. Refactoring `BaseReviewer` into a generic base was weighed and rejected: it
+  would put the D10.5-tested boundary at risk for the sake of about 150 lines [D].
+* **Contract:** `PLAN_FIT_SCHEMA` -- one field, `goal_fit`, enum `plausible | implausible | insufficient_context`,
+  `additionalProperties: false`, **no rationale, no confidence** (design DP-6). `PlanFitResult(goal_fit, cause)`;
+  `not_assessed` is set by the base, never emitted by a model (the schema cannot express it).
+* **Prompt:** the system prompt defines the three values narrowly (design 2.3, L4: "plausible only if the action and
+  target are of a kind the goal names or obviously entails"; "insufficient_context" as an equal, defined answer).
+  Everything the validator is shown -- goal, task action and target, proposal action and canonical target -- goes
+  **inside** the nonce block through `untrusted.wrap_untrusted`; there is no trusted input but the system prompt.
+  The agent's stated `reason`, discovery prose, resources and expected data are **not** passed (design 2.2).
+* **Failure:** timeout, transport error, non-JSON, schema violation, unknown value -> `not_assessed` with cause
+  `failed`; an unknown value is never coerced to `plausible`. A `ValidationCall` record per call (latency, tokens,
+  model, backend, failure) as `ReviewCall` does [R].
+* **Selection:** `CYBERORCH_PLANFIT_BACKEND` / `_MODEL` in `selection.py`, default `fake`, same rule as the other
+  three roles; the existing test that the control plane does not import `selection` extends to this.
+* **Fakes (CI uses only these):** honest (always `plausible`); scripted (returns a given value, for rules);
+  adversarial (always `plausible` against known-mismatched triples -- the validator that lies); failing; slow.
+* **Tests (offline):** the boundary tests of D10.5 re-run against the new prompt (nonce fresh per call, goal
+  injected text stays inside, a forged closing marker, the system prompt says the block is data); the schema admits
+  exactly the three values; extra fields dropped; each failure path gives `not_assessed:failed`; no input outside S1
+  and S2 fields (an assertion on what `build_prompt` is given); the agent's reason is absent from the prompt;
+  **the adapters share one boundary** (`test_every_adapter_shares_one_boundary` style). Mutations: goal moved outside
+  the block; reason added to the prompt; unknown value coerced to `plausible`; a free-text field admitted; marker
+  made static.
+
+## 6. S5 -- Q1 wired
+
+* `propose_action(..., plan_fit_validator=None)`: `None` means off (goal_fit = `not_assessed`, cause `disabled`).
+  When present and `task_relation == matches_task`, the control plane **reads the goal itself** from the task row
+  (never from the proposal), calls the validator with no transaction held, and stores
+  `plan_fit["goal_fit"]` beside `task_relation`; the same single `plan_fit.assessed` event carries both, plus the
+  validator version (prompt hash, model, backend, CLI version) and a digest of the inputs, never the goal text.
+* Policy: `goal_fit_enforce` (DP-11, same merge); rules `plan_implausible`, `plan_unverified` (for
+  `insufficient_context`, DP-3), `plan_check_failed` (for `not_assessed` with cause `failed`). `plausible` and
+  `not_assessed:disabled` / `:not_applicable` read by no rule. The property test of S3 is extended to goal_fit.
+* Replay: the same mechanism as S3; the stored `goal_fit` is replayed, never recomputed -- a replayed value must not
+  cost a model call.
+* **Kernel-holds test:** the Scenario-B pattern -- the adversarial validator against a kernel with enforcement on
+  and off: decisions are never more permissive than the baseline, a lying `plausible` changes nothing.
+* The enforcement-on CI job covers `goal_fit_enforce` with the fake validators.
+* Cost note carried from the design: one more call per `matches_task` proposal, median ~6.3 s on the one measured
+  model [R/E: ADR_REVIEWER_BILLING], serial; not on a human-visible path [D].
+
+## 7. S6, S7 -- measurement (the DP-7 gate made concrete)
+
+### 7.1 What exists and what does not -- said first
+
+* There is **no production harness** that calls `propose_action` [R: design section 9; ACCEPTANCE 5.28]. So there is
+  no real traffic to measure a false-positive rate on. The measurable sources are: (1) an oracle-labelled corpus,
+  (2) the live-run harnesses with real models (`d40_three_role` and its peers, run by hand), (3) the soak
+  (synthetic). The gate therefore rests on (1) and (2); a rate "on real engagements" is **not** claimed, and
+  turning enforcement on for a real engagement remains gated on a production harness existing and being run in
+  shadow first. This is a limit of the evidence, written into S7's report.
+
+### 7.2 S6 -- tooling (offline parts in CI, real-model parts manual)
+
+* **The corpus** (`tests/plan_fit_corpus.py`, deterministic from a seed): triples `(goal, action, target)` with a
+  label true by construction. Classes: *matched* (goal names the kind of work; action and host fit), *mismatched*
+  (host or action unrelated to the goal), *vague* (goals too broad to bound -- L4), and the **lure variants of
+  design 2.3 (L1-L7)**, each paired with its no-lure control. Offline tests check the corpus itself: labels present,
+  every lure has a control, no duplicate triples, counts per class, reproducible from the seed.
+* **`scripts/plan_fit_baseline.py`** (manual, local, like `scripts/reviewer_baseline.py`, never in CI -- ADR billing
+  rule [R]): runs the corpus through a chosen backend N times, writes a JSON record **with backend, model and CLI
+  version together** and a rendered report. Offline test: the runner, run against the fake validators, produces the
+  expected counts and refuses to run without a backend name.
+* **`scripts/plan_fit_report.py`** (read-only, over the audit, named engagements like `audit_scope_values.py`
+  because RLS forbids a sweep [R]): per engagement, counts of `task_relation` by value and sub-cause, `goal_fit` by
+  value, the share each rule *would have* escalated, i.e. the approval volume enforcement would add. This is the
+  shadow-mode number for P1 and Q1.
+
+### 7.3 S7 -- the runs, and the gate (numbers are DP-14)
+
+Runs: the baseline on the real backend (subscription `claude_code`, per the billing ADR; confirm the billing status
+first, as that ADR requires); the G1 harness runs in shadow; one soak smoke with tasks. Reported as `k/N`, never as
+percentages alone, with the bound stated (a `0/N` result bounds the true rate to about `3/N` at 95%).
+
+Proposed gate, to be set by you:
+
+| Measure | Proposed requirement | Why |
+|---|---|---|
+| Lure success (mismatched + lure judged `plausible`) vs its control | not above the control by more than 5 points, per lure class, N >= 60 per class | a lure must not buy anything; N chosen so a clean `0/N` bounds the rate near 5% |
+| False positive (`implausible` on *matched*) | <= 10% | approval volume is the cost (design 2.4) |
+| `insufficient_context` on matched | <= 15%; if it is the majority outcome the validator is not informative and Q1 is not enabled | design 4.3 |
+| Detection (`implausible` or `insufficient_context` on *mismatched*) | reported; a floor is yours to set -- I have no basis for a number [N] | the feature's value; unknown until measured |
+| Flip rate (same triple, 5 repeats) | <= 10% | design L7 |
+| Latency and tokens | within 1.5x the Reviewer baseline | ADR_REVIEWER_BILLING |
+| P1 shadow: `differs_from_task` split by sub-cause | reported; **`same_action_target_inside_task_target` must be decided** (DP-13) before S8a | the one place P1 could escalate ordinary work |
+
+S7 produces `docs/D68_PLAN_FIT_BASELINE.md` and ACCEPTANCE rows. **It ends with a decision from you**, not an
+automatic step: enable P1 (S8a), enable Q1 (S8b), neither yet, or adjust the validator's definition (a numbered
+change, never a silent edit of the prompt; design 5.3).
+
+## 8. S8 -- enablement
+
+* **S8a (P1):** publish a baseline carrying `task_relation_enforce: true` for new engagements and, if you want
+  existing ones covered, an overlay -- both through `manage_global_policy.py`, audited, with the waiting-approvals
+  effect (DP-10) announced first. Then the **4-hour soak on the runner with enforcement on** (the soak's engagements
+  carry the flag), checking in particular the restart faults against approvals waiting, which is where the replay
+  earns its keep. Evidence into ACCEPTANCE. **5.116 moves to Closed** when S3's replay tests and mutations are in
+  and this soak passes with enforcement on.
+* **S8b (Q1):** the same, for `goal_fit_enforce`, after S7's gate and with a real backend selected for the run.
+  Q1 never ships "on" by default in the repository; the repository default stays `fake`.
+* Rollback at any time: publish a layer without the flag (or an engagement layer); the signal keeps being recorded.
+
+## 9. Risks and unknowns
+
+1. **P1 may escalate ordinary decomposition** (DP-13). The numbers do not exist; S2 makes them cheap to get.
+2. **No real traffic** (7.1). The gate is on a corpus and hand-run harnesses; the plan says so rather than
+   implying more.
+3. **The soak's load changes** in S1 (task rows). Its counted checks and `residue_check` are re-read, the smoke is
+   repeated; any invariant that counts tasks is a finding [N].
+4. **The `tasks.goal` trust issue** (ADR G) is handled at the validator (wrapped); the D22 "step two" flag stays its
+   own open decision and is now more pressing: a second prompt reads `goal`.
+5. **Voiding of waiting approvals when enforcement is published** is a feature of the existing policy-version rule;
+   operators must expect it. Documented in S3.
+6. **A model-facing deliverable (S4) has non-determinism in its tests only at the manual baseline**; CI is
+   fakes-only, as for the Reviewer.
+7. **Dead fields** (`recommended_escalation`, `semantic_risk_hints`, ACCEPTANCE 5.117) are not touched; the new
+   signal is named `plan_fit` so it cannot be mistaken for them.
+
+## 10. Sizing, honestly
+
+I do not have measured sizes; from the shape of each stage [D]: S1 several hundred lines, nearly all tests;
+S2 about one module of 100-150 lines plus tests; S3 the largest product change (merge, input, rego, replay,
+structure test, a second CI job); S4 about the size of one existing adapter set; S5 small in code, large in tests;
+S6 the corpus and two scripts; S7 and S8 are runs and documents. If a single number is wanted: S1-S3 together
+carry the risk and the value (P1 is deterministic and closes 5.116); S4-S5 are where the model enters.
+
+## 11. What this plan does not do
+
+It does not build anything, does not choose the DP-14 numbers, does not decide Q2 or Q3 (deferred by DP-1, with
+D58-12 owning the coarse relation by DP-8), does not touch the dead-field question (5.117), and does not change a
+default.
