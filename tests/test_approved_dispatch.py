@@ -728,7 +728,7 @@ def test_ad_collect_after_approval_is_still_refused_because_the_capability_has_n
     monkeypatch.setattr(dispatch_module, "DockerSandbox", ad._RecordingDockerSandbox)
     scope_object_id = ad._setup(engagement_id)
     credential_id = ad._store_credential(engagement_id)
-    proposal = ad._proposal(scope_object_id, credential_username="svc-account")
+    proposal = ad._proposal(engagement_id, scope_object_id, credential_username="svc-account")
 
     # HUMAN_APPROVAL for an ad.collect, by the same reviewer-hint route as everything else here
     outcome = propose_action(
