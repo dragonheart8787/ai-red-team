@@ -186,6 +186,13 @@ jobs:
           grep -E '"kind": "smoke.not_enforced"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-300 | head -5 || true
           echo "=== report (head)"
           head -c 14000 "$RUN_DIR/report.md" 2>/dev/null || echo "no report.md"
+          # D68 S1 follow-up: the head above ends inside the explained rows of the log classification, and the
+          # artifact cannot be fetched from the development machine -- so the whole section is printed here,
+          # and the Docker daemon's own log is counted by shape, to be read without the artifact.
+          echo "=== logs, classified (the whole section, lines cut at 700 characters)"
+          awk '/^## Logs, classified after the run/{f=1} f' "$RUN_DIR/report.md" 2>/dev/null | cut -c1-700 | head -c 40000 || true
+          echo "=== dockerd.log by shape (ids and times removed), top 15"
+          sed -E 's/time="[^"]*"//; s/[0-9a-f]{12,}/<id>/g' "$RUN_DIR/dockerd.log" 2>/dev/null | sort | uniq -c | sort -rn | head -15 | cut -c1-300 || true
 
       - name: Summary
         if: always()

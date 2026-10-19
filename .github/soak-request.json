@@ -1,1 +1,1 @@
-{"hours": 0.2, "attempt": 1, "purpose": "D68 S1: smoke run of the soak after its worker began creating a task per request (scripts/soak/worker.py); the 4-hour run of ACCEPTANCE 5.113 is not repeated by this request"}
+{"hours": 0.2, "attempt": 2, "purpose": "D68 S1 follow-up: the same smoke run again, with the log-classification section and the dockerd log printed in full, to read the 630-line not_explained group without the artifact (the proxy denies its blob host)"}
