@@ -73,6 +73,7 @@ from control_plane.state.db import (
     registry_admin_scope,
 )
 from control_plane.vault.vault import store_credential
+from tests.task_support import attach_task
 from tool_gateway.adapters import ad_collector
 from tool_gateway.sandbox import SandboxResult
 
@@ -175,7 +176,7 @@ def _store_credential(engagement_id: str) -> str:
 
 
 def _proposal(
-    scope_object_id: str, credential_username: str | None = None,
+    engagement_id: str, scope_object_id: str, credential_username: str | None = None,
     dns_server: str | None = None,
 ) -> ProposedAction:
     target: dict[str, Any] = {
@@ -187,13 +188,14 @@ def _proposal(
         target["auth_mode"] = "password"
     if dns_server is not None:
         target["dns_server"] = dns_server
-    return ProposedAction(
+    proposal = ProposedAction(
         action="ad.collect", target=target,
         authorization={"source": "engagement_scope", "scope_object_id": scope_object_id},
         discovery={"source": "explicit_scope"},
         resources=("ad_object",), expected_data=("group_membership", "acl"),
         reason="D47/D48 permanent propose_action regression test",
     )
+    return attach_task(engagement_id, proposal)
 
 
 def test_ad_collect_runs_end_to_end_through_propose_action(engagement_id, monkeypatch):
@@ -207,7 +209,7 @@ def test_ad_collect_runs_end_to_end_through_propose_action(engagement_id, monkey
 
     scope_object_id = _setup(engagement_id)
     credential_id = _store_credential(engagement_id)
-    proposal = _proposal(scope_object_id, credential_username="svc-account")
+    proposal = _proposal(engagement_id, scope_object_id, credential_username="svc-account")
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
@@ -299,7 +301,7 @@ def test_ad_collect_without_a_credential_is_refused_by_dispatch_collection(
     monkeypatch.setattr(dispatch_module, "DockerSandbox", _RecordingDockerSandbox)
 
     scope_object_id = _setup(engagement_id)
-    proposal = _proposal(scope_object_id, credential_username=None)
+    proposal = _proposal(engagement_id, scope_object_id, credential_username=None)
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
@@ -370,7 +372,7 @@ def test_dns_server_reaches_the_real_command_through_propose_action(
     scope_object_id = _setup(engagement_id)
     credential_id = _store_credential(engagement_id)
     proposal = _proposal(
-        scope_object_id, credential_username="svc-account", dns_server=DNS_SERVER,
+        engagement_id, scope_object_id, credential_username="svc-account", dns_server=DNS_SERVER,
     )
 
     outcome = propose_action(
@@ -402,7 +404,7 @@ def test_a_dns_server_outside_the_allowlist_is_refused_through_propose_action(
     scope_object_id = _setup(engagement_id)
     credential_id = _store_credential(engagement_id)
     proposal = _proposal(
-        scope_object_id, credential_username="svc-account", dns_server="203.0.113.5",
+        engagement_id, scope_object_id, credential_username="svc-account", dns_server="203.0.113.5",
     )
 
     outcome = propose_action(
@@ -431,7 +433,7 @@ def test_the_credentials_identity_is_used_when_the_proposal_states_none(
 
     scope_object_id = _setup(engagement_id)
     credential_id = _store_credential(engagement_id)  # bound to "svc-account"/password
-    proposal = _proposal(scope_object_id, credential_username=None)
+    proposal = _proposal(engagement_id, scope_object_id, credential_username=None)
 
     outcome = propose_action(
         engagement_id=engagement_id, proposal=proposal,
@@ -462,7 +464,7 @@ def test_a_proposal_stating_a_different_identity_than_the_credential_is_refused(
 
     scope_object_id = _setup(engagement_id)
     credential_id = _store_credential(engagement_id)  # bound to "svc-account"
-    proposal = _proposal(scope_object_id, credential_username="someone-else")
+    proposal = _proposal(engagement_id, scope_object_id, credential_username="someone-else")
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
@@ -501,7 +503,7 @@ def test_a_legacy_credential_with_no_bound_identity_is_refused_through_propose_a
 
     scope_object_id = _setup(engagement_id)
     credential_id = _legacy_store(engagement_id, secret=REAL_DOMAIN_SECRET)
-    proposal = _proposal(scope_object_id, credential_username="svc-account")
+    proposal = _proposal(engagement_id, scope_object_id, credential_username="svc-account")
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(

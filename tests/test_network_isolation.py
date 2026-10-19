@@ -45,6 +45,7 @@ import pytest
 from sqlalchemy import text
 
 from control_plane.state.db import engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.sandbox import (
     NO_OWNER,
     OWNER_LABEL,
@@ -501,6 +502,7 @@ def test_a_network_refusal_is_failed_not_unknown_outcome(engagement_id, registry
         authorization={"source": "engagement_scope", "scope_object_id": scope_id},
         discovery={"source": "explicit_scope"},
     )
+    proposal = attach_task(engagement_id, proposal)
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
             engagement_id=engagement_id, proposal=proposal,

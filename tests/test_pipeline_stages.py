@@ -29,6 +29,7 @@ reported in ``docs/D60_PIPELINE_STAGES_REPORT.md`` as run by hand.
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 import sys
 import threading
@@ -50,6 +51,7 @@ from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.provenance import graph
 from control_plane.state.db import engagement_scope
 from tests.helpers import committing_scope
+from tests.task_support import task_for
 from tool_gateway.sandbox import SandboxResult
 
 TARGET = "10.82.0.5"
@@ -106,12 +108,17 @@ def world(engagement_id, registry):
 
 
 def _proposal(world, target=TARGET):
-    return ProposedAction(
+    proposal = ProposedAction(
         action="network.scan",
         target={"logical_identity": {"type": "ip", "value": target}},
         authorization={"source": "engagement_scope", "scope_object_id": world["scope_id"]},
         discovery={"source": "explicit_scope"},
     )
+    # One task per target, however often the request is retried: a retry is the same request.
+    tasks = world.setdefault("tasks", {})
+    if target not in tasks:
+        tasks[target] = task_for(world["engagement_id"], proposal)
+    return dataclasses.replace(proposal, task_id=tasks[target])
 
 
 def go(world, *, reviewer=None, sandbox=None, key="default", target=TARGET, **extra):

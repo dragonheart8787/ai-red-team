@@ -77,6 +77,7 @@ def child(args) -> int:
     from control_plane.api.function_api import propose_action
     from control_plane.capability.broker import Budget
     from tests import scheduler_support as sup
+    from tests.task_support import attach_task
     from tool_gateway.sandbox import DockerSandbox
 
     class Sleeping(DockerSandbox):
@@ -89,7 +90,8 @@ def child(args) -> int:
             return super().run(**kwargs)
 
     propose_action(
-        engagement_id=args.eid, proposal=sup.proposal_for(args.scope, host=args.host),
+        engagement_id=args.eid,
+        proposal=attach_task(args.eid, sup.proposal_for(args.scope, host=args.host)),
         reviewer=HonestFakeReviewer(), policy=sup.effective_policy(args.eid),
         agent_id="drill", sandbox=Sleeping(), network_allowlist=[args.cidr],
         budget=Budget(max_duration_seconds=BUDGET_S),

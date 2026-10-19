@@ -31,6 +31,7 @@ import uuid
 
 import pytest
 
+from tests.task_support import attach_task
 from tool_gateway.adapters import http_get, nmap
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -591,6 +592,7 @@ def _web_get_decision(engagement_id, registry, *, data_class, register):
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
 
     class _NoSandbox:
         def run(self, **kwargs):

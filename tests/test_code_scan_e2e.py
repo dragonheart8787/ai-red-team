@@ -47,6 +47,7 @@ from control_plane.vault.vault import store_credential
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tests.test_git_fetch_credential import REAL_TOKEN, private_git_server  # noqa: F401
 from tool_gateway.adapters import semgrep
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
@@ -146,6 +147,7 @@ def test_code_scan_runs_end_to_end_through_propose_action(
         resources=("source_code",), expected_data=("finding",),
         reason="D47/D48 permanent propose_action regression test",
     )
+    proposal = attach_task(engagement_id, proposal)
 
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
@@ -247,6 +249,7 @@ def test_code_scan_without_a_credential_still_reaches_dispatch_code_scan(
             resources=("source_code",), expected_data=("finding",),
             reason="D47/D48 permanent propose_action regression test (public repo)",
         )
+        proposal = attach_task(engagement_id, proposal)
 
         with engagement_scope(engagement_id) as conn:
             outcome = propose_action(

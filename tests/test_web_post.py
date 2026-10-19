@@ -23,6 +23,7 @@ import uuid
 import pytest
 
 from control_plane.orchestrator import dispatch
+from tests.task_support import attach_task
 from tool_gateway import registry as tool_registry
 from tool_gateway.adapters import _http, http_get, http_post, nmap
 
@@ -108,6 +109,7 @@ def _propose(
         discovery={"source": "explicit_scope"},
         writes_data=writes_data, changes_state=changes_state,
     )
+    proposal = attach_task(engagement_id, proposal)
     return propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(), policy=policy, agent_id="worker-1",
@@ -525,6 +527,7 @@ def test_web_post_needs_a_known_classification_like_every_content_touching_actio
         # The Worker understates it. The floor is what makes this irrelevant.
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
 
     class _NoSandbox:
         def run(self, **kwargs):

@@ -26,6 +26,7 @@ with the same key, 5 times, with growing waits; any other exception is written d
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import random
 import signal
@@ -97,13 +98,21 @@ class Worker:
         from control_plane.api.function_api import propose_action
         from control_plane.capability.broker import Budget
         from tests import scheduler_support as sup
+        from tests.task_support import task_for
         from tool_gateway.sandbox import DockerSandbox
 
         reviewer = (HonestFakeReviewer(sensitive_hint=("pii",)) if req["what"] == "human"
                     else HonestFakeReviewer())
+        proposal = sup.proposal_for(req["scope_id"], host=req["host"], ports=req["ports"])
+        # D68: a request names the task it serves, as a harness's worker would. One task per
+        # request, however often it is retried; created inside the retry loop, so a fault
+        # that lands on the task's own insert is retried like any other.
+        if "task_id" not in req:
+            req["task_id"] = task_for(req["eid"], proposal)
+        proposal = dataclasses.replace(proposal, task_id=req["task_id"])
         return propose_action(
             engagement_id=req["eid"],
-            proposal=sup.proposal_for(req["scope_id"], host=req["host"], ports=req["ports"]),
+            proposal=proposal,
             reviewer=reviewer, policy=sup.effective_policy(req["eid"]), agent_id="soak-worker",
             sandbox=DockerSandbox() if req["what"] == "allow" else None,
             network_allowlist=[req["cidr"]],

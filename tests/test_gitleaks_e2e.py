@@ -47,6 +47,7 @@ from tests.gitleaks_support import (
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.adapters import gitleaks
 
 ACTOR = "test-harness"
@@ -105,6 +106,7 @@ def _propose(engagement_id, sandbox, repo_value, scope_object_id, **target_extra
         resources=("source_code",), expected_data=("finding",),
         reason="D55 permanent propose_action regression test",
     )
+    proposal = attach_task(engagement_id, proposal)
     return propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="test-worker",

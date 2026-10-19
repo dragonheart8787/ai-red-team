@@ -18,6 +18,7 @@ from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
 from control_plane.api.function_api import propose_action
 from control_plane.config import load_dotenv
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
+from tests.task_support import attach_task
 
 
 class BlockingSandbox:
@@ -42,6 +43,7 @@ def main() -> None:
         authorization={"source": "engagement_scope", "scope_object_id": scope_object_id},
         discovery={"source": "explicit_scope"},
     )
+    proposal = attach_task(engagement_id, proposal)
     propose_action(
         engagement_id=engagement_id, proposal=proposal, reviewer=HonestFakeReviewer(),
         policy=policy, agent_id="crash-child", sandbox=BlockingSandbox(), idempotency_key=key,

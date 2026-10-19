@@ -37,6 +37,7 @@ from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.adapters import http_post
 from tool_gateway.sandbox import SandboxResult
 
@@ -126,8 +127,8 @@ class _SpyReviewer(HonestFakeReviewer):
         return super().review(proposal=proposal, canonical_target=canonical_target)
 
 
-def _post_proposal(scope_id, **target_extra):
-    return ProposedAction(
+def _post_proposal(engagement_id, scope_id, **target_extra):
+    proposal = ProposedAction(
         action="web.post",
         target={"logical_identity": {"type": "ip", "value": TARGET_IP},
                 "port": TARGET_PORT, "path": "/submit", **target_extra},
@@ -135,6 +136,7 @@ def _post_proposal(scope_id, **target_extra):
         discovery={"source": "explicit_scope"},
         writes_data=True, changes_state=True,
     )
+    return attach_task(engagement_id, proposal)
 
 
 def _propose(engagement_id, proposal, *, sandbox=None, reviewer=None):
@@ -201,7 +203,7 @@ def test_a_body_in_a_known_secret_format_is_refused_at_propose_time(
     scope_id = _authorize(registry, engagement_id)
     body = SECRET_BODIES[label]
     outcome, sandbox, reviewer = _propose(
-        engagement_id, _post_proposal(scope_id, body=body))
+        engagement_id, _post_proposal(engagement_id, scope_id, body=body))
 
     assert outcome.decision == "DENY"
     assert "body_contains_secret_format" in outcome.deny_reasons
@@ -222,7 +224,7 @@ def test_a_refused_body_is_never_persisted_reviewed_or_audited(
     a check placed after the reviewer would have refused too late."""
     scope_id = _authorize(registry, engagement_id)
     body = SECRET_BODIES[label]
-    _, _, reviewer = _propose(engagement_id, _post_proposal(scope_id, body=body))
+    _, _, reviewer = _propose(engagement_id, _post_proposal(engagement_id, scope_id, body=body))
 
     assert reviewer.seen == [], "the reviewer LLM was shown a secret-shaped body"
     assert _rows(engagement_id, "SELECT 1 FROM action_proposals") == []
@@ -258,7 +260,8 @@ def test_a_body_the_adapter_would_refuse_is_refused_at_propose_time(
     """The size ceiling and content-type allowlist were already the adapter's;
     they now apply where the proposal enters, not only when a plan is built."""
     scope_id = _authorize(registry, engagement_id)
-    outcome, sandbox, reviewer = _propose(engagement_id, _post_proposal(scope_id, **bad))
+    outcome, sandbox, reviewer = _propose(
+        engagement_id, _post_proposal(engagement_id, scope_id, **bad))
     assert outcome.decision == "DENY"
     assert outcome.deny_reasons == ("web_post_body_invalid",)
     assert reason_fragment in outcome.failure
@@ -297,7 +300,8 @@ def test_an_ordinary_body_runs_end_to_end_and_reaches_curl_unmodified(
     body = FORM_BODY + "&pad=" + "v" * 400          # over 160 columns on purpose
     outcome, sandbox, reviewer = _propose(
         engagement_id,
-        _post_proposal(scope_id, body=body, content_type="application/x-www-form-urlencoded"),
+        _post_proposal(engagement_id, scope_id, body=body,
+                       content_type="application/x-www-form-urlencoded"),
     )
 
     assert outcome.decision == "ALLOW", (outcome.deny_reasons, outcome.approval_reasons,
@@ -329,8 +333,8 @@ def test_two_different_bodies_are_two_different_runs(engagement_id, registry):
     """The body is in the fingerprint (http_post.as_params): a second POST with a
     different body must not dedup into the first."""
     scope_id = _authorize(registry, engagement_id)
-    a, sandbox_a, _ = _propose(engagement_id, _post_proposal(scope_id, body="q=one"))
-    b, sandbox_b, _ = _propose(engagement_id, _post_proposal(scope_id, body="q=two"))
+    a, sandbox_a, _ = _propose(engagement_id, _post_proposal(engagement_id, scope_id, body="q=one"))
+    b, sandbox_b, _ = _propose(engagement_id, _post_proposal(engagement_id, scope_id, body="q=two"))
     assert a.decision == b.decision == "ALLOW"
     assert len(sandbox_a.runs) == 1 and len(sandbox_b.runs) == 1
     assert a.run_id != b.run_id
@@ -350,7 +354,7 @@ def test_the_approval_route_carries_and_describes_the_same_body(engagement_id, r
     scope_id = _authorize(registry, engagement_id, classified=False)
     outcome, sandbox, _ = _propose(
         engagement_id,
-        _post_proposal(scope_id, body=FORM_BODY,
+        _post_proposal(engagement_id, scope_id, body=FORM_BODY,
                        content_type="application/x-www-form-urlencoded"),
     )
     assert outcome.decision == "HUMAN_APPROVAL"
@@ -405,6 +409,7 @@ def test_web_get_runs_end_to_end_through_propose_action(engagement_id, registry)
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     outcome, sandbox, _ = _propose(engagement_id, proposal, sandbox=sandbox)
 
     assert outcome.decision == "ALLOW", (outcome.deny_reasons, outcome.approval_reasons,
@@ -437,6 +442,7 @@ def test_web_get_carries_no_body_even_if_a_proposal_names_one(engagement_id, reg
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     outcome, sandbox, _ = _propose(engagement_id, proposal)
     assert outcome.decision == "ALLOW"
     (run,) = sandbox.runs

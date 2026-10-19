@@ -23,6 +23,7 @@ from control_plane.state.db import registry_admin_scope
 from tests import scheduler_support as sup
 from tests.gitleaks_support import history_only_secret_repo
 from tests.helpers import committing_scope
+from tests.task_support import attach_task
 
 
 def _network_world(registry, engagement_id, action):
@@ -50,6 +51,7 @@ def _code_world(engagement_id, action, tmp_path):
         discovery={"source": "explicit_scope"}, resources=("source_code",),
         expected_data=("finding",), reason="D63 scheduler per-action routing test",
         requested_capability_ttl_seconds=60)
+    proposal = attach_task(engagement_id, proposal)
     return scope_id, proposal
 
 

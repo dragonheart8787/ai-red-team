@@ -30,6 +30,7 @@ from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.adapters import browser
 from tool_gateway.sandbox import SandboxResult
 
@@ -126,6 +127,7 @@ def test_web_render_runs_end_to_end_through_propose_action(engagement_id, regist
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     outcome = propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),
@@ -168,6 +170,7 @@ def test_the_rendered_evidence_is_raw_plus_untrusted_derived_view(engagement_id,
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     with engagement_scope(engagement_id) as conn:
         outcome = propose_action(
             engagement_id=engagement_id, proposal=proposal,
@@ -258,6 +261,7 @@ def _render_decision(engagement_id, registry, *, classification):
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     outcome = propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),

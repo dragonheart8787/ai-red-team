@@ -59,6 +59,7 @@ from control_plane.registry.metadata_registry import register_metadata  # noqa: 
 from control_plane.registry.scope_registry import register_scope_object  # noqa: E402
 from control_plane.state.db import engagement_scope, registry_admin_scope  # noqa: E402
 from scripts.live_run.live_run import publish_baseline  # noqa: E402
+from tests.task_support import attach_task  # noqa: E402
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable  # noqa: E402
 
 ACTOR = "d12-5-verification"
@@ -175,9 +176,9 @@ def setup(engagement_id: str, target_ip: str) -> str:
     return scope_object_id
 
 
-def proposal_for(*, identity_type: str, value: str, scope_object_id: str,
+def proposal_for(*, engagement_id: str, identity_type: str, value: str, scope_object_id: str,
                  ports: str) -> ProposedAction:
-    return ProposedAction(
+    proposal = ProposedAction(
         action="network.scan",
         target={"logical_identity": {"type": identity_type, "value": value},
                 "ports": ports, "scan_type": "connect"},
@@ -187,6 +188,7 @@ def proposal_for(*, identity_type: str, value: str, scope_object_id: str,
         resources=("network_host",), expected_data=("port_state",),
         reason=f"D12.5 verification against {value}",
     )
+    return attach_task(engagement_id, proposal)
 
 
 def run_case(*, engagement_id: str, proposal: ProposedAction, budget: Budget,
@@ -296,7 +298,7 @@ def main() -> int:
     print("A. cidr 10.79.0.0/24, max_targets=1  (D11-4 counterexample)")
     a = run_case(
         engagement_id=engagement_id,
-        proposal=proposal_for(identity_type="cidr", value=ALLOWLIST,
+        proposal=proposal_for(engagement_id=engagement_id, identity_type="cidr", value=ALLOWLIST,
                               scope_object_id=scope_object_id, ports="8080"),
         budget=Budget(max_duration_seconds=120, max_targets=1),
         reviewer=reviewer, sandbox=ExplodingSandbox(),
@@ -337,7 +339,8 @@ def main() -> int:
     print("    through the pipeline:")
     b = run_case(
         engagement_id=engagement_id,
-        proposal=proposal_for(identity_type="cidr", value="10.79.0.2/24",
+        proposal=proposal_for(engagement_id=engagement_id, identity_type="cidr",
+                              value="10.79.0.2/24",
                               scope_object_id=scope_object_id, ports="8080"),
         budget=Budget(max_duration_seconds=120, max_targets=1),
         reviewer=reviewer, sandbox=ExplodingSandbox(),
@@ -366,7 +369,7 @@ def main() -> int:
     print("\nC. cidr 10.79.0.0/24, max_targets=256  (control for A)")
     c = run_case(
         engagement_id=engagement_id,
-        proposal=proposal_for(identity_type="cidr", value=ALLOWLIST,
+        proposal=proposal_for(engagement_id=engagement_id, identity_type="cidr", value=ALLOWLIST,
                               scope_object_id=scope_object_id, ports="8080"),
         budget=Budget(max_duration_seconds=120, max_targets=256),
         reviewer=reviewer, sandbox=sandbox,
@@ -391,7 +394,7 @@ def main() -> int:
     print("\nD. ip 10.79.0.2, max_targets=1  (control for B)")
     d = run_case(
         engagement_id=engagement_id,
-        proposal=proposal_for(identity_type="ip", value=target_ip,
+        proposal=proposal_for(engagement_id=engagement_id, identity_type="ip", value=target_ip,
                               scope_object_id=scope_object_id,
                               ports="25,80,8080"),
         budget=Budget(max_duration_seconds=120, max_targets=1),

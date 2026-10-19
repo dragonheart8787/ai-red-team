@@ -40,6 +40,7 @@ from control_plane.tls.engagement_ca import generate_ca, leaf_spki_pin, sign_lea
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.adapters import browser
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable
 
@@ -172,6 +173,7 @@ def _render(conn, engagement_id, scope_id, topology, *, path, budget):
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(engagement_id, proposal)
     return propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(risk_hint="low"), policy=_policy(),

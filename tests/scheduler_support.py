@@ -52,13 +52,15 @@ def register_scope(registry, *, type: str, value: str, actions=("network.scan",)
 
 
 def proposal_for(scope_id: str, *, host: str, action="network.scan", target_type="ip",
-                 ports="8080", scan_type="connect") -> ProposedAction:
+                 ports="8080", scan_type="connect", task_id: str | None = None) -> ProposedAction:
+    """A proposal for ``host``; name the task it serves with ``task_id`` (tests/task_support)."""
     return ProposedAction(
         action=action,
         target={"logical_identity": {"type": target_type, "value": host},
                 "ports": ports, "scan_type": scan_type},
         authorization={"source": "engagement_scope", "scope_object_id": scope_id},
         discovery={"source": "explicit_scope"},
+        task_id=task_id,
         requested_capability_ttl_seconds=60,
     )
 

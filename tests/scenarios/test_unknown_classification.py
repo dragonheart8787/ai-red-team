@@ -27,6 +27,7 @@ from control_plane.api import function_api
 from control_plane.api.function_api import propose_action
 from control_plane.policy.engine import evaluate
 from tests.scenarios.conftest import ALLOWED_CIDR, uid
+from tests.task_support import attach_task
 
 UNCLASSIFIED_IP = "10.79.0.31"
 
@@ -79,6 +80,7 @@ def _propose(engagement, effective_policy, *, writes_data=False,
         writes_data=writes_data,
         changes_state=changes_state,
     )
+    proposal = attach_task(engagement_id, proposal)
     return propose_action(
         engagement_id=engagement_id, proposal=proposal,
         reviewer=HonestFakeReviewer(), policy=effective_policy,

@@ -77,6 +77,7 @@ from scripts.live_run.verify_d12 import (  # noqa: E402
     assert_policy_permits_scanning,
     container_ip,
 )
+from tests.task_support import attach_task  # noqa: E402
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable  # noqa: E402
 
 ACTOR = "d15-lookalike-run"
@@ -267,6 +268,7 @@ def in_scope_control(*, engagement_id: str, registered: dict[str, str], sandbox,
         discovery={"source": "explicit_scope"},
         reason="an address the upper-half scope object genuinely covers",
     )
+    proposal = attach_task(engagement_id, proposal)
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
         outcome = function_api.propose_action(

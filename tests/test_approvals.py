@@ -33,6 +33,7 @@ from control_plane.state.db import registry_admin_scope
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 
 CIDR = "10.79.0.0/24"
 HOST = "10.79.0.2"
@@ -258,6 +259,7 @@ def test_the_allow_path_and_the_approval_path_grant_the_same_constraints(
         authorization={"source": "engagement_scope", "scope_object_id": scope2},
         discovery={"source": "explicit_scope"},
     )
+    allowed = attach_task(eid2, allowed)
 
     with engagement_scope(eid2) as conn:
         auto = propose_action(

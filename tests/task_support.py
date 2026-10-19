@@ -5,7 +5,8 @@ A proposal that goes through ``propose_action`` names the task it serves, as a W
 leave the task out and nothing noticed; from P1 on a proposal with no task, or one that differs from
 its task, is an approval reason. These helpers give a fixture the task a real harness would have
 created first -- through the product's own ``create_task``, committed, with the same canonicalizer
-for the identity -- so a fixture states what it is, rather than relying on a check that was not there.
+for the identity -- so a fixture states what it is, rather than relying on a check that was
+not there.
 
 They create the task **from the proposal**: the action, the target and the scope object are the
 proposal's, so ``identity_key`` is equal by construction. The goal is a sentence built from the

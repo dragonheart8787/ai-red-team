@@ -25,6 +25,7 @@ from tests.helpers import EngagementManager, make_engagement
 # D60: propose_action opens its own transactions, one per stage, so what a test sets up
 # first must be committed -- as it is in production. See tests/helpers.committing_scope.
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tests.test_baseline_freeze import Globals, glob  # noqa: F401 - pytest fixture
 
 CIDR = "10.57.0.0/24"
@@ -55,6 +56,7 @@ def _propose(eid: str, action: str):
         discovery={"source": "explicit_scope"},
         writes_data=False, changes_state=False,
     )
+    proposal = attach_task(eid, proposal)
     with engagement_scope(eid) as conn:
         return propose_action(
             engagement_id=eid, proposal=proposal,

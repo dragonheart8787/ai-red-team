@@ -33,6 +33,7 @@ from control_plane.api.function_api import propose_action
 from control_plane.orchestrator.dispatch import reconcile_stale_dispatches
 from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tool_gateway.sandbox import (
     DaemonUnreachable,
     DockerSandbox,
@@ -70,6 +71,7 @@ def go(world, sandbox):
         authorization={"source": "engagement_scope", "scope_object_id": world["scope_id"]},
         discovery={"source": "explicit_scope"},
     )
+    proposal = attach_task(world["engagement_id"], proposal)
     return propose_action(
         engagement_id=world["engagement_id"], proposal=proposal,
         reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="w",
@@ -263,6 +265,7 @@ def test_a_refused_start_through_propose_action_is_failed_and_closed_not_stuck_d
         authorization={"source": "engagement_scope", "scope_object_id": world["scope_id"]},
         discovery={"source": "explicit_scope"},
     )
+    proposal = attach_task(world["engagement_id"], proposal)
     with caplog.at_level("WARNING", logger="cyberorch.sandbox"):
         outcome = propose_action(
             engagement_id=world["engagement_id"], proposal=proposal,

@@ -111,6 +111,7 @@ from control_plane.state.db import (  # noqa: E402
 )
 from control_plane.vault.vault import store_credential  # noqa: E402
 from scripts.live_run.live_run import publish_baseline  # noqa: E402
+from tests.task_support import attach_task  # noqa: E402
 from tool_gateway.adapters import ad_collector  # noqa: E402
 from tool_gateway.sandbox import DockerSandbox, SandboxUnavailable  # noqa: E402
 
@@ -179,7 +180,8 @@ def store_domain_credential(*, engagement_id: str, username: str, secret: str) -
 
 
 def build_proposal(
-    *, domain: str, scope_object_id: str, username: str, dns_server: str | None = None,
+    *, engagement_id: str, domain: str, scope_object_id: str, username: str,
+    dns_server: str | None = None,
 ) -> ProposedAction:
     target = {
         "logical_identity": {"type": "ad_domain", "value": domain},
@@ -193,7 +195,7 @@ def build_proposal(
         # dispatch_collection's network_allowlist check -- never a bypass of
         # DockerSandbox the way D45's own --dns experiment was.
         target["dns_server"] = dns_server
-    return ProposedAction(
+    proposal = ProposedAction(
         action="ad.collect",
         target=target,
         authorization={"source": "engagement_scope", "scope_object_id": scope_object_id},
@@ -201,6 +203,7 @@ def build_proposal(
         resources=("ad_object",), expected_data=("group_membership", "acl"),
         reason="D45 end-to-end verification against a real Samba AD DC",
     )
+    return attach_task(engagement_id, proposal)
 
 
 def collect_trail(engagement_id: str, *, proposal_id: str,
@@ -237,8 +240,8 @@ def run_main_dispatch(*, engagement_id: str, domain: str, scope_object_id: str,
                       max_duration_seconds: int, sandbox,
                       dns_server: str | None = None) -> dict[str, Any]:
     proposal = build_proposal(
-        domain=domain, scope_object_id=scope_object_id, username=username,
-        dns_server=dns_server,
+        engagement_id=engagement_id, domain=domain, scope_object_id=scope_object_id,
+        username=username, dns_server=dns_server,
     )
     with engagement_scope(engagement_id) as conn:
         policy = load_effective_policy(conn, engagement_id)
