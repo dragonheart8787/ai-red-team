@@ -84,6 +84,7 @@ from control_plane.orchestrator.dispatch import (
     dispatch_collection,
     dispatch_scan,
 )
+from control_plane.plan_fit import relation as plan_relation
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
@@ -483,6 +484,9 @@ class _Run:
     # Learned as the stages run. None when this call resumed a proposal past the stage that
     # produces them -- the committed rows are then the source of truth, not this object.
     opinion: ReviewerOpinion | None = None
+    # D68 P1: the relation between the proposal and the task it names. Computed in the decide
+    # stage and stored with the decision; in this version nothing reads it but the audit.
+    plan_fit: Any = None
     metadata: Any = None
     decision: Any = None
     # Set only by ``dispatch_approved``: this drive is the post-approval one, so it may also take
@@ -718,6 +722,13 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         # ran makes the recorded version older than the world, never newer (D61: an approval
         # issued later is checked against it).
         policy_version = current_policy_version(conn, eid)
+        # --- 3b. Plan fit (D68 P1): does the proposal belong to the task it names? -----------
+        # A read, and deterministic. Recorded and audited; no policy input reads it yet, so it
+        # changes no decision (ACCEPTANCE 5.116).
+        canonical_target, identity_key = _task_identity(proposal.action, proposal.target)
+        run.plan_fit = plan_relation.assess_task_relation(
+            conn, task_id=proposal.task_id, action=proposal.action,
+            canonical_target=canonical_target, identity_key=identity_key)
     run.metadata = metadata
 
     # --- 4. Policy Reviewer --------------------------------------------------
@@ -782,7 +793,15 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
                 reviewer_hints={
                     "risk_hint": opinion.risk_hint,
                     "possible_sensitive_data_hint": list(opinion.possible_sensitive_data_hint),
+                    # Inputs recorded at the decision and replayed at re-derivation (D68): not the
+                    # reviewer's words, but kept where the re-derivation already looks for them.
+                    "plan_fit": run.plan_fit.as_hint(),
                 },
+            )
+            record_audit(
+                engagement_id=eid, actor=run.actor, event_type="plan_fit.assessed",
+                subject_type="action_proposal", subject_id=proposal_id,
+                payload=run.plan_fit.audit_payload(),
             )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="policy.decided",
