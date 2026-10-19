@@ -27,10 +27,13 @@ injection worth nothing, because the model's entire output surface is advisory.
 it can time out, rate-limit, or refuse. Letting the exception propagate would
 abort the pipeline — safe, but it reads as a crash. Returning a cheerful default
 would be a fail-open. So every failure path returns an opinion carrying
-``risk_hint="high"`` and ``recommended_escalation=True``, which OPA already
-turns into HUMAN_APPROVAL through its existing ``high_risk`` rule. No policy
-change and no new reason string: an unavailable reviewer is treated as a
-reviewer that is worried.
+``risk_hint="high"``, and **that** is the field that escalates: OPA's existing
+``high_risk`` rule turns it into HUMAN_APPROVAL. No policy change and no new
+reason string: an unavailable reviewer is treated as a reviewer that is worried.
+
+The same opinion also carries ``recommended_escalation=True`` and the failure
+reason in ``semantic_risk_hints``. Those two are written to the audit trail and
+read by no policy rule; they do not escalate anything (ACCEPTANCE 5.117).
 """
 
 from __future__ import annotations

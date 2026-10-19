@@ -1,9 +1,10 @@
 # D68 — Reviewer semantic plausibility validation: design checkpoint
 
 **Status: design only. Nothing is built, no code, no migration, no test.** Direction approved (section 10):
-DP-1/2/3/5/6/7/8/9 as recommended; **DP-4 is open pending the survey in section 9.** This note answers the six
-parts of the D68 brief and ends with the decisions (section 7). Implementation scope and phasing are not
-discussed until DP-4 is decided.
+all nine decision points are taken; **DP-4 = option (a)**. This note answers the six parts of the D68 brief,
+ends with the decisions (section 7), and records the survey (section 9), the required scope of P1 (section 11)
+and the caller list for the DP-7 switch (section 12). Implementation scope beyond section 11 and phasing are
+not yet discussed.
 
 Claims are tagged: **[R]** read in code or a document (file named), **[E]** executed (nothing new was executed
 for this note; the one [E] cited is an earlier measurement), **[D]** derived from [R] facts by argument,
@@ -300,7 +301,7 @@ All new rules only add approval reasons; none removes, none allows.
 | `goal_fit = not_assessed`, cause = not applicable (P1 not matched) | none (P1's own rule covers it) | avoid double reasons |
 | `task_relation = differs_from_task` | `proposal_outside_task` | the Worker proposed something other than its task |
 | `task_relation = task_not_live` | `proposal_outside_task` | task done / cancelled / in another engagement |
-| `task_relation = no_task` | **see DP-4** | today's flows (tests, human-driven proposals) have no task; a blanket escalation changes them |
+| `task_relation = no_task` | `proposal_without_task` (name provisional) | **DP-4 = (a): every `no_task` escalates when enforcement is on** (section 9) |
 | `task_relation = matches_task` | none | no-op |
 
 How `insufficient_context` is *produced* matters as much as how it is read. The prompt must make
@@ -354,7 +355,7 @@ Ordered by dependency: an earlier decision constrains the later ones. Each has m
 | **DP-1** | **Scope of v1 questions** | (a) P1 + Q1 only; (b) P1 + Q1 + Q2; (c) all three | **(a).** P1 is exact and needs no model; Q1 is the one question with no deterministic comparator and a buildable oracle. Q2 has no ground truth and the widest surface (S4); Q3 belongs to D58-12 first (section 3) | -- |
 | **DP-2** | **Call placement** | A one call / B separate always / C separate when ALLOW | **B.** Independence of failure, surface and baseline; the existing Reviewer stays untouched; latency is off any human-visible path; unbiased calibration data. C later as a pure optimisation (section 4.1) | DP-1 |
 | **DP-3** | **What `insufficient_context` does** | (a) escalate; (b) audit only; (c) escalate only for state-changing / non-read action classes | **(a), subject to the DP-7 rate budget.** (b) turns a model-chosen value into an escape hatch an attacker can aim for; (c) is better on fatigue but adds a second axis to a first version. Revisit to (c) if the measured rate is high | DP-1, DP-2 |
-| **DP-4** | **What `no_task` does** | (a) escalate; (b) no effect, audit; (c) escalate for agent-originated proposals only | **(c)**, if the proposal's origin (agent vs human) is recoverable from `agent_id`; else (b) with an ACCEPTANCE row. Must be answered with a check of which current flows submit without a task, which I have not done [N] | DP-1 |
+| **DP-4** | **What `no_task` does** | (a) escalate; (b) no effect, audit; (c) escalate for agent-originated proposals only | **DECIDED: (a)** -- every `no_task` escalates when enforcement is on. The survey (section 9) showed (c) has nothing to key on (`agent_id` is unauthenticated) and (b) lets an agent bypass P1 by omitting `task_id`. Original recommendation, superseded: (c) if the origin were recoverable | DP-1 |
 | **DP-5** | **P1 as a gate on Q1** | Q1 asked only when `matches_task`; or always | **Only when `matches_task`.** Otherwise Q1 judges a goal the proposal does not serve and the cost is wasted | DP-1 |
 | **DP-6** | **No rationale text in the signal** | none / audit-only capped text / shown to the approver | **None.** Audit-only capped text only if a measurement needs it; never shown to the approver (section 2.4) | -- |
 | **DP-7** | **Enforcement gate** | enable rules immediately / require measured rates first | **Measure first.** Compute and audit the signal with the OPA rules inactive (a configuration switch, off by default), then set a documented false-positive budget and a lure-suite result (`k/N`, bound stated), and only then enable. This is the only point where the feature's value (detection) and cost (approval volume) become numbers. Without it the rules would enforce something nobody has measured [N] | DP-1..DP-3 |
@@ -421,14 +422,150 @@ proposals only" (DP-4 option c) has nothing to key on: it would key on a field t
    `scheduler_support.proposal_for`, two drills, and the G2 scripts would need a task or the switch off. Nothing
    is touched while the switch is off (DP-7).
 
-### 9.5 Recommendation for DP-4 (revised from section 7)
+### 9.5 Recommendation for DP-4 (revised from section 7) -- **decided: (a)**
 
 **(a) escalate every `no_task`, when enforcement is on.** Option (c), which section 7 preferred conditionally, is
 withdrawn: its condition ("origin recoverable from `agent_id`") is false (9.2). Option (b) (no effect) is
 withdrawn too: it makes P1 bypassable by omission (9.3). The cost of (a) is the fixture migration in 9.4 (2),
-which is deferred by DP-7. **Decision still yours; nothing is built.**
+which is deferred by DP-7. **Decided (a); nothing is built.**
 
 ## 10. Decisions taken
 
-DP-1, 2, 3, 5, 6, 7, 8, 9 approved as recommended in section 7. DP-4 is open pending section 9.
-Implementation scope and phasing are not discussed until DP-4 is decided.
+DP-1, 2, 3, 5, 6, 7, 8, 9 approved as recommended in section 7. **DP-4 decided: option (a)** -- when enforcement is
+on, every `no_task` is escalated to HUMAN_APPROVAL. Three consequences were requested with it, and are
+sections 11 and 12 and the wording fix recorded in 11.5.
+
+## 11. Required scope of P1: the replay at `approved_dispatch.py` (not an extra)
+
+### 11.1 What breaks without it, exactly
+
+There are **two** places that call `evaluate_policy` [R: grep of `evaluate_policy(` / `build_policy_input(`]:
+`function_api.propose_action` (`function_api.py:750`) and the approval re-derivation
+`approved_dispatch._rederive` (`approved_dispatch.py:193`). The second rebuilds the proposal from its stored row
+(`:194`, **no `task_id`**) and feeds the reviewer's part of the input from the stored `reviewer_hints` (`:192`,
+`:202-203`). It then refuses the dispatch if the fresh decision shows an approval reason the human was not shown
+and approved:
+
+    unseen = sorted(set(decision.approval_reasons) - set(approved["approval_reasons"]))   # approved_dispatch.py:209
+    if unseen: reasons.append(NEW_APPROVAL_REASONS)                                        # :210 -> the dispatch is refused
+
+A new signal that is computed at decision time but **not replayed** therefore fails in two ways on the day it is
+switched on:
+
+| Case | What the re-derivation sees | Result |
+|---|---|---|
+| **(i) An approval granted before the switch was on**, still waiting for dispatch | its snapshot lacks the new reason; the rebuilt proposal has no task, so a recomputed `no_task` adds one | `new_approval_reasons` -> **every already-approved, not-yet-dispatched proposal is refused** |
+| **(ii) A proposal decided with a task** (`matches_task`, or `differs_from_task` that a person approved), dispatched later | the rebuilt proposal has no `task_id`, so a recomputed value is `no_task`; and the task may have completed in the meantime, which would recompute as `task_not_live` | a reason the human never saw -> refused, for a proposal that was fine |
+
+(i) is the "wounded on day one" case; (ii) is the one that would hide until the first real task-carrying harness
+exists. Task-less proposals recompute identically either way -- see 11.4.
+
+### 11.2 Required, as part of P1
+
+1. **Store the signal with the decision.** `plan_fit` (at least `task_relation`; `goal_fit` when Q1 is built) is
+   written in the same statement that records the decision, beside `risk_hint`. `action_proposals.reviewer_hints` is
+   `JSONB` (migration 0018, `state/models.py:150`), so a key in the existing object needs no schema change --
+   to be confirmed at implementation, not assumed.
+2. **`_rederive` replays the stored value into `evaluate_policy`**, exactly as it does `risk_hint`. It never
+   recomputes from the rebuilt proposal and never re-reads the task row or its status: a task finishing between
+   approval and dispatch is normal, and a decision-time fact stays the decision-time fact.
+3. **Absent means absent.** A proposal decided before the feature has no stored `plan_fit`; that is an absent
+   input, no rule fires, and nothing defaults to `no_task`. (This is also what keeps case (i) harmless.)
+4. **A stored value the current vocabulary does not know** is not coerced to anything permissive: it takes the
+   fail-closed value (`not_assessed`, cause failed), whose reason the approval did not show, so the dispatch is
+   refused loudly rather than passed quietly.
+5. **One path for both call sites.** The two `evaluate_policy` callers must take the signal from the same
+   function, and a structure test in the style of `tests/test_docker_health_structure.py` (AST) should fail if a
+   third caller appears that does not -- so the next evaluation site cannot skip the replay unnoticed.
+
+### 11.3 Tests this implies (to be written with P1, not now)
+
+* a proposal approved **before** the switch, dispatched **after** it, with no stored `plan_fit` -> dispatches;
+* a `matches_task` proposal approved, its task then completed, dispatched -> dispatches, and the replayed value is
+  still `matches_task`;
+* a `differs_from_task` proposal that a person approved with the reason shown -> dispatches, no `new_approval_reasons`;
+* mutation checks: replay removed; replay replaced by a recompute from the rebuilt proposal; a stored value read
+  as present when absent -- each must turn one of the above red.
+
+### 11.4 The existing tests are not evidence for this
+
+The 34 tests of `test_approved_dispatch.py` and the other approval-path tests build **task-less** proposals. With
+the switch on they decide `no_task` at propose time and would recompute `no_task` at dispatch: the two agree
+whether or not the replay exists. So they will stay green with the replay missing. The replay needs its own
+tests (11.3), and they need proposals **with** tasks and approvals **older** than the switch -- which is why the
+fixtures in section 12 that must carry a task are a prerequisite of P1's tests, not only of the switch.
+
+### 11.5 Wording fix made now (documentation only)
+
+`agents/llm/policy_reviewer.py`'s module docstring said a failed review returns `risk_hint="high"` *and*
+`recommended_escalation=True`, "which OPA already turns into HUMAN_APPROVAL". Only `risk_hint` does that. The
+docstring now says so and states that `recommended_escalation` and `semantic_risk_hints` are audit-only. No code
+changed; `agents/llm/reviewer_base.py`'s `_escalate` docstring was already accurate. Whether to remove, keep or
+wire those fields remains ACCEPTANCE 5.117, undecided.
+
+## 12. Callers with no task: what must change before the DP-7 switch, and what is expected to escalate
+
+*Method: the AST scan of section 9 plus a read of the assertions of every test that reaches each site (through
+its helpers); for the live-run scripts, the recorded result in the reports.* "Before the switch" means before it
+is on in the test session by default, in the soak, or anywhere a run depends on the result.
+
+**Rule that sorts them**, with `no_task` adding an approval reason (ALLOW -> HUMAN_APPROVAL; HUMAN_APPROVAL stays
+HUMAN_APPROVAL with one more reason; DENY unchanged by precedence):
+
+| Class | Meaning | What to do |
+|---|---|---|
+| **M1** | the site needs **ALLOW** (it asserts it, or goes on to a capability, a run, evidence) | **Must carry a task before the switch**: otherwise it stops at HUMAN_APPROVAL and what it tests never executes -- a test that stays green while proving nothing is the failure mode ACCEPTANCE section 5 is about |
+| **M2** | asserts HUMAN_APPROVAL **for one named reason** or compares `approval_reasons` exactly | **Must carry a task before the switch**, not have its expectation edited: the point is that the named layer be the only cause. A second cause would also hide a regression of the named one wherever only the decision is asserted |
+| **K1** | asserts **DENY** | **Keep as is.** DENY outranks the new reason; nothing observable changes |
+| **K2** | uses HUMAN_APPROVAL as a **fixture** (to get an approvable proposal) or measures something reached either way, and asserts nothing about which reasons | **Keep as is; escalation is expected, and for these it is the same decision** -- HUMAN_APPROVAL with one more reason |
+| n/a | builds a `ProposedAction` only to feed a Reviewer; never reaches `propose_action` | out of scope |
+
+### 12.1 Scripts and drivers (G2, G3)
+
+| Site | Needs | Class |
+|---|---|---|
+| `scripts/soak/worker.py` (`call`, via `proposal_for`) | `allow` requests must be ALLOW; `human` ones already escalate by a sensitive hint; `deny` stay DENY | **M1** -- each request needs its task created first, which also changes the soak's write load; to be re-measured, not assumed |
+| `scripts/drill_reconciler_full_chain.py`, `drill_reconciler_late_result.py` (`proposal_for`) | a real container must be dispatched | **M1** |
+| `scripts/drill_scheduler_docker_restart.py` (`approved_proposal`) | an approved proposal, dispatched | K2 (HUMAN fixture) |
+| `scripts/live_run/d45_ad_collection_e2e.py:196` | `ad.collect` must run | **M1** |
+| `scripts/live_run/verify_d12.py:180` | cases include ALLOW, DENY, HUMAN_APPROVAL | **M1** |
+| `scripts/live_run/d15_lookalike.py:261` (`in_scope_control`) | the point is that the genuinely covered address is **allowed** | **M1** |
+| `scripts/live_run/d15_lookalike.py:214` (`kernel_control`) | recorded: DENY for out-of-scope | K1 |
+| `scripts/live_run/d13_worker.py:278` (`kernel_control`) | recorded (D13 report): DENY, both labels | K1 |
+| `scripts/live_run/d17_supervisor.py:635` (`close_everything`) | a real DENY into the ledger | K1 |
+| `scripts/reviewer_baseline.py:55` | Reviewer only | n/a |
+
+These are historical experiments with their results recorded; K1 means a rerun after the switch gives the same
+decisions.
+
+### 12.2 Tests (G4): 38 constructor sites in 23 files; 36 reach `propose_action`
+
+**M -- must carry a task before the switch (25 sites):**
+`tests/crash_child.py:39`; `scenarios/test_scenario_web_render.py:167`; `scenarios/test_unknown_classification.py:71` (M2);
+`scheduler_support.py:56` (`proposal_for`; consumers `test_scheduler_actions`, `test_scheduler_e2e`, the soak, two drills);
+`test_ad_collection_e2e.py:190` (7 tests); `test_approvals.py:254`; `test_audit_coverage.py:312`;
+`test_baseline_freeze_e2e.py:51` (4); `test_code_scan_e2e.py:138, 242`; `test_gitleaks_e2e.py:100` (4; one is M2);
+`test_http_get.py:586` (M2 + M1 + K1 through one helper); `test_network_isolation.py:498`; `test_pipeline_stages.py:109` (15);
+`test_sandbox_not_started.py:67` (5), `:260`; `test_scheduler_actions.py:46`; `test_web_post.py:103` (M2), `:519` (M2);
+`test_web_post_body.py:130` (6; two ALLOW, two DENY, one approval route -- one helper, so M), `:400`, `:432`;
+`test_web_render_e2e.py:121`, `:163`, `:253` (3; mixed).
+
+**K1 -- keep (5 sites, DENY):** `test_approvals.py:410`; `test_audit_coverage.py:270, 373`;
+`test_policy_engine.py:288`; `test_web_console.py:247`.
+
+**K2 -- keep, expected to stay HUMAN_APPROVAL (6 sites):** `test_approvals.py:60, 121, 204`;
+`test_approved_dispatch.py:98` (34 tests); `test_http_get.py:503` (it measures the OPA input, reached either way);
+`test_web_console.py:64`. Plus every consumer of `scheduler_support.escalate` / `approved_proposal`
+(calls: `test_approved_dispatch` 39, `test_web_console` 4, `test_discovery_source` 1; and the scheduler and reconciler tests:
+`test_scheduler_cli/e2e/policy_change/roles/service/skips/structure`, `test_reconciler_concurrency`).
+
+**n/a (2 sites):** `test_llm_reviewer.py:121`, `test_reviewer_backends.py:59`.
+
+(25 + 5 + 6 + 2 = 38.)
+
+### 12.3 What this list is for
+
+M is the work the switch needs: tasks in 25 test sites, the soak driver, two drills and three live-run scripts, done
+**with a helper that creates a task matching the proposal's identity** so the fixture states what a real harness
+would. K1 and K2 need nothing and are listed so a red result after the switch is read as intended, not as a
+regression. The K2 group is the one that **cannot detect** the replay defect (11.4); P1's own tests do.
