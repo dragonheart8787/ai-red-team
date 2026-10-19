@@ -22,6 +22,10 @@ the same source, level and shape. A group is then put in exactly one class:
 * ``not_explained`` -- at least one occurrence outside every window. Listed with its first and last
   time, its count inside and outside windows, and samples.
 * ``untimed`` -- the source has no timestamps (the services' logs). Listed; not placed.
+* ``known`` -- the whole group matches a pattern registered in :data:`KNOWN`, each with the
+  ACCEPTANCE item that explains it. Counted and listed like any group, with the item's number in
+  the class column; it is not read as ``not_explained`` again each run. A pattern is registered only
+  after its content has been read in a run's own log, never from a guess about its count.
 
 Nothing here judges a run or stops one. The report prints the groups, and a person reads them.
 """
@@ -77,6 +81,33 @@ def normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()[:240]
 
 
+@dataclass(frozen=True)
+class Known:
+    """A message that has been looked at, understood and recorded -- with where it is recorded."""
+
+    source: str
+    level: str
+    shape: re.Pattern            # matched against the whole normalised shape of the group
+    ref: str                     # the ACCEPTANCE item
+    note: str
+
+
+#: Registered after reading the message in a run's own log (the D68 S1 smoke runs, 2026-10-19:
+#: 628 lines for 314 containers created -- two each -- every one this text).
+KNOWN: tuple[Known, ...] = (
+    Known("dockerd", "warning",
+          re.compile(r"Security options with `:` as a separator are deprecated and will be "
+                     r"completely unsupported in <n>, use `=` instead\."),
+          "5.114", "the sandbox's security_opt spelling; the daemon says it once or twice for "
+                   "every container it is asked to create, inside a fault window or not"),
+)
+
+
+def known_for(source: str, level: str, shape: str) -> Known | None:
+    return next((k for k in KNOWN if k.source == source and k.level == level
+                 and k.shape.fullmatch(shape)), None)
+
+
 @dataclass
 class Entry:
     source: str
@@ -98,7 +129,13 @@ class Group:
     kinds: dict[str, int] = field(default_factory=dict)
 
     @property
+    def known(self) -> Known | None:
+        return known_for(self.source, self.level, self.shape)
+
+    @property
     def klass(self) -> str:
+        if self.known is not None:
+            return "known"
         if all(e.ts is None for e in self.entries):
             return "untimed"
         return "explained" if self.outside == 0 and self.inside else "not_explained"
@@ -256,9 +293,10 @@ def render(groups: list[Group], *, samples: int = 2) -> list[str]:
         span = f"{_clock(times[0])} - {_clock(times[-1])}" if times else "-"
         inside = f"{g.inside} / {g.outside}" if times else "-"
         kinds = ", ".join(f"{k} {n}" for k, n in sorted(g.kinds.items())) or "-"
-        lines.append(f"| {g.klass} | {g.source} | {g.level} | {len(g.entries)} | {inside} | "
+        label = f"known ({g.known.ref})" if g.known is not None else g.klass
+        lines.append(f"| {label} | {g.source} | {g.level} | {len(g.entries)} | {inside} | "
                      f"{kinds} | {span} | `{g.shape.replace('|', '/')[:150]}` |")
-    unexplained = [g for g in groups if g.klass != "explained"]
+    unexplained = [g for g in groups if g.klass in ("not_explained", "untimed")]
     if unexplained:
         lines.append("\nSamples of what is not explained (raw lines):\n")
         for g in unexplained:

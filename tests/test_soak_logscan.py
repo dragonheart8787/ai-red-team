@@ -155,3 +155,44 @@ def test_scan_reads_all_three_sources_and_the_summary_counts_the_classes(tmp_pat
                                        "not_explained": {"groups": 1, "lines": 1}}
     text = "\n".join(logscan.render(groups))
     assert "not_explained" in text and "Samples of what is not explained" in text
+
+
+DEPRECATION = ('level=warning msg="Security options with `:` as a separator are deprecated and '
+               'will be completely unsupported in 17.04, use `=` instead."')
+
+
+def test_a_registered_known_message_is_its_own_class_inside_or_outside_a_window(tmp_path):
+    """5.114's warning is said at every container create, so it falls inside a window by chance:
+    one class for it, whichever side of a window a line is on, with the item that records it."""
+    path = tmp_path / "dockerd.log"
+    path.write_text("\n".join([f'time="{at(100)}" {DEPRECATION}',
+                               f'time="{at(2000)}" {DEPRECATION}']) + "\n")
+    events = journal(("docker_restart", 95, 120))
+    groups = logscan.group(logscan.read_dockerd(path, T0, T0 + 7200), logscan.fault_windows(events))
+    assert [(g.klass, len(g.entries), g.known.ref) for g in groups] == [("known", 2, "5.114")]
+    assert (groups[0].inside, groups[0].outside) == (1, 1)
+    text = "\n".join(logscan.render(groups))
+    assert "known (5.114)" in text and "Samples of what is not explained" not in text
+    assert logscan.summary(groups) == {"known": {"groups": 1, "lines": 2}}
+
+
+def test_only_the_exact_message_of_the_exact_source_is_known(tmp_path):
+    """A pattern is not a prefix: a changed text, another level or another source stays unexplained,
+    so a Docker release that rewords or escalates the warning is seen."""
+    other = tmp_path / "dockerd.log"
+    other.write_text("\n".join([
+        f'time="{at(2000)}" level=error msg="Security options with `:` as a separator are '
+        f'deprecated and will be completely unsupported in 17.04, use `=` instead."',
+        f'time="{at(2001)}" level=warning msg="Security options with `:` are refused: invalid '
+        f'--security-opt"',
+        f'time="{at(2002)}" level=warning msg="Security options with `:` as a separator are '
+        f'deprecated and will be completely unsupported in 17.04, use `=` instead. Extra"',
+    ]) + "\n")
+    groups = logscan.group(logscan.read_dockerd(other, T0, T0 + 7200),
+                           logscan.fault_windows(journal()))
+    assert sorted(g.klass for g in groups) == ["not_explained"] * 3
+    pg = postgres_log(tmp_path, f"{at(2000, pg=True)} [1] app@db ERROR:  Security options with `:` "
+                      f"as a separator are deprecated and will be completely unsupported in "
+                      f"17.04, use `=` instead.")
+    assert all(g.known is None for g in logscan.group(
+        logscan.read_postgres([pg], T0, T0 + 7200), logscan.fault_windows(journal())))

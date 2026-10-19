@@ -224,7 +224,9 @@ def write(conductor, final_results, teardown) -> None:
               "Every warning and error of the services' logs, the Docker daemon's log and the "
               "Postgres log between the first and the last event of the run, normalised and "
               f"grouped (`scripts/soak/logscan.py`; classes: {classes}). `explained` means "
-              "*every* occurrence lies inside a fault's window, which says when and not why.\n"]
+              "*every* occurrence lies inside a fault's window, which says when and not why; "
+              "`known (N)` is a group that matches a pattern registered in `logscan.KNOWN`, "
+              "with the ACCEPTANCE item N that records it.\n"]
     lines += logscan.render(groups)
     if logscan.SKIPPED:
         lines.append("\n**Log sources that could not be read, and so are not in the table above:** "
@@ -296,10 +298,14 @@ def not_covered(conductor, journal: list[dict], groups: list[logscan.Group]) -> 
 
     Each item says what was looked at, so that an empty one is an answer and not an omission."""
     out: list[str] = []
-    odd = [g for g in groups if g.klass != "explained"]
+    odd = [g for g in groups if g.klass in ("not_explained", "untimed")]
     out.append(f"* **Log groups not explained by a fault window:** {len(odd)} "
                f"({sum(len(g.entries) for g in odd)} lines) -- the rows marked `not_explained` or "
                "`untimed` above, with raw samples.")
+    known = [g for g in groups if g.klass == "known"]
+    out.append("* **Log groups that match a registered known pattern:** " + (
+        "; ".join(f"{len(g.entries)} lines of `{g.shape[:70]}` ({g.known.ref})" for g in known)
+        if known else "none") + ".")
     bad = [r for r in journal if r["kind"] == "reconciler.action" and r.get("outcome") != "done"]
     by_outcome = Counter((r.get("action"), r.get("outcome"), r.get("reason")) for r in bad)
     out.append("* **Reconciler actions whose outcome was not `done`:** " + (
