@@ -1,1 +1,1 @@
-{"hours": 4, "attempt": 1, "purpose": "the four-hour soak on a runner (ACCEPTANCE 5.113), requested after the smoke run passed; an invariant that fails stops it, nothing is repaired or relaxed"}
+{"hours": 0.2, "attempt": 1, "purpose": "D68 S1: smoke run of the soak after its worker began creating a task per request (scripts/soak/worker.py); the 4-hour run of ACCEPTANCE 5.113 is not repeated by this request"}
