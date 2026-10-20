@@ -569,3 +569,83 @@ M is the work the switch needs: tasks in 25 test sites, the soak driver, two dri
 **with a helper that creates a task matching the proposal's identity** so the fixture states what a real harness
 would. K1 and K2 need nothing and are listed so a red result after the switch is read as intended, not as a
 regression. The K2 group is the one that **cannot detect** the replay defect (11.4); P1's own tests do.
+
+## 13. The cross-engagement task reference: verified against the real database (2026-10-20)
+
+*Asked after S2: a proposal in engagement A can name a task of engagement B (the foreign key on
+`tasks(task_id)` is global). Does P1's read see it ("found, but not this proposal's"), or does
+row-level security hide it ("absent")? The two mean different things, so it was run, not argued. The probe
+(a throwaway script, not in the repository) created two engagements, a task in B, and had A propose naming it.
+[E] throughout; [R] where marked.*
+
+### 13.1 What the query returns
+
+| the same `SELECT ... FROM tasks WHERE task_id = <B's task>` run as... | rows |
+|---|---|
+| `cyberorch_app`, scope **A** (the path P1 uses: `engagement_scope(A)`) | **0** (`fetchone` is `None`) |
+| `cyberorch_app`, scope **B** | **1** (`TASK-...`, engagement B, `queued`) |
+| `cyberorch_app`, **no scope set** (`cyberorch.engagement_id` empty) | 0 -- fails closed |
+| `migration_owner` (the table's owner), no scope | 0 -- `FORCE ROW LEVEL SECURITY` binds the owner |
+| the `postgres` superuser (`psql`) | 1, `engagement_id` = B -- the row exists |
+
+So in A the answer is **absent by row-level security**, not "found and different". P1's result for it is
+`task_not_live / task_not_found`, with `task_status: null` in the audit event: nothing of B's task reached A.
+The catalog agrees [E]: `tasks` has `ENABLE` and `FORCE ROW LEVEL SECURITY`, one policy
+`engagement_isolation` (`engagement_id = cyberorch_current_engagement()`), and the role that reads it is
+neither superuser nor `BYPASSRLS`. The same holds for `action_proposals`, `credentials`,
+`credential_material`, `approvals`, `capabilities`, `tool_runs`, `evidence`, and **none of the eleven
+roles of the system has `BYPASSRLS`** or is a superuser [E].
+
+### 13.2 The guarantee, and what it is not
+
+**Guarantee (pinned by tests):** a task of another engagement cannot vouch for a proposal. P1 reads
+tasks only through the engagement's scope; a task it cannot see is `task_not_live`, never
+`matches_task`, and never `differs_from_task`. Under enforcement (S3) such a proposal is escalated, like
+any proposal outside its plan. The guarantee depends on row-level security, which is the project's
+isolation mechanism for every table (`ARCHITECTURE` section 8.6), and the tests fail if it is removed
+(mutation `D68-S2-l` switches RLS off on `tasks`; `D68-S2-k` makes absent read as mismatched).
+
+**What it is not:** the database still *accepts* the reference. The insert of A's proposal succeeds
+because the foreign key check does not go through row-level security. Two consequences, both recorded
+and neither a data exposure:
+
+* an id that exists in **no** engagement is refused (`ForeignKeyViolation`), one that exists in **any**
+  engagement is accepted -- whoever may submit a proposal can tell *whether a task id exists anywhere*. The
+  id is `TASK-` plus 10 hex digits (40 random bits) and the answer carries nothing else; enumeration is
+  not practical and nothing about the task is returned [E: both outcomes observed; R: `uuid4().hex[:10]`].
+* A's proposal row then holds B's task id, and the FK makes B's task undeletable while it is referenced.
+  Nothing deletes tasks (no `DELETE FROM tasks` in the code) [R], so this is dormant.
+
+**Classification: not a gap in the isolation, no escalation to the owner.** Impact on P1: none.
+
+### 13.3 Intent of the global foreign key
+
+Read from the schema [R][E], not from a design note (none addresses it):
+
+* Every object-to-object foreign key in the core schema is **single-column on a globally unique id**:
+  `action_proposals -> tasks`, `approvals -> action_proposals`, `capabilities -> approvals / credentials /
+  action_proposals`, `credential_material -> credentials`, `tool_runs -> capabilities / action_proposals`,
+  `evidence -> tool_runs`, `security_graph_* -> tool_runs / security_graph_nodes`, `tasks.parent_task_id ->
+  tasks`: 14 of them. The only composite one is `scheduler_state -> action_proposals (proposal_id,
+  engagement_id)`, added at D62 (migration 0019) together with a `UNIQUE (proposal_id, engagement_id)`
+  on `action_proposals` -- a later, deliberate exception for a table that the scheduler's narrow role reads.
+* Every table that carries `engagement_id` is under `ENABLE` + `FORCE ROW LEVEL SECURITY` with the same
+  policy; engagement isolation is enforced by that, on every read and write, not by the shape of the keys.
+
+So the global foreign key is the **convention of the core schema** (a globally unique id, isolation by
+row-level security), not something specific to `tasks`; `tasks` is not meant to be shared between
+engagements, and nothing relies on it being so. Nothing else uses the globality of this foreign key: the
+other user of `tasks(task_id)` is `tasks.parent_task_id`, which `create_task` never sets
+(`ProposedTask` has no parent field) [R].
+
+**Not changed.** Tightening would mean a composite key on a table the scheduler and the reconciler also read,
+for no exposure found; if it is ever wanted, the model is the D62 one. Recorded as ACCEPTANCE 5.119.
+
+### 13.4 What was not examined
+
+The other thirteen single-column foreign keys have the same shape and are protected by the same
+row-level security; only `tasks` was probed with a real cross-engagement reference. The next most
+valuable to probe is `capabilities.credential_id -> credentials` (a credential of another engagement):
+its reads go through `credential_admin_scope` under the same policy, and `_load_material` selects by
+`credential_id` alone, so it relies entirely on row-level security [R]. That is the design, not a defect,
+but it was not exercised here. Listed in 5.119 as the first thing to check if the question is taken further.

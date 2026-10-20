@@ -80,10 +80,13 @@ replayed at re-derivation".
 ## 4. What S2 found
 
 1. **The foreign key on `tasks(task_id)` is global**, so a proposal can name another engagement's
-   task and the insert is accepted; row-level security hides the row, so P1 reads it as
-   `task_not_found`. It is an existing quirk (an existence oracle for task ids across engagements,
-   though not a read of anything), recorded here, tested as behaviour, and not changed: whether the
-   foreign key should be per engagement is a decision of its own.
+   task and the insert is accepted. Asked afterwards whether P1's read sees such a task or row-level
+   security hides it, and **run against the real database (2026-10-20)**: the P1 query returns no row in
+   the other engagement's scope, one in the owner's scope, none with no scope set, and the row exists for
+   a superuser -- *absent by row-level security*, not found-and-different. P1 reads it as
+   `task_not_live / task_not_found` and the audit event carries no status. Not an isolation gap; pinned by
+   two tests and two mutations; the convention behind it, and what it does and does not allow, are in
+   design note section 13 and ACCEPTANCE 5.119 (not changed).
 2. **A task whose target will not canonicalize** (the older audit test creates one with `target={}`)
    matches nothing by design ("a task nobody can reduce matches nothing", ADR_TASK_IDENTITY). Under
    P1 it is `differs_from_task / task_target_not_canonical` for every proposal that names it. That is

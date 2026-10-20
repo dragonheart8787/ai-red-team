@@ -250,9 +250,9 @@ def test_a_completed_task_is_not_live(engagement_id, registry):
 
 
 def test_another_engagements_task_is_not_found(engagement_id, registry, engagement_factory):
-    """The foreign key on ``tasks(task_id)`` is global, so a proposal can name another engagement's
-    task; row-level security hides it, and it reads as not found. (That the insert is accepted is an
-    existing quirk, recorded in ACCEPTANCE 5.118 and not changed here.)"""
+    """The foreign key on ``tasks(task_id)`` is global, so a proposal can name another
+    engagement's task and the insert is accepted; row-level security hides the row, so P1 reads it
+    as not found -- *absent*, which is not the same as "found, and not this proposal's"."""
     scope = _scope(registry, engagement_id)
     other_id, other_registry = engagement_factory()
     other_scope = _scope(other_registry, other_id)
@@ -260,6 +260,67 @@ def test_another_engagements_task_is_not_found(engagement_id, registry, engageme
     outcome = _propose(engagement_id, _proposal(scope, task_id=foreign))
     plan = _plan(engagement_id, outcome.proposal_id)
     assert (plan["task_relation"], plan["sub_cause"]) == ("task_not_live", "task_not_found")
+    with engagement_scope(engagement_id) as conn:
+        stored = conn.execute(text("SELECT task_id FROM action_proposals WHERE proposal_id = :p"),
+                              {"p": outcome.proposal_id}).scalar_one()
+    assert stored == foreign, "the database accepted the reference (the global foreign key)"
+    event = _events(engagement_id, outcome.proposal_id)[0]["payload"]
+    assert event["task_status"] is None, "nothing about the other engagement's task reached A"
+
+
+def test_the_task_read_is_confined_by_row_level_security_and_the_row_does_exist(
+    engagement_id, registry, engagement_factory
+):
+    """Verified against the real database (2026-10-20), and pinned: the *query* P1 runs returns no
+    row in another engagement's scope because row-level security filters it -- not because the row
+    is missing, and not because a comparison failed. The same query in the owning engagement's
+    scope returns it; with no scope set at all it returns nothing (fail closed)."""
+    from control_plane.state.db import get_engine
+
+    scope = _scope(registry, engagement_id)
+    other_id, other_registry = engagement_factory()
+    foreign = task_for(other_id, _proposal(_scope(other_registry, other_id)))
+    read = text("SELECT task_id, engagement_id FROM tasks WHERE task_id = :t")
+
+    with engagement_scope(engagement_id) as conn:       # the proposing engagement
+        assert conn.execute(read, {"t": foreign}).all() == []
+        canonical, key = _task_identity(SCAN, _proposal(scope).target)
+        got = r.assess_task_relation(conn, task_id=foreign, action=SCAN,
+                                     canonical_target=canonical, identity_key=key)
+        assert (got.value, got.sub_cause) == ("task_not_live", "task_not_found")
+        assert got.value != "differs_from_task", "absent, not mismatched"
+    with engagement_scope(other_id) as conn:            # the owner: the row is there
+        assert [tuple(x) for x in conn.execute(read, {"t": foreign}).all()] == [(foreign, other_id)]
+    with get_engine().begin() as conn:                  # the app role, no engagement bound
+        assert conn.execute(text("SELECT current_setting('cyberorch.engagement_id', true)")
+                            ).scalar() in (None, "")
+        assert conn.execute(read, {"t": foreign}).all() == []
+
+    with engagement_scope(engagement_id) as conn:       # and the protection is the table's own
+        enabled, forced = conn.execute(text(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'tasks' "
+            "AND relnamespace = 'public'::regnamespace")).one()
+        assert enabled and forced
+        policy = conn.execute(text(
+            "SELECT qual FROM pg_policies WHERE tablename = 'tasks' "
+            "AND policyname = 'engagement_isolation'")).scalar_one()
+        assert "cyberorch_current_engagement()" in policy
+        assert conn.execute(text(
+            "SELECT NOT rolbypassrls AND NOT rolsuper FROM pg_roles WHERE rolname = current_user"
+        )).scalar_one(), "the role that reads tasks can bypass row-level security"
+
+
+def test_a_task_id_that_exists_nowhere_is_refused_by_the_database(engagement_id, registry):
+    """The other half of the global foreign key, recorded as behaviour: an id that exists in no
+    engagement is refused (the existence of a task id, in any engagement, can be told apart from
+    its absence by whoever may submit a proposal; the id carries 40 random bits and the answer
+    carries nothing else). Not changed by D68."""
+    from sqlalchemy.exc import IntegrityError
+
+    scope = _scope(registry, engagement_id)
+    with pytest.raises(IntegrityError) as raised:
+        _propose(engagement_id, _proposal(scope, task_id="TASK-doesnotexist"))
+    assert "action_proposals_task_id_fkey" in str(raised.value)
 
 
 def test_a_retried_request_is_one_event_and_one_stored_value(engagement_id, registry):

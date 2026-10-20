@@ -69,6 +69,18 @@ CATALOGUE = [
              edits=(Edit(API, "        possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,\n    )\n    run.decision = decision\n",
                          "        possible_sensitive_data_hint=opinion.possible_sensitive_data_hint\n        or (('no_task',) if run.plan_fit.value == 'no_task' else ()),\n    )\n    run.decision = decision\n"),),
              targets=("test_the_signal_changes_no_decision_whatever_the_relation",)),
+    Mutation("D68-S2-k", "a task that cannot be seen is judged as a mismatch instead of as absent",
+             TESTS,
+             edits=(Edit(RELATION, "        return TaskRelation(TASK_NOT_LIVE, TASK_NOT_FOUND, task_id)\n",
+                         "        return TaskRelation(DIFFERS_FROM_TASK, DIFFERENT_TARGET, task_id)\n"),),
+             targets=("test_the_comparison_table", "test_another_engagements_task_is_not_found",
+                      "test_the_task_read_is_confined_by_row_level_security_and_the_row_does_exist")),
+    Mutation("D68-S2-l", "row-level security is switched off on tasks (the proposing engagement can read another's task)",
+             TESTS,
+             sql_up=("ALTER TABLE tasks DISABLE ROW LEVEL SECURITY",),
+             sql_down=("ALTER TABLE tasks ENABLE ROW LEVEL SECURITY", "ALTER TABLE tasks FORCE ROW LEVEL SECURITY"),
+             targets=("test_another_engagements_task_is_not_found",
+                      "test_the_task_read_is_confined_by_row_level_security_and_the_row_does_exist")),
 ]
 
 if __name__ == "__main__":
