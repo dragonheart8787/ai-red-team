@@ -792,3 +792,93 @@ test_wildcard_fqdn_scope_covers_subdomains_only if {
 	not authz.fqdn_covered("*.customer-a.com", "customer-a.com")
 	not authz.fqdn_covered("*.customer-a.com", "evil-customer-a.com")
 }
+
+# ---------------------------------------------------------------------------
+# D68 P1 -- the relation between a proposal and the task it names
+#
+# A fact computed by the control plane and stored with the decision, read by approval_reasons alone,
+# and only when the policy's task_relation_enforce is on. It can ask for a human; nothing else.
+# ---------------------------------------------------------------------------
+
+enforced := object.union(base, {"policy": object.union(base.policy, {"task_relation_enforce": true})})
+
+relation(name) := {"version": "plan_fit_v1", "task_relation": name, "sub_cause": null}
+
+test_matches_task_is_the_same_as_no_signal if {
+	with_signal := authz.result with input as object.union(enforced, {"plan_fit": relation("matches_task")})
+	without := authz.result with input as enforced
+
+	with_signal == without
+	with_signal.decision == "ALLOW"
+}
+
+test_no_task_asks_for_a_human_when_enforced if {
+	r := authz.result with input as object.union(enforced, {"plan_fit": relation("no_task")})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["proposal_without_task"]
+}
+
+test_a_task_that_differs_or_is_not_live_asks_for_a_human_when_enforced if {
+	every name in ["differs_from_task", "task_not_live"] {
+		r := authz.result with input as object.union(enforced, {"plan_fit": relation(name)})
+		r.decision == "HUMAN_APPROVAL"
+		r.approval_reasons == ["proposal_outside_task"]
+	}
+}
+
+test_nothing_is_read_when_not_enforced if {
+	every name in ["no_task", "differs_from_task", "task_not_live", "matches_task", "unrecognized"] {
+		r := authz.result with input as object.union(base, {"plan_fit": relation(name)})
+		r.decision == "ALLOW"
+		count(r.approval_reasons) == 0
+	}
+}
+
+test_an_explicit_false_switch_reads_nothing if {
+	off := object.union(base, {"policy": object.union(base.policy, {"task_relation_enforce": false})})
+	r := authz.result with input as object.union(off, {"plan_fit": relation("no_task")})
+
+	r.decision == "ALLOW"
+}
+
+test_an_absent_signal_fires_nothing_even_when_enforced if {
+	r := authz.result with input as enforced
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+test_a_signal_this_policy_cannot_read_is_outside_the_plan if {
+	bad := [
+		relation("unrecognized"),
+		relation("some_value_from_a_newer_vocabulary"),
+		{"version": "plan_fit_v1"},
+		{"task_relation": 7},
+		"matches_task",
+		null,
+	]
+	every signal in bad {
+		r := authz.result with input as object.union(enforced, {"plan_fit": signal})
+		r.decision == "HUMAN_APPROVAL"
+		"proposal_outside_task" in r.approval_reasons
+	}
+}
+
+test_the_signal_never_outranks_a_deny if {
+	denied := object.union(enforced, {"authorization_resolution": {"authorized": false, "scope_object_id": null}})
+	plain := authz.result with input as denied
+	with_signal := authz.result with input as object.union(denied, {"plan_fit": relation("no_task")})
+
+	plain.decision == "DENY"
+	with_signal.decision == "DENY"
+	with_signal.deny_reasons == plain.deny_reasons
+}
+
+test_the_signal_adds_to_other_reasons_and_never_replaces_them if {
+	worried := object.union(enforced, {"canonical": {"risk": "high"}})
+	r := authz.result with input as object.union(worried, {"plan_fit": relation("no_task")})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["high_risk", "proposal_without_task"]
+}

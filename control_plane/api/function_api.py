@@ -766,6 +766,9 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         # is ask for a human.
         risk_hint=opinion.risk_hint,
         possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,
+        # D68 P1: the relation to the task, read by approval_reasons alone and only when the
+        # policy's task_relation_enforce is on. The same function gives the re-derivation its copy.
+        plan_fit=plan_relation.policy_signal(run.plan_fit.as_hint()),
     )
     run.decision = decision
 
@@ -867,13 +870,17 @@ def _revalidate(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
 def evaluate_policy(
     *, proposal: ProposedAction, target, authorization, metadata, policy: EffectivePolicy,
     scope_objects, budget: Budget, risk_hint: str | None,
-    possible_sensitive_data_hint: Sequence[str],
+    possible_sensitive_data_hint: Sequence[str], plan_fit: Mapping[str, Any] | None,
 ):
     """The one place a proposal's inputs become an OPA decision.
 
     Called by the decision stage and, again, by the re-validation ``dispatch_approved`` does before
     it issues (D58-8): a second copy of this assembly would let the dispatch-time answer differ from
     the decision-time one for reasons that have nothing to do with the world having changed.
+
+    ``plan_fit`` (D68) is the stored signal, already in the form ``plan_fit.relation.policy_signal``
+    gives, and **a required argument**: both callers must say what they pass (``None`` is an answer,
+    the signal being absent), so a third caller cannot leave it out without it being seen.
     """
     side_effects = side_effect_floor(
         action=proposal.action,
@@ -894,6 +901,7 @@ def evaluate_policy(
         writes_data=side_effects.writes_data,
         changes_state=side_effects.changes_state,
         capability_request=budget.as_dict(),
+        plan_fit=plan_fit,
     )
     return evaluate(policy_input)
 

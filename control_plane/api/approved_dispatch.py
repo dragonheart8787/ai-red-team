@@ -62,6 +62,7 @@ from control_plane.canonicalizer.metadata import resolve_metadata
 from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
 from control_plane.capability.broker import Budget
 from control_plane.orchestrator import stages
+from control_plane.plan_fit import relation as plan_relation
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.registry.scope_registry import list_scope_objects
 from control_plane.state.db import engagement_scope
@@ -201,6 +202,11 @@ def _rederive(
         scope_objects=scope_objects, budget=Budget(max_duration_seconds=_APPROVED_BUDGET_SECONDS),
         risk_hint=hints.get("risk_hint"),
         possible_sensitive_data_hint=tuple(hints.get("possible_sensitive_data_hint") or ()),
+        # D68: the signal as it was at the decision, replayed -- never recomputed from this rebuilt
+        # proposal (it has no task_id) and never from the task's status now (a task that finished
+        # while the approval waited is the ordinary case). Absent stays absent: a proposal decided
+        # before the signal existed has none, and nothing here invents one.
+        plan_fit=plan_relation.policy_signal(hints["plan_fit"]) if "plan_fit" in hints else None,
     )
     if decision.decision == fa.DENY:
         reasons.append(POLICY_NOW_DENIES)

@@ -16,6 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mutation_check import Edit, Mutation, main  # noqa: E402
 
 RELATION = "control_plane/plan_fit/relation.py"
+MERGE = "control_plane/policy/merge.py"
+LAYERS = "control_plane/policy/layers.py"
+DISPATCH = "control_plane/api/approved_dispatch.py"
+ENGINE = "control_plane/policy/engine.py"
+REGO = "control_plane/policy/rego/authz.rego"
+POLICY = ("tests/test_plan_fit_policy.py",)
+REPLAY = ("tests/test_plan_fit_replay.py",)
+STRUCTURE = ("tests/test_plan_fit_structure.py",)
 API = "control_plane/api/function_api.py"
 TESTS = ("tests/test_plan_fit_relation.py",)
 
@@ -81,6 +89,81 @@ CATALOGUE = [
              sql_down=("ALTER TABLE tasks ENABLE ROW LEVEL SECURITY", "ALTER TABLE tasks FORCE ROW LEVEL SECURITY"),
              targets=("test_another_engagements_task_is_not_found",
                       "test_the_task_read_is_confined_by_row_level_security_and_the_row_does_exist")),
+    # ---- S3: the switch, the rules, the replay -------------------------------------------------
+    Mutation("D68-S3-a", "the merge forgets the switch (no layer can turn it on)",
+             POLICY,
+             edits=(Edit(MERGE, "        task_relation_enforce=any(layer.task_relation_enforce for layer in layers),\n    )",
+                         "        task_relation_enforce=False,\n    )"),),
+             targets=("test_any_one_layer_turns_it_on", "test_no_layer_can_turn_off_what_another_turned_on")),
+    Mutation("D68-S3-b", "the loader's combining of rows drops the switch",
+             POLICY,
+             edits=(Edit(LAYERS, "        task_relation_enforce=any(layer.task_relation_enforce for layer in layers),\n    )",
+                         "    )"),),
+             targets=("test_rows_of_one_layer_name_are_combined_without_dropping_the_switch",
+                      "test_the_switch_reaches_the_loaded_policy_and_only_that_engagement")),
+    Mutation("D68-S3-c", "any truthy value in a document turns the switch on",
+             POLICY,
+             edits=(Edit(MERGE, '            task_relation_enforce=doc.get("task_relation_enforce") is True,',
+                         '            task_relation_enforce=bool(doc.get("task_relation_enforce")),'),),
+             targets=("test_only_a_real_true_turns_it_on_when_read_from_a_document",)),
+    Mutation("D68-S3-d", "publication accepts a switch that is not a boolean",
+             POLICY,
+             edits=(Edit(LAYERS, '    if "task_relation_enforce" in document and not isinstance(\n            document["task_relation_enforce"], bool):',
+                         '    if False:'),),
+             targets=("test_publication_refuses_anything_but_a_boolean",)),
+    Mutation("D68-S3-e", "an emergency overlay may say the switch is off",
+             POLICY,
+             edits=(Edit(MERGE, '    if "task_relation_enforce" in doc and doc["task_relation_enforce"] is not True:', '    if False:'),),
+             targets=("test_the_overlay_may_turn_it_on_and_never_say_anything_else_about_it",)),
+    Mutation("D68-S3-f", "the re-derivation passes no signal at all (the replay removed)",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(DISPATCH, '        plan_fit=plan_relation.policy_signal(hints["plan_fit"]) if "plan_fit" in hints else None,',
+                         '        plan_fit=None,'),),
+             targets=("test_both_callers_of_evaluate_policy_say_what_they_pass_and_take_it_from_one_function",
+                      "test_the_rederivation_never_reads_the_task_or_the_proposal_for_the_signal")),
+    Mutation("D68-S3-g", "the re-derivation recomputes the signal from the rebuilt proposal (no task_id: no_task)",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(DISPATCH, '        plan_fit=plan_relation.policy_signal(hints["plan_fit"]) if "plan_fit" in hints else None,',
+                         '        plan_fit=plan_relation.policy_signal({"version": "plan_fit_v1", "task_relation": "no_task", "sub_cause": "task_id_absent"}),'),),
+             targets=("test_a_matching_task_that_finished_while_the_approval_waited_still_dispatches",
+                      "test_a_proposal_outside_its_task_is_approved_with_the_reason_shown_and_dispatches")),
+    Mutation("D68-S3-h", "the re-derivation reads the task's status now (a finished task is not live)",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(DISPATCH, '        plan_fit=plan_relation.policy_signal(hints["plan_fit"]) if "plan_fit" in hints else None,',
+                         '        plan_fit=plan_relation.policy_signal({"version": "plan_fit_v1", "task_relation": "task_not_live", "sub_cause": "task_status_not_live"}),'),),
+             targets=("test_a_matching_task_that_finished_while_the_approval_waited_still_dispatches",)),
+    Mutation("D68-S3-i", "an absent stored signal is invented as a value",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(DISPATCH, '        plan_fit=plan_relation.policy_signal(hints["plan_fit"]) if "plan_fit" in hints else None,',
+                         '        plan_fit=plan_relation.policy_signal(hints.get("plan_fit")),'),),
+             targets=("test_a_row_from_before_the_signal_existed_adds_nothing_and_dispatches",)),
+    Mutation("D68-S3-j", "a stored signal nobody can read is taken as a match",
+             POLICY + REPLAY,
+             edits=(Edit(RELATION, '    return {"version": VERSION, "task_relation": UNRECOGNIZED, "sub_cause": None}',
+                         '    return {"version": VERSION, "task_relation": MATCHES_TASK, "sub_cause": None}'),),
+             targets=("test_anything_else_is_unrecognized_and_never_reads_as_a_match",
+                      "test_a_stored_signal_that_cannot_be_read_refuses_the_dispatch_loudly")),
+    Mutation("D68-S3-k", "the rules fire whether or not the switch is on (no_task)",
+             POLICY,
+             edits=(Edit(REGO, '\tinput.policy.task_relation_enforce == true\n\tinput.plan_fit.task_relation == "no_task"', '\tinput.plan_fit.task_relation == "no_task"'),),
+             targets=("test_the_signal_never_makes_a_decision_more_permissive",)),
+    Mutation("D68-S3-l", "a damaged signal is read as fine (only the two known-bad values are outside the plan)",
+             POLICY,
+             edits=(Edit(REGO, '\tnot plan_fit_is_a_known_good_value\n', '\tinput.plan_fit.task_relation in {"differs_from_task", "task_not_live"}\n'),),
+             targets=("test_an_allow_stays_an_allow_only_for_a_match_or_no_signal",)),
+    Mutation("D68-S3-m", "matches_task asks for a human too",
+             POLICY,
+             edits=(Edit(REGO, 'in {"matches_task", "no_task"}', 'in {"no_task"}'),),
+             targets=("test_the_signal_never_makes_a_decision_more_permissive",
+                      "test_an_allow_stays_an_allow_only_for_a_match_or_no_signal")),
+    Mutation("D68-S3-n", "the policy input drops the signal",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(ENGINE, '        policy_input["plan_fit"] = dict(plan_fit)\n', '        pass\n'),),
+             targets=("test_a_present_signal_is_passed_as_given_and_copied",)),
+    Mutation("D68-S3-o", "evaluate_policy does not hand the signal to the input builder",
+             POLICY + REPLAY + STRUCTURE,
+             edits=(Edit(API, "        capability_request=budget.as_dict(),\n        plan_fit=plan_fit,\n    )", "        capability_request=budget.as_dict(),\n    )"),),
+             targets=("test_build_policy_input_forwards_what_it_is_given",)),
 ]
 
 if __name__ == "__main__":

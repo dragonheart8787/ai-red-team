@@ -92,6 +92,29 @@ class TaskRelation:
         return {**self.as_hint(), "task_id": self.task_id, "task_status": self.task_status}
 
 
+#: What a stored signal reads as when it is present but is not one this code knows: a newer
+#: version, another vocabulary, damaged JSON. It is *not* in :data:`RELATIONS` -- nothing builds
+#: it -- and the policy treats it as outside the plan, so the reason it adds is one the approver
+#: was never shown and the dispatch is refused loudly rather than passed quietly.
+UNRECOGNIZED = "unrecognized"
+
+
+def policy_signal(stored: Any) -> dict[str, Any]:
+    """The policy input for a signal that was stored at a decision (D68 S3).
+
+    The one function both ``evaluate_policy`` callers use: the decision stage passes what it has
+    just computed, and the approval re-derivation passes what the decision stored. A value this
+    code recognises goes through unchanged; anything else becomes :data:`UNRECOGNIZED`. It never
+    raises and never returns something that reads as ``matches_task`` unless the stored value
+    said so.
+    """
+    if isinstance(stored, dict) and stored.get("version") == VERSION:
+        relation, sub_cause = stored.get("task_relation"), stored.get("sub_cause")
+        if relation in SUB_CAUSES and sub_cause in SUB_CAUSES[relation]:
+            return {"version": VERSION, "task_relation": relation, "sub_cause": sub_cause}
+    return {"version": VERSION, "task_relation": UNRECOGNIZED, "sub_cause": None}
+
+
 def _inside(proposal_target: str | None, task_target: str | None) -> bool:
     """True when ``ip:A`` / ``cidr:B`` lies inside ``cidr:C`` (and is not the same thing)."""
     try:

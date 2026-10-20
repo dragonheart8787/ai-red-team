@@ -105,6 +105,34 @@ def _nothing_is_left_behind(request):
                     + "\n  ".join(found.failures() + rows.failures()), pytrace=False)
 
 
+#: D68 S3. When set to ``1`` the whole suite runs with ``task_relation_enforce`` on for every policy
+#: input it builds -- the CI step that proves the callers of ``propose_action`` are classified
+#: right (design note section 12): a test that needs ALLOW and has no task turns red, a DENY or a
+#: HUMAN_APPROVAL fixture does not. A test-only seam: no product module reads this variable
+#: (``tests/test_plan_fit_structure.py``).
+ENFORCE_ENV = "CYBERORCH_TEST_TASK_RELATION_ENFORCE"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _task_relation_enforcement_when_asked():
+    if os.environ.get(ENFORCE_ENV) != "1":
+        yield
+        return
+    from control_plane.api import function_api
+
+    real = function_api.build_policy_input
+
+    def enforcing(*args, **kwargs):
+        policy_input = real(*args, **kwargs)
+        policy_input["policy"]["task_relation_enforce"] = True
+        return policy_input
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(function_api, "build_policy_input", enforcing)
+    yield
+    patch.undo()
+
+
 @pytest.fixture(autouse=True)
 def _each_test_finishes_what_it_started():
     """The engagements a test made have their stuck proposals and in-flight runs closed when it

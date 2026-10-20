@@ -121,6 +121,7 @@ def build_policy_input(
     changes_state: bool = False,
     requests_in_window: int = 0,
     capability_request: Mapping[str, Any] | None = None,
+    plan_fit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble ``input`` for the policy.
 
@@ -144,7 +145,7 @@ def build_policy_input(
     stated budget means no limit" would be the opposite of what §4.6 asks for,
     at the one place nobody would look again.
     """
-    return {
+    policy_input: dict[str, Any] = {
         "action": {
             "action": action,
             "authorization": {
@@ -169,3 +170,9 @@ def build_policy_input(
         },
         "usage": {"requests_in_window": requests_in_window},
     }
+    if plan_fit is not None:
+        # D68 P1. Present only when a signal exists: an absent key is an absent input, and no
+        # rule reads an absent signal. Like the reviewer's words it is read by
+        # ``approval_reasons`` alone, so the worst it can do is ask for a human.
+        policy_input["plan_fit"] = dict(plan_fit)
+    return policy_input

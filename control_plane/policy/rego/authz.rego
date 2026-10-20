@@ -324,6 +324,30 @@ approval_reasons contains "non_authoritative_sensitivity" if {
 	not class in canonical_data_class
 }
 
+# D68 P1 (ACCEPTANCE 5.116): whether a proposal belongs to the plan. `plan_fit` is the relation
+# between the proposal and the task it names, computed by the control plane from rows and stored with
+# the decision; it is a fact, not a model's opinion. It enters approval_reasons and nowhere else, so
+# the worst it can do is ask for a human -- and only when the policy's `task_relation_enforce` is on.
+#
+# No rule reads `matches_task`: it is the same as the signal being absent. An absent `plan_fit`
+# (a proposal decided before the signal existed) fires nothing. A present one that is not one of the
+# two known-good values -- a task that differs or is not live, a vocabulary this policy does not know,
+# a damaged object -- is outside the plan: fail closed, so a value nobody can read never reads as fine.
+approval_reasons contains "proposal_without_task" if {
+	input.policy.task_relation_enforce == true
+	input.plan_fit.task_relation == "no_task"
+}
+
+# (A helper rather than `not input.plan_fit.task_relation in {...}`: with the operand undefined that
+# one-line form does not fire, which is exactly the damaged-object case this must catch.)
+plan_fit_is_a_known_good_value if input.plan_fit.task_relation in {"matches_task", "no_task"}
+
+approval_reasons contains "proposal_outside_task" if {
+	input.policy.task_relation_enforce == true
+	input.plan_fit
+	not plan_fit_is_a_known_good_value
+}
+
 # ---------------------------------------------------------------------------
 # Decision precedence: DENY > HUMAN_APPROVAL > ALLOW
 # ---------------------------------------------------------------------------

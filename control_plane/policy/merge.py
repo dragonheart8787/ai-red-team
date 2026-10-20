@@ -26,6 +26,11 @@ So every constraint carries its own neutral element — the value that means
     actions         INHERIT (not a boolean)    see below
     ==============  =========================  ==========
 
+``task_relation_enforce`` (D68 P1) is not in the table because it is not a constraint on an action:
+it is a switch that decides whether the policy reads the task relation of a proposal. Its neutral
+element is ``False`` and it merges by OR, so a layer that says nothing, or ``false``, adds no
+restriction and no layer can turn off what another turned on. Only a layer can turn it *on*.
+
 Action policy resolution is DENY-dominant: any layer that says DENY wins
 outright, regardless of position; otherwise any layer saying ALLOW wins; if
 every layer is INHERIT the answer is DENY (fail-closed, I10). The §4.5 prose
@@ -90,6 +95,7 @@ class PolicyLayer:
     data_deny: frozenset[str] = field(default_factory=frozenset)
     rate_limit: float = math.inf
     actions: Mapping[str, str] = field(default_factory=dict)
+    task_relation_enforce: bool = False
 
     @classmethod
     def from_document(cls, name: str, document: Mapping[str, Any] | None) -> PolicyLayer:
@@ -116,6 +122,9 @@ class PolicyLayer:
             actions={
                 k: v for k, v in (doc.get("actions") or {}).items() if v != str(INHERIT)
             },
+            # Only a real ``true`` turns it on. (A string "false" is truthy; publication refuses
+            # anything but a boolean, and this refuses to read one.)
+            task_relation_enforce=doc.get("task_relation_enforce") is True,
         )
 
 
@@ -128,6 +137,7 @@ class EffectivePolicy:
     data_deny: frozenset[str]
     rate_limit: float
     actions: Mapping[str, str]
+    task_relation_enforce: bool = False
 
     def action_decision(self, action: str) -> str:
         """Resolve one action, including one never mentioned by any layer.
@@ -153,6 +163,7 @@ class EffectivePolicy:
             # the neutral element rather than as a limit of zero.
             "rate_limit": None if math.isinf(self.rate_limit) else self.rate_limit,
             "actions": dict(self.actions),
+            "task_relation_enforce": self.task_relation_enforce,
         }
 
 
@@ -174,6 +185,12 @@ def validate_emergency_overlay(document: Mapping[str, Any] | None) -> None:
             raise EmergencyOverlayError(
                 f"emergency overlay may not ALLOW {action!r}: it can only tighten"
             )
+    if "task_relation_enforce" in doc and doc["task_relation_enforce"] is not True:
+        # false is a no-op under the OR merge, so it could not relax anything; it is refused all the
+        # same, because an overlay that says "false" reads as a relaxation to whoever reads it.
+        raise EmergencyOverlayError(
+            "emergency overlay may only turn task_relation_enforce on (true): it can only tighten"
+        )
 
 
 def intersect_allow(
@@ -236,4 +253,5 @@ def merge_policy(
             key: resolve_action([layer.actions.get(key, INHERIT) for layer in layers])
             for key in sorted(action_keys)
         },
+        task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
     )

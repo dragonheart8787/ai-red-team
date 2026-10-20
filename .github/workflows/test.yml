@@ -353,6 +353,40 @@ jobs:
       - name: Run test suite
         run: .venv/bin/pytest -v -ra --junitxml=junit.xml
 
+      - name: Run test suite with task_relation enforcement ON (zero failures expected)
+        # D68 S3 -- a hard acceptance criterion, not to be relaxed, skipped or made advisory. The
+        # whole suite again, with the policy reading the relation between every proposal and its
+        # task (CYBERORCH_TEST_TASK_RELATION_ENFORCE: a seam in tests/conftest.py that no shipped
+        # module reads). With the switch on, a proposal that names no task, or the wrong one, needs a
+        # human: so a test that needs ALLOW and gave its proposal no task goes red here, and a DENY
+        # or a HUMAN_APPROVAL fixture does not. It is the mechanical check of the caller
+        # classification in docs/D68_REVIEWER_SEMANTIC_VALIDATION_DESIGN.md section 12. A red test is
+        # a missed caller or a misclassified one: fix the classification, never this step.
+        if: always()
+        env:
+          CYBERORCH_TEST_TASK_RELATION_ENFORCE: '1'
+        run: .venv/bin/pytest -v -ra --junitxml=junit-enforced.xml
+
+      - name: Assert the enforced run had no failure, no error and no skip
+        if: always()
+        run: |
+          .venv/bin/python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          try:
+              suite = ET.parse("junit-enforced.xml").getroot()
+          except Exception as exc:
+              print("::error::the enforced run left no result file: %s" % exc)
+              sys.exit(1)
+          if suite.tag == "testsuites":
+              suite = suite[0]
+          counts = {k: int(suite.get(k, 0)) for k in ("tests", "failures", "errors", "skipped")}
+          print("enforced: tests={tests} failures={failures} errors={errors} skipped={skipped}"
+                .format(**counts))
+          if counts["failures"] or counts["errors"] or counts["skipped"] or counts["tests"] == 0:
+              print("::error::the suite is not clean with task_relation enforcement on")
+              sys.exit(1)
+          PY
+
       - name: Assert nothing was skipped
         # Belt and braces for the property the whole job exists to protect. A
         # skipped security test is not a passing security test, so any skip

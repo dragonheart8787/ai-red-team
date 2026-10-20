@@ -137,6 +137,14 @@ def publish_policy_layer(
             "would apply to every customer's engagements (ACCEPTANCE 5.35)"
         )
 
+    if "task_relation_enforce" in document and not isinstance(
+            document["task_relation_enforce"], bool):
+        # A switch read as "is True": "false" or 1 would silently not enforce. Refuse it instead.
+        raise PolicyLayerError(
+            "task_relation_enforce must be a boolean (true or false), not "
+            f"{document['task_relation_enforce']!r}"
+        )
+
     if layer == EMERGENCY_OVERLAY:
         # Raises EmergencyOverlayError, which callers may want to catch
         # separately from a malformed request.
@@ -283,6 +291,7 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
             key: resolve_action([layer.actions.get(key, INHERIT) for layer in layers])
             for key in {k for layer in layers for k in layer.actions}
         },
+        task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
     )
 
 
