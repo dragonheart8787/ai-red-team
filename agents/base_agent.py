@@ -110,3 +110,73 @@ class Planner(Protocol):
 class Worker(Protocol):
     def propose(self, *, task: ProposedTask) -> ProposedAction:  # pragma: no cover
         ...
+
+
+# ---------------------------------------------------------------------------
+# Plan fit (D68): do the task's goal, action and target fit each other?
+# ---------------------------------------------------------------------------
+
+#: What a model may say. Three values, no score, no confidence, no text: ``insufficient_context`` is
+#: an answer of equal standing, so a model is never pushed to a guess when the goal, the action and
+#: the target do not say enough.
+GOAL_FIT_VALUES = ("plausible", "implausible", "insufficient_context")
+
+#: What the *system* says when there is no model answer. A model cannot produce it: it is not in the
+#: output schema, and a reply that tries is a failure. ``failed`` -- the call broke, timed out, was
+#: refused or returned something outside the contract; ``disabled`` -- no validator is configured;
+#: ``not_applicable`` -- the proposal does not match its task, so there is no goal to judge it by.
+NOT_ASSESSED = "not_assessed"
+NOT_ASSESSED_CAUSES = ("failed", "disabled", "not_applicable")
+
+
+@dataclass(frozen=True)
+class PlanFitQuery:
+    """Everything a validator is shown, and nothing else.
+
+    Five strings. The goal is model-authored text that may have been shaped by what a target said
+    (ADR_GOAL_LAUNDERING), so it is shown only inside the untrusted block; the other four are the
+    task's and the proposal's action and canonical target, as the canonicalizer wrote them. The
+    agent's own stated reason, how the target was found, resources and expected data are **not**
+    here: a model's justification of its own proposal is what a lure writes, and it is not
+    evidence of fit.
+    """
+
+    goal: str
+    task_action: str
+    task_target: str
+    proposal_action: str
+    proposal_target: str
+
+
+@dataclass(frozen=True)
+class GoalFitAssessment:
+    """A validator's answer: one value from a closed vocabulary, and why it is not a model's.
+
+    No rationale field exists, by design -- model-authored prose on the way to the person who
+    approves is a persuasion channel. Like :class:`ReviewerOpinion` it can only add caution:
+    ``plausible`` is read by no policy rule.
+    """
+
+    validator_id: str
+    goal_fit: str
+    cause: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.goal_fit in GOAL_FIT_VALUES:
+            ok = self.cause is None
+        else:
+            ok = self.goal_fit == NOT_ASSESSED and self.cause in NOT_ASSESSED_CAUSES
+        if not ok:
+            raise ValueError(
+                f"not in the goal_fit vocabulary: {self.goal_fit!r} / {self.cause!r}")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"validator_id": self.validator_id, "goal_fit": self.goal_fit, "cause": self.cause}
+
+
+@runtime_checkable
+class PlanFitValidator(Protocol):
+    """The seam a plan-fit validator drops into (D68 Q1). Not called by anything yet (S5)."""
+
+    def assess(self, *, query: PlanFitQuery) -> GoalFitAssessment:  # pragma: no cover
+        ...

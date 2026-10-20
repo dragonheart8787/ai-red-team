@@ -60,6 +60,12 @@ WORKER_MODEL_ENV = "CYBERORCH_WORKER_MODEL"
 SUPERVISOR_BACKEND_ENV = "CYBERORCH_SUPERVISOR_BACKEND"
 SUPERVISOR_MODEL_ENV = "CYBERORCH_SUPERVISOR_MODEL"
 
+#: And a fourth role (D68 Q1): the plan-fit validator, which judges whether a task's goal, action
+#: and target fit each other. Its own pair of variables, for the reason the other three have theirs:
+#: one new source of non-determinism at a time. Nothing calls it yet.
+PLANFIT_BACKEND_ENV = "CYBERORCH_PLANFIT_BACKEND"
+PLANFIT_MODEL_ENV = "CYBERORCH_PLANFIT_MODEL"
+
 FAKE = "fake"
 API = "api"
 CLAUDE_CODE = "claude_code"
@@ -207,4 +213,42 @@ def build_supervisor(
     raise ReviewerSelectionError(
         f"unknown supervisor backend {backend!r}; expected one of "
         f"{SUPERVISOR_BACKENDS}"
+    )
+
+
+def build_plan_fit_validator(
+    backend: str | None = None, *, model: str | None = None, **kwargs: Any
+):
+    """Return the configured plan-fit validator (D68 Q1).
+
+    Defaults to ``fake`` for the reason ``build_reviewer`` does, and an unknown name raises rather
+    than falling back, so a typo cannot produce a run that looks like it exercised a real model and
+    did not. The four backends are the Reviewer's.
+    """
+    backend = (backend or os.environ.get(PLANFIT_BACKEND_ENV) or FAKE).strip().lower()
+    model = model or os.environ.get(PLANFIT_MODEL_ENV) or None
+
+    if backend == FAKE:
+        from agents.fake.fake_plan_fit import HonestFakePlanFit
+
+        return HonestFakePlanFit(*kwargs.pop("values", ()), **kwargs)
+
+    if backend == API:
+        from agents.llm.plan_fit_validators import LLMPlanFitValidator
+
+        return LLMPlanFitValidator(**({"model": model} if model else {}), **kwargs)
+
+    if backend == CLAUDE_CODE:
+        from agents.llm.plan_fit_validators import ClaudeCodeHeadlessPlanFitValidator
+
+        return ClaudeCodeHeadlessPlanFitValidator(
+            **({"model": model} if model else {}), **kwargs)
+
+    if backend == LOCAL:
+        from agents.llm.plan_fit_validators import LocalPlanFitValidator
+
+        return LocalPlanFitValidator(**({"model": model} if model else {}), **kwargs)
+
+    raise ReviewerSelectionError(
+        f"unknown plan-fit validator backend {backend!r}; expected one of {BACKENDS}"
     )

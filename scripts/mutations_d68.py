@@ -24,6 +24,12 @@ REGO = "control_plane/policy/rego/authz.rego"
 POLICY = ("tests/test_plan_fit_policy.py",)
 REPLAY = ("tests/test_plan_fit_replay.py",)
 STRUCTURE = ("tests/test_plan_fit_structure.py",)
+VALIDATOR = ("tests/test_plan_fit_validator.py",)
+PFBASE = "agents/llm/plan_fit_base.py"
+PFVAL = "agents/llm/plan_fit_validators.py"
+BASE_AGENT = "agents/base_agent.py"
+UNTRUSTED = "agents/llm/untrusted.py"
+SELECTION = "agents/llm/selection.py"
 API = "control_plane/api/function_api.py"
 TESTS = ("tests/test_plan_fit_relation.py",)
 
@@ -164,6 +170,61 @@ CATALOGUE = [
              POLICY + REPLAY + STRUCTURE,
              edits=(Edit(API, "        capability_request=budget.as_dict(),\n        plan_fit=plan_fit,\n    )", "        capability_request=budget.as_dict(),\n    )"),),
              targets=("test_build_policy_input_forwards_what_it_is_given",)),
+    # ---- S4: the plan-fit validator ------------------------------------------------------------
+    Mutation("D68-S4-a", "the goal is moved out of the untrusted block (onto the trusted side)",
+             VALIDATOR,
+             edits=(Edit(PFBASE, '            "task_goal": query.goal,\n', ""),
+                    Edit(PFBASE, 'body, instruction="Judge whether the proposed action and target fit the task\'s goal.")',
+                         'body, instruction=f"Judge whether the proposed action and target fit: {query.goal}")')),
+             targets=("test_the_whole_query_is_in_one_nonce_delimited_block",
+                      "test_hostile_text_stays_inside_the_block_wherever_it_is_put")),
+    Mutation("D68-S4-b", "the agent's own stated reason is added to what the validator is shown",
+             VALIDATOR,
+             edits=(Edit(BASE_AGENT, "    proposal_action: str\n    proposal_target: str\n\n\n@dataclass(frozen=True)\nclass GoalFitAssessment",
+                         "    proposal_action: str\n    proposal_target: str\n    reason: str = \"\"\n\n\n@dataclass(frozen=True)\nclass GoalFitAssessment"),),
+             targets=("test_what_the_validator_is_shown_is_five_strings_and_none_of_the_agents_words",)),
+    Mutation("D68-S4-c", "a failure is returned as plausible (fails open)",
+             VALIDATOR,
+             edits=(Edit(PFBASE, '        return GoalFitAssessment(self.validator_id, NOT_ASSESSED, "failed")', '        return GoalFitAssessment(self.validator_id, "plausible")'),),
+             targets=("test_a_reply_outside_the_contract_is_a_failure_never_a_plausible",
+                      "test_each_api_failure_path_asks_for_a_human")),
+    Mutation("D68-S4-d", "the schema admits fields other than goal_fit",
+             VALIDATOR,
+             edits=(Edit(PFBASE, '    "additionalProperties": False,\n}\n\nSYSTEM_PROMPT', '    "additionalProperties": True,\n}\n\nSYSTEM_PROMPT'),),
+             targets=("test_the_schema_allows_one_field_which_is_an_enum_of_the_three_values",)),
+    Mutation("D68-S4-e", "a reply carrying a sentence beside the answer is accepted",
+             VALIDATOR,
+             edits=(Edit(PFBASE, '        if (set(payload) != {"goal_fit"} or not isinstance(value, str)\n                or value not in GOAL_FIT_VALUES):', '        if (not isinstance(value, str) or value not in GOAL_FIT_VALUES):'),),
+             targets=("test_a_reply_outside_the_contract_is_a_failure_never_a_plausible",)),
+    Mutation("D68-S4-f", "the delimiter token is the same on every call",
+             VALIDATOR,
+             edits=(Edit(UNTRUSTED, "    nonce = secrets.token_hex(8)\n    while nonce in body:", '    nonce = "0123456789abcdef"\n    while nonce in body:'),),
+             targets=("test_the_nonce_is_fresh_for_every_call",)),
+    Mutation("D68-S4-g", "a refusal is read as an answer",
+             VALIDATOR,
+             edits=(Edit(PFVAL, '        if getattr(response, "stop_reason", None) == "refusal":', "        if False:"),),
+             targets=("test_a_refusal_is_not_an_answer_even_when_the_text_says_plausible",)),
+    Mutation("D68-S4-h", "an empty list of choices escapes the local validator as an exception",
+             VALIDATOR,
+             edits=(Edit(PFVAL, "        except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:", "        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:"),),
+             targets=("test_each_local_failure_path_asks_for_a_human",)),
+    Mutation("D68-S4-i", "the default backend is a real model",
+             VALIDATOR,
+             edits=(Edit(SELECTION, "    backend = (backend or os.environ.get(PLANFIT_BACKEND_ENV) or FAKE).strip().lower()", "    backend = (backend or os.environ.get(PLANFIT_BACKEND_ENV) or API).strip().lower()"),),
+             targets=("test_the_default_is_the_fake_one_and_an_unknown_name_raises",)),
+    Mutation("D68-S4-j", "a failed call leaves no record",
+             VALIDATOR,
+             edits=(Edit(PFBASE, "        self.calls.append(ValidationCall(\n            latency_seconds=time.monotonic() - started, input_tokens=input_tokens,\n            output_tokens=output_tokens, model=self.model, failed=True, failure=reason))\n", ""),),
+             targets=("test_each_call_is_recorded_with_latency_and_tokens_and_a_failure_is_recorded_as_one",
+                      "test_a_failure_carries_no_text_in_the_assessment_only_in_the_call_record")),
+    Mutation("D68-S4-k", "the system prompt no longer says that \"cannot tell\" is a complete answer",
+             VALIDATOR,
+             edits=(Edit(PFBASE, "It is a complete and honest answer.", "It is an answer."),),
+             targets=("test_the_system_prompt_says_the_block_is_data_and_defines_every_value",)),
+    Mutation("D68-S4-l", "the model may answer not_assessed (the system's own value)",
+             VALIDATOR,
+             edits=(Edit(PFBASE, '            "enum": list(GOAL_FIT_VALUES),', '            "enum": list(GOAL_FIT_VALUES) + ["not_assessed"],'),),
+             targets=("test_the_schema_allows_one_field_which_is_an_enum_of_the_three_values",)),
 ]
 
 if __name__ == "__main__":
