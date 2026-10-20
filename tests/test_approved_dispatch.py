@@ -71,6 +71,7 @@ from control_plane.policy.merge import ALLOW, PolicyLayer, merge_policy
 from control_plane.registry.scope_registry import deactivate_scope_object
 from control_plane.state.db import registry_admin_scope
 from tests.helpers import committing_scope as engagement_scope
+from tests.task_support import attach_task
 from tests.test_pipeline_stages import FakeSandbox, assert_coherent, snapshot
 
 CIDR = "10.61.0.0/24"
@@ -647,9 +648,11 @@ def test_the_approval_path_takes_the_same_transitions_through_the_same_functions
     """An ALLOW and an approved proposal walk the same stages after the point they diverge, using
     the very same ``_issue``/``_dispatch`` -- checked by recording every conditional UPDATE."""
     transitions = _transitions(monkeypatch)
-    # ALLOW
+    # ALLOW (it needs a task: with the relation to the plan enforced, a proposal that names none is
+    # sent to a human -- the enforced CI run found this one, a K2 helper used here for an ALLOW)
     allowed = propose_action(
-        engagement_id=world["engagement_id"], proposal=_proposal(world),
+        engagement_id=world["engagement_id"],
+        proposal=attach_task(world["engagement_id"], _proposal(world)),
         reviewer=HonestFakeReviewer(), policy=_policy(), agent_id="worker-1",
         sandbox=FakeSandbox(), network_allowlist=[CIDR],
     )

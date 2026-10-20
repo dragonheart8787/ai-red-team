@@ -333,7 +333,9 @@ def test_a_retried_request_is_one_event_and_one_stored_value(engagement_id, regi
     assert len(_events(engagement_id, first.proposal_id)) == 1
 
 
-def test_the_signal_changes_no_decision_whatever_the_relation(engagement_id, registry):
+def test_the_signal_changes_no_decision_whatever_the_relation(
+    engagement_id, registry, switch_as_published
+):
     """Shadow: the same proposal, with no task, a matching task, a differing one and a dead one,
     is decided identically -- decision, reasons and the reviewer's part of the stored hints."""
     scope = _scope(registry, engagement_id)

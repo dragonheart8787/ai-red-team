@@ -80,6 +80,20 @@ def test_nothing_that_ships_reads_the_test_enforcement_variable():
             assert ENFORCE_ENV not in path.read_text(), path
 
 
+def test_only_the_tests_about_the_switch_itself_opt_out_of_the_enforced_run():
+    """``switch_as_published`` lets a test see the switch as its own policy sets it. These are the
+    modules that may use it: the ones that test the switch. Any other module that wants out of the
+    enforced run adds itself here, in a diff a reviewer reads."""
+    users = {p.relative_to(REPO).as_posix() for p in (REPO / "tests").rglob("*.py")
+             if "switch_as_published" in p.read_text()}
+    assert users == {
+        "tests/conftest.py",                    # the definition
+        "tests/test_plan_fit_structure.py",     # this test
+        "tests/test_plan_fit_relation.py",      # the shadow: with the switch off, nothing changes
+        "tests/test_plan_fit_replay.py",        # approved with it off, dispatched with it on
+    }, users
+
+
 def test_the_enforcement_seam_is_engaged_exactly_when_asked():
     """With the variable set the suite runs enforced; without it, it does not. Asserted both ways
     so that the CI step that sets it cannot silently run a suite that is not enforced."""

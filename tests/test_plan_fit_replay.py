@@ -74,6 +74,8 @@ def dispatch(world, proposal_id, *, enforce=True):
         sandbox=sandbox, network_allowlist=[CIDR])
 
 
+pytestmark = pytest.mark.usefixtures("switch_as_published")
+
 WORRIED = HonestFakeReviewer(sensitive_hint=("pii",))
 
 

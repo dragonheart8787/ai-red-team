@@ -133,6 +133,21 @@ def _task_relation_enforcement_when_asked():
     patch.undo()
 
 
+@pytest.fixture
+def switch_as_published(monkeypatch):
+    """Opt a test out of the enforcement seam: the switch is exactly what its policy says.
+
+    For the tests *about* the switch -- "with it off, the relation changes nothing", "approved while
+    it was off, dispatched with it on" -- which cannot say what they mean while every policy input
+    is forced on. Not for anything else: ``tests/test_plan_fit_structure.py`` lists the modules that
+    may ask for it, so a test that wants out of the enforced run for another reason has to be seen
+    asking, in review, by name."""
+    from control_plane.api import function_api
+    from control_plane.policy.engine import build_policy_input
+
+    monkeypatch.setattr(function_api, "build_policy_input", build_policy_input)
+
+
 @pytest.fixture(autouse=True)
 def _each_test_finishes_what_it_started():
     """The engagements a test made have their stuck proposals and in-flight runs closed when it
