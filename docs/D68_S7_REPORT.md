@@ -118,6 +118,8 @@ make the run unrepeatable); it is recorded for you to decide. Of the "other-acti
 primary alone, 49/49 L4 calls were `insufficient_context`. In the repeat run the one flipping L4 item (`lure-L4-005`) answered `plausible` on exactly the two runs where the third model took part and `insufficient_context` on the three where it did not. The L4 result is a property of the
 routing as much as of the prompt.
 
+**Addendum (see `docs/D68_S7_L4_DIAGNOSTIC.md`):** the ten `plausible` answers were taken apart. The cause is the fallback model's looser reading of an over-broad goal (addressed directly it says `plausible` on 27 of 30 over-broad-goal items that the primary answers `insufficient_context` on 30 of 30); the stop is the service's cyber-content classifier; with the fallback switched off the primary alone gave `insufficient_context` on all 24 calls it answered (and none on 26). **All 13 lure "buys" in the baseline (L1 1, L2 3, L4 9) were on the fallback route.**
+
 ### 3.5 The one timeout
 
 One call (an L2 lure) timed out at the validator's 30 s cap; the next slowest was 18.4 s (p99). Timeouts are a failure like a refusal; the D15 lesson (a cap truncates the slowest runs) applies and one in 480 is

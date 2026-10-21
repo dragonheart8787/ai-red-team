@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -145,16 +146,25 @@ def summarise_stream(lines: list[str]) -> dict[str, Any]:
     return out
 
 
-def run_one(item, *, model: str, schema_kind: str, timeout: float = 120.0) -> dict[str, Any]:
+#: Found in the CLI binary, not documented: stops the CLI from re-asking another model after the
+#: service's safety classifier ended a turn. With it set a stopped call has no answer -- which is
+#: the point of using it here: it shows what the asked-for model says when it is allowed to say it,
+#: and how often it is not.
+NO_FALLBACK_ENV = "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"
+
+
+def run_one(item, *, model: str, schema_kind: str, no_fallback: bool = False,
+            timeout: float = 120.0) -> dict[str, Any]:
     validator = BasePlanFitValidator()
     prompt = validator.build_prompt(query=item.query)
     command = build_command(prompt, model=model, schema_kind=schema_kind)
     started = time.monotonic()
+    env = {**os.environ, **({NO_FALLBACK_ENV: "1"} if no_fallback else {})}
     done = subprocess.run(command, cwd=tempfile.mkdtemp(prefix="cyberorch-diag-"), text=True,
-                          capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout)
+                          capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, env=env)
     record = summarise_stream(done.stdout.splitlines())
     record.update(
-        item_id=item.item_id, model_requested=model, schema=schema_kind,
+        item_id=item.item_id, model_requested=model, schema=schema_kind, no_fallback=no_fallback,
         returncode=done.returncode, seconds=round(time.monotonic() - started, 2),
         stderr=(done.stderr or "")[:200],
         query={"goal": item.query.goal, "task_action": item.query.task_action,
@@ -176,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--l4-all", action="store_true", help="every L4 item in the baseline")
     parser.add_argument("--model", default="sonnet", help="an alias or a pinned model id")
     parser.add_argument("--schema", choices=["production", "reason"], default="production")
+    parser.add_argument("--no-refusal-fallback", action="store_true",
+                        help=f"set {NO_FALLBACK_ENV}=1: a call the classifier stops has no answer")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--max-calls", type=int, default=120)
     parser.add_argument("--out", type=Path, default=None)
@@ -193,20 +205,21 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown item(s): {unknown}")
     calls = len(ids) * args.repeat
-    print(f"model={args.model} schema={args.schema} items={len(ids)} repeat={args.repeat} "
-          f"calls={calls}")
+    print(f"model={args.model} schema={args.schema} no_fallback={args.no_refusal_fallback} "
+          f"items={len(ids)} repeat={args.repeat} calls={calls}")
     if calls > args.max_calls:
         print(f"refusing: above --max-calls {args.max_calls}", file=sys.stderr)
         return 2
     results = []
     for run in range(args.repeat):
         for iid in ids:
-            record = run_one(corpus[iid], model=args.model, schema_kind=args.schema)
+            record = run_one(corpus[iid], model=args.model, schema_kind=args.schema,
+                             no_fallback=args.no_refusal_fallback)
             record["run"] = run
             results.append(record)
             print(f"  {iid} run {run}: answer={record['answer']} "
                   f"refused={record['refused_turns']} by={record['answering_model']} "
-                  f"fallback={record['took_fallback']}", flush=True)
+                  f"fallback={record['took_fallback']} rc={record['returncode']}", flush=True)
     if args.out:
         args.out.write_text(json.dumps(results, indent=2))
         print(f"wrote {args.out}")
