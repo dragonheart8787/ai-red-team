@@ -291,6 +291,33 @@ change, never a silent edit of the prompt; design 5.3).
   Q1 never ships "on" by default in the repository; the repository default stays `fake`.
 * Rollback at any time: publish a layer without the flag (or an engagement layer); the signal keeps being recorded.
 
+### 8.1 Required checks at enablement (S8 report must show each one, executed, with its output)
+
+Recorded at S5 on the owner's instruction, so that it is not thought of for the first time at S8.
+
+1. **S8b -- both conditions, together, or a loud failure.** Enabling Q1 means two things must both be true at the
+   moment it is enabled: **`goal_fit_enforce` is `true` in the effective policy** *and* **a validator is configured**
+   (`CYBERORCH_PLANFIT_BACKEND` names a real backend, not the default `fake`, and the process that calls
+   `propose_action` actually passes it as `plan_fit_validator`). If either is missing, the check **reports the anomaly
+   explicitly and stops** -- it never lets the system run in "switch on, validator absent" or "validator present, switch
+   off" without saying so.
+   * *Why this is a hard item:* by design (S5, `goal_fit` cause `disabled` is read by no rule) a switch that is on with
+     no validator **silently does nothing** -- every proposal records `not_assessed/disabled` and none is escalated. That
+     is correct as a safe default and wrong as an enablement end-state, because it looks enabled and is not.
+   * *What S8b must do about it (not implemented now):* (a) an enablement check, run and printed in the S8 report, that
+     reads the effective policy for the engagement and the configured validator and fails on any mismatch; (b) after
+     enabling, a count over the engagement's recent `plan_fit.assessed` events showing `goal_fit` values other than
+     `not_assessed/disabled` -- zero such events while proposals are flowing is the "enabled and doing nothing" state and
+     is reported as a failure; (c) whether the process should itself log a warning at start when the switch is on and no
+     validator is passed is a design question to settle then (it needs the effective policy at the point the validator
+     is constructed, which the code does not have today) [N].
+2. **S8a -- the same shape for P1:** the switch is true in the effective policy of the engagement being enabled, and the
+   first decisions after enabling show non-`absent` `plan_fit` values with the switch honoured (a proposal with no task
+   escalates with `proposal_without_task`). A switch published to a layer that does not reach the engagement (a
+   baseline only applies to engagements created afterwards, D54) is the equivalent silent no-op.
+3. Waiting approvals are voided by the policy-version bump (DP-10): announced before, counted after.
+4. Rollback tried once: publish the layer without the flag and show the decisions return to unchanged.
+
 ## 9. Risks and unknowns
 
 1. **P1 may escalate ordinary decomposition** (DP-13). The numbers do not exist; S2 makes them cheap to get.
