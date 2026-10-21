@@ -70,18 +70,61 @@ PLAUSIBLE, IMPLAUSIBLE, INSUFFICIENT = GOAL_FIT_VALUES
 # running
 # ---------------------------------------------------------------------------------------------
 
-def run_corpus(validator: Any, items: tuple[Item, ...], *, repeat: int = 1,
-               progress: Any = None) -> list[dict[str, Any]]:
+class RunAborted(RuntimeError):  # noqa: N818 - a run stopped on purpose, with what it had
+    def __init__(self, message: str, records: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.records = records
+
+
+class EnvelopeRecorder:
+    """Wraps ``subprocess.run`` for the ``claude_code`` backend and keeps what the CLI says about
+    each call: the models that served it, its list-price cost, whether it reported an error. The
+    validator never sees this (it gets the completed process back unchanged); the runner reads it
+    after each call, so the record names the model that *answered*, not the alias that was asked."""
+
+    def __init__(self, inner: Any = None) -> None:
+        self._inner = inner or subprocess.run
+        self.envelopes: list[dict[str, Any]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        done = self._inner(*args, **kwargs)
+        entry: dict[str, Any] = {"returncode": done.returncode}
+        try:
+            env = json.loads(done.stdout or "")
+            usage = env.get("modelUsage") or {}
+            entry.update(
+                cost_usd=env.get("total_cost_usd"), models=sorted(usage),
+                is_error=bool(env.get("is_error")), api_error_status=env.get("api_error_status"),
+                terminal_reason=env.get("terminal_reason"),
+                cache_read_tokens=int((env.get("usage") or {}).get("cache_read_input_tokens", 0)),
+                cache_creation_tokens=int(
+                    (env.get("usage") or {}).get("cache_creation_input_tokens", 0)))
+        except (ValueError, TypeError, AttributeError):
+            entry["unparsed"] = True
+        self.envelopes.append(entry)
+        return done
+
+
+def run_corpus(validator: Any, items: tuple[Item, ...], *, repeat: int = 1, progress: Any = None,
+               envelopes: list[dict[str, Any]] | None = None,
+               stop_after_failures: int | None = None,
+               checkpoint: Path | None = None) -> list[dict[str, Any]]:
     """Ask ``validator`` about every item, ``repeat`` times, in order; one record per call.
 
     A validator that raises is recorded as ``failed`` -- the same reading the control plane gives
     it (S5) -- so that one bad call cannot end a run that has spent an hour and some tokens.
+    ``stop_after_failures`` is the opposite protection: that many failures *in a row* (a rate
+    limit, an expired login, a dead server) mean every further call will fail too, and the run
+    stops with what it has (:class:`RunAborted`) instead of spending the rest of the corpus on it.
+    ``checkpoint`` appends each record to a JSONL file as it is made.
     """
     records: list[dict[str, Any]] = []
+    streak = 0
     for run in range(repeat):
         for n, item in enumerate(items):
             calls = getattr(validator, "calls", None)
             before = len(calls) if isinstance(calls, list) else 0
+            seen = len(envelopes) if envelopes is not None else 0
             record: dict[str, Any] = {"item_id": item.item_id, "run": run}
             try:
                 got = validator.assess(query=item.query)
@@ -99,9 +142,21 @@ def run_corpus(validator: Any, items: tuple[Item, ...], *, repeat: int = 1,
                     call_failed=bool(call.failed))
                 if call.failed and call.failure:
                     record["failure"] = str(call.failure)[:200]
+            if envelopes is not None and len(envelopes) > seen:
+                env = envelopes[-1]
+                record.update(cost_usd=env.get("cost_usd"), models=env.get("models"),
+                              cache_read_tokens=env.get("cache_read_tokens"))
             records.append(record)
+            if checkpoint is not None:
+                with checkpoint.open("a") as handle:
+                    handle.write(json.dumps(record) + "\n")
             if progress is not None:
                 progress(run, n, len(items), record)
+            streak = streak + 1 if record["goal_fit"] == FAILED else 0
+            if stop_after_failures and streak >= stop_after_failures:
+                raise RunAborted(
+                    f"{streak} calls failed in a row after {len(records)} calls; last: "
+                    f"{record.get('failure') or record.get('error_type') or 'no detail'}", records)
     return records
 
 
@@ -184,6 +239,10 @@ def analyse(records: list[dict[str, Any]], items: tuple[Item, ...]) -> dict[str,
         "output": sum(r.get("output_tokens", 0) for r in known)}
     out["failed_calls"] = rate(sum(1 for r in known if r["goal_fit"] == FAILED), len(known))
     out["error_types"] = dict(Counter(r["error_type"] for r in known if "error_type" in r))
+    costs = [r["cost_usd"] for r in known if isinstance(r.get("cost_usd"), (int, float))]
+    out["cost_usd_list_price"] = round(sum(costs), 4) if costs else None
+    out["models_that_answered"] = dict(Counter(
+        m for r in known for m in (r.get("models") or [])))
     return out
 
 
@@ -226,6 +285,11 @@ def render(report: dict[str, Any]) -> str:
               f"* tokens in {a['tokens']['input']}, out {a['tokens']['output']}"]
     if a["error_types"]:
         lines.append(f"* exceptions raised by the validator: {a['error_types']}")
+    if a["cost_usd_list_price"] is not None:
+        lines.append(f"* list-price cost reported by the CLI: ${a['cost_usd_list_price']} "
+                     "(a notional figure on a subscription backend)")
+    if a["models_that_answered"]:
+        lines.append(f"* models that served the calls: {a['models_that_answered']}")
     lines += ["", "No threshold is applied here. The numbers are read against the gate the owner "
               "sets (DP-14) in S7.", ""]
     return "\n".join(lines)
@@ -309,6 +373,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-class", type=int, default=PER_CLASS)
     parser.add_argument("--max-calls", type=int, default=DEFAULT_MAX_CALLS,
                         help="refuse a run with more calls than this (default %(default)s)")
+    parser.add_argument("--stop-after-failures", type=int, default=8,
+                        help="stop after this many failed calls in a row (0: never)")
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="append each record to this JSONL file as it is made")
     parser.add_argument("--dry-run", action="store_true",
                         help="print what would be asked and make no call")
     parser.add_argument("--json", type=Path, default=None, help="write the full record here")
@@ -330,19 +398,32 @@ def main(argv: list[str] | None = None) -> int:
               "purpose, after reading docs/ADR_REVIEWER_BILLING.md", file=sys.stderr)
         return 2
 
-    validator = build_plan_fit_validator(args.backend, model=args.model)
+    recorder = EnvelopeRecorder() if args.backend == "claude_code" else None
+    validator = build_plan_fit_validator(
+        args.backend, model=args.model, **({"runner": recorder} if recorder else {}))
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     def progress(run: int, n: int, total: int, record: dict[str, Any]) -> None:
         if (n + 1) % 20 == 0 or n + 1 == total:
             print(f"  pass {run + 1}/{args.repeat}: {n + 1}/{total}", flush=True)
 
-    records = run_corpus(validator, items, repeat=args.repeat, progress=progress)
+    aborted = None
+    try:
+        records = run_corpus(
+            validator, items, repeat=args.repeat, progress=progress,
+            envelopes=recorder.envelopes if recorder else None,
+            stop_after_failures=args.stop_after_failures or None, checkpoint=args.checkpoint)
+    except RunAborted as stop:
+        records, aborted = stop.records, str(stop)
+        print(f"\nABORTED: {aborted}", file=sys.stderr)
     report = make_report(
         backend=args.backend, model=args.model, validator=validator, items=items,
         records=records, repeat=args.repeat, seed=args.seed, per_class=args.per_class,
         started=started)
+    report["meta"]["aborted"] = aborted
     text = render(report)
+    if aborted:
+        text = f"**ABORTED after {len(records)} calls: {aborted}**\n\n" + text
     print("\n" + text)
     if args.json:
         args.json.write_text(json.dumps(report, indent=2, default=str))
@@ -350,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.report:
         args.report.write_text(text)
         print(f"wrote {args.report}")
-    return 0
+    return 3 if aborted else 0
 
 
 if __name__ == "__main__":

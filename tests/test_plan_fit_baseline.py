@@ -320,3 +320,116 @@ def test_the_baseline_script_is_the_only_caller_of_a_validator_outside_the_contr
             if re.search(r"\.assess\(\s*query=", path.read_text()):
                 callers.append(path.relative_to(REPO).as_posix())
     assert sorted(callers) == ["control_plane/plan_fit/goal_fit.py", "scripts/plan_fit_baseline.py"]
+
+
+# ---------------------------------------------------------------------------------------------
+# S7 additions: what the CLI says about each call, the stop after repeated failure, the checkpoint
+# ---------------------------------------------------------------------------------------------
+
+def test_the_envelope_recorder_keeps_what_the_cli_said_and_hands_the_process_back_unchanged():
+    envelope = {"total_cost_usd": 0.012, "is_error": False, "terminal_reason": "completed",
+                "modelUsage": {"claude-sonnet-5-5": {}, "claude-haiku-5-5": {}},
+                "usage": {"cache_read_input_tokens": 5, "cache_creation_input_tokens": 7}}
+    done = SimpleNamespace(returncode=0, stdout=json.dumps(envelope), stderr="")
+    recorder = pb.EnvelopeRecorder(inner=lambda *a, **k: done)
+    assert recorder(["claude"], cwd="x") is done
+    assert recorder.envelopes == [{
+        "returncode": 0, "cost_usd": 0.012, "models": ["claude-haiku-5-5", "claude-sonnet-5-5"],
+        "is_error": False, "api_error_status": None, "terminal_reason": "completed",
+        "cache_read_tokens": 5, "cache_creation_tokens": 7}]
+
+
+def test_an_unreadable_envelope_is_recorded_as_such_and_never_raises():
+    for stdout in ("", "not json", "[]", None):
+        done = SimpleNamespace(returncode=1, stdout=stdout, stderr="boom")
+        recorder = pb.EnvelopeRecorder(inner=lambda *a, done=done, **k: done)
+        recorder([])
+        assert recorder.envelopes[0].get("unparsed") is True
+
+
+def test_the_per_call_cost_and_the_model_that_answered_reach_the_analysis(small):
+    envelopes = []
+
+    class Billed(Oracle):
+        def assess(self, *, query):
+            envelopes.append({"cost_usd": 0.01, "models": ["claude-sonnet-5-5", "claude-haiku-5-5"],
+                              "cache_read_tokens": 3})
+            return super().assess(query=query)
+
+    records = run(Billed(small), small, envelopes=envelopes)
+    a = pb.analyse(records, small)
+    assert a["cost_usd_list_price"] == pytest.approx(0.01 * len(small))
+    assert a["models_that_answered"] == {"claude-sonnet-5-5": len(small),
+                                         "claude-haiku-5-5": len(small)}
+    assert "claude-sonnet-5-5" in pb.render(pb.make_report(
+        backend="claude_code", model="sonnet", validator=Oracle(small), items=small,
+        records=records, repeat=1, seed=pc.SEED, per_class=6, started="t"))
+
+
+def test_a_run_stops_after_failures_in_a_row_and_keeps_what_it_had(small):
+    class Dies(Oracle):
+        def __init__(self, items):
+            super().__init__(items)
+            self.n = 0
+
+        def assess(self, *, query):
+            self.n += 1
+            if self.n > 3:
+                return GoalFitAssessment("dies", "not_assessed", "failed")
+            return super().assess(query=query)
+
+    with pytest.raises(pb.RunAborted) as stop:
+        run(Dies(small), small, stop_after_failures=5)
+    assert len(stop.value.records) == 3 + 5
+    assert "5 calls failed in a row" in str(stop.value)
+
+
+def test_one_success_resets_the_streak(small):
+    class Alternates(Oracle):
+        n = 0
+
+        def assess(self, *, query):
+            self.n += 1
+            if self.n % 3:
+                return GoalFitAssessment("alt", "not_assessed", "failed")
+            return super().assess(query=query)
+
+    assert len(run(Alternates(small), small, stop_after_failures=3)) == len(small)
+
+
+def test_the_checkpoint_holds_every_record_as_it_is_made(small, tmp_path):
+    path = tmp_path / "cp.jsonl"
+    records = run(Oracle(small), small, checkpoint=path)
+    lines = [json.loads(x) for x in path.read_text().splitlines()]
+    assert lines == records
+
+
+def test_an_aborted_run_writes_its_partial_record_and_exits_nonzero(monkeypatch, tmp_path, capsys):
+    from agents.llm import selection
+
+    monkeypatch.setattr(pb, "cli_version", lambda: "test-cli")
+    monkeypatch.setattr(selection, "build_plan_fit_validator",
+                        lambda backend, model=None, **kw: UnavailableFakePlanFit())
+    out = tmp_path / "r.json"
+    code = pb.main(["--backend", "local", "--per-class", "6", "--stop-after-failures", "4",
+                    "--json", str(out)])
+    assert code == 3
+    saved = json.loads(out.read_text())
+    assert saved["meta"]["aborted"].startswith("4 calls failed in a row")
+    assert len(saved["records"]) == 4
+    assert "ABORTED" in capsys.readouterr().err
+
+
+def test_the_claude_code_backend_is_given_the_recorder_as_its_runner(monkeypatch, tmp_path):
+    from agents.llm import selection
+
+    seen = {}
+
+    def build(backend, model=None, **kw):
+        seen.update(kw)
+        return Oracle(pc.build_corpus(per_class=6))
+
+    monkeypatch.setattr(selection, "build_plan_fit_validator", build)
+    monkeypatch.setattr(pb, "cli_version", lambda: "test-cli")
+    assert pb.main(["--backend", "claude_code", "--per-class", "6", "--limit", "6"]) == 0
+    assert isinstance(seen.get("runner"), pb.EnvelopeRecorder)
