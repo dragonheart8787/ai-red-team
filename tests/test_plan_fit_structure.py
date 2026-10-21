@@ -91,6 +91,7 @@ def test_only_the_tests_about_the_switch_itself_opt_out_of_the_enforced_run():
         "tests/test_plan_fit_structure.py",     # this test
         "tests/test_plan_fit_relation.py",      # the shadow: with the switch off, nothing changes
         "tests/test_plan_fit_replay.py",        # approved with it off, dispatched with it on
+        "tests/test_plan_fit_goal_fit.py",      # the validator's wiring: switch off / on
     }, users
 
 
@@ -114,3 +115,45 @@ def test_the_enforcement_seam_is_engaged_exactly_when_asked():
         policy=merge_policy(*(PolicyLayer(name=n) for n in names)), scope_objects=[],
         plan_fit=None)
     assert policy_input["policy"]["task_relation_enforce"] is (os.environ.get(ENFORCE_ENV) == "1")
+
+
+def test_the_validator_is_called_from_one_place_and_inside_except_exception():
+    """D68 S5, a hard requirement: the control plane calls a plan-fit validator in exactly one
+    place (``_ask``), ``_ask`` is called in exactly one place (``assess_goal_fit``), and that call
+    sits inside a ``try`` whose handler catches ``Exception`` -- so an unexpected exception from a
+    validator can never leave ``propose_action`` as an exception."""
+    calls = [(p, fn) for p, fn, node in _calls("assess")
+             if p.startswith("control_plane/") and "query" in {k.arg for k in node.keywords}]
+    assert calls == [("control_plane/plan_fit/goal_fit.py", "_ask")], calls
+
+    tree = ast.parse((REPO / "control_plane/plan_fit/goal_fit.py").read_text())
+    asks = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and getattr(n.func, "id", None) == "_ask"]
+    assert len(asks) == 1, "``_ask`` is called from more than one place"
+    (call,) = asks
+    enclosing = [f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)
+                 and any(call is inner for inner in ast.walk(f))]
+    assert "assess_goal_fit" in {f.name for f in enclosing}
+    guarded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try) and any(
+                call is inner for stmt in node.body for inner in ast.walk(stmt)):
+            names = {getattr(h.type, "id", None) for h in node.handlers}
+            guarded |= "Exception" in names
+            # and not by a handler that would also swallow a stop request
+            assert None not in names and "BaseException" not in names
+    assert guarded, "the validator is called outside a try/except Exception"
+    # nothing else in the control plane reaches the validator's methods
+    for attr in ("provenance", "calls"):
+        users = [(p, fn) for p, fn, _ in _calls(attr) if p.startswith("control_plane/")]
+        assert all(p == "control_plane/plan_fit/goal_fit.py" for p, _ in users), (attr, users)
+
+
+def test_the_rederivation_never_calls_a_validator():
+    """A replayed ``goal_fit`` must not cost a model call, and cannot change: the stored value is
+    the decision's. The re-derivation does not import the goal-fit module, the validators, or
+    the types a validator is called with."""
+    source = (REPO / "control_plane/api/approved_dispatch.py").read_text()
+    for name in ("goal_fit", "assess_goal_fit", "PlanFitQuery", "plan_fit_validator", ".assess("):
+        # ``plan_fit=`` (the signal) is allowed; the module, the query and the validator are not
+        assert name not in source.replace("plan_fit=", "").replace('"plan_fit"', ""), name

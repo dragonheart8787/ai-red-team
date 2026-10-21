@@ -37,6 +37,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from agents.base_agent import GOAL_FIT_VALUES, NOT_ASSESSED, NOT_ASSESSED_CAUSES
+
 #: The version of the whole signal object stored with a decision. Additive evolution only.
 VERSION = "plan_fit_v1"
 
@@ -100,19 +102,54 @@ UNRECOGNIZED = "unrecognized"
 
 
 def policy_signal(stored: Any) -> dict[str, Any]:
-    """The policy input for a signal that was stored at a decision (D68 S3).
+    """The policy input for a signal that was stored at a decision (D68 S3, S5).
 
     The one function both ``evaluate_policy`` callers use: the decision stage passes what it has
     just computed, and the approval re-derivation passes what the decision stored. A value this
     code recognises goes through unchanged; anything else becomes :data:`UNRECOGNIZED`. It never
-    raises and never returns something that reads as ``matches_task`` unless the stored value
-    said so.
+    raises and never returns something that reads as ``matches_task`` unless the stored value said
+    so.
+
+    The two halves are judged apart. ``task_relation`` (P1) is always present in the result. The
+    goal-fit half (Q1) is present only if the stored value has one: a row decided before Q1 existed
+    has none, and stays without -- absent is not invented. If it has one and it is not in the
+    vocabulary, it becomes ``unrecognized``, which the policy reads as a check that did not
+    succeed.
     """
-    if isinstance(stored, dict) and stored.get("version") == VERSION:
-        relation, sub_cause = stored.get("task_relation"), stored.get("sub_cause")
-        if relation in SUB_CAUSES and sub_cause in SUB_CAUSES[relation]:
-            return {"version": VERSION, "task_relation": relation, "sub_cause": sub_cause}
-    return {"version": VERSION, "task_relation": UNRECOGNIZED, "sub_cause": None}
+    if not isinstance(stored, dict):
+        return {"version": VERSION, "task_relation": UNRECOGNIZED, "sub_cause": None}
+    relation, sub_cause = stored.get("task_relation"), stored.get("sub_cause")
+    # ``in`` on a dict or a set hashes its operand: a damaged row holding a list or an object would
+    # raise, and this function is the one that must not.
+    known = (stored.get("version") == VERSION and isinstance(relation, str)
+             and relation in SUB_CAUSES and (sub_cause is None or isinstance(sub_cause, str))
+             and sub_cause in SUB_CAUSES[relation])
+    signal: dict[str, Any] = (
+        {"version": VERSION, "task_relation": relation, "sub_cause": sub_cause} if known
+        else {"version": VERSION, "task_relation": UNRECOGNIZED, "sub_cause": None})
+    if "goal_fit" in stored:
+        value, cause = stored.get("goal_fit"), stored.get("goal_fit_cause")
+        ok = (isinstance(value, str) and (cause is None or isinstance(cause, str))) and (
+            (value in GOAL_FIT_VALUES and cause is None)
+            or (value == NOT_ASSESSED and cause in NOT_ASSESSED_CAUSES))
+        signal["goal_fit"], signal["goal_fit_cause"] = (
+            (value, cause) if ok else (UNRECOGNIZED, None))
+    return signal
+
+
+def read_task_for_goal_fit(conn: Connection, task_id: str) -> dict[str, Any] | None:
+    """The task's own words and identity, for the plan-fit validator (D68 Q1).
+
+    Read by the control plane from the task row -- **never** from the proposal, which carries no
+    goal and whose words are the agent's. RLS-confined like the P1 read; ``None`` if the task is
+    not visible. Called only once P1 has said ``matches_task``, so the task is live and the
+    engagement's own.
+    """
+    row = conn.execute(
+        text("SELECT goal, action, canonical_target FROM tasks WHERE task_id = :t"),
+        {"t": task_id},
+    ).mappings().one_or_none()
+    return dict(row) if row else None
 
 
 def _inside(proposal_target: str | None, task_target: str | None) -> bool:

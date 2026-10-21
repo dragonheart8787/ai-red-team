@@ -55,6 +55,7 @@ from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
 from control_plane.policy.merge import (
+    ENFORCE_SWITCHES,
     INHERIT,
     LAYER_ORDER,
     EffectivePolicy,
@@ -137,13 +138,12 @@ def publish_policy_layer(
             "would apply to every customer's engagements (ACCEPTANCE 5.35)"
         )
 
-    if "task_relation_enforce" in document and not isinstance(
-            document["task_relation_enforce"], bool):
-        # A switch read as "is True": "false" or 1 would silently not enforce. Refuse it instead.
-        raise PolicyLayerError(
-            "task_relation_enforce must be a boolean (true or false), not "
-            f"{document['task_relation_enforce']!r}"
-        )
+    for switch in ENFORCE_SWITCHES:
+        if switch in document and not isinstance(document[switch], bool):
+            # A switch read as "is True": "false" or 1 would silently not enforce. Refuse it.
+            raise PolicyLayerError(
+                f"{switch} must be a boolean (true or false), not {document[switch]!r}"
+            )
 
     if layer == EMERGENCY_OVERLAY:
         # Raises EmergencyOverlayError, which callers may want to catch
@@ -292,6 +292,7 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
             for key in {k for layer in layers for k in layer.actions}
         },
         task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
+        goal_fit_enforce=any(layer.goal_fit_enforce for layer in layers),
     )
 
 

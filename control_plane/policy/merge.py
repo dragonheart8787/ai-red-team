@@ -26,10 +26,12 @@ So every constraint carries its own neutral element — the value that means
     actions         INHERIT (not a boolean)    see below
     ==============  =========================  ==========
 
-``task_relation_enforce`` (D68 P1) is not in the table because it is not a constraint on an action:
-it is a switch that decides whether the policy reads the task relation of a proposal. Its neutral
-element is ``False`` and it merges by OR, so a layer that says nothing, or ``false``, adds no
-restriction and no layer can turn off what another turned on. Only a layer can turn it *on*.
+``task_relation_enforce`` (D68 P1) and ``goal_fit_enforce`` (D68 Q1) are not in the table because
+they are not constraints on an action: each is a switch that decides whether the policy reads one
+signal about a proposal (its relation to its task; whether its task's goal, action and target fit).
+Their neutral element is ``False`` and they merge by OR, so a layer that says nothing, or ``false``,
+adds no restriction and no layer can turn off what another turned on. Only a layer can turn one
+*on*. :data:`ENFORCE_SWITCHES` names them, and every place that handles one handles both.
 
 Action policy resolution is DENY-dominant: any layer that says DENY wins
 outright, regardless of position; otherwise any layer saying ALLOW wins; if
@@ -50,6 +52,10 @@ from typing import Any
 
 ALLOW = "ALLOW"
 DENY = "DENY"
+
+#: The two D68 switches. A new one is added here and in :class:`PolicyLayer`,
+#: :class:`EffectivePolicy` and ``merge_policy`` / ``_combine``; a test fails if one is missed.
+ENFORCE_SWITCHES = ("task_relation_enforce", "goal_fit_enforce")
 
 
 class Sentinel:
@@ -96,6 +102,7 @@ class PolicyLayer:
     rate_limit: float = math.inf
     actions: Mapping[str, str] = field(default_factory=dict)
     task_relation_enforce: bool = False
+    goal_fit_enforce: bool = False
 
     @classmethod
     def from_document(cls, name: str, document: Mapping[str, Any] | None) -> PolicyLayer:
@@ -125,6 +132,7 @@ class PolicyLayer:
             # Only a real ``true`` turns it on. (A string "false" is truthy; publication refuses
             # anything but a boolean, and this refuses to read one.)
             task_relation_enforce=doc.get("task_relation_enforce") is True,
+            goal_fit_enforce=doc.get("goal_fit_enforce") is True,
         )
 
 
@@ -138,6 +146,7 @@ class EffectivePolicy:
     rate_limit: float
     actions: Mapping[str, str]
     task_relation_enforce: bool = False
+    goal_fit_enforce: bool = False
 
     def action_decision(self, action: str) -> str:
         """Resolve one action, including one never mentioned by any layer.
@@ -164,6 +173,7 @@ class EffectivePolicy:
             "rate_limit": None if math.isinf(self.rate_limit) else self.rate_limit,
             "actions": dict(self.actions),
             "task_relation_enforce": self.task_relation_enforce,
+            "goal_fit_enforce": self.goal_fit_enforce,
         }
 
 
@@ -185,12 +195,13 @@ def validate_emergency_overlay(document: Mapping[str, Any] | None) -> None:
             raise EmergencyOverlayError(
                 f"emergency overlay may not ALLOW {action!r}: it can only tighten"
             )
-    if "task_relation_enforce" in doc and doc["task_relation_enforce"] is not True:
-        # false is a no-op under the OR merge, so it could not relax anything; it is refused all the
-        # same, because an overlay that says "false" reads as a relaxation to whoever reads it.
-        raise EmergencyOverlayError(
-            "emergency overlay may only turn task_relation_enforce on (true): it can only tighten"
-        )
+    for switch in ENFORCE_SWITCHES:
+        if switch in doc and doc[switch] is not True:
+            # false is a no-op under the OR merge, so it could not relax anything; it is refused all
+            # the same, because an overlay that says "false" reads as a relaxation to its reader.
+            raise EmergencyOverlayError(
+                f"emergency overlay may only turn {switch} on (true): it can only tighten"
+            )
 
 
 def intersect_allow(
@@ -254,4 +265,5 @@ def merge_policy(
             for key in sorted(action_keys)
         },
         task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
+        goal_fit_enforce=any(layer.goal_fit_enforce for layer in layers),
     )

@@ -348,6 +348,44 @@ approval_reasons contains "proposal_outside_task" if {
 	not plan_fit_is_a_known_good_value
 }
 
+# D68 Q1: whether the task's goal, action and target fit each other, as a validator judged it. Same
+# shape as the relation above: stored with the decision, read by approval_reasons alone, only when
+# `goal_fit_enforce` is on, and able to ask for a human and nothing else.
+#
+# No rule reads `plausible`: it is the same as the signal being absent. `not_assessed` with the cause
+# `disabled` (no validator configured) or `not_applicable` (the proposal is not its task, which the
+# relation above already answers) adds nothing. An absent `goal_fit` -- a decision from before the
+# validator existed -- fires nothing. `implausible` and `insufficient_context` each ask for a human
+# under their own name; anything else that is present (`not_assessed` / `failed`, a value outside the
+# vocabulary, a damaged object) is a check that did not succeed, and asks too.
+plan_fit_has_a_goal_fit if object.get(input.plan_fit, "goal_fit", "__absent__") != "__absent__"
+
+goal_fit_is_quiet if input.plan_fit.goal_fit == "plausible"
+
+goal_fit_is_quiet if {
+	input.plan_fit.goal_fit == "not_assessed"
+	input.plan_fit.goal_fit_cause in {"disabled", "not_applicable"}
+}
+
+goal_fit_is_answered if input.plan_fit.goal_fit in {"implausible", "insufficient_context"}
+
+approval_reasons contains "plan_implausible" if {
+	input.policy.goal_fit_enforce == true
+	input.plan_fit.goal_fit == "implausible"
+}
+
+approval_reasons contains "plan_unverified" if {
+	input.policy.goal_fit_enforce == true
+	input.plan_fit.goal_fit == "insufficient_context"
+}
+
+approval_reasons contains "plan_check_failed" if {
+	input.policy.goal_fit_enforce == true
+	plan_fit_has_a_goal_fit
+	not goal_fit_is_quiet
+	not goal_fit_is_answered
+}
+
 # ---------------------------------------------------------------------------
 # Decision precedence: DENY > HUMAN_APPROVAL > ALLOW
 # ---------------------------------------------------------------------------

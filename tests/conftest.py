@@ -125,6 +125,7 @@ def _task_relation_enforcement_when_asked():
     def enforcing(*args, **kwargs):
         policy_input = real(*args, **kwargs)
         policy_input["policy"]["task_relation_enforce"] = True
+        policy_input["policy"]["goal_fit_enforce"] = True
         return policy_input
 
     patch = pytest.MonkeyPatch()

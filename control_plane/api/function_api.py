@@ -84,6 +84,7 @@ from control_plane.orchestrator.dispatch import (
     dispatch_collection,
     dispatch_scan,
 )
+from control_plane.plan_fit import goal_fit as plan_goal
 from control_plane.plan_fit import relation as plan_relation
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
@@ -485,8 +486,12 @@ class _Run:
     # produces them -- the committed rows are then the source of truth, not this object.
     opinion: ReviewerOpinion | None = None
     # D68 P1: the relation between the proposal and the task it names. Computed in the decide
-    # stage and stored with the decision; in this version nothing reads it but the audit.
+    # stage and stored with the decision; read by the policy only when its switch is on.
     plan_fit: Any = None
+    # D68 Q1: the validator to ask (None: none configured), and what it said -- a ``GoalFit``,
+    # stored beside the relation. The validator is called nowhere but ``plan_goal.assess_goal_fit``.
+    plan_fit_validator: Any = None
+    goal_fit: Any = None
     metadata: Any = None
     decision: Any = None
     # Set only by ``dispatch_approved``: this drive is the post-approval one, so it may also take
@@ -519,6 +524,7 @@ def propose_action(
     proxy_cert_spki: str | None = None,
     credential_id: str | None = None,
     idempotency_key: str | None = None,
+    plan_fit_validator=None,
 ) -> ActionOutcome:
     """Canonicalize, resolve, review, decide, and only then act -- in stages that each commit.
 
@@ -609,7 +615,7 @@ def propose_action(
         # goes to the broker, so what OPA judged and what was issued cannot come apart.
         requested_budget=budget or Budget(max_duration_seconds=120),
         proxy_url=proxy_url, ca_cert_pem=ca_cert_pem, proxy_cert_spki=proxy_cert_spki,
-        credential_id=credential_id,
+        credential_id=credential_id, plan_fit_validator=plan_fit_validator,
     )
 
     # --- Stage 0: the proposal row, committed -------------------------------
@@ -729,6 +735,12 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         run.plan_fit = plan_relation.assess_task_relation(
             conn, task_id=proposal.task_id, action=proposal.action,
             canonical_target=canonical_target, identity_key=identity_key)
+        # --- 3c. Plan fit (D68 Q1): the task's own words, for the validator, read here with the
+        # rest and not at the moment of the model call -- no connection is held while it runs.
+        task_context = (
+            plan_relation.read_task_for_goal_fit(conn, proposal.task_id)
+            if run.plan_fit_validator is not None
+            and run.plan_fit.value == plan_relation.MATCHES_TASK else None)
     run.metadata = metadata
 
     # --- 4. Policy Reviewer --------------------------------------------------
@@ -757,6 +769,14 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         },
     )
 
+    # --- 4b. The plan-fit validator (D68 Q1) -----------------------------------
+    # After the Reviewer and before OPA, with no transaction held. Never raises an Exception: a
+    # validator that fails to answer is ``not_assessed``, not an interrupted proposal.
+    run.goal_fit = plan_goal.assess_goal_fit(
+        validator=run.plan_fit_validator, relation=run.plan_fit, task_context=task_context,
+        proposal_action=proposal.action, proposal_target=canonical_target)
+    plan_fit_stored = {**run.plan_fit.as_hint(), **run.goal_fit.as_hint()}
+
     # --- 5. OPA --------------------------------------------------------------
     decision = evaluate_policy(
         proposal=proposal, target=target, authorization=authorization, metadata=metadata,
@@ -766,9 +786,10 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
         # is ask for a human.
         risk_hint=opinion.risk_hint,
         possible_sensitive_data_hint=opinion.possible_sensitive_data_hint,
-        # D68 P1: the relation to the task, read by approval_reasons alone and only when the
-        # policy's task_relation_enforce is on. The same function gives the re-derivation its copy.
-        plan_fit=plan_relation.policy_signal(run.plan_fit.as_hint()),
+        # D68 P1/Q1: the relation to the task and the validator's judgement, read by
+        # approval_reasons alone and only when the policy's switches are on. The same function
+        # gives the re-derivation its copy.
+        plan_fit=plan_relation.policy_signal(plan_fit_stored),
     )
     run.decision = decision
 
@@ -798,13 +819,13 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
                     "possible_sensitive_data_hint": list(opinion.possible_sensitive_data_hint),
                     # Inputs recorded at the decision and replayed at re-derivation (D68): not the
                     # reviewer's words, but kept where the re-derivation already looks for them.
-                    "plan_fit": run.plan_fit.as_hint(),
+                    "plan_fit": plan_fit_stored,
                 },
             )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="plan_fit.assessed",
                 subject_type="action_proposal", subject_id=proposal_id,
-                payload=run.plan_fit.audit_payload(),
+                payload={**run.plan_fit.audit_payload(), **run.goal_fit.audit_payload()},
             )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="policy.decided",

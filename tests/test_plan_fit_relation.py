@@ -206,7 +206,8 @@ def test_no_task_is_recorded_stored_and_audited_once(engagement_id, registry):
     outcome = _propose(engagement_id, _proposal(scope))
     plan = _plan(engagement_id, outcome.proposal_id)
     assert plan == {"version": "plan_fit_v1", "task_relation": "no_task",
-                    "sub_cause": "task_id_absent"}
+                    "sub_cause": "task_id_absent", "goal_fit": "not_assessed",
+                    "goal_fit_cause": "disabled"}
     payloads = [e["payload"] for e in _events(engagement_id, outcome.proposal_id)]
     assert len(payloads) == 1 and payloads[0]["task_relation"] == "no_task"
 

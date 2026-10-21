@@ -32,6 +32,7 @@ here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -129,6 +130,18 @@ class BasePlanFitValidator:
 
     def assess(self, *, query: PlanFitQuery) -> GoalFitAssessment:
         raise NotImplementedError
+
+    def provenance(self) -> dict[str, str]:
+        """Which validator, model and prompt answered -- recorded in the audit with each answer, so
+        that a drift in the rates is attributable to a change in one of them (design section 5).
+        The CLI version, which ADR_REVIEWER_BILLING asks a baseline to record too, is not captured
+        here; the baseline runner (S6) records it."""
+        contract = SYSTEM_PROMPT + json.dumps(PLAN_FIT_SCHEMA, sort_keys=True)
+        return {
+            "validator_id": self.validator_id, "model": self.model,
+            "backend": type(self).__name__,
+            "prompt_sha256": hashlib.sha256(contract.encode()).hexdigest(),
+        }
 
     def build_prompt(self, *, query: PlanFitQuery) -> str:
         """The five strings, in one untrusted block, and nothing of the agent's own words.

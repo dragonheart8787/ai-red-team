@@ -16,6 +16,13 @@ from agents.base_agent import (
 )
 
 
+def _provenance(validator) -> dict[str, str]:
+    return {
+        "validator_id": validator.validator_id, "model": "none",
+        "backend": type(validator).__name__,
+    }
+
+
 class ScriptedPlanFit:
     """Answers with the values it is given in order, repeating the last; records its queries."""
 
@@ -29,6 +36,9 @@ class ScriptedPlanFit:
                     f"a scripted validator answers from {GOAL_FIT_VALUES}, not {value!r}")
         self._values = values
         self.queries: list[PlanFitQuery] = []
+
+    def provenance(self) -> dict[str, str]:
+        return _provenance(self)
 
     def assess(self, *, query: PlanFitQuery) -> GoalFitAssessment:
         self.queries.append(query)
@@ -64,6 +74,9 @@ class UnavailableFakePlanFit:
 
     def __init__(self) -> None:
         self.queries: list[PlanFitQuery] = []
+
+    def provenance(self) -> dict[str, str]:
+        return _provenance(self)
 
     def assess(self, *, query: PlanFitQuery) -> GoalFitAssessment:
         self.queries.append(query)

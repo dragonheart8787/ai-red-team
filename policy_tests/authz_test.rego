@@ -882,3 +882,115 @@ test_the_signal_adds_to_other_reasons_and_never_replaces_them if {
 	r.decision == "HUMAN_APPROVAL"
 	r.approval_reasons == ["high_risk", "proposal_without_task"]
 }
+
+# ---------------------------------------------------------------------------
+# D68 Q1 -- whether the task's goal, action and target fit each other
+#
+# A validator's judgement, stored with the decision, read by approval_reasons alone, and only when the
+# policy's goal_fit_enforce is on. It can ask for a human; nothing else. `plausible` is read by no rule.
+# ---------------------------------------------------------------------------
+
+goal_enforced := object.union(base, {"policy": object.union(base.policy, {"goal_fit_enforce": true})})
+
+fit(value, cause) := {
+	"version": "plan_fit_v1",
+	"task_relation": "matches_task",
+	"sub_cause": null,
+	"goal_fit": value,
+	"goal_fit_cause": cause,
+}
+
+test_plausible_is_the_same_as_no_signal if {
+	with_signal := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("plausible", null)})
+	without := authz.result with input as goal_enforced
+
+	with_signal == without
+	with_signal.decision == "ALLOW"
+}
+
+test_implausible_asks_for_a_human_when_enforced if {
+	r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("implausible", null)})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["plan_implausible"]
+}
+
+test_cannot_tell_asks_for_a_human_under_its_own_name if {
+	r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("insufficient_context", null)})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["plan_unverified"]
+}
+
+test_a_check_that_failed_asks_for_a_human if {
+	r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", "failed")})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["plan_check_failed"]
+}
+
+test_a_check_that_was_never_asked_adds_nothing if {
+	every cause in ["disabled", "not_applicable"] {
+		r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", cause)})
+		r.decision == "ALLOW"
+		count(r.approval_reasons) == 0
+	}
+}
+
+test_a_decision_from_before_the_validator_existed_has_no_goal_fit_and_fires_nothing if {
+	old := {"version": "plan_fit_v1", "task_relation": "matches_task", "sub_cause": null}
+	r := authz.result with input as object.union(goal_enforced, {"plan_fit": old})
+
+	r.decision == "ALLOW"
+	count(r.approval_reasons) == 0
+}
+
+test_nothing_is_read_when_the_goal_switch_is_off if {
+	every value in ["implausible", "insufficient_context", "not_assessed", "unrecognized", "plausible"] {
+		r := authz.result with input as object.union(base, {"plan_fit": fit(value, "failed")})
+		r.decision == "ALLOW"
+		count(r.approval_reasons) == 0
+	}
+}
+
+test_a_value_this_policy_cannot_read_is_a_check_that_failed if {
+	every value in ["unrecognized", "some_value_from_a_newer_vocabulary", null, false, 7, "", ["plausible"], {"a": 1}] {
+		r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit(value, null)})
+		r.decision == "HUMAN_APPROVAL"
+		"plan_check_failed" in r.approval_reasons
+	}
+}
+
+test_the_two_switches_are_independent if {
+	no_task_only := object.union(base, {"plan_fit": {"version": "plan_fit_v1", "task_relation": "no_task", "sub_cause": "task_id_absent", "goal_fit": "implausible", "goal_fit_cause": null}})
+
+	# the goal switch alone: only the goal's reason
+	goal_only := authz.result with input as object.union(no_task_only, {"policy": object.union(base.policy, {"goal_fit_enforce": true})})
+	goal_only.approval_reasons == ["plan_implausible"]
+
+	# the relation switch alone: only the relation's reason
+	task_only := authz.result with input as object.union(no_task_only, {"policy": object.union(base.policy, {"task_relation_enforce": true})})
+	task_only.approval_reasons == ["proposal_without_task"]
+
+	# both: both
+	both := authz.result with input as object.union(no_task_only, {"policy": object.union(base.policy, {"task_relation_enforce": true, "goal_fit_enforce": true})})
+	both.approval_reasons == ["plan_implausible", "proposal_without_task"]
+}
+
+test_the_goal_signal_never_outranks_a_deny if {
+	denied := object.union(goal_enforced, {"authorization_resolution": {"authorized": false, "scope_object_id": null}})
+	plain := authz.result with input as denied
+	with_signal := authz.result with input as object.union(denied, {"plan_fit": fit("implausible", null)})
+
+	plain.decision == "DENY"
+	with_signal.decision == "DENY"
+	with_signal.deny_reasons == plain.deny_reasons
+}
+
+test_the_goal_signal_adds_to_other_reasons_and_never_replaces_them if {
+	worried := object.union(goal_enforced, {"canonical": {"risk": "high"}})
+	r := authz.result with input as object.union(worried, {"plan_fit": fit("implausible", null)})
+
+	r.decision == "HUMAN_APPROVAL"
+	r.approval_reasons == ["high_risk", "plan_implausible"]
+}

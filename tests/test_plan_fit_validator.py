@@ -4,7 +4,8 @@ No model is called. The transports are stubs, as the Reviewer's tests do it, so 
 test is what the code owns: what the model is shown, what it may answer, and that anything else
 is a failure that asks for a human -- never a ``plausible``.
 
-Not wired: nothing in the control plane calls a validator yet (S5), and one test says so.
+Where the control plane calls a validator, and that it does so inside `except Exception`, is
+`tests/test_plan_fit_structure.py`.
 """
 
 from __future__ import annotations
@@ -447,16 +448,3 @@ def test_the_model_variable_reaches_the_backend(monkeypatch):
     monkeypatch.setenv("CYBERORCH_PLANFIT_MODEL", "some-model")
     assert build_plan_fit_validator("api").model == "some-model"
     assert build_plan_fit_validator("claude_code").model == "some-model"
-
-
-# ---------------------------------------------------------------------------------------------
-# not wired (S5 replaces this test)
-# ---------------------------------------------------------------------------------------------
-
-def test_nothing_in_the_control_plane_calls_a_validator_yet():
-    """S4 builds the validator and calls it from nowhere. S5 wires it into ``propose_action``
-    behind its own switch and replaces this test with the one that says where."""
-    for path in (REPO / "control_plane").rglob("*.py"):
-        source = path.read_text()
-        assert "plan_fit_validators" not in source and "plan_fit_base" not in source, path
-        assert ".assess(" not in source, path
