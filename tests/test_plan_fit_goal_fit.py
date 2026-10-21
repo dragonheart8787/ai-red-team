@@ -97,18 +97,24 @@ def decide(world, validator, *, task="matching", goal=True, task_enforce=False,
            reviewer=None, sandbox=None, key=None, host=None, proposal=None):
     """One ``propose_action`` through the real pipeline."""
     base = proposal or (_proposal(world) if host is None else _proposal(world, host=host))
-    return propose_action(
-        engagement_id=world["engagement_id"], proposal=with_task(world, base, how=task),
-        reviewer=reviewer or HonestFakeReviewer(),
-        policy=policy(task=task_enforce, goal=goal), agent_id="worker-1",
-        sandbox=sandbox if sandbox is not None else TrapSandbox(),
-        network_allowlist=[CIDR], plan_fit_validator=validator, idempotency_key=key)
+    try:
+        return propose_action(
+            engagement_id=world["engagement_id"], proposal=with_task(world, base, how=task),
+            reviewer=reviewer or HonestFakeReviewer(),
+            policy=policy(task=task_enforce, goal=goal), agent_id="worker-1",
+            sandbox=sandbox if sandbox is not None else TrapSandbox(),
+            network_allowlist=[CIDR], plan_fit_validator=validator, idempotency_key=key)
+    except Exception as escaped:  # noqa: BLE001 - an Exception leaving here is the failure
+        pytest.fail(f"{type(escaped).__name__} left propose_action: {escaped!r}")
 
 
-def stored(world, proposal_id):
+def stored(world, proposal_id, *, with_goal_fit=True):
+    """The stored ``plan_fit``; a missing key is a failed assertion, not a ``KeyError``."""
     got = rows(world, "SELECT reviewer_hints FROM action_proposals WHERE proposal_id = :p",
                p=proposal_id)[0]["reviewer_hints"]
     assert "plan_fit" in got, f"no plan_fit stored with the decision: {got}"
+    if with_goal_fit:
+        assert "goal_fit" in got["plan_fit"], f"no goal_fit stored with the decision: {got}"
     return got["plan_fit"]
 
 
@@ -468,7 +474,7 @@ def test_an_answer_that_is_not_a_valid_one_is_a_failed_check(world, name):
     assert trap.calls == 0
     plan = stored(world, out.proposal_id)
     assert (plan["goal_fit"], plan["goal_fit_cause"]) == ("not_assessed", "failed")
-    assert audited(world, out.proposal_id)[0]["error_type"] == "invalid_answer"
+    assert audited(world, out.proposal_id)[0].get("error_type") == "invalid_answer"
     assert_coherent(snapshot(world["engagement_id"]))
 
 
@@ -539,7 +545,7 @@ def test_a_task_that_cannot_be_read_is_a_failed_check(world, monkeypatch):
     out = decide(world, validator, goal=True, sandbox=TrapSandbox())
     assert validator.queries == []
     assert out.approval_reasons == ("plan_check_failed",)
-    assert audited(world, out.proposal_id)[0]["error_type"] == "task_unreadable"
+    assert audited(world, out.proposal_id)[0].get("error_type") == "task_unreadable"
 
 
 def test_the_control_plane_does_not_depend_on_the_adapters_promise_not_to_raise(world):
@@ -684,7 +690,7 @@ def test_a_row_from_before_the_validator_existed_dispatches_with_the_switch_on(w
         conn.execute(text(
             "UPDATE action_proposals SET reviewer_hints = jsonb_set(reviewer_hints, '{plan_fit}', "
             "(reviewer_hints->'plan_fit') - 'goal_fit' - 'goal_fit_cause')"))
-    assert "goal_fit" not in stored(world, out.proposal_id)
+    assert "goal_fit" not in stored(world, out.proposal_id, with_goal_fit=False)
     approve(world, out.proposal_id)
     done, _ = _dispatch(world, out.proposal_id, goal=True)
     assert done.executed, (done.failure, done.deny_reasons)
