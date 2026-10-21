@@ -222,6 +222,9 @@ FILE_REGISTRY = {
         "reads the stages to know when everything is terminal at the end; moves none itself",
     "scripts/soak/report.py":
         "counts proposals by stage for the report; writes nothing",
+    "scripts/plan_fit_report.py":
+        "reads `pipeline_stage` beside `decision` in `action_proposals` to count what was decided; "
+        "writes nothing (a test requires the script to contain no write statement)",
     "scripts/check_reconciler_run.py":
         "reads the stage of each proposal a state-only run moved and compares it with "
         "`vocab.PROPOSAL_TRANSITIONS`; writes nothing",
