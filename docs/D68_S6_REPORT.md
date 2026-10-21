@@ -84,11 +84,15 @@ a second test requires the set of reasons the policy can give to equal the set t
   disagree; a failure recorded under the model's word; a lure compared with itself; a clean `0/N` with no bound; a dry run that builds a
   validator; the call limit off; the report forgetting a reason, counting `plausible` or `disabled` as a reason to ask, ignoring
   `--since`, counting a DENY, counting a pre-S2 row, taking a maximum instead of a sum.
-* **Full suite locally** (Docker and Postgres up): the normal run was 3,897 passed, **1 failed**, 24 errors -- the failure was
-  `test_st3_every_module_that_names_a_stage_is_registered_with_its_reason`: the report names `pipeline_stage`, and the repository
-  makes every such module register why (fixed: registered, read-only; the test passes). The run with the switches forced on, on the fixed
-  tree: **3,898 passed, 0 failed, 24 errors** (the same missing-image tests as in every stage). The normal run was not repeated
-  whole after the one-line registry fix; CI runs both. [E]
+* **Full suite locally** (Docker and Postgres up), on the final tree `e6e6fdd`: the **normal run 3,898 passed, 0 failed, 24 errors**, and
+  the run with the switches forced on (`CYBERORCH_TEST_TASK_RELATION_ENFORCE=1`) **3,898 passed, 0 failed, 24 errors**. The 24 errors are the
+  same browser/bloodhound image tests this machine lacks (`test_ad_collector_credential_delivery` 16, `test_browser_escape` 4,
+  `test_dns_server_kernel_evidence` 2, `scenarios/test_scenario_web_render` 2), as in every stage. History, for the record: the first
+  normal run of the S6 code had 1 failure (`test_st3_every_module_that_names_a_stage_is_registered_with_its_reason`: the report names
+  `pipeline_stage`, and the repository makes every such module register why); it was fixed by registering the report, and the whole
+  normal run was then repeated. [E]
+* **CI:** `89aed23` (the first S6 code commit) red, for that same registry test; `d1cf134` (the fix) green; `e6e6fdd` (report and
+  ACCEPTANCE) green. [E]
 * **ruff** clean; **OPA** 78/78 (unchanged).
 
 ## 3. What was found
