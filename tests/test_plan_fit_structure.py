@@ -92,6 +92,7 @@ def test_only_the_tests_about_the_switch_itself_opt_out_of_the_enforced_run():
         "tests/test_plan_fit_relation.py",      # the shadow: with the switch off, nothing changes
         "tests/test_plan_fit_replay.py",        # approved with it off, dispatched with it on
         "tests/test_plan_fit_goal_fit.py",      # the validator's wiring: switch off / on
+        "tests/test_plan_fit_shadow.py",        # counts decisions made with the switches off
     }, users
 
 
