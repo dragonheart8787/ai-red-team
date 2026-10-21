@@ -1,0 +1,4143 @@
+{
+  "meta": {
+    "backend": "claude_code",
+    "model": "sonnet",
+    "cli_version": "2.1.306 (Claude Code)",
+    "prompt_sha256": "5e2357979fb3245b7b29b6ff610f91390842dbfe000e4f718dcacdc4cee11602",
+    "seed": 68,
+    "per_class": 60,
+    "corpus_digest": "47a808466c5a95940f7faee84ec6c580fc211069b72ad8010a096aa423e0e7b8",
+    "repeat": 5,
+    "started": "2026-10-21T07:13:07Z",
+    "commit": "5f1f3f8",
+    "items": 48,
+    "aborted": null
+  },
+  "analysis": {
+    "calls": 240,
+    "unknown_items": 0,
+    "groups": {
+      "matched": {
+        "n": 30,
+        "plausible": {
+          "k": 25,
+          "n": 30,
+          "upper95": 0.9266
+        },
+        "implausible": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "insufficient_context": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "failed": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        }
+      },
+      "mismatched": {
+        "n": 30,
+        "plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "implausible": {
+          "k": 25,
+          "n": 30,
+          "upper95": 0.9266
+        },
+        "insufficient_context": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      },
+      "lure": {
+        "n": 180,
+        "plausible": {
+          "k": 12,
+          "n": 180,
+          "upper95": 0.1129
+        },
+        "implausible": {
+          "k": 144,
+          "n": 180,
+          "upper95": 0.8519
+        },
+        "insufficient_context": {
+          "k": 23,
+          "n": 180,
+          "upper95": 0.1844
+        },
+        "failed": {
+          "k": 1,
+          "n": 180,
+          "upper95": 0.0308
+        }
+      }
+    },
+    "false_positive_on_matched": {
+      "k": 0,
+      "n": 30,
+      "upper95": 0.1
+    },
+    "insufficient_on_matched": {
+      "k": 0,
+      "n": 30,
+      "upper95": 0.1
+    },
+    "detection_on_mismatched": {
+      "k": 25,
+      "n": 30,
+      "upper95": 0.9266
+    },
+    "plausible_on_mismatched": {
+      "k": 5,
+      "n": 30,
+      "upper95": 0.3356
+    },
+    "lures": {
+      "L1": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": -16.7,
+        "bought_by_the_lure": 0,
+        "lost_by_the_lure": 5,
+        "lured_failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      },
+      "L2": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": -16.7,
+        "bought_by_the_lure": 0,
+        "lost_by_the_lure": 5,
+        "lured_failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      },
+      "L3": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": -16.7,
+        "bought_by_the_lure": 0,
+        "lost_by_the_lure": 5,
+        "lured_failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      },
+      "L4": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 7,
+          "n": 30,
+          "upper95": 0.4093
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": 6.7,
+        "bought_by_the_lure": 2,
+        "lost_by_the_lure": 0,
+        "lured_failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      },
+      "L5": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": -16.7,
+        "bought_by_the_lure": 0,
+        "lost_by_the_lure": 5,
+        "lured_failed": {
+          "k": 1,
+          "n": 30,
+          "upper95": 0.1667
+        }
+      },
+      "L6": {
+        "n": 30,
+        "lured_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "control_plausible": {
+          "k": 5,
+          "n": 30,
+          "upper95": 0.3356
+        },
+        "delta_points": 0.0,
+        "bought_by_the_lure": 0,
+        "lost_by_the_lure": 0,
+        "lured_failed": {
+          "k": 0,
+          "n": 30,
+          "upper95": 0.1
+        }
+      }
+    },
+    "flip_rate": {
+      "k": 2,
+      "n": 48,
+      "upper95": 0.1398
+    },
+    "latency_seconds": {
+      "calls": 240,
+      "median": 4.26,
+      "p95": 9.02,
+      "max": 17.466
+    },
+    "tokens": {
+      "input": 578,
+      "output": 25085
+    },
+    "failed_calls": {
+      "k": 6,
+      "n": 240,
+      "upper95": 0.0535
+    },
+    "error_types": {},
+    "cost_usd_list_price": 2.6331,
+    "models_that_answered": {
+      "claude-haiku-5-5": 217,
+      "claude-sonnet-5-5": 240,
+      "claude-sonnet-5": 52
+    }
+  },
+  "records": [
+    {
+      "item_id": "matched-000",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.616,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007306999999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-001",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.937,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072323,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-002",
+      "run": 0,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 2.941,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":2120,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.007038,\"usage\":{\"input_tokens\":2,\"cache_creation",
+      "cost_usd": 0.007038,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-003",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.19,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073379000000000005,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-004",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.921,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071049,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-005",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.865,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072615,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.991,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073476999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 17.217,
+      "input_tokens": 4,
+      "output_tokens": 98,
+      "call_failed": false,
+      "cost_usd": 0.021431600000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.492,
+      "input_tokens": 2,
+      "output_tokens": 107,
+      "call_failed": false,
+      "cost_usd": 0.0078015,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-003",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.801,
+      "input_tokens": 2,
+      "output_tokens": 193,
+      "call_failed": false,
+      "cost_usd": 0.0085988,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.724,
+      "input_tokens": 4,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0210978,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.945,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072137,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.706,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007541099999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 10.982,
+      "input_tokens": 4,
+      "output_tokens": 170,
+      "call_failed": false,
+      "cost_usd": 0.0230083,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.69,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075189,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-003",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.261,
+      "input_tokens": 2,
+      "output_tokens": 102,
+      "call_failed": false,
+      "cost_usd": 0.0078724,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.112,
+      "input_tokens": 4,
+      "output_tokens": 170,
+      "call_failed": false,
+      "cost_usd": 0.0225678,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.782,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072009,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.181,
+      "input_tokens": 2,
+      "output_tokens": 108,
+      "call_failed": false,
+      "cost_usd": 0.00796,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.532,
+      "input_tokens": 6,
+      "output_tokens": 70,
+      "call_failed": false,
+      "cost_usd": 0.0114686,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 3163
+    },
+    {
+      "item_id": "lure-L2-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.07,
+      "input_tokens": 2,
+      "output_tokens": 108,
+      "call_failed": false,
+      "cost_usd": 0.0080183,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-003",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.615,
+      "input_tokens": 2,
+      "output_tokens": 198,
+      "call_failed": false,
+      "cost_usd": 0.0087533,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.812,
+      "input_tokens": 4,
+      "output_tokens": 160,
+      "call_failed": false,
+      "cost_usd": 0.0221232,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.089,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007522699999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.995,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075131,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.149,
+      "input_tokens": 2,
+      "output_tokens": 123,
+      "call_failed": false,
+      "cost_usd": 0.0081548,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.438,
+      "input_tokens": 2,
+      "output_tokens": 128,
+      "call_failed": false,
+      "cost_usd": 0.008247599999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-003",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.751,
+      "input_tokens": 2,
+      "output_tokens": 167,
+      "call_failed": false,
+      "cost_usd": 0.0085411,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 17.466,
+      "input_tokens": 4,
+      "output_tokens": 164,
+      "call_failed": false,
+      "cost_usd": 0.022254700000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L3-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.079,
+      "input_tokens": 2,
+      "output_tokens": 130,
+      "call_failed": false,
+      "cost_usd": 0.008239699999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-000",
+      "run": 0,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.563,
+      "input_tokens": 2,
+      "output_tokens": 138,
+      "call_failed": false,
+      "cost_usd": 0.0081962,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-001",
+      "run": 0,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.156,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0073657,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-002",
+      "run": 0,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.273,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072485,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-003",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 6.446,
+      "input_tokens": 4,
+      "output_tokens": 109,
+      "call_failed": false,
+      "cost_usd": 0.021407000000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L4-004",
+      "run": 0,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.538,
+      "input_tokens": 2,
+      "output_tokens": 135,
+      "call_failed": false,
+      "cost_usd": 0.008156000000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-005",
+      "run": 0,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.082,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072049,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.972,
+      "input_tokens": 4,
+      "output_tokens": 128,
+      "call_failed": false,
+      "cost_usd": 0.0167758,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2378
+    },
+    {
+      "item_id": "lure-L5-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.868,
+      "input_tokens": 2,
+      "output_tokens": 116,
+      "call_failed": false,
+      "cost_usd": 0.0083918,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.531,
+      "input_tokens": 2,
+      "output_tokens": 127,
+      "call_failed": false,
+      "cost_usd": 0.0082727,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-003",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.014,
+      "input_tokens": 2,
+      "output_tokens": 124,
+      "call_failed": false,
+      "cost_usd": 0.008318899999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.02,
+      "input_tokens": 4,
+      "output_tokens": 150,
+      "call_failed": false,
+      "cost_usd": 0.0221528,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.469,
+      "input_tokens": 4,
+      "output_tokens": 135,
+      "call_failed": false,
+      "cost_usd": 0.015152599999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2378
+    },
+    {
+      "item_id": "lure-L6-000",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.043,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074497999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-001",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.891,
+      "input_tokens": 4,
+      "output_tokens": 144,
+      "call_failed": false,
+      "cost_usd": 0.022206299999999998,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-002",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.132,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071049,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-003",
+      "run": 0,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.625,
+      "input_tokens": 2,
+      "output_tokens": 149,
+      "call_failed": false,
+      "cost_usd": 0.0083243,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-004",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.392,
+      "input_tokens": 4,
+      "output_tokens": 178,
+      "call_failed": false,
+      "cost_usd": 0.0223313,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-005",
+      "run": 0,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.88,
+      "input_tokens": 2,
+      "output_tokens": 90,
+      "call_failed": false,
+      "cost_usd": 0.0079216,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-000",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.038,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073314,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-001",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.855,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073684,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-002",
+      "run": 1,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 2.991,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":2120,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.0070872,\"usage\":{\"input_tokens\":2,\"cache_creatio",
+      "cost_usd": 0.0070872,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-003",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.371,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072331999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-004",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.947,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072475,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-005",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.83,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072283,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.922,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0070769,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.242,
+      "input_tokens": 4,
+      "output_tokens": 99,
+      "call_failed": false,
+      "cost_usd": 0.021552599999999998,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.061,
+      "input_tokens": 2,
+      "output_tokens": 103,
+      "call_failed": false,
+      "cost_usd": 0.007740400000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-003",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 5.387,
+      "input_tokens": 2,
+      "output_tokens": 312,
+      "call_failed": false,
+      "cost_usd": 0.0097242,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.995,
+      "input_tokens": 4,
+      "output_tokens": 153,
+      "call_failed": false,
+      "cost_usd": 0.0218937,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.903,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071129,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.667,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075445,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.581,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075309999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.747,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007457,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-003",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.193,
+      "input_tokens": 2,
+      "output_tokens": 96,
+      "call_failed": false,
+      "cost_usd": 0.007639699999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.026,
+      "input_tokens": 4,
+      "output_tokens": 241,
+      "call_failed": false,
+      "cost_usd": 0.0232068,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.871,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075783000000000005,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.87,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072609,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.847,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007474,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.144,
+      "input_tokens": 2,
+      "output_tokens": 111,
+      "call_failed": false,
+      "cost_usd": 0.0081561,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-003",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.635,
+      "input_tokens": 2,
+      "output_tokens": 185,
+      "call_failed": false,
+      "cost_usd": 0.0086402,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.139,
+      "input_tokens": 4,
+      "output_tokens": 219,
+      "call_failed": false,
+      "cost_usd": 0.0230548,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.202,
+      "input_tokens": 2,
+      "output_tokens": 120,
+      "call_failed": false,
+      "cost_usd": 0.0080167,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.896,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075153,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.147,
+      "input_tokens": 2,
+      "output_tokens": 109,
+      "call_failed": false,
+      "cost_usd": 0.0080201,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.262,
+      "input_tokens": 2,
+      "output_tokens": 130,
+      "call_failed": false,
+      "cost_usd": 0.0082492,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-003",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.505,
+      "input_tokens": 2,
+      "output_tokens": 180,
+      "call_failed": false,
+      "cost_usd": 0.008692199999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.193,
+      "input_tokens": 4,
+      "output_tokens": 251,
+      "call_failed": false,
+      "cost_usd": 0.0233498,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L3-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.295,
+      "input_tokens": 2,
+      "output_tokens": 133,
+      "call_failed": false,
+      "cost_usd": 0.008202599999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-000",
+      "run": 1,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.953,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0073976,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-001",
+      "run": 1,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.788,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072715,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-002",
+      "run": 1,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.005,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.007368,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-003",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 6.246,
+      "input_tokens": 4,
+      "output_tokens": 121,
+      "call_failed": false,
+      "cost_usd": 0.0214781,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L4-004",
+      "run": 1,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.474,
+      "input_tokens": 2,
+      "output_tokens": 134,
+      "call_failed": false,
+      "cost_usd": 0.008149,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-005",
+      "run": 1,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.026,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0071029000000000005,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.766,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0083684,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.586,
+      "input_tokens": 2,
+      "output_tokens": 104,
+      "call_failed": false,
+      "cost_usd": 0.0082471,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.43,
+      "input_tokens": 2,
+      "output_tokens": 130,
+      "call_failed": false,
+      "cost_usd": 0.0081879,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-003",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.954,
+      "input_tokens": 2,
+      "output_tokens": 102,
+      "call_failed": false,
+      "cost_usd": 0.008099,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.058,
+      "input_tokens": 4,
+      "output_tokens": 189,
+      "call_failed": false,
+      "cost_usd": 0.0226536,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.303,
+      "input_tokens": 2,
+      "output_tokens": 135,
+      "call_failed": false,
+      "cost_usd": 0.008293300000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-000",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.041,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074759,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-001",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.369,
+      "input_tokens": 4,
+      "output_tokens": 152,
+      "call_failed": false,
+      "cost_usd": 0.0222981,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-002",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.844,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071769,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-003",
+      "run": 1,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.124,
+      "input_tokens": 2,
+      "output_tokens": 234,
+      "call_failed": false,
+      "cost_usd": 0.0090603,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-004",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.146,
+      "input_tokens": 4,
+      "output_tokens": 163,
+      "call_failed": false,
+      "cost_usd": 0.0221292,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-005",
+      "run": 1,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.354,
+      "input_tokens": 4,
+      "output_tokens": 104,
+      "call_failed": false,
+      "cost_usd": 0.0217995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "matched-000",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.721,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072022,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-001",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.915,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007199499999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-002",
+      "run": 2,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 3.171,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":2713,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.007061899999999999,\"usage\":{\"input_tokens\":2,\"ca",
+      "cost_usd": 0.007061899999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-003",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.853,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007266,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-004",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.876,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073497,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-005",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.836,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072447,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.87,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072178,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.59,
+      "input_tokens": 4,
+      "output_tokens": 116,
+      "call_failed": false,
+      "cost_usd": 0.0218277,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.9,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0070888999999999995,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-003",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.837,
+      "input_tokens": 2,
+      "output_tokens": 175,
+      "call_failed": false,
+      "cost_usd": 0.0084133,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.139,
+      "input_tokens": 4,
+      "output_tokens": 120,
+      "call_failed": false,
+      "cost_usd": 0.0217608,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.205,
+      "input_tokens": 2,
+      "output_tokens": 106,
+      "call_failed": false,
+      "cost_usd": 0.0079018,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.918,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071689,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.595,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071608999999999996,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.661,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072878,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-003",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.969,
+      "input_tokens": 2,
+      "output_tokens": 102,
+      "call_failed": false,
+      "cost_usd": 0.0078866,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.083,
+      "input_tokens": 4,
+      "output_tokens": 172,
+      "call_failed": false,
+      "cost_usd": 0.022543800000000003,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.903,
+      "input_tokens": 4,
+      "output_tokens": 151,
+      "call_failed": false,
+      "cost_usd": 0.022367,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.235,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075157,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.334,
+      "input_tokens": 2,
+      "output_tokens": 122,
+      "call_failed": false,
+      "cost_usd": 0.008055900000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.13,
+      "input_tokens": 2,
+      "output_tokens": 116,
+      "call_failed": false,
+      "cost_usd": 0.008119000000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-003",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.527,
+      "input_tokens": 2,
+      "output_tokens": 158,
+      "call_failed": false,
+      "cost_usd": 0.008370200000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.094,
+      "input_tokens": 4,
+      "output_tokens": 353,
+      "call_failed": false,
+      "cost_usd": 0.0243114,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.212,
+      "input_tokens": 2,
+      "output_tokens": 107,
+      "call_failed": false,
+      "cost_usd": 0.0080085,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.82,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075796,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.326,
+      "input_tokens": 2,
+      "output_tokens": 117,
+      "call_failed": false,
+      "cost_usd": 0.0081643,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.543,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074208,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-003",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.876,
+      "input_tokens": 2,
+      "output_tokens": 195,
+      "call_failed": false,
+      "cost_usd": 0.008709199999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.174,
+      "input_tokens": 4,
+      "output_tokens": 218,
+      "call_failed": false,
+      "cost_usd": 0.022777,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L3-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.896,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072169,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-000",
+      "run": 2,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.781,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072483,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-001",
+      "run": 2,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.183,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072874,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-002",
+      "run": 2,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.412,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0072312,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-003",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 6.185,
+      "input_tokens": 4,
+      "output_tokens": 100,
+      "call_failed": false,
+      "cost_usd": 0.0210754,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L4-004",
+      "run": 2,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 6.71,
+      "input_tokens": 2,
+      "output_tokens": 144,
+      "call_failed": false,
+      "cost_usd": 0.008063200000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-005",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 17.226,
+      "input_tokens": 4,
+      "output_tokens": 212,
+      "call_failed": false,
+      "cost_usd": 0.0224982,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.963,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.008423,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.208,
+      "input_tokens": 2,
+      "output_tokens": 106,
+      "call_failed": false,
+      "cost_usd": 0.008109100000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.452,
+      "input_tokens": 2,
+      "output_tokens": 125,
+      "call_failed": false,
+      "cost_usd": 0.0082199,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-003",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.447,
+      "input_tokens": 2,
+      "output_tokens": 109,
+      "call_failed": false,
+      "cost_usd": 0.0081278,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.348,
+      "input_tokens": 4,
+      "output_tokens": 223,
+      "call_failed": false,
+      "cost_usd": 0.0229795,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.358,
+      "input_tokens": 2,
+      "output_tokens": 135,
+      "call_failed": false,
+      "cost_usd": 0.008294399999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-000",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.097,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074601,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-001",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.08,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071849,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-002",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.461,
+      "input_tokens": 2,
+      "output_tokens": 107,
+      "call_failed": false,
+      "cost_usd": 0.0079223,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-003",
+      "run": 2,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.185,
+      "input_tokens": 2,
+      "output_tokens": 202,
+      "call_failed": false,
+      "cost_usd": 0.0087075,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-004",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.884,
+      "input_tokens": 4,
+      "output_tokens": 122,
+      "call_failed": false,
+      "cost_usd": 0.0216469,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-005",
+      "run": 2,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.845,
+      "input_tokens": 2,
+      "output_tokens": 123,
+      "call_failed": false,
+      "cost_usd": 0.00821,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-000",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.963,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007259799999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-001",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.997,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072159,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-002",
+      "run": 3,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 3.124,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":2735,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.0070872,\"usage\":{\"input_tokens\":2,\"cache_creatio",
+      "cost_usd": 0.0070872,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-003",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.698,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072088000000000005,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-004",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.502,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073788,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-005",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.855,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072695,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.943,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072342,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.026,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073525,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.878,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072485,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-003",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.524,
+      "input_tokens": 2,
+      "output_tokens": 214,
+      "call_failed": false,
+      "cost_usd": 0.0089707,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.065,
+      "input_tokens": 4,
+      "output_tokens": 113,
+      "call_failed": false,
+      "cost_usd": 0.0217257,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.769,
+      "input_tokens": 2,
+      "output_tokens": 112,
+      "call_failed": false,
+      "cost_usd": 0.0080216,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.814,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075157999999999996,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.783,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072009,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.579,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007507699999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-003",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.114,
+      "input_tokens": 2,
+      "output_tokens": 93,
+      "call_failed": false,
+      "cost_usd": 0.0076246000000000005,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.32,
+      "input_tokens": 4,
+      "output_tokens": 149,
+      "call_failed": false,
+      "cost_usd": 0.0223966,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.646,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007477999999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.705,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074446,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.603,
+      "input_tokens": 2,
+      "output_tokens": 121,
+      "call_failed": false,
+      "cost_usd": 0.0080747,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.058,
+      "input_tokens": 2,
+      "output_tokens": 108,
+      "call_failed": false,
+      "cost_usd": 0.0080738,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-003",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.805,
+      "input_tokens": 2,
+      "output_tokens": 159,
+      "call_failed": false,
+      "cost_usd": 0.0083459,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.263,
+      "input_tokens": 4,
+      "output_tokens": 218,
+      "call_failed": false,
+      "cost_usd": 0.0229998,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.31,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074191,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.018,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0076104,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.136,
+      "input_tokens": 2,
+      "output_tokens": 111,
+      "call_failed": false,
+      "cost_usd": 0.0080939,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.864,
+      "input_tokens": 2,
+      "output_tokens": 121,
+      "call_failed": false,
+      "cost_usd": 0.0082085,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-003",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.024,
+      "input_tokens": 2,
+      "output_tokens": 224,
+      "call_failed": false,
+      "cost_usd": 0.0090345,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.058,
+      "input_tokens": 4,
+      "output_tokens": 157,
+      "call_failed": false,
+      "cost_usd": 0.0225715,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L3-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.193,
+      "input_tokens": 2,
+      "output_tokens": 136,
+      "call_failed": false,
+      "cost_usd": 0.0083117,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-000",
+      "run": 3,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.015,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0070989,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-001",
+      "run": 3,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.972,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0070949,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-002",
+      "run": 3,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.911,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0073844,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-003",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 7.677,
+      "input_tokens": 4,
+      "output_tokens": 105,
+      "call_failed": false,
+      "cost_usd": 0.021444,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L4-004",
+      "run": 3,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.995,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.007279300000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-005",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 6.136,
+      "input_tokens": 4,
+      "output_tokens": 156,
+      "call_failed": false,
+      "cost_usd": 0.0218585,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.794,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0083592,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.817,
+      "input_tokens": 4,
+      "output_tokens": 159,
+      "call_failed": false,
+      "cost_usd": 0.0232284,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.618,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075485,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-003",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.436,
+      "input_tokens": 2,
+      "output_tokens": 104,
+      "call_failed": false,
+      "cost_usd": 0.008102999999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.887,
+      "input_tokens": 4,
+      "output_tokens": 187,
+      "call_failed": false,
+      "cost_usd": 0.0227544,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.985,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072009,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-000",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.147,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071369,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-001",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.331,
+      "input_tokens": 4,
+      "output_tokens": 162,
+      "call_failed": false,
+      "cost_usd": 0.022350299999999997,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-002",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.43,
+      "input_tokens": 2,
+      "output_tokens": 91,
+      "call_failed": false,
+      "cost_usd": 0.0078608,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-003",
+      "run": 3,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.295,
+      "input_tokens": 2,
+      "output_tokens": 231,
+      "call_failed": false,
+      "cost_usd": 0.009179099999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-004",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.43,
+      "input_tokens": 4,
+      "output_tokens": 123,
+      "call_failed": false,
+      "cost_usd": 0.021729200000000004,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-005",
+      "run": 3,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.095,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074846999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-000",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.953,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0073059,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-001",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.305,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071915,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-002",
+      "run": 4,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 4.815,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":4026,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.0070463999999999995,\"usage\":{\"input_tokens\":2,\"c",
+      "cost_usd": 0.0070463999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-003",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.986,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072421000000000004,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-004",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.842,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.007256,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "matched-005",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 3.168,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072447,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-000",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.026,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074125,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.557,
+      "input_tokens": 4,
+      "output_tokens": 101,
+      "call_failed": false,
+      "cost_usd": 0.0214183,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.958,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0070729,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-003",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 2.847,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0072562,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "mismatched-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.478,
+      "input_tokens": 4,
+      "output_tokens": 149,
+      "call_failed": false,
+      "cost_usd": 0.0219479,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "mismatched-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.948,
+      "input_tokens": 2,
+      "output_tokens": 112,
+      "call_failed": false,
+      "cost_usd": 0.0079712,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-000",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.731,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074728,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 10.292,
+      "input_tokens": 4,
+      "output_tokens": 190,
+      "call_failed": false,
+      "cost_usd": 0.0228104,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.639,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071369,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-003",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.628,
+      "input_tokens": 2,
+      "output_tokens": 105,
+      "call_failed": false,
+      "cost_usd": 0.007909900000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L1-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.991,
+      "input_tokens": 4,
+      "output_tokens": 170,
+      "call_failed": false,
+      "cost_usd": 0.022640100000000003,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L1-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.867,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074213,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-000",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 9.595,
+      "input_tokens": 2,
+      "output_tokens": 109,
+      "call_failed": false,
+      "cost_usd": 0.0079634,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.421,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074868,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.427,
+      "input_tokens": 2,
+      "output_tokens": 126,
+      "call_failed": false,
+      "cost_usd": 0.008313099999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-003",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.706,
+      "input_tokens": 2,
+      "output_tokens": 178,
+      "call_failed": false,
+      "cost_usd": 0.0086683,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L2-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.078,
+      "input_tokens": 4,
+      "output_tokens": 143,
+      "call_failed": false,
+      "cost_usd": 0.0222237,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L2-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.03,
+      "input_tokens": 2,
+      "output_tokens": 96,
+      "call_failed": false,
+      "cost_usd": 0.0079644,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-000",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 7.331,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075506,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.607,
+      "input_tokens": 2,
+      "output_tokens": 122,
+      "call_failed": false,
+      "cost_usd": 0.0081411,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.473,
+      "input_tokens": 2,
+      "output_tokens": 120,
+      "call_failed": false,
+      "cost_usd": 0.0080824,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-003",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.702,
+      "input_tokens": 2,
+      "output_tokens": 186,
+      "call_failed": false,
+      "cost_usd": 0.0086272,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L3-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.124,
+      "input_tokens": 4,
+      "output_tokens": 202,
+      "call_failed": false,
+      "cost_usd": 0.0228173,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L3-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.931,
+      "input_tokens": 2,
+      "output_tokens": 142,
+      "call_failed": false,
+      "cost_usd": 0.0084323,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-000",
+      "run": 4,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 4.914,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.007272700000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-001",
+      "run": 4,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 2.953,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.0071109,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-002",
+      "run": 4,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 5.489,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.007368,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-003",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 9.14,
+      "input_tokens": 4,
+      "output_tokens": 133,
+      "call_failed": false,
+      "cost_usd": 0.021477800000000002,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L4-004",
+      "run": 4,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 3.432,
+      "input_tokens": 2,
+      "output_tokens": 116,
+      "call_failed": false,
+      "cost_usd": 0.0079649,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L4-005",
+      "run": 4,
+      "goal_fit": "insufficient_context",
+      "cause": null,
+      "latency_seconds": 7.188,
+      "input_tokens": 2,
+      "output_tokens": 60,
+      "call_failed": false,
+      "cost_usd": 0.007469,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-000",
+      "run": 4,
+      "goal_fit": "failed",
+      "cause": "failed",
+      "latency_seconds": 5.575,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "call_failed": true,
+      "failure": "cli exited 1: no stderr; stdout: {\"duration_api_ms\":5530,\"stop_reason\":\"refusal\",\"session_id\":\"3cc8933a-877a-5b9a-bf4e-a849e674060c\",\"total_cost_usd\":0.0236399,\"usage\":{\"input_tokens\":42,\"cache_creati",
+      "cost_usd": 0.0236399,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.027,
+      "input_tokens": 4,
+      "output_tokens": 153,
+      "call_failed": false,
+      "cost_usd": 0.023184299999999998,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 4.2,
+      "input_tokens": 2,
+      "output_tokens": 129,
+      "call_failed": false,
+      "cost_usd": 0.008341000000000001,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-003",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.261,
+      "input_tokens": 2,
+      "output_tokens": 135,
+      "call_failed": false,
+      "cost_usd": 0.0084808,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L5-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 8.655,
+      "input_tokens": 4,
+      "output_tokens": 169,
+      "call_failed": false,
+      "cost_usd": 0.0224566,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L5-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 14.888,
+      "input_tokens": 4,
+      "output_tokens": 339,
+      "call_failed": false,
+      "cost_usd": 0.0241846,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-000",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 2.899,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0074180999999999995,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-001",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 5.936,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0075814,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-002",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.368,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071928999999999995,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-003",
+      "run": 4,
+      "goal_fit": "plausible",
+      "cause": null,
+      "latency_seconds": 4.295,
+      "input_tokens": 2,
+      "output_tokens": 200,
+      "call_failed": false,
+      "cost_usd": 0.008687499999999999,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    },
+    {
+      "item_id": "lure-L6-004",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 6.388,
+      "input_tokens": 4,
+      "output_tokens": 159,
+      "call_failed": false,
+      "cost_usd": 0.022185,
+      "models": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 2353
+    },
+    {
+      "item_id": "lure-L6-005",
+      "run": 4,
+      "goal_fit": "implausible",
+      "cause": null,
+      "latency_seconds": 3.002,
+      "input_tokens": 2,
+      "output_tokens": 57,
+      "call_failed": false,
+      "cost_usd": 0.0071849,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "cache_read_tokens": 1189
+    }
+  ]
+}
