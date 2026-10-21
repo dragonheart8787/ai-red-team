@@ -1,0 +1,812 @@
+{
+  "engagements": {
+    "ENG-D40-MAIN-e1ef1f9e96": {
+      "proposals": 5,
+      "decided": 5,
+      "decisions": {
+        "ALLOW": 2,
+        "HUMAN_APPROVAL": 3
+      },
+      "with_plan_fit": 5,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 5
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 5
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 2,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 2,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 2,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 2,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 2,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 2,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 5,
+        "ids": {
+          "control-plane": 5
+        },
+        "prompts": {
+          "?": 5
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-b7948f1b4a": {
+      "proposals": 3,
+      "decided": 3,
+      "decisions": {
+        "ALLOW": 3
+      },
+      "with_plan_fit": 3,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 3
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 3
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 3,
+        "ids": {
+          "control-plane": 3
+        },
+        "prompts": {
+          "?": 3
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-100aaca77e": {
+      "proposals": 4,
+      "decided": 4,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 1
+      },
+      "with_plan_fit": 4,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 4
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 4
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 4,
+        "ids": {
+          "control-plane": 4
+        },
+        "prompts": {
+          "?": 4
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-601dc00385": {
+      "proposals": 6,
+      "decided": 6,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 3
+      },
+      "with_plan_fit": 6,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 6
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 6
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 6,
+        "ids": {
+          "control-plane": 6
+        },
+        "prompts": {
+          "?": 6
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-df206dd7ce": {
+      "proposals": 6,
+      "decided": 6,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 3
+      },
+      "with_plan_fit": 6,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 6
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 6
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 1,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 1
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 6,
+        "ids": {
+          "control-plane": 6
+        },
+        "prompts": {
+          "?": 6
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-381d88d95a": {
+      "proposals": 7,
+      "decided": 7,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 4
+      },
+      "with_plan_fit": 7,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 7
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 7
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 7,
+        "ids": {
+          "control-plane": 7
+        },
+        "prompts": {
+          "?": 7
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-5553dc11f5": {
+      "proposals": 6,
+      "decided": 6,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 3
+      },
+      "with_plan_fit": 6,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 6
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 6
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 1,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 1
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 6,
+        "ids": {
+          "control-plane": 6
+        },
+        "prompts": {
+          "?": 6
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-42b569da27": {
+      "proposals": 5,
+      "decided": 5,
+      "decisions": {
+        "ALLOW": 3,
+        "HUMAN_APPROVAL": 2
+      },
+      "with_plan_fit": 5,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 4,
+        "differs_from_task": 1
+      },
+      "task_relation_sub_cause": {
+        "differs_from_task/same_action_target_inside_task_target": 1
+      },
+      "goal_fit": {
+        "not_assessed/disabled": 5
+      },
+      "dp13_inside_task_target": {
+        "k": 1,
+        "n": 1,
+        "upper95": 1.0
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 1,
+          "n": 2,
+          "upper95": 0.9055
+        },
+        "by_relation": {
+          "matches_task": 1,
+          "differs_from_task": 1
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 1,
+            "n": 3,
+            "upper95": 0.7923
+          },
+          "by_reason": {
+            "proposal_outside_task": 1
+          },
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 1,
+            "n": 3,
+            "upper95": 0.7923
+          },
+          "by_reason": {
+            "proposal_outside_task": 1
+          },
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 5,
+        "ids": {
+          "control-plane": 5
+        },
+        "prompts": {
+          "?": 5
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    "ENG-D40-MAIN-5c6772251f": {
+      "proposals": 3,
+      "decided": 3,
+      "decisions": {
+        "ALLOW": 3
+      },
+      "with_plan_fit": 3,
+      "without_plan_fit": 0,
+      "task_relation": {
+        "matches_task": 3
+      },
+      "task_relation_sub_cause": {},
+      "goal_fit": {
+        "not_assessed/disabled": 3
+      },
+      "dp13_inside_task_target": {
+        "k": 0,
+        "n": 0,
+        "upper95": null
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 0,
+          "n": 2,
+          "upper95": 1.0
+        },
+        "by_relation": {
+          "matches_task": 2
+        }
+      },
+      "would_add": {
+        "p1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "q1_only": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        },
+        "both": {
+          "allow_decisions": 3,
+          "would_become_human_approval": {
+            "k": 0,
+            "n": 3,
+            "upper95": 1.0
+          },
+          "by_reason": {},
+          "reasons_gained_by_already_asked": {}
+        }
+      },
+      "validator": {
+        "events": 3,
+        "ids": {
+          "control-plane": 3
+        },
+        "prompts": {
+          "?": 3
+        },
+        "errors": {},
+        "calls": 0,
+        "latency_median": null,
+        "latency_p95": null,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    }
+  },
+  "total": {
+    "engagements": 9,
+    "proposals": 45,
+    "decided": 45,
+    "with_plan_fit": 45,
+    "without_plan_fit": 0,
+    "decisions": {
+      "ALLOW": 26,
+      "HUMAN_APPROVAL": 19
+    },
+    "task_relation": {
+      "matches_task": 44,
+      "differs_from_task": 1
+    },
+    "task_relation_sub_cause": {
+      "differs_from_task/same_action_target_inside_task_target": 1
+    },
+    "goal_fit": {
+      "not_assessed/disabled": 45
+    },
+    "dp13_inside_task_target": {
+      "k": 1,
+      "n": 1,
+      "upper95": 1.0
+    },
+    "dp13_proposals_on_network_tasks": {
+      "single_host_inside": {
+        "k": 1,
+        "n": 16,
+        "upper95": 0.2833
+      },
+      "by_relation": {
+        "matches_task": 15,
+        "differs_from_task": 1
+      }
+    },
+    "would_add": {
+      "p1_only": {
+        "allow_decisions": 26,
+        "would_become_human_approval": {
+          "k": 1,
+          "n": 26,
+          "upper95": 0.1889
+        },
+        "by_reason": {
+          "proposal_outside_task": 1
+        },
+        "reasons_gained_by_already_asked": {}
+      },
+      "q1_only": {
+        "allow_decisions": 26,
+        "would_become_human_approval": {
+          "k": 0,
+          "n": 26,
+          "upper95": 0.1154
+        },
+        "by_reason": {},
+        "reasons_gained_by_already_asked": {}
+      },
+      "both": {
+        "allow_decisions": 26,
+        "would_become_human_approval": {
+          "k": 1,
+          "n": 26,
+          "upper95": 0.1889
+        },
+        "by_reason": {
+          "proposal_outside_task": 1
+        },
+        "reasons_gained_by_already_asked": {}
+      }
+    }
+  }
+}

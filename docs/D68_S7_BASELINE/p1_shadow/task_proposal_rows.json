@@ -1,0 +1,857 @@
+[
+ {
+  "task_id": "TASK-c4b9cc283d",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-f254b99c7a",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-e1ef1f9e96"
+ },
+ {
+  "task_id": "TASK-50e3967e55",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-b01cadb911",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-e1ef1f9e96"
+ },
+ {
+  "task_id": "TASK-73018bb928",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-fab1c64f7b",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-e1ef1f9e96"
+ },
+ {
+  "task_id": "TASK-a9fdf0e9e3",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-d178343af1",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-e1ef1f9e96"
+ },
+ {
+  "task_id": "TASK-852b2f8a6d",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-3c18a61ec0",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-e1ef1f9e96"
+ },
+ {
+  "task_id": "TASK-a18b2c4d08",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-96b2a21c01",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-b7948f1b4a"
+ },
+ {
+  "task_id": "TASK-bec7e236d1",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-23ecb5dfd5",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-b7948f1b4a"
+ },
+ {
+  "task_id": "TASK-f075813980",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-22a281b969",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-b7948f1b4a"
+ },
+ {
+  "task_id": "TASK-42c66389d3",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-0353805df7",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-100aaca77e"
+ },
+ {
+  "task_id": "TASK-88f72556ff",
+  "task_action": "network.recon",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-1d9bf366aa",
+  "p_action": "network.recon",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-100aaca77e"
+ },
+ {
+  "task_id": "TASK-16546f80f4",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-ccc22654a0",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-100aaca77e"
+ },
+ {
+  "task_id": "TASK-ce456d6536",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-2b1927e514",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-100aaca77e"
+ },
+ {
+  "task_id": "TASK-aeef507e9f",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-94c0737b35",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-78a3e9ea82",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-c00fb108ee",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-f36cb17287",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-28bcb8a46c",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-98ac8125f5",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-529186469b",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-ed44b9f318",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-4259eac167",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-81fc7c0335",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-c9a0a5103d",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-601dc00385"
+ },
+ {
+  "task_id": "TASK-d30725915b",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-ca280f6b4b",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-53e057857b",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-8574946114",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-c5e2858470",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-6d1a3f0c32",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-8563ca547c",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-ea8acf65f1",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-c224512e5e",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-bbb14b4bd4",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-5d77663828",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-945a910e87",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-df206dd7ce"
+ },
+ {
+  "task_id": "TASK-1030a2cdf4",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-398ac64e87",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-b783c43448",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-15dfa35788",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-eb84f69643",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-9fe2a0b5b6",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-c1ec280e16",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-79a699903e",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-8080338c6e",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-6c50a19469",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-c7543f1982",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-58d1525db5",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-6cffabefdf",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-8f7b439cfa",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-381d88d95a"
+ },
+ {
+  "task_id": "TASK-03c6778cd6",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-8a8803c0de",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-d0791a559f",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-b42e6ca403",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-be20ae975c",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-555db898fa",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-9efa663c28",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-33744b912e",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-c2a9ac16b3",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-9a9e743edf",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-860a23ed3f",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-c5ec962d24",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5553dc11f5"
+ },
+ {
+  "task_id": "TASK-6b2fa15845",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-6e3e647aeb",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-42b569da27"
+ },
+ {
+  "task_id": "TASK-23b4463f75",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-b97bb1d5b1",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": "same_action_target_inside_task_target",
+   "task_relation": "differs_from_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-42b569da27"
+ },
+ {
+  "task_id": "TASK-9cbc2d8852",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-b7897d2255",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-42b569da27"
+ },
+ {
+  "task_id": "TASK-45c28fd2e4",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.1",
+  "status": "completed",
+  "proposal_id": "PROP-19faa5833f",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.1",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-42b569da27"
+ },
+ {
+  "task_id": "TASK-8a94610a98",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.3",
+  "status": "completed",
+  "proposal_id": "PROP-48f7800e2e",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.3",
+  "decision": "HUMAN_APPROVAL",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-42b569da27"
+ },
+ {
+  "task_id": "TASK-7bbeee7eb4",
+  "task_action": "network.recon",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-5271b33562",
+  "p_action": "network.recon",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5c6772251f"
+ },
+ {
+  "task_id": "TASK-e621736869",
+  "task_action": "network.scan",
+  "task_target": "cidr:10.79.0.0/24",
+  "status": "completed",
+  "proposal_id": "PROP-5c6452680b",
+  "p_action": "network.scan",
+  "p_type": "cidr",
+  "p_value": "10.79.0.0/24",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5c6772251f"
+ },
+ {
+  "task_id": "TASK-3d50e73100",
+  "task_action": "network.scan",
+  "task_target": "ip:10.79.0.2",
+  "status": "completed",
+  "proposal_id": "PROP-60db306791",
+  "p_action": "network.scan",
+  "p_type": "ip",
+  "p_value": "10.79.0.2",
+  "decision": "ALLOW",
+  "pf": {
+   "version": "plan_fit_v1",
+   "goal_fit": "not_assessed",
+   "sub_cause": null,
+   "task_relation": "matches_task",
+   "goal_fit_cause": "disabled"
+  },
+  "eid": "ENG-D40-MAIN-5c6772251f"
+ }
+]
