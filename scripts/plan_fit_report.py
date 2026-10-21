@@ -88,6 +88,19 @@ def summarize(rows: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[
     differs = relations.get(r.DIFFERS_FROM_TASK, 0)
     out["dp13_inside_task_target"] = rate(
         sub_causes.get(f"{r.DIFFERS_FROM_TASK}/{r.INSIDE_TASK_TARGET}", 0), differs)
+    # DP-13 as the question was asked: of the proposals made for a task whose target is a network,
+    # how many were for one host inside it (and so would be `differs_from_task`)?
+    on_cidr = [x for x in with_plan if x.get("task_target_kind") == "cidr"]
+    inside = 0
+    kinds: Counter = Counter()
+    for x in on_cidr:
+        signal = r.policy_signal(x["plan_fit"])
+        if (signal["task_relation"], signal["sub_cause"]) == (
+                r.DIFFERS_FROM_TASK, r.INSIDE_TASK_TARGET):
+            inside += 1
+        kinds[signal["task_relation"]] += 1
+    out["dp13_proposals_on_network_tasks"] = {
+        "single_host_inside": rate(inside, len(on_cidr)), "by_relation": dict(kinds)}
 
     allowed = [x for x in with_plan if x["decision"] == "ALLOW"]
     asked = [x for x in with_plan if x["decision"] == "HUMAN_APPROVAL"]
@@ -134,11 +147,14 @@ def collect(engagement_id: str, *, since: str | None = None) -> dict[str, Any]:
             {"proposal_id": p["proposal_id"], "decision": p["decision"],
              "pipeline_stage": p["pipeline_stage"],
              "plan_fit": (p["reviewer_hints"] or {}).get("plan_fit")
-             if isinstance(p["reviewer_hints"], dict) else None}
+             if isinstance(p["reviewer_hints"], dict) else None,
+             "task_target_kind": (p["task_target"] or "").partition(":")[0] or None}
             for p in conn.execute(text(
-                "SELECT proposal_id, decision, pipeline_stage, reviewer_hints "
-                "FROM action_proposals WHERE true" + when + " ORDER BY created_at"),
-                params).mappings()]
+                "SELECT p.proposal_id, p.decision, p.pipeline_stage, p.reviewer_hints, "
+                "t.canonical_target AS task_target "
+                "FROM action_proposals p LEFT JOIN tasks t ON t.task_id = p.task_id "
+                "WHERE true" + when.replace("created_at", "p.created_at")
+                + " ORDER BY p.created_at"), params).mappings()]
         events = [e["payload"] for e in conn.execute(text(
             "SELECT payload FROM audit_log WHERE event_type = 'plan_fit.assessed'" + audit_when
             + " ORDER BY audit_id"), params).mappings()]
@@ -159,6 +175,14 @@ def combine(per_engagement: dict[str, dict[str, Any]]) -> dict[str, Any]:
         f"{r.DIFFERS_FROM_TASK}/{r.INSIDE_TASK_TARGET}", 0)
     total["dp13_inside_task_target"] = rate(inside, total["task_relation"].get(
         r.DIFFERS_FROM_TASK, 0))
+    network = [v["dp13_proposals_on_network_tasks"] for v in per_engagement.values()]
+    by_relation: Counter = Counter()
+    for entry in network:
+        by_relation.update(entry["by_relation"])
+    total["dp13_proposals_on_network_tasks"] = {
+        "single_host_inside": rate(sum(e["single_host_inside"]["k"] for e in network),
+                                   sum(e["single_host_inside"]["n"] for e in network)),
+        "by_relation": dict(by_relation)}
     would: dict[str, Any] = {}
     for name, _, _ in SCENARIOS:
         rows = [v["would_add"][name] for v in per_engagement.values()]
@@ -188,7 +212,10 @@ def render(report: dict[str, Any]) -> str:
                   f"* sub-causes: {data['task_relation_sub_cause']}",
                   f"* goal_fit: {data['goal_fit']}",
                   f"* DP-13, a host inside the task's network, of all `differs_from_task`: "
-                  f"{fmt(data['dp13_inside_task_target'])}", "",
+                  f"{fmt(data['dp13_inside_task_target'])}",
+                  f"* DP-13 as asked: proposals for a task on a network that were for one host "
+                  f"inside it: {fmt(data['dp13_proposals_on_network_tasks']['single_host_inside'])}"
+                  f" ({data['dp13_proposals_on_network_tasks']['by_relation']})", "",
                   "| if enabled | ALLOW decisions | would go to a human | by reason | reasons "
                   "added to those already asked |", "|---|---|---|---|---|"]
         for scenario, w in data["would_add"].items():

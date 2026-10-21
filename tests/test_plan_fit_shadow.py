@@ -294,3 +294,53 @@ def test_the_report_only_reads():
     source = (REPO / "scripts" / "plan_fit_report.py").read_text()
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b", source), (
         "the report must not write")
+
+
+def test_dp13_as_asked_counts_proposals_for_a_task_on_a_network():
+    network = {"task_target_kind": "cidr"}
+    rows = [
+        {**row("ALLOW", plan()), **network},                                        # same network
+        {**row("ALLOW", plan("differs_from_task", "same_action_target_inside_task_target")),
+         **network},                                                                # one host in it
+        {**row("ALLOW", plan("differs_from_task", "same_action_target_inside_task_target")),
+         **network},
+        {**row("ALLOW", plan("differs_from_task", "different_target")), **network},  # elsewhere
+        {**row("ALLOW", plan("differs_from_task", "same_action_target_inside_task_target")),
+         "task_target_kind": "ip"},                                      # not a network task
+    ]
+    got = rep.summarize(rows, [])["dp13_proposals_on_network_tasks"]
+    assert (got["single_host_inside"]["k"], got["single_host_inside"]["n"]) == (2, 4)
+    assert got["by_relation"] == {"matches_task": 1, "differs_from_task": 3}
+    total = rep.combine({"A": rep.summarize(rows, []), "B": rep.summarize(rows[:2], [])})
+    assert total["dp13_proposals_on_network_tasks"]["single_host_inside"]["n"] == 4 + 2
+    assert total["dp13_proposals_on_network_tasks"]["single_host_inside"]["k"] == 2 + 1
+
+
+def test_the_report_joins_the_task_of_each_proposal(world):
+    decide(world, None, task="matching", host="10.61.0.5")
+    s = rep.collect(world["engagement_id"])
+    assert s["dp13_proposals_on_network_tasks"]["single_host_inside"]["n"] == 0   # an ip task
+
+
+def test_a_host_proposed_inside_a_network_task_is_counted_from_the_real_rows(world):
+    import dataclasses
+
+    from agents.base_agent import ProposedTask
+    from control_plane.api.function_api import create_task, propose_action
+    from control_plane.state.db import engagement_scope
+
+    eid = world["engagement_id"]
+    task = ProposedTask(
+        goal="Scan the network for open ports", action="network.scan",
+        scope_object_id=world["scope_id"],
+        target={"logical_identity": {"type": "cidr", "value": CIDR}})
+    with engagement_scope(eid) as conn:
+        task_id = create_task(conn, engagement_id=eid, task=task, created_by="supervisor")
+    proposal = dataclasses.replace(_proposal(world, host=HOST), task_id=task_id)
+    out = propose_action(
+        engagement_id=eid, proposal=proposal, reviewer=HonestFakeReviewer(), policy=_policy(),
+        agent_id="worker-1", sandbox=FakeSandbox(), network_allowlist=[CIDR])
+    assert out.decision == "ALLOW"
+    got = rep.collect(eid)["dp13_proposals_on_network_tasks"]
+    assert (got["single_host_inside"]["k"], got["single_host_inside"]["n"]) == (1, 1)
+    assert got["by_relation"] == {"differs_from_task": 1}
