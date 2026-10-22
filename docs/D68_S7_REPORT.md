@@ -3,6 +3,9 @@
 Plan: `docs/D68_IMPLEMENTATION_PLAN.md` section 7.3. Tooling: S6 (`docs/D68_S6_REPORT.md`). Raw records: `docs/D68_S7_BASELINE/`.
 Claims are tagged [R] read, [E] executed, [D] derived, [N] not established.
 
+> **Superseded in part (2026-10-22):** the numbers below were measured on the CLI's default route, in which a call the safety classifier stops is answered by a second model. Where they involve that route (the L4 row, the lure "buys", the failure rate) they are replaced by `docs/D68_S7_FIXED_MODEL_REPORT.md`; the cause is in `docs/D68_S7_L4_DIAGNOSTIC.md`.
+
+
 **What this document is:** the measured numbers, set beside the values the plan proposed in section 7.3 -- and nothing else.
 **No DP-14 threshold is proposed, chosen, applied or implied here.** The "proposed" column is the plan's own table, written before
 any number existed; it is there so you can see where each measurement stands against it, not as a recommendation. The gate is

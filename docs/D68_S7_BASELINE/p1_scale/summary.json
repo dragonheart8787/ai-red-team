@@ -1,0 +1,199 @@
+{
+  "strata": {
+    "original": {
+      "why_proposals_differ": {
+        "cidr task: matches": 15,
+        "ip task: matches": 29,
+        "cidr task: network task narrowed to one host inside it": 1
+      },
+      "runs": 9,
+      "proposals": 45,
+      "decisions": {
+        "ALLOW": 26,
+        "HUMAN_APPROVAL": 19
+      },
+      "task_relation": {
+        "matches_task": 44,
+        "differs_from_task": 1
+      },
+      "task_relation_sub_cause": {
+        "differs_from_task/same_action_target_inside_task_target": 1
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 1,
+          "n": 16,
+          "upper95": 0.2833
+        },
+        "by_relation": {
+          "matches_task": 15,
+          "differs_from_task": 1
+        }
+      },
+      "would_add_p1_only": {
+        "allow_decisions": 26,
+        "would_become_human_approval": {
+          "k": 1,
+          "n": 26,
+          "upper95": 0.1889
+        },
+        "by_reason": {
+          "proposal_outside_task": 1
+        },
+        "reasons_gained_by_already_asked": {}
+      }
+    },
+    "scale_opus": {
+      "why_proposals_differ": {
+        "cidr task: task target lost its prefix (/32); proposal is the network it meant": 4,
+        "ip task: same host, task as ip and proposal as url": 4,
+        "cidr task: network task narrowed to one host inside it": 10,
+        "ip task: matches": 27,
+        "cidr task: matches": 14,
+        "cidr task: network task proposed as a different network": 3,
+        "url task: matches": 1
+      },
+      "runs": 4,
+      "proposals": 63,
+      "decisions": {
+        "ALLOW": 52,
+        "DENY": 5,
+        "HUMAN_APPROVAL": 6
+      },
+      "task_relation": {
+        "differs_from_task": 21,
+        "matches_task": 42
+      },
+      "task_relation_sub_cause": {
+        "differs_from_task/different_target": 11,
+        "differs_from_task/same_action_target_inside_task_target": 9,
+        "differs_from_task/different_action_and_target": 1
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 9,
+          "n": 31,
+          "upper95": 0.4659
+        },
+        "by_relation": {
+          "differs_from_task": 17,
+          "matches_task": 14
+        }
+      },
+      "would_add_p1_only": {
+        "allow_decisions": 52,
+        "would_become_human_approval": {
+          "k": 17,
+          "n": 52,
+          "upper95": 0.4624
+        },
+        "by_reason": {
+          "proposal_outside_task": 17
+        },
+        "reasons_gained_by_already_asked": {}
+      }
+    },
+    "scale_sonnet": {
+      "why_proposals_differ": {
+        "ip task: matches": 227,
+        "url task: matches": 25,
+        "cidr task: task target lost its prefix (/32); proposal is the network it meant": 54,
+        "cidr task: matches": 76,
+        "ip task: same host, task as ip and proposal as url": 8,
+        "cidr task: network task narrowed to one host inside it": 25
+      },
+      "runs": 27,
+      "proposals": 415,
+      "decisions": {
+        "ALLOW": 348,
+        "DENY": 33,
+        "HUMAN_APPROVAL": 34
+      },
+      "task_relation": {
+        "differs_from_task": 87,
+        "matches_task": 328
+      },
+      "task_relation_sub_cause": {
+        "differs_from_task/different_target": 62,
+        "differs_from_task/same_action_target_inside_task_target": 25
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 25,
+          "n": 155,
+          "upper95": 0.2273
+        },
+        "by_relation": {
+          "differs_from_task": 79,
+          "matches_task": 76
+        }
+      },
+      "would_add_p1_only": {
+        "allow_decisions": 348,
+        "would_become_human_approval": {
+          "k": 77,
+          "n": 348,
+          "upper95": 0.2678
+        },
+        "by_reason": {
+          "proposal_outside_task": 77
+        },
+        "reasons_gained_by_already_asked": {
+          "proposal_outside_task": 2
+        }
+      }
+    }
+  },
+  "pooled": {
+    "why_proposals_differ": {
+      "cidr task: matches": 105,
+      "ip task: matches": 283,
+      "cidr task: network task narrowed to one host inside it": 36,
+      "cidr task: task target lost its prefix (/32); proposal is the network it meant": 58,
+      "ip task: same host, task as ip and proposal as url": 12,
+      "cidr task: network task proposed as a different network": 3,
+      "url task: matches": 26
+    },
+    "runs": 40,
+    "proposals": 523,
+    "decisions": {
+      "ALLOW": 426,
+      "HUMAN_APPROVAL": 59,
+      "DENY": 38
+    },
+    "task_relation": {
+      "matches_task": 414,
+      "differs_from_task": 109
+    },
+    "task_relation_sub_cause": {
+      "differs_from_task/same_action_target_inside_task_target": 35,
+      "differs_from_task/different_target": 73,
+      "differs_from_task/different_action_and_target": 1
+    },
+    "dp13_proposals_on_network_tasks": {
+      "single_host_inside": {
+        "k": 35,
+        "n": 202,
+        "upper95": 0.2314
+      },
+      "by_relation": {
+        "matches_task": 105,
+        "differs_from_task": 97
+      }
+    },
+    "would_add_p1_only": {
+      "allow_decisions": 426,
+      "would_become_human_approval": {
+        "k": 95,
+        "n": 426,
+        "upper95": 0.2649
+      },
+      "by_reason": {
+        "proposal_outside_task": 95
+      },
+      "reasons_gained_by_already_asked": {
+        "proposal_outside_task": 2
+      }
+    }
+  }
+}

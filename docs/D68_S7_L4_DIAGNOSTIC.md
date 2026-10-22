@@ -1,5 +1,7 @@
 # D68 S7 addendum -- the ten L4 `plausible` answers, taken apart
 
+> **Numbers superseded (2026-10-22):** the 10 L4 `plausible` answers were the fallback model's; the fixed-model run (`docs/D68_S7_FIXED_MODEL_REPORT.md`, `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`) gives L4 **0 of 60 `plausible`**, 12 failed. This document stays as the evidence for why; the table there replaces the L4 line of `docs/D68_S7_REPORT.md`.
+
 Raw records: `docs/D68_S7_BASELINE/l4_diagnostic/` (every call's exact prompt, every model turn in order, the stop reason and its details, the answer, the cost).
 Tool: `scripts/plan_fit_route_diagnostic.py`. Claims are tagged [R] read, [E] executed, [D] derived, [N] not established.
 No threshold is proposed here. Corpus and validator are unchanged; this is about 240 further calls on 20 L4 items (220 are recorded in the directory above; 20 more were two probe runs that were not kept), about $3 at list price.
