@@ -1,1 +1,1 @@
-{"hours": 0.2, "attempt": 2, "purpose": "D68 S1 follow-up: the same smoke run again, with the log-classification section and the dockerd log printed in full, to read the 630-line not_explained group without the artifact (the proxy denies its blob host)"}
+{"hours": 0.2, "p1_enforce": true, "attempt": 1, "purpose": "D68 S8a smoke: --p1-enforce and the negative controls in the real soak job"}
