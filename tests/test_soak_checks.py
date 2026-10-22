@@ -189,3 +189,55 @@ def test_the_window_ends_five_minutes_after_the_fault_does():
 def test_a_reconciler_kill_does_not_explain_an_audit_event():
     killers = [w for w in WINDOWS if w["kind"] in audit_pairs.KILLERS]
     assert [w["kind"] for w in killers] == ["kill9_control_plane"]
+
+
+# ---------------------------------------------------------------------------------------------
+# D68 S8a: the P1 check of a soak that runs with enforcement on
+# ---------------------------------------------------------------------------------------------
+
+ON = {"ENG-1": True, "ENG-2": True}
+
+
+def test_a_switch_that_does_not_reach_an_engagement_is_a_failure_that_names_it():
+    got = checks.p1_verdict({"ENG-1": True, "ENG-2": False}, stored=40, proposals=40, escalated={})
+    assert not got.ok and "ENG-2" in got.detail and "NOT true" in got.detail
+
+
+def test_enabled_and_recording_nothing_is_a_failure():
+    got = checks.p1_verdict(ON, stored=0, proposals=25, escalated={})
+    assert not got.ok and "recording nothing" in got.detail
+
+
+def test_a_p1_reason_on_a_proposal_that_names_its_task_is_a_failure():
+    got = checks.p1_verdict(ON, stored=30, proposals=30, escalated={"proposal_outside_task": 2})
+    assert not got.ok and "proposal_outside_task" in got.detail
+
+
+def test_too_few_proposals_is_an_execution_that_judged_nothing_not_a_pass():
+    got = checks.p1_verdict(ON, stored=0, proposals=0, escalated={})
+    assert got.ok and not got.judged
+
+
+def test_a_clean_run_passes_and_says_what_it_saw():
+    got = checks.p1_verdict(ON, stored=30, proposals=31, escalated={})
+    assert got.ok and got.judged and "30 of 31" in got.detail
+
+
+def test_the_switch_is_judged_before_anything_else():
+    got = checks.p1_verdict({"ENG-1": False}, stored=0, proposals=0,
+                            escalated={"proposal_without_task": 1})
+    assert not got.ok and "NOT true" in got.detail
+
+
+def test_the_p1_check_is_expected_only_when_enforcement_is_asked_for():
+    ran = [{"name": n, "judged": True} for n in checks.CYCLE_CHECKS] + [
+        {"name": checks.DRAIN_CHECK, "judged": True}]
+    assert checks.never_ran(ran, expect_drain=True) == []
+    assert checks.never_ran(ran, expect_drain=True, p1=True) == [
+        f"{checks.P1_CHECK}: never executed"]
+    ran.append({"name": checks.P1_CHECK, "judged": False})
+    assert checks.never_ran(ran, expect_drain=True, p1=True) == [
+        f"{checks.P1_CHECK}: executed 1 times, never judged anything"]
+    names = [n for n, _, _ in checks.execution_counts(ran, p1=True)]
+    assert checks.P1_CHECK in names and checks.P1_CHECK not in [
+        n for n, _, _ in checks.execution_counts(ran)]

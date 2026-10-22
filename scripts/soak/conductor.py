@@ -126,8 +126,18 @@ class Conductor:
         if self.args.reuse_world:
             self.world = world_mod.load(self.run_dir)
         else:
-            self.world = world_mod.setup(self.run_dir, self.args.engagements)
+            self.world = world_mod.setup(self.run_dir, self.args.engagements,
+                                         p1_enforce=bool(self.args.p1_enforce))
         self.eids = [e["id"] for e in self.world["engagements"]]
+        if self.args.p1_enforce:
+            # both conditions or a loud stop (plan 8.1): the switch is in every engagement's
+            # effective policy before any traffic; the other half (it records, it escalates
+            # nothing it should not) is the cycle check below
+            lib.load_env()
+            off = [e for e, on in checks.p1_switches(self.eids).items() if not on]
+            if off:
+                raise SystemExit("P1 enforcement was asked for and task_relation_enforce is not "
+                                 f"true in the effective policy of {', '.join(off)}; not starting")
         lib.load_env()
         env = {**os.environ, **RECONCILER_ENV, "PYTHONUNBUFFERED": "1"}
         for line in (REPO_ROOT / ".env.example").read_text().splitlines():
@@ -516,6 +526,8 @@ class Conductor:
             lambda: checks.unresolved_intents(self.eids),
             lambda: checks.schema_unchanged(self.schema_before),
         ]
+        if self.args.p1_enforce:
+            steps.append(lambda: checks.p1_enforcement(self.eids))
         for step in steps:
             for attempt in range(3):
                 try:
@@ -614,7 +626,8 @@ class Conductor:
     def completeness_findings(self) -> None:
         """A check that never ran, or never judged anything, has verified nothing: a finding. So is
         a fault kind that never took effect in a run long enough to have drawn all six."""
-        for line in checks.never_ran(self.check_results, expect_drain=True):
+        for line in checks.never_ran(self.check_results, expect_drain=True,
+                                     p1=bool(self.args.p1_enforce)):
             self.finding("check_never_ran", line)
         arr = checks._quote(self.eids)
         rows = lib.psql(
@@ -726,6 +739,9 @@ def main(argv: list[str] | None = None) -> int:
                              "checks every two minutes, a short drain")
     parser.add_argument("--seed", default="d66")
     parser.add_argument("--reuse-world", action="store_true")
+    parser.add_argument("--p1-enforce", action="store_true",
+                        help="D68 S8a: publish a baseline with task_relation_enforce true before "
+                             "the engagements are made, and check that P1 is enforced and records")
     parser.add_argument("--halt-on-finding", action="store_true", default=True)
     args = parser.parse_args(argv)
     if args.smoke:

@@ -32,6 +32,10 @@ on:
         description: 'Hours of traffic and faults (4 = a soak; 0.2 = a smoke run of the workflow)'
         default: '4'
         required: true
+      p1_enforce:
+        description: 'D68 S8a: run with task_relation_enforce published in the baseline (true/false)'
+        default: 'false'
+        required: false
   push:
     branches: ['claude/mvp-kernel-cybersecurity-platform-su841g']
     paths: ['.github/soak-request.json']
@@ -70,11 +74,19 @@ jobs:
             push) H="$(python3 -c 'import json;print(json.load(open(".github/soak-request.json"))["hours"])')" ;;
             *) H=4 ;;
           esac
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) P1="${{ github.event.inputs.p1_enforce }}" ;;
+            push) P1="$(python3 -c 'import json;print(str(json.load(open(".github/soak-request.json")).get("p1_enforce", False)).lower())')" ;;
+            *) P1=false ;;
+          esac
+          P1FLAG=""
+          if [ "$P1" = "true" ]; then P1FLAG="--p1-enforce"; fi
+          echo "p1=$P1FLAG" >> "$GITHUB_OUTPUT"
           SMOKE=""
           if python3 -c "import sys; sys.exit(0 if float('$H') <= 0.5 else 1)"; then SMOKE="--smoke"; fi
           echo "hours=$H" >> "$GITHUB_OUTPUT"
           echo "smoke=$SMOKE" >> "$GITHUB_OUTPUT"
-          echo "hours=$H smoke='${SMOKE}' event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "hours=$H smoke='${SMOKE}' p1_enforce='${P1FLAG}' event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fetch the deadline helper built and verified by the previous job
         uses: actions/download-artifact@v4
@@ -163,7 +175,7 @@ jobs:
           set -a; . ./.env; set +a
           .venv/bin/python -m scripts.soak.conductor \
             --run-dir "$RUN_DIR" --caps-file "$RUN_DIR/caps.json" \
-            --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }}
+            --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }} ${{ steps.plan.outputs.p1 }}
 
       - name: What the heartbeat says about the run, and the logs of the daemons
         if: always()

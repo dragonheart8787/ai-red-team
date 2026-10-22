@@ -55,6 +55,9 @@ CYCLE_CHECKS = (
     "unresolved reconciler intents (listed, not judged)",
     "schema is identical to the one at the start",
 )
+#: D68 S8a. Present in a run only when P1 enforcement is on (``--p1-enforce``); then it must have
+#: run and judged, like the others.
+P1_CHECK = "P1 enforcement is on, is recorded, and escalates nothing the workload does not earn"
 #: the check made once, after the drain
 DRAIN_CHECK = "after the drain nothing of the soak is left"
 #: checks that are listed and not judged by design: their executions count, their judgement does not
@@ -90,9 +93,10 @@ def workload_exercised(allow_recorded: int, human_recorded: int) -> list[str]:
     return problems
 
 
-def never_ran(results: list[dict], *, expect_drain: bool) -> list[str]:
+def never_ran(results: list[dict], *, expect_drain: bool, p1: bool = False) -> list[str]:
     """Names of the checks with no execution (or, for the judged ones, no judgement) in a run."""
-    wanted = list(CYCLE_CHECKS) + ([DRAIN_CHECK] if expect_drain else [])
+    wanted = (list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else [])
+              + ([DRAIN_CHECK] if expect_drain else []))
     missing = []
     for name in wanted:
         rows = [r for r in results if r["name"] == name]
@@ -103,13 +107,77 @@ def never_ran(results: list[dict], *, expect_drain: bool) -> list[str]:
     return missing
 
 
-def execution_counts(results: list[dict]) -> list[tuple[str, int, int]]:
+def execution_counts(results: list[dict], *, p1: bool = False) -> list[tuple[str, int, int]]:
     """``(name, executions, judged executions)`` for every expected check, zero included."""
     out = []
-    for name in list(CYCLE_CHECKS) + [DRAIN_CHECK]:
+    for name in list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else []) + [DRAIN_CHECK]:
         rows = [r for r in results if r["name"] == name]
         out.append((name, len(rows), sum(1 for r in rows if r.get("judged", True))))
     return out
+
+
+#: reasons only the P1 switch adds to a decision (the rego rules, ``approval_reasons`` only)
+P1_REASONS = ("proposal_without_task", "proposal_outside_task")
+
+
+def p1_verdict(switches: dict[str, bool], stored: int, proposals: int,
+               escalated: dict[str, int]) -> Result:
+    """The P1 check from what was read: the switch in each engagement's effective policy, how many
+    of the engagement's decided proposals carry a stored ``plan_fit`` and how many carry a P1
+    reason.
+
+    Three ways to be wrong, each named: **the switch is not in the effective policy** (the
+    publication did not reach the engagement -- the silent no-op of the plan's section 8.1);
+    **nothing is recorded** while proposals flow (enabled and doing nothing); **a P1 reason on a
+    proposal of this workload**, whose every request names a task made from the request itself
+    (``scripts/soak/worker.py``), so an escalation here is the rule firing where it should not.
+    Too few proposals to say anything is an execution that did not judge, not a pass."""
+    off = sorted(e for e, on in switches.items() if not on)
+    if off:
+        return Result(P1_CHECK, False, "task_relation_enforce is NOT true in the effective policy "
+                      f"of {', '.join(off)}: the switch was published somewhere that does not "
+                      "reach "
+                      "them, and P1 is not being enforced there")
+    if proposals == 0:
+        return Result(P1_CHECK, True, "the switch is true in every engagement; no decided "
+                      "proposal yet to judge the rest on", judged=False)
+    if stored == 0:
+        return Result(P1_CHECK, False, f"{proposals} decided proposals and none with a stored "
+                      "plan_fit: enabled and recording nothing")
+    if escalated:
+        return Result(P1_CHECK, False, f"P1 reasons on proposals that each name a matching task: "
+                      f"{escalated}")
+    return Result(P1_CHECK, True, f"switch true in {len(switches)} engagements; {stored} of "
+                  f"{proposals} decided proposals carry a plan_fit; no P1 escalation")
+
+
+def p1_switches(engagements: list[str]) -> dict[str, bool]:
+    """``task_relation_enforce`` in the effective policy of each engagement, read the way the
+    pipeline reads it (``load_effective_policy`` on the engagement's own connection)."""
+    from control_plane.policy.layers import load_effective_policy
+    from control_plane.state.db import engagement_scope
+
+    out = {}
+    for eid in engagements:
+        with engagement_scope(eid) as conn:
+            out[eid] = bool(load_effective_policy(conn, eid).task_relation_enforce)
+    return out
+
+
+def p1_enforcement(engagements: list[str]) -> Result:
+    arr = _quote(engagements)
+    rows = lib.psql(
+        "SELECT count(*) FILTER (WHERE decision IS NOT NULL), "
+        "count(*) FILTER (WHERE decision IS NOT NULL AND reviewer_hints ? 'plan_fit') "
+        "FROM action_proposals WHERE engagement_id = ANY(" + arr + ")")
+    proposals, stored = int(rows[0][0]), int(rows[0][1])
+    escalated = {}
+    for reason in P1_REASONS:
+        n = int(lib.psql("SELECT count(*) FROM action_proposals WHERE engagement_id = ANY(" + arr
+                         + ") AND '" + reason + "' = ANY(decision_reasons)")[0][0])
+        if n:
+            escalated[reason] = n
+    return p1_verdict(p1_switches(engagements), stored, proposals, escalated)
 
 
 def _quote(ids: list[str]) -> str:

@@ -31,16 +31,28 @@ def _free_prefix(client, first: int) -> int:
     raise SystemExit("no free 10.66.x.0/24 range")
 
 
-def setup(run_dir: Path, engagements: int) -> dict:
+def setup(run_dir: Path, engagements: int, *, p1_enforce: bool = False) -> dict:
     lib.load_env()
     from tests import scheduler_support as sup
-    from tests.helpers import EngagementManager, ensure_test_baseline, make_engagement
+    from tests.helpers import (
+        EngagementManager,
+        ensure_test_baseline,
+        make_engagement,
+        publish_global_layer,
+    )
 
     stamp = time.strftime("%m%d%H%M%S", time.gmtime())
     client = lib.docker_client()
     baseline = ensure_test_baseline()
     first = _free_prefix(client, 10)
     world = {"started": lib.stamp(), "baseline_layer_id": baseline, "engagements": []}
+    if p1_enforce:
+        # D68 S8a: a global baseline carrying the switch, published before the engagements exist
+        # (a baseline applies to engagements created after it, D54), by the same path the platform
+        # owner's script uses. Retired at teardown.
+        world["p1_enforce_layer_id"] = publish_global_layer(
+            layer="baseline_global", version=int(time.time()) % 2_000_000_000,
+            document={"task_relation_enforce": True}, actor="soak-harness")
     for index in range(engagements):
         eid = f"ENG-SOAK-{stamp}-{index}"
         make_engagement(eid, actor="soak-harness")
@@ -71,6 +83,8 @@ def teardown(run_dir: Path) -> dict:
     for eid in ids:
         sup.withdraw(eid)
     closed = residue.close_rows(ids)
+    if world.get("p1_enforce_layer_id"):
+        deactivate_global_layer(world["p1_enforce_layer_id"], actor="soak-harness")
     if world.get("baseline_layer_id"):
         deactivate_global_layer(world["baseline_layer_id"], actor="soak-harness")
     return {"withdrawn": ids, "closed_proposals": closed.proposals if hasattr(
