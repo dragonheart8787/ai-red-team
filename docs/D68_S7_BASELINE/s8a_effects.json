@@ -1,0 +1,96 @@
+{
+ "engagement": "ENG-S8A-1022205819",
+ "1. waiting approvals": [
+  [
+   "PROP-22799da52e",
+   "HUMAN_APPROVAL"
+  ],
+  [
+   "PROP-5ab242b527",
+   "HUMAN_APPROVAL"
+  ]
+ ],
+ "1. policy version they were decided under": 46017,
+ "expectations": [
+  {
+   "label": "two approvals are waiting",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "the enabling bumped the policy version",
+   "ok": true,
+   "detail": "46017 -> 46018"
+  },
+  {
+   "label": "the switch reads true in the engagement",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "a task-bearing proposal is allowed",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "a task-less proposal asks for a person under its own name",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "rollback: the switch reads false again",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "rollback: the task-less proposal is allowed again",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "label": "a baseline's retirement returns only the engagements made after it",
+   "ok": true,
+   "detail": "(the one made while it was active keeps the switch: D54 freezes the baseline)"
+  }
+ ],
+ "2. policy version after the overlay": 46018,
+ "2. a waiting approval, approved and dispatched after the enabling": {
+  "executed": false,
+  "failure": "capability_refused",
+  "deny_reasons": [
+   "policy_version_changed"
+  ]
+ },
+ "2. waiting proposals: decided-under version and stage": [
+  [
+   "PROP-22799da52e",
+   46017,
+   "closed"
+  ],
+  [
+   "PROP-5ab242b527",
+   46017,
+   "awaiting_approval"
+  ]
+ ],
+ "2. approvals decided under another version than the current": 2,
+ "3. task-bearing proposal": [
+  "ALLOW",
+  []
+ ],
+ "3. task-less proposal": [
+  "HUMAN_APPROVAL",
+  [
+   "proposal_without_task"
+  ]
+ ],
+ "4. task-less proposal after the rollback": [
+  "ALLOW",
+  []
+ ],
+ "4b. after a baseline carrying the switch was published and then retired": {
+  "made before it": false,
+  "made while it was active": true,
+  "made after it was retired": false
+ }
+}

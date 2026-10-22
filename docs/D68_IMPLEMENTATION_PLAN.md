@@ -332,7 +332,7 @@ change, never a silent edit of the prompt; design 5.3).
   and this soak passes with enforcement on.
 * **S8b (Q1):** the same, for `goal_fit_enforce`, after S7's gate and with a real backend selected for the run.
   Q1 never ships "on" by default in the repository; the repository default stays `fake`.
-* Rollback at any time: publish a layer without the flag (or an engagement layer); the signal keeps being recorded.
+* Rollback: **retire the layer that carries the flag; the signal keeps being recorded.** *Corrected 2026-10-22 after the check was executed (ACCEPTANCE 5.124): the earlier sentence here, "publish a layer without the flag (or an engagement layer)", cannot work -- the switches are OR-merged, so no layer turns off what another turned on.* What retiring returns depends on the layer: an **emergency overlay** returns every engagement; a **baseline** is frozen into each engagement at its creation (D54), so retiring it returns only engagements made after the retirement. Enabling through an overlay is the reversible form.
 
 ### 8.1 Required checks at enablement (S8 report must show each one, executed, with its output)
 
