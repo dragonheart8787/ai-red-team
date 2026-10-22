@@ -1,0 +1,102 @@
+{
+  "strata": {
+    "pf": {
+      "why_proposals_differ": {
+        "cidr task: matches": 43,
+        "ip task: matches": 84,
+        "ip task: same host, task as ip and proposal as url": 3,
+        "url task: matches": 10,
+        "cidr task: network task narrowed to one host inside it": 9
+      },
+      "runs": 10,
+      "proposals": 149,
+      "decisions": {
+        "ALLOW": 120,
+        "DENY": 13,
+        "HUMAN_APPROVAL": 16
+      },
+      "task_relation": {
+        "matches_task": 137,
+        "differs_from_task": 12
+      },
+      "task_relation_sub_cause": {
+        "differs_from_task/different_target": 3,
+        "differs_from_task/same_action_target_inside_task_target": 9
+      },
+      "dp13_proposals_on_network_tasks": {
+        "single_host_inside": {
+          "k": 9,
+          "n": 52,
+          "upper95": 0.2973
+        },
+        "by_relation": {
+          "matches_task": 43,
+          "differs_from_task": 9
+        }
+      },
+      "would_add_p1_only": {
+        "allow_decisions": 120,
+        "would_become_human_approval": {
+          "k": 8,
+          "n": 120,
+          "upper95": 0.1261
+        },
+        "by_reason": {
+          "proposal_outside_task": 8
+        },
+        "reasons_gained_by_already_asked": {
+          "proposal_outside_task": 1
+        }
+      }
+    }
+  },
+  "pooled": {
+    "why_proposals_differ": {
+      "cidr task: matches": 43,
+      "ip task: matches": 84,
+      "ip task: same host, task as ip and proposal as url": 3,
+      "url task: matches": 10,
+      "cidr task: network task narrowed to one host inside it": 9
+    },
+    "runs": 10,
+    "proposals": 149,
+    "decisions": {
+      "ALLOW": 120,
+      "DENY": 13,
+      "HUMAN_APPROVAL": 16
+    },
+    "task_relation": {
+      "matches_task": 137,
+      "differs_from_task": 12
+    },
+    "task_relation_sub_cause": {
+      "differs_from_task/different_target": 3,
+      "differs_from_task/same_action_target_inside_task_target": 9
+    },
+    "dp13_proposals_on_network_tasks": {
+      "single_host_inside": {
+        "k": 9,
+        "n": 52,
+        "upper95": 0.2973
+      },
+      "by_relation": {
+        "matches_task": 43,
+        "differs_from_task": 9
+      }
+    },
+    "would_add_p1_only": {
+      "allow_decisions": 120,
+      "would_become_human_approval": {
+        "k": 8,
+        "n": 120,
+        "upper95": 0.1261
+      },
+      "by_reason": {
+        "proposal_outside_task": 8
+      },
+      "reasons_gained_by_already_asked": {
+        "proposal_outside_task": 1
+      }
+    }
+  }
+}

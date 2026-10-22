@@ -76,3 +76,30 @@ Made on a re-run of the original configuration (5 main rounds, 3 injection round
 
 * DP-13: the narrowing rate is **scenario- and model-dependent (6% to 37% in this lab)**; a bound of 25% on the pooled larger sample is narrow, but it is a bound on a mixture. If a threshold is set it needs to say which scenario and planner it is about.
 * Two other classes dominate the volume P1 would add and are **not** the DP-13 question: the prefix loss (a task canonicalization issue: `cidr` without a prefix read as `/32`) and the ip/url identity form. Both are candidates in ACCEPTANCE (5.122, 5.123). Whether P1's identity key should change for them, or the producers of tasks should, is yours.
+
+## 7. After the Supervisor schema fix (ACCEPTANCE 5.122) -- the numbers without the prefix loss [E]
+
+**Cause, read from the code [R]:** the plan schema's `target_value` description (`agents/llm/supervisor_base.py`) said a network is given "in CIDR form written as its network address". That wording does not require a prefix, and read literally asks for the bare address. The planner's own `goal` text said "10.79.0.64/26" while its `target_value` was `10.79.0.64` (run 1, round 1). So this is the case "the prompt did not require it", not "the model ignored a requirement": the description was changed to "the network address and its prefix length, e.g. 10.79.0.64/26: a bare address such as 10.79.0.64 names that one host, not the network", and a test pins the wording (`tests/test_supervisor_boundary.py`). Nothing else was changed (not the canonicalizer, not the task-creation path).
+
+**Re-run:** the same scenario and worker as the `sonnet` stratum (nine hosts, four /26 networks, 3 rounds, scripted Reviewer), 10 runs, 149 proposals (`p1_scale/sonnet_prefix_fixed/`, `p1_scale/summary_prefix_fixed.json`).
+
+| | before (sonnet, 27 runs) | after the fix (10 runs) |
+|---|---|---|
+| network (`cidr`) tasks written without a prefix | 54 of 156 (35%) | **0 of 52** |
+| `differs_from_task` over all proposals | 87 of 415 (21%) | 12 of 149 (8%) |
+| P1 would send ALLOW decisions to a person | 94 of 400 over both strata | 8 of 120 (6.7%, <= 12.6%) |
+
+The prefix loss does not occur in this run (upper 95% bound for 0 of 52: 5.8%). **Limits:** one planner model (`sonnet`), one scenario, 10 runs; `opus` was not re-run (it lost the prefix in 4 of 31 before). The fix is to the producer's instructions; the canonicalizer still reads a bare `cidr` as a `/32`, so a planner that ignores the new description would produce the same task again.
+
+**The clean DP-13 number (narrowing to one host inside the network):**
+
+| sample | network-task proposals | narrowed to a host inside | rate (95% upper) |
+|---|---|---|---|
+| after the fix, `sonnet`, 10 runs | 52 | 9 | **17.3% (<= 29.7%)** |
+| before the fix, tasks with a prefix, `sonnet` | 101 | 25 | 24.8% (<= 34.0%) |
+| before the fix, tasks with a prefix, both models | 128 | 35 | 27.3% (<= 35.6%) |
+| original scenario (one /24, one host) | 16 | 1 | 6% (<= 28%) |
+
+* The 58 prefix-lost tasks no longer sit in the denominator, so 17.3% is the first figure for the Worker's own narrowing that the task canonicalization cannot have produced. It is a figure for one planner model in one scenario; its interval (to 29.7%) overlaps the pre-fix `sonnet` rate, so the data do not show that the narrowing rate changed.
+* The other class still present: 3 `web.get` proposals whose task names the host as an `ip` and whose proposal is the `url` (ACCEPTANCE 5.123), unchanged.
+* **No DP-13 threshold is set or proposed here.**
