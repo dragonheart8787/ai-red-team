@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import statistics
 import subprocess
 import sys
@@ -59,6 +60,9 @@ from tests.plan_fit_corpus import (  # noqa: E402
     corpus_digest,
 )
 
+#: Not in the CLI's help; found in the binary and established by running (D68 S7 addendum).
+NO_FALLBACK_ENV = "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"
+
 #: calls above this need ``--max-calls`` raised on purpose
 DEFAULT_MAX_CALLS = 600
 
@@ -82,11 +86,14 @@ class EnvelopeRecorder:
     validator never sees this (it gets the completed process back unchanged); the runner reads it
     after each call, so the record names the model that *answered*, not the alias that was asked."""
 
-    def __init__(self, inner: Any = None) -> None:
+    def __init__(self, inner: Any = None, env: dict[str, str] | None = None) -> None:
         self._inner = inner or subprocess.run
+        self._env = dict(env or {})
         self.envelopes: list[dict[str, Any]] = []
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self._env:
+            kwargs["env"] = {**os.environ, **kwargs.get("env", {}), **self._env}
         done = self._inner(*args, **kwargs)
         entry: dict[str, Any] = {"returncode": done.returncode}
         try:
@@ -95,7 +102,8 @@ class EnvelopeRecorder:
             entry.update(
                 cost_usd=env.get("total_cost_usd"), models=sorted(usage),
                 is_error=bool(env.get("is_error")), api_error_status=env.get("api_error_status"),
-                terminal_reason=env.get("terminal_reason"),
+                terminal_reason=env.get("terminal_reason"), stop_reason=env.get("stop_reason"),
+                safety_stops=env.get("safety_stops"),
                 cache_read_tokens=int((env.get("usage") or {}).get("cache_read_input_tokens", 0)),
                 cache_creation_tokens=int(
                     (env.get("usage") or {}).get("cache_creation_input_tokens", 0)))
@@ -145,7 +153,9 @@ def run_corpus(validator: Any, items: tuple[Item, ...], *, repeat: int = 1, prog
             if envelopes is not None and len(envelopes) > seen:
                 env = envelopes[-1]
                 record.update(cost_usd=env.get("cost_usd"), models=env.get("models"),
-                              cache_read_tokens=env.get("cache_read_tokens"))
+                              cache_read_tokens=env.get("cache_read_tokens"),
+                              stop_reason=env.get("stop_reason"),
+                              safety_stops=env.get("safety_stops"))
             records.append(record)
             if checkpoint is not None:
                 with checkpoint.open("a") as handle:
@@ -163,6 +173,17 @@ def run_corpus(validator: Any, items: tuple[Item, ...], *, repeat: int = 1, prog
 # ---------------------------------------------------------------------------------------------
 # analysis (pure)
 # ---------------------------------------------------------------------------------------------
+
+def failure_kind(record: dict[str, Any]) -> str:
+    """Why a failed call failed: the service's safety stop, the validator's own timeout, or
+    something else (named by what the record holds)."""
+    if record.get("stop_reason") == "refusal" or '"stop_reason":"refusal"' in str(
+            record.get("failure", "")):
+        return "safety_stop_refusal"
+    if "timed out" in str(record.get("failure", "")):
+        return "timeout"
+    return "other"
+
 
 def _tally(records: list[dict[str, Any]]) -> Counter:
     return Counter(r["goal_fit"] for r in records)
@@ -239,11 +260,20 @@ def analyse(records: list[dict[str, Any]], items: tuple[Item, ...]) -> dict[str,
         "output": sum(r.get("output_tokens", 0) for r in known)}
     out["failed_calls"] = rate(sum(1 for r in known if r["goal_fit"] == FAILED), len(known))
     out["error_types"] = dict(Counter(r["error_type"] for r in known if "error_type" in r))
+    out["failure_kinds"] = dict(Counter(failure_kind(r) for r in known if r["goal_fit"] == FAILED))
+    out["safety_stopped_calls"] = rate(
+        sum(1 for r in known if (r.get("safety_stops") or 0) > 0), len(known))
     costs = [r["cost_usd"] for r in known if isinstance(r.get("cost_usd"), (int, float))]
     out["cost_usd_list_price"] = round(sum(costs), 4) if costs else None
     out["models_that_answered"] = dict(Counter(
         m for r in known for m in (r.get("models") or [])))
     return out
+
+
+FALLBACK_NOTE = {
+    True: "OFF: a call the safety classifier stops is a failure",
+    False: "default (a stopped call is re-asked of another model)",
+}
 
 
 def render(report: dict[str, Any]) -> str:
@@ -253,7 +283,9 @@ def render(report: dict[str, Any]) -> str:
               f"CLI `{meta['cli_version']}`, prompt `{meta['prompt_sha256'][:12]}`",
               f"* corpus seed {meta['seed']}, per class {meta['per_class']}, digest "
               f"`{meta['corpus_digest'][:12]}`, repeat {meta['repeat']}, {a['calls']} calls",
-              f"* run started {meta['started']}, commit `{meta['commit']}`", "",
+              f"* run started {meta['started']}, commit `{meta['commit']}`, refusal fallback "
+              f"{FALLBACK_NOTE[bool(meta.get('no_refusal_fallback'))]}",
+              "",
               "Counts are `k/N` with an upper bound at 95%; `0/N` bounds a rate to about "
               "`3/N`.", "",
               "## Answers by group", "",
@@ -285,6 +317,9 @@ def render(report: dict[str, Any]) -> str:
               f"* tokens in {a['tokens']['input']}, out {a['tokens']['output']}"]
     if a["error_types"]:
         lines.append(f"* exceptions raised by the validator: {a['error_types']}")
+    if a["failure_kinds"]:
+        lines.append(f"* why the failed calls failed: {a['failure_kinds']}; calls the safety "
+                     f"classifier stopped (any turn): {fmt(a['safety_stopped_calls'])}")
     if a["cost_usd_list_price"] is not None:
         lines.append(f"* list-price cost reported by the CLI: ${a['cost_usd_list_price']} "
                      "(a notional figure on a subscription backend)")
@@ -373,6 +408,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-class", type=int, default=PER_CLASS)
     parser.add_argument("--max-calls", type=int, default=DEFAULT_MAX_CALLS,
                         help="refuse a run with more calls than this (default %(default)s)")
+    parser.add_argument("--no-refusal-fallback", action="store_true",
+                        help="set CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1 for the CLI: only the "
+                             "asked-for model answers, and a call the service's safety classifier "
+                             "stops is recorded as a failure (not skipped)")
     parser.add_argument("--stop-after-failures", type=int, default=8,
                         help="stop after this many failed calls in a row (0: never)")
     parser.add_argument("--checkpoint", type=Path, default=None,
@@ -398,7 +437,10 @@ def main(argv: list[str] | None = None) -> int:
               "purpose, after reading docs/ADR_REVIEWER_BILLING.md", file=sys.stderr)
         return 2
 
-    recorder = EnvelopeRecorder() if args.backend == "claude_code" else None
+    if args.no_refusal_fallback and args.backend != "claude_code":
+        parser.error("--no-refusal-fallback is a setting of the claude CLI (--backend claude_code)")
+    recorder = (EnvelopeRecorder(env={NO_FALLBACK_ENV: "1"} if args.no_refusal_fallback else None)
+                if args.backend == "claude_code" else None)
     validator = build_plan_fit_validator(
         args.backend, model=args.model, **({"runner": recorder} if recorder else {}))
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -421,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
         records=records, repeat=args.repeat, seed=args.seed, per_class=args.per_class,
         started=started)
     report["meta"]["aborted"] = aborted
+    report["meta"]["no_refusal_fallback"] = bool(args.no_refusal_fallback)
     text = render(report)
     if aborted:
         text = f"**ABORTED after {len(records)} calls: {aborted}**\n\n" + text

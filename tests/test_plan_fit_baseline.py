@@ -336,6 +336,7 @@ def test_the_envelope_recorder_keeps_what_the_cli_said_and_hands_the_process_bac
     assert recorder.envelopes == [{
         "returncode": 0, "cost_usd": 0.012, "models": ["claude-haiku-5-5", "claude-sonnet-5-5"],
         "is_error": False, "api_error_status": None, "terminal_reason": "completed",
+        "stop_reason": None, "safety_stops": None,
         "cache_read_tokens": 5, "cache_creation_tokens": 7}]
 
 
@@ -433,3 +434,87 @@ def test_the_claude_code_backend_is_given_the_recorder_as_its_runner(monkeypatch
     monkeypatch.setattr(pb, "cli_version", lambda: "test-cli")
     assert pb.main(["--backend", "claude_code", "--per-class", "6", "--limit", "6"]) == 0
     assert isinstance(seen.get("runner"), pb.EnvelopeRecorder)
+
+
+# ---------------------------------------------------------------------------------------------
+# the fixed-model run: the CLI's refusal fallback off, and a stopped call counted as a failure
+# ---------------------------------------------------------------------------------------------
+
+def test_the_recorder_adds_its_environment_to_the_call_and_keeps_the_callers_own():
+    seen = {}
+
+    def inner(*args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    recorder = pb.EnvelopeRecorder(inner=inner, env={pb.NO_FALLBACK_ENV: "1"})
+    recorder(["claude"], env={"KEEP": "yes"})
+    assert seen["env"][pb.NO_FALLBACK_ENV] == "1" and seen["env"]["KEEP"] == "yes"
+    assert "PATH" in seen["env"], "the rest of the environment is inherited"
+    seen.clear()
+    pb.EnvelopeRecorder(inner=inner)(["claude"])
+    assert "env" not in seen, "no environment is imposed when none was asked for"
+
+
+def test_a_call_the_classifier_stopped_is_a_failure_with_its_reason_and_never_skipped(small):
+    envelopes = []
+
+    class Stops(Oracle):
+        n = 0
+
+        def assess(self, *, query):
+            self.n += 1
+            stopped = self.n % 4 == 0
+            envelopes.append({"cost_usd": 0.007, "models": ["claude-sonnet-5-5"],
+                              "stop_reason": "refusal" if stopped else "tool_use",
+                              "safety_stops": 2 if stopped else 0})
+            if stopped:
+                return GoalFitAssessment("stops", "not_assessed", "failed")
+            return super().assess(query=query)
+
+    records = run(Stops(small), small, envelopes=envelopes)
+    assert len(records) == len(small), "a stopped call is a record, not a skipped item"
+    a = pb.analyse(records, small)
+    stopped = len(small) // 4
+    assert a["failed_calls"]["k"] == stopped
+    assert a["failure_kinds"] == {"safety_stop_refusal": stopped}
+    assert a["safety_stopped_calls"]["k"] == stopped
+    assert a["groups"]["matched"]["plausible"]["k"] + a["groups"]["matched"]["failed"]["k"] <= 6
+    # never counted as plausible, and the group totals still add up to the group's size
+    for g in a["groups"].values():
+        assert sum(g[v]["k"] for v in ("plausible", "implausible", "insufficient_context",
+                                       "failed")) == g["n"]
+
+
+def test_failure_kinds_are_told_apart():
+    assert pb.failure_kind({"stop_reason": "refusal"}) == "safety_stop_refusal"
+    assert pb.failure_kind({"failure": 'cli exited 1: stdout: {"stop_reason":"refusal"}'}) == (
+        "safety_stop_refusal")
+    assert pb.failure_kind({"failure": "timed out after 30.0s"}) == "timeout"
+    assert pb.failure_kind({"failure": "unparseable reply"}) == "other"
+    assert pb.failure_kind({}) == "other"
+
+
+def test_the_flag_reaches_the_recorder_and_the_record_says_so(monkeypatch, tmp_path):
+    from agents.llm import selection
+
+    seen = {}
+
+    def build(backend, model=None, **kw):
+        seen.update(kw)
+        return Oracle(pc.build_corpus(per_class=6))
+
+    monkeypatch.setattr(selection, "build_plan_fit_validator", build)
+    monkeypatch.setattr(pb, "cli_version", lambda: "test-cli")
+    out = tmp_path / "r.json"
+    assert pb.main(["--backend", "claude_code", "--no-refusal-fallback", "--per-class", "6",
+                    "--limit", "6", "--json", str(out)]) == 0
+    assert seen["runner"]._env == {pb.NO_FALLBACK_ENV: "1"}
+    saved = json.loads(out.read_text())
+    assert saved["meta"]["no_refusal_fallback"] is True
+
+
+def test_the_flag_is_refused_for_a_backend_without_the_cli():
+    with pytest.raises(SystemExit) as stop:
+        pb.main(["--backend", "local", "--no-refusal-fallback"])
+    assert stop.value.code == 2
