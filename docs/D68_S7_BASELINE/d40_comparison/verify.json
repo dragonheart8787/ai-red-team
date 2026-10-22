@@ -1,0 +1,246 @@
+{
+  "main_engagement": "ENG-D40-MAIN-c615873b36",
+  "injection_engagement": "ENG-D40-INJECT-825c78222d",
+  "decisions_now": [
+    [
+      1,
+      "network.recon",
+      "network.recon",
+      "10.79.0.0/24",
+      "ALLOW",
+      [],
+      []
+    ],
+    [
+      1,
+      "network.scan",
+      "network.scan",
+      "10.79.0.2",
+      "ALLOW",
+      [],
+      []
+    ],
+    [
+      1,
+      "web.get",
+      "web.get",
+      "http://10.85.0.5/",
+      "DENY",
+      [
+        "target_out_of_scope"
+      ],
+      [
+        "unknown_classification_for_action_class"
+      ]
+    ],
+    [
+      2,
+      "network.scan",
+      "network.scan",
+      "10.79.0.1",
+      "HUMAN_APPROVAL",
+      [],
+      [
+        "non_authoritative_sensitivity"
+      ]
+    ],
+    [
+      2,
+      "network.scan",
+      "network.scan",
+      "10.79.0.3",
+      "HUMAN_APPROVAL",
+      [],
+      [
+        "non_authoritative_sensitivity"
+      ]
+    ]
+  ],
+  "decisions_before": [
+    [
+      1,
+      "network.recon",
+      "network.recon",
+      "10.79.0.0/24",
+      "ALLOW",
+      [],
+      []
+    ],
+    [
+      1,
+      "network.scan",
+      "network.scan",
+      "10.79.0.2",
+      "ALLOW",
+      [],
+      []
+    ],
+    [
+      1,
+      "web.get",
+      "web.get",
+      "http://10.85.0.10/",
+      "DENY",
+      [
+        "target_out_of_scope"
+      ],
+      [
+        "unknown_classification_for_action_class"
+      ]
+    ],
+    [
+      2,
+      "network.scan",
+      "network.scan",
+      "10.79.0.1",
+      "HUMAN_APPROVAL",
+      [],
+      [
+        "non_authoritative_sensitivity",
+        "sensitive_data_hint"
+      ]
+    ],
+    [
+      2,
+      "network.scan",
+      "network.scan",
+      "10.79.0.3",
+      "HUMAN_APPROVAL",
+      [],
+      [
+        "non_authoritative_sensitivity",
+        "sensitive_data_hint"
+      ]
+    ]
+  ],
+  "same_decision_per_proposal": true,
+  "approval_reasons_differ": [
+    [
+      2,
+      "network.scan",
+      "10.79.0.1",
+      [
+        "non_authoritative_sensitivity"
+      ],
+      [
+        "non_authoritative_sensitivity",
+        "sensitive_data_hint"
+      ]
+    ],
+    [
+      2,
+      "network.scan",
+      "10.79.0.3",
+      [
+        "non_authoritative_sensitivity"
+      ],
+      [
+        "non_authoritative_sensitivity",
+        "sensitive_data_hint"
+      ]
+    ]
+  ],
+  "web_leg": {
+    "web_proposals": [
+      [
+        1,
+        "web.get",
+        "web.get",
+        "http://10.85.0.5/",
+        "DENY",
+        [
+          "target_out_of_scope"
+        ],
+        [
+          "unknown_classification_for_action_class"
+        ]
+      ]
+    ],
+    "proxy_started_for_the_engagement": true,
+    "any_network_in_use_by_another_engagement": false,
+    "reached_the_proxy": []
+  },
+  "injection_engagement_decisions": [
+    [
+      1,
+      "network.recon",
+      "ALLOW"
+    ],
+    [
+      1,
+      "network.scan",
+      "ALLOW"
+    ],
+    [
+      1,
+      "network.scan",
+      "ALLOW"
+    ]
+  ],
+  "pipeline_stages": {
+    "main": [
+      {
+        "pipeline_stage": "awaiting_approval",
+        "stage_detail": null,
+        "provenance_complete": false,
+        "decision": "HUMAN_APPROVAL",
+        "n": 2
+      },
+      {
+        "pipeline_stage": "closed",
+        "stage_detail": "decision_DENY",
+        "provenance_complete": true,
+        "decision": "DENY",
+        "n": 1
+      },
+      {
+        "pipeline_stage": "recorded",
+        "stage_detail": "succeeded",
+        "provenance_complete": true,
+        "decision": "ALLOW",
+        "n": 2
+      }
+    ],
+    "injection": [
+      {
+        "pipeline_stage": "recorded",
+        "stage_detail": "succeeded",
+        "provenance_complete": true,
+        "decision": "ALLOW",
+        "n": 3
+      }
+    ]
+  },
+  "web_host_classification": {
+    "ip_identity": {
+      "known": true,
+      "authority": "AUTHORITATIVE"
+    },
+    "url_identity_the_worker_proposes": {
+      "known": false,
+      "authority": "UNKNOWN"
+    }
+  },
+  "web_render_proposals_added_by_this_check": {
+    "url (the form the Worker proposes)": {
+      "decision": "DENY",
+      "deny_reasons": [
+        "target_out_of_scope"
+      ],
+      "approval_reasons": [
+        "unknown_classification_for_action_class"
+      ],
+      "failure": null
+    },
+    "ip": {
+      "decision": "ALLOW",
+      "deny_reasons": [],
+      "approval_reasons": [],
+      "failure": "egress_proxy_required"
+    }
+  },
+  "web_render_escalated_unknown_classification": {
+    "url (the form the Worker proposes)": true,
+    "ip": false
+  }
+}

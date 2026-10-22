@@ -205,7 +205,9 @@ def ensure_baseline(engagement_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def setup_engagement(engagement_id: str, *, nmap_ip: str, web_ip: str | None,
-                     customer_id: str) -> dict[str, str]:
+                     customer_id: str, extra_hosts: tuple[str, ...] = (),
+                     subnets: tuple[str, ...] = (),
+                     web_actions: tuple[str, ...] = ("web.get", "web.render")) -> dict[str, str]:
     """Create the engagement and register scope — the real path, not raw SQL.
 
     Three scope objects when a web target is given: the nmap range, the nmap
@@ -226,9 +228,18 @@ def setup_engagement(engagement_id: str, *, nmap_ip: str, web_ip: str | None,
             ("ip", nmap_ip, ("network.recon", "network.scan"),
              "the one live host in that range, authorized by name as well"),
         ]
+        # D68 (P1 shadow at scale): more than one host and more than one network, so a planner
+        # has several networks to scan and a worker has several hosts to narrow one to. Default
+        # off: the D40 engagement is exactly as it was.
+        for subnet in subnets:
+            plan.append(("cidr", subnet, ("network.recon", "network.scan"),
+                         "a sub-network of the authorized range"))
+        for host in extra_hosts:
+            plan.append(("ip", host, ("network.recon", "network.scan"),
+                         "another authorized live host"))
         if web_ip:
             plan.append(
-                ("ip", web_ip, ("web.get", "web.render"),
+                ("ip", web_ip, web_actions,
                  "the authorized web host — both actions offered on one object")
             )
         for stype, value, actions, _why in plan:
@@ -239,6 +250,7 @@ def setup_engagement(engagement_id: str, *, nmap_ip: str, web_ip: str | None,
             )
             registered[value] = scope_object_id
         meta_targets = [("cidr", NMAP_ALLOWLIST), ("ip", nmap_ip)]
+        meta_targets += [("cidr", c) for c in subnets] + [("ip", h) for h in extra_hosts]
         if web_ip:
             meta_targets.append(("ip", web_ip))
         for itype, ivalue in meta_targets:
@@ -449,20 +461,32 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
 
 def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
             nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox,
-            engagement_id: str | None = None) -> dict[str, Any]:
+            engagement_id: str | None = None, extra_hosts: tuple[str, ...] = (),
+            subnets: tuple[str, ...] = (), web_actions: tuple[str, ...] = ("web.get", "web.render"),
+            fake_reviewer: bool = False) -> dict[str, Any]:
     # D59: the egress proxy belongs to one engagement, so main() names it before the
     # proxy is started and passes the same id here.
     engagement_id = engagement_id or uid("ENG-D40-MAIN")
     # 5.20 (D54): the baseline must exist before the engagement, which freezes it at creation.
     ensure_baseline(engagement_id)
     registered = setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=web_ip,
-                                  customer_id="CUST-D40-LOCAL")
+                                  customer_id="CUST-D40-LOCAL", extra_hosts=extra_hosts,
+                                  subnets=subnets, web_actions=web_actions)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 
     supervisor = build_supervisor("claude_code")
     worker = build_worker("claude_code")
-    reviewer = build_reviewer("claude_code")
+    # D68: the Reviewer does not decide whether a proposal names its task; with ``fake_reviewer``
+    # the relation to the task is measured at a third fewer model calls. Decisions then differ
+    # from the real Reviewer's (more ALLOW), so decision-mix figures from such a run are not
+    # comparable with D40's.
+    if fake_reviewer:
+        from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
+
+        reviewer = HonestFakeReviewer()
+    else:
+        reviewer = build_reviewer("claude_code")
 
     print(f"\n=== main_run  engagement={engagement_id} ===")
     print(f"    nmap target  {nmap_ip}  (range {NMAP_ALLOWLIST})")
@@ -735,6 +759,20 @@ def main() -> int:
     parser.add_argument("--skip-web", action="store_true",
                         help="run the main loop against the nmap target only")
     parser.add_argument("--skip-injection", action="store_true")
+    parser.add_argument("--extra-containers", default="",
+                        help="comma-separated names of further live-target containers on the "
+                             "allowlist network (D68): each is registered as an authorized host")
+    parser.add_argument("--subnets", default="",
+                        help="comma-separated sub-networks of 10.79.0.0/24 to register as "
+                             "further authorized ranges (D68)")
+    parser.add_argument("--web-actions", choices=["both", "get"], default="both",
+                        help="'get' offers the web host for web.get only")
+    parser.add_argument("--fake-reviewer", action="store_true",
+                        help="use the scripted honest Reviewer (D68 P1 shadow: the relation to "
+                             "the task does not depend on it)")
+    parser.add_argument("--allow-missing-browser", action="store_true",
+                        help="do not require the browser image at start (a web.render proposal "
+                             "is still decided; its dispatch then fails where it is missing)")
     args = parser.parse_args()
 
     load_dotenv()
@@ -742,13 +780,17 @@ def main() -> int:
     browser_sandbox = DockerSandbox(image=browser.IMAGE)
     try:
         nmap_sandbox.ensure_image()
-        if not args.skip_web:
+        if not args.skip_web and not args.allow_missing_browser:
             browser_sandbox.ensure_image()
     except SandboxUnavailable as exc:
         raise SystemExit(f"sandbox unavailable: {exc}") from exc
 
     nmap_network = nmap_sandbox.network_name([NMAP_ALLOWLIST])
     nmap_ip = container_ip(args.target_container, nmap_network)
+    extra_hosts = tuple(container_ip(name.strip(), nmap_network)
+                        for name in args.extra_containers.split(",") if name.strip())
+    subnets = tuple(c.strip() for c in args.subnets.split(",") if c.strip())
+    web_actions = ("web.get",) if args.web_actions == "get" else ("web.get", "web.render")
 
     proxy_url = None
     web_ip = None
@@ -777,6 +819,8 @@ def main() -> int:
             rounds=args.rounds, nmap_ip=nmap_ip, web_ip=web_ip,
             proxy_url=proxy_url, nmap_sandbox=nmap_sandbox,
             browser_sandbox=browser_sandbox, engagement_id=main_engagement_id,
+            extra_hosts=extra_hosts, subnets=subnets, web_actions=web_actions,
+            fake_reviewer=args.fake_reviewer,
         )
         if not args.skip_injection:
             results["injection_experiment"] = injection_experiment(
