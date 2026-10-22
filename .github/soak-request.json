@@ -1,1 +1,1 @@
-{"hours": 0.2, "p1_enforce": true, "attempt": 1, "purpose": "D68 S8a smoke: --p1-enforce and the negative controls in the real soak job"}
+{"hours": 4, "p1_enforce": true, "attempt": 1, "purpose": "D68 S8a: the 4 h soak with task_relation_enforce published in the baseline (the smoke, soak run 8, passed: 0 findings, 5 of 5 enablement controls fired, P1 check 6/6 judged)"}
