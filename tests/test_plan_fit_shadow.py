@@ -316,6 +316,32 @@ def test_dp13_as_asked_counts_proposals_for_a_task_on_a_network():
     assert total["dp13_proposals_on_network_tasks"]["single_host_inside"]["k"] == 2 + 1
 
 
+def test_dp13_counts_both_labels_of_a_host_inside_the_network_and_the_rules_own_use():
+    """Decisions made before the rule say ``differs_from_task`` / inside; since it, a host inside
+    is ``matches_task`` / ``subset_of_task_range``. A database can hold both, and the report counts
+    both as "inside" -- and counts the rule's own matches apart, so that its use can be watched."""
+    network = {"task_target_kind": "cidr"}
+    rows = [
+        {**row("ALLOW", plan()), **network},                                         # same network
+        {**row("ALLOW", plan("matches_task", "subset_of_task_range")), **network},   # by the rule
+        {**row("ALLOW", plan("matches_task", "subset_of_task_range")), **network},
+        {**row("ALLOW", plan("differs_from_task", "same_action_target_inside_task_target")),
+         **network},                                                                 # before it
+        {**row("ALLOW", plan("differs_from_task", "different_target")), **network},  # elsewhere
+        row("ALLOW", plan("matches_task", "subset_of_task_range")),                 # any task
+    ]
+    s = rep.summarize(rows, [])
+    inside = s["dp13_proposals_on_network_tasks"]["single_host_inside"]
+    assert (inside["k"], inside["n"]) == (3, 5)
+    use = s["dp13_rule_use"]
+    assert (use["of_proposals"]["k"], use["of_proposals"]["n"]) == (3, 6)
+    assert (use["of_matches"]["k"], use["of_matches"]["n"]) == (3, 4)
+    total = rep.combine({"A": s, "B": rep.summarize(rows[:3], [])})
+    assert (total["dp13_rule_use"]["of_proposals"]["k"],
+            total["dp13_rule_use"]["of_proposals"]["n"]) == (3 + 2, 6 + 3)
+    assert "subset_of_task_range" in rep.render({"engagements": {"A": s}, "total": total})
+
+
 def test_the_report_joins_the_task_of_each_proposal(world):
     decide(world, None, task="matching", host="10.61.0.5")
     s = rep.collect(world["engagement_id"])
@@ -343,4 +369,4 @@ def test_a_host_proposed_inside_a_network_task_is_counted_from_the_real_rows(wor
     assert out.decision == "ALLOW"
     got = rep.collect(eid)["dp13_proposals_on_network_tasks"]
     assert (got["single_host_inside"]["k"], got["single_host_inside"]["n"]) == (1, 1)
-    assert got["by_relation"] == {"differs_from_task": 1}
+    assert got["by_relation"] == {"matches_task": 1}       # DP-13: matched by the containment rule

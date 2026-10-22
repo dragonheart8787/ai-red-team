@@ -167,3 +167,58 @@ def test_with_the_switch_off_at_both_ends_the_signal_changes_nothing(world):
     out = propose(world, reviewer=WORRIED, task="none", enforce=False)
     approve(world, out.proposal_id)
     assert dispatch(world, out.proposal_id, enforce=False).executed
+
+
+# ---------------------------------------------------------------------------------------------
+# DP-13: a proposal inside the task's network, with the switch on
+# ---------------------------------------------------------------------------------------------
+
+TASK_NETWORK = "10.61.0.0/25"       # the lower half of the scope's /24
+
+
+def _network_task_proposal(world, *, host):
+    """A task on the lower /25 of the scope's /24 and a proposal for ``host``."""
+    import dataclasses
+
+    from agents.base_agent import ProposedTask
+    from control_plane.api.function_api import create_task
+    from tests.test_approved_dispatch import _proposal as make
+
+    eid = world["engagement_id"]
+    task = ProposedTask(
+        goal="survey the network", action="network.scan", scope_object_id=world["scope_id"],
+        target={"logical_identity": {"type": "cidr", "value": TASK_NETWORK}})
+    with engagement_scope(eid) as conn:
+        task_id = create_task(conn, engagement_id=eid, task=task, created_by="supervisor")
+    return dataclasses.replace(make(world, host=host), task_id=task_id)
+
+
+def _decide_on_network_task(world, *, host, enforce):
+    return propose_action(
+        engagement_id=world["engagement_id"],
+        proposal=_network_task_proposal(world, host=host), reviewer=HonestFakeReviewer(),
+        policy=policy(enforce), agent_id="worker-1")
+
+
+def test_a_host_inside_the_tasks_network_is_not_sent_to_a_person_by_the_switch(world):
+    """The point of DP-13: with the switch on, decomposing a network task into hosts is ordinary
+    work and is allowed -- the decision is the one the switch-off decision is."""
+    inside = "10.61.0.7"
+    on = _decide_on_network_task(world, host=inside, enforce=True)
+    off = _decide_on_network_task(world, host=inside, enforce=False)
+    assert (on.decision, on.approval_reasons) == (off.decision, off.approval_reasons) == (
+        ALLOW, ())
+    stored = _hints(world, on.proposal_id)["plan_fit"]
+    assert (stored["task_relation"], stored["sub_cause"]) == (
+        "matches_task", "subset_of_task_range")
+
+
+def test_a_host_outside_the_tasks_network_is_still_sent_to_a_person(world):
+    """... and the new rule does not widen to "anywhere in scope": a host that the scope covers but
+    that is outside the task's network is ``differs_from_task`` and, with the switch on, asks for a
+    person under the old reason."""
+    out = _decide_on_network_task(world, host="10.61.0.200", enforce=True)
+    assert out.decision == "HUMAN_APPROVAL" and out.approval_reasons == ("proposal_outside_task",)
+    stored = _hints(world, out.proposal_id)["plan_fit"]
+    assert (stored["task_relation"], stored["sub_cause"]) == (
+        "differs_from_task", "different_target")

@@ -48,3 +48,9 @@ def test_the_engagements_of_a_stratum_are_read_from_its_run_records(tmp_path):
     (tmp_path / "run_3.json").write_text(json.dumps({"main_run": {}}))      # a run with none
     (tmp_path / "other.json").write_text(json.dumps({"main_run": {"engagement_id": "ENG-C"}}))
     assert s.engagements(tmp_path) == ["ENG-A", "ENG-B"]
+
+
+def test_a_match_by_the_containment_rule_is_told_from_an_identical_match():
+    assert s.classify("cidr:10.0.0.0/24", "ip:10.0.0.5", "matches_task",
+                      "subset_of_task_range").startswith("matched by the containment rule")
+    assert s.classify("cidr:10.0.0.0/24", "cidr:10.0.0.0/24", "matches_task", None) == "matches"

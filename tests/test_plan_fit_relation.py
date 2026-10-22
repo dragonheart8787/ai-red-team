@@ -58,11 +58,21 @@ def cmp(task, *, action=SCAN, canonical="ip:10.88.0.5", identity="auto"):
     (row(), {"action": "network.recon"}, r.DIFFERS_FROM_TASK, r.DIFFERENT_ACTION),
     (row(), {"action": "network.recon", "canonical": "ip:10.88.0.6"}, r.DIFFERS_FROM_TASK,
      r.DIFFERENT_ACTION_AND_TARGET),
-    # a task on a network, a proposal for one host inside it: still "differs", with its own cause
-    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.88.0.5"}, r.DIFFERS_FROM_TASK,
-     r.INSIDE_TASK_TARGET),
-    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "cidr:10.88.0.0/25"}, r.DIFFERS_FROM_TASK,
-     r.INSIDE_TASK_TARGET),
+    # a task on a network, a proposal for one host or a smaller network inside it: a match, with
+    # its own sub-cause (DP-13), never the unmarked identical match
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.88.0.5"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "cidr:10.88.0.0/25"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "cidr:10.88.0.64/26"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.88.0.0"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),                       # the edges of the network are inside it
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.88.0.255"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "cidr:10.88.0.0/24"}, r.MATCHES_TASK, None),
+    (row(canonical="cidr:2001:db8::/32"), {"canonical": "ip:2001:db8::5"}, r.MATCHES_TASK,
+     r.SUBSET_OF_TASK_RANGE),
     # ... but not a host outside it, a wider network, or the same network under another action
     (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.99.0.5"}, r.DIFFERS_FROM_TASK,
      r.DIFFERENT_TARGET),
@@ -72,6 +82,26 @@ def cmp(task, *, action=SCAN, canonical="ip:10.88.0.5", identity="auto"):
      {"canonical": "ip:10.88.0.5", "action": "network.recon"}, r.DIFFERS_FROM_TASK,
      r.DIFFERENT_ACTION_AND_TARGET),
     (row(canonical="fqdn:a.example"), {"canonical": "ip:10.88.0.5"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),
+    # near misses of the new rule: one address past either edge, a sibling network, another
+    # address family, a name, a URL, and a task that is not a network at all
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:10.88.1.0"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.64/26"), {"canonical": "ip:10.88.0.63"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.0/25"), {"canonical": "cidr:10.88.0.128/25"},
+     r.DIFFERS_FROM_TASK, r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "cidr:10.88.0.0/23"},
+     r.DIFFERS_FROM_TASK, r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:2001:db8::5"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "fqdn:host.example"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "url:http://10.88.0.5/"},
+     r.DIFFERS_FROM_TASK, r.DIFFERENT_TARGET),
+    (row(canonical="ip:10.88.0.5"), {"canonical": "cidr:10.88.0.0/24"}, r.DIFFERS_FROM_TASK,
+     r.DIFFERENT_TARGET),                       # a host task is not a network: no containment
+    (row(canonical="cidr:10.88.0.0/24"), {"canonical": "ip:garbage"}, r.DIFFERS_FROM_TASK,
      r.DIFFERENT_TARGET),
 ])
 def test_the_comparison_table(task, kwargs, value, sub):
@@ -98,7 +128,25 @@ def test_every_value_the_comparison_can_give_is_in_the_vocabulary():
     seen.add((cmp(None).value, cmp(None).sub_cause))
     seen.add((r.NO_TASK, r.TASK_ID_ABSENT))
     expected = {(v, s) for v, subs in r.SUB_CAUSES.items() for s in subs}
+    # DP-13: this one is no longer produced (a host inside the network is a match now) and stays in
+    # the vocabulary only so that a decision stored before the rule keeps reading as what it was
+    expected.discard((r.DIFFERS_FROM_TASK, r.INSIDE_TASK_TARGET))
     assert seen == expected
+
+
+def test_a_decision_stored_before_the_rule_still_reads_as_what_it_was():
+    """The old sub-cause is outside the new rule's reach: it is neither promoted to a match nor
+    turned into ``unrecognized`` (which the policy reads as outside the plan for another reason)."""
+    stored = {"version": r.VERSION, "task_relation": r.DIFFERS_FROM_TASK,
+              "sub_cause": r.INSIDE_TASK_TARGET}
+    assert r.policy_signal(stored) == stored
+    new = {"version": r.VERSION, "task_relation": r.MATCHES_TASK,
+           "sub_cause": r.SUBSET_OF_TASK_RANGE}
+    assert r.policy_signal(new) == new
+    # the sub-cause belongs to the relation it was built for: it is not valid under another
+    swapped = {"version": r.VERSION, "task_relation": r.DIFFERS_FROM_TASK,
+               "sub_cause": r.SUBSET_OF_TASK_RANGE}
+    assert r.policy_signal(swapped)["task_relation"] == r.UNRECOGNIZED
 
 
 def test_a_value_outside_the_vocabulary_cannot_be_built():
@@ -231,13 +279,15 @@ def test_a_task_for_another_host_differs(engagement_id, registry):
 
 
 def test_a_task_on_the_network_and_a_proposal_for_one_host_inside_it(engagement_id, registry):
-    """The case the shadow exists to count (DP-13): its own sub-cause, judged as nothing."""
+    """The case the shadow counted (DP-13): now a match, under a sub-cause of its own, so that the
+    rule's use is separable from an identical match in the stored value and in the audit."""
     scope = _scope(registry, engagement_id)
     task_id = _task(engagement_id, scope, target_type="cidr", value=CIDR)
     outcome = _propose(engagement_id, _proposal(scope, task_id=task_id))
     plan = _plan(engagement_id, outcome.proposal_id)
-    assert (plan["task_relation"], plan["sub_cause"]) == (
-        "differs_from_task", "same_action_target_inside_task_target")
+    assert (plan["task_relation"], plan["sub_cause"]) == ("matches_task", "subset_of_task_range")
+    event = _events(engagement_id, outcome.proposal_id)[0]["payload"]
+    assert (event["task_relation"], event["sub_cause"]) == ("matches_task", "subset_of_task_range")
 
 
 def test_a_completed_task_is_not_live(engagement_id, registry):

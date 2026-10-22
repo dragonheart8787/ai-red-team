@@ -227,6 +227,12 @@ def scenario(name, enforce):
 SIGNALS = {
     "absent": None,
     "matches": {"version": "plan_fit_v1", "task_relation": "matches_task", "sub_cause": None},
+    # DP-13: a match by containment is a match to the policy -- the sub-cause is for counting
+    "subset": {"version": "plan_fit_v1", "task_relation": "matches_task",
+               "sub_cause": "subset_of_task_range"},
+    # a decision stored before the rule: it said "differs" and still does
+    "differs_inside_old": {"version": "plan_fit_v1", "task_relation": "differs_from_task",
+                           "sub_cause": "same_action_target_inside_task_target"},
     "no_task": {"version": "plan_fit_v1", "task_relation": "no_task",
                 "sub_cause": "task_id_absent"},
     "differs": {"version": "plan_fit_v1", "task_relation": "differs_from_task",
@@ -263,7 +269,7 @@ def test_the_signal_never_makes_a_decision_more_permissive(name, enforce):
         assert set(without.approval_reasons) <= set(got.approval_reasons), label
         assert set(got.approval_reasons) - set(without.approval_reasons) <= {
             "proposal_without_task", "proposal_outside_task"}, label
-        if label == "matches" or not enforce:
+        if label in ("matches", "subset") or not enforce:
             assert got == without, label
         if name == "denied":
             assert got.decision == "DENY"
@@ -279,7 +285,7 @@ def test_the_signal_only_ever_adds_one_of_two_reasons():
 def test_an_allow_stays_an_allow_only_for_a_match_or_no_signal():
     allowed = {label for label, signal in SIGNALS.items()
                if decide("allowed", True, signal).decision == ALLOW}
-    assert allowed == {"absent", "matches"}
+    assert allowed == {"absent", "matches", "subset"}
 
 
 # ---------------------------------------------------------------------------------------------

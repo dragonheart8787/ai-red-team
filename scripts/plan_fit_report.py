@@ -26,9 +26,11 @@ How to read it, so that a number is not mistaken for more than it is:
   re-derivation reads too. It does not re-ask a validator.
 * A proposal already sent to a human gets no new approval from a switch; the report shows the
   reasons it would *gain*, which change what the approver is told and not how many approvals exist.
-* ``same_action_target_inside_task_target`` -- a task on a network and a proposal for one host
-  inside it (DP-13) -- is reported on its own line: it is where P1 could escalate ordinary
-  decomposition.
+* DP-13: a task on a network and a proposal for one host (or a smaller network) inside it is, since
+  2026-10-22, ``matches_task`` with the sub-cause ``subset_of_task_range``; before, it was
+  ``differs_from_task`` with ``same_action_target_inside_task_target``. Both are reported (a
+  database can hold both), and the rule's own use -- how many matches it decided, and what share
+  of all matches -- is a line of its own, so that its use can be watched.
 * No real engagement traffic is implied by a run on a test or soak engagement.
 """
 
@@ -88,6 +90,7 @@ def summarize(rows: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[
     differs = relations.get(r.DIFFERS_FROM_TASK, 0)
     out["dp13_inside_task_target"] = rate(
         sub_causes.get(f"{r.DIFFERS_FROM_TASK}/{r.INSIDE_TASK_TARGET}", 0), differs)
+    out["dp13_rule_use"] = _rule_use(sub_causes, relations, len(with_plan))
     # DP-13 as the question was asked: of the proposals made for a task whose target is a network,
     # how many were for one host inside it (and so would be `differs_from_task`)?
     on_cidr = [x for x in with_plan if x.get("task_target_kind") == "cidr"]
@@ -95,8 +98,9 @@ def summarize(rows: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[
     kinds: Counter = Counter()
     for x in on_cidr:
         signal = r.policy_signal(x["plan_fit"])
-        if (signal["task_relation"], signal["sub_cause"]) == (
-                r.DIFFERS_FROM_TASK, r.INSIDE_TASK_TARGET):
+        if (signal["task_relation"], signal["sub_cause"]) in (
+                (r.DIFFERS_FROM_TASK, r.INSIDE_TASK_TARGET),     # decided before the rule
+                (r.MATCHES_TASK, r.SUBSET_OF_TASK_RANGE)):       # decided by it
             inside += 1
         kinds[signal["task_relation"]] += 1
     out["dp13_proposals_on_network_tasks"] = {
@@ -175,6 +179,8 @@ def combine(per_engagement: dict[str, dict[str, Any]]) -> dict[str, Any]:
         f"{r.DIFFERS_FROM_TASK}/{r.INSIDE_TASK_TARGET}", 0)
     total["dp13_inside_task_target"] = rate(inside, total["task_relation"].get(
         r.DIFFERS_FROM_TASK, 0))
+    total["dp13_rule_use"] = _rule_use(
+        total["task_relation_sub_cause"], total["task_relation"], total["with_plan_fit"])
     network = [v["dp13_proposals_on_network_tasks"] for v in per_engagement.values()]
     by_relation: Counter = Counter()
     for entry in network:
@@ -200,6 +206,14 @@ def combine(per_engagement: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return total
 
 
+def _rule_use(sub_causes: Any, relations: Any, with_plan: int) -> dict[str, Any]:
+    """How much the DP-13 containment rule decided: matches it made, of all proposals with a stored
+    value and of all matches. The sub-cause exists so that this can be asked."""
+    used = sub_causes.get(f"{r.MATCHES_TASK}/{r.SUBSET_OF_TASK_RANGE}", 0)
+    return {"of_proposals": rate(used, with_plan),
+            "of_matches": rate(used, relations.get(r.MATCHES_TASK, 0))}
+
+
 def render(report: dict[str, Any]) -> str:
     lines: list[str] = []
     for name, data in (*report["engagements"].items(), ("ALL", report["total"])):
@@ -213,6 +227,9 @@ def render(report: dict[str, Any]) -> str:
                   f"* goal_fit: {data['goal_fit']}",
                   f"* DP-13, a host inside the task's network, of all `differs_from_task`: "
                   f"{fmt(data['dp13_inside_task_target'])}",
+                  f"* DP-13 containment rule (`matches_task/subset_of_task_range`): "
+                  f"{fmt(data['dp13_rule_use']['of_proposals'])} of proposals, "
+                  f"{fmt(data['dp13_rule_use']['of_matches'])} of matches",
                   f"* DP-13 as asked: proposals for a task on a network that were for one host "
                   f"inside it: {fmt(data['dp13_proposals_on_network_tasks']['single_host_inside'])}"
                   f" ({data['dp13_proposals_on_network_tasks']['by_relation']})", "",

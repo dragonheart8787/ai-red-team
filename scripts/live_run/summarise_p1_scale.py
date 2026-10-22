@@ -39,13 +39,16 @@ def engagements(directory: Path) -> list[str]:
     return ids
 
 
-def classify(task_canonical: str, proposal_canonical: str, relation: str) -> str:
+def classify(task_canonical: str, proposal_canonical: str, relation: str,
+             sub_cause: str | None = None) -> str:
     """Why a proposal does not match its task, in words about what happened (not the policy's
-    sub-cause names): the DP-13 case first, then the others this run found."""
+    sub-cause names): the DP-13 case first, then the others this run found. A match by the DP-13
+    containment rule is its own line, so a run made after the rule can be told from one before."""
     import ipaddress
 
     if relation == "matches_task":
-        return "matches"
+        return ("matched by the containment rule (a host or network inside the task's network)"
+                if sub_cause == "subset_of_task_range" else "matches")
     t_kind, _, t_value = task_canonical.partition(":")
     p_kind, _, p_value = proposal_canonical.partition(":")
     try:
@@ -80,12 +83,14 @@ def classified(engagement_ids: list[str]) -> Counter:
             rows = conn.execute(text(
                 "SELECT t.action AS task_action, t.canonical_target AS task_target, "
                 "p.action AS action, p.target AS target, "
-                "p.reviewer_hints->'plan_fit'->>'task_relation' AS relation "
+                "p.reviewer_hints->'plan_fit'->>'task_relation' AS relation, "
+                "p.reviewer_hints->'plan_fit'->>'sub_cause' AS sub_cause "
                 "FROM tasks t JOIN action_proposals p ON p.task_id = t.task_id")).mappings().all()
         for row in rows:
             canonical, _ = _task_identity(row["action"], row["target"])
             kind = row["task_target"].partition(":")[0]
-            out[(kind, classify(row["task_target"], canonical, row["relation"]))] += 1
+            why = classify(row["task_target"], canonical, row["relation"], row["sub_cause"])
+            out[(kind, why)] += 1
     return out
 
 

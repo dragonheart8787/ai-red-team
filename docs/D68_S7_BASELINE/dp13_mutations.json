@@ -1,0 +1,248 @@
+[
+ {
+  "id": "D68-S2-e",
+  "summary": "the containment rule is removed: a host inside the task's network is a difference again (DP-13)",
+  "verdict": "valid",
+  "seconds": 20.1,
+  "tests": [
+   "tests/test_plan_fit_relation.py",
+   "tests/test_plan_fit_replay.py"
+  ],
+  "passed": 54,
+  "failures": [
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task12-kwargs12-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task13-kwargs13-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task14-kwargs14-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task15-kwargs15-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task16-kwargs16-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task18-kwargs18-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_every_value_the_comparison_can_give_is_in_the_vocabulary",
+    "kind": "target",
+    "message": "AssertionError: assert {('differs_fr...', None), ...} == {('differs_fr...onical'), ...}"
+   },
+   {
+    "test": "test_plan_fit_relation::test_a_task_on_the_network_and_a_proposal_for_one_host_inside_it",
+    "kind": "target",
+    "message": "AssertionError: assert ('differs_fro...erent_target') == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_replay::test_a_host_inside_the_tasks_network_is_not_sent_to_a_person_by_the_switch",
+    "kind": "target",
+    "message": "AssertionError: assert ('HUMAN_APPRO...tside_task',)) == ('ALLOW', ())"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D68-S2-f",
+  "summary": "a host outside the task's network is taken to be inside it (DP-13)",
+  "verdict": "valid",
+  "seconds": 11.9,
+  "tests": [
+   "tests/test_plan_fit_relation.py",
+   "tests/test_plan_fit_replay.py"
+  ],
+  "passed": 52,
+  "failures": [
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task19-kwargs19-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task20-kwargs20-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task23-kwargs23-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task24-kwargs24-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task25-kwargs25-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task26-kwargs26-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task27-kwargs27-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task28-kwargs28-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task29-kwargs29-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task31-kwargs31-differs_from_task-different_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...erent_target')"
+   },
+   {
+    "test": "test_plan_fit_replay::test_a_host_outside_the_tasks_network_is_still_sent_to_a_person",
+    "kind": "target",
+    "message": "AssertionError: assert ('ALLOW' == 'HUMAN_APPROVAL'"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D68-S2-f2",
+  "summary": "the containment rule ignores the action: another action on a host inside the network matches (DP-13)",
+  "verdict": "valid",
+  "seconds": 12.0,
+  "tests": [
+   "tests/test_plan_fit_relation.py"
+  ],
+  "passed": 50,
+  "failures": [
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task21-kwargs21-differs_from_task-different_action_and_target]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_tas...f_task_range') == ('differs_fro...n_and_target')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D68-S2-f3",
+  "summary": "a match by containment is reported as an identical match (the rule's use cannot be counted) (DP-13)",
+  "verdict": "valid",
+  "seconds": 10.6,
+  "tests": [
+   "tests/test_plan_fit_relation.py",
+   "tests/test_plan_fit_replay.py"
+  ],
+  "passed": 54,
+  "failures": [
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task12-kwargs12-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task13-kwargs13-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task14-kwargs14-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task15-kwargs15-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task16-kwargs16-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_the_comparison_table[task18-kwargs18-matches_task-subset_of_task_range]",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_relation::test_every_value_the_comparison_can_give_is_in_the_vocabulary",
+    "kind": "target",
+    "message": "AssertionError: assert {('differs_fr...', None), ...} == {('differs_fr...onical'), ...}"
+   },
+   {
+    "test": "test_plan_fit_relation::test_a_task_on_the_network_and_a_proposal_for_one_host_inside_it",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   },
+   {
+    "test": "test_plan_fit_replay::test_a_host_inside_the_tasks_network_is_not_sent_to_a_person_by_the_switch",
+    "kind": "target",
+    "message": "AssertionError: assert ('matches_task', None) == ('matches_tas...f_task_range')"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D68-S6-r",
+  "summary": "the report counts only the old label as a host inside the network (the rule's matches vanish from the DP-13 line)",
+  "verdict": "valid",
+  "seconds": 53.8,
+  "tests": [
+   "tests/test_plan_fit_shadow.py"
+  ],
+  "passed": 19,
+  "failures": [
+   {
+    "test": "test_plan_fit_shadow::test_dp13_counts_both_labels_of_a_host_inside_the_network_and_the_rules_own_use",
+    "kind": "target",
+    "message": "assert (1, 5) == (3, 5)"
+   },
+   {
+    "test": "test_plan_fit_shadow::test_a_host_proposed_inside_a_network_task_is_counted_from_the_real_rows",
+    "kind": "target",
+    "message": "assert (0, 1) == (1, 1)"
+   }
+  ],
+  "problems": []
+ },
+ {
+  "id": "D68-S6-s",
+  "summary": "the rule's own use is counted as zero",
+  "verdict": "valid",
+  "seconds": 27.7,
+  "tests": [
+   "tests/test_plan_fit_shadow.py"
+  ],
+  "passed": 20,
+  "failures": [
+   {
+    "test": "test_plan_fit_shadow::test_dp13_counts_both_labels_of_a_host_inside_the_network_and_the_rules_own_use",
+    "kind": "target",
+    "message": "assert (0, 6) == (3, 6)"
+   }
+  ],
+  "problems": []
+ }
+]

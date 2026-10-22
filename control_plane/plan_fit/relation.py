@@ -13,7 +13,9 @@ anything.
 The relation:
 
 ====================  =======================================================================
-``matches_task``      the task is live and its ``identity_key`` equals the proposal's
+``matches_task``      the task is live and its ``identity_key`` equals the proposal's -- or the
+                      action is the same and the proposal's target is a strict subset of the
+                      task's network (sub-cause ``subset_of_task_range``, DP-13)
 ``differs_from_task`` the task is live and its identity is not the proposal's
 ``task_not_live``     the task is not visible to this engagement, or is completed/failed/cancelled
 ``no_task``           the proposal names no task
@@ -23,21 +25,31 @@ Identity is the task layer's own (``ADR_TASK_IDENTITY.md`` Option 1): the action
 target at host/network granularity, from the same canonicalizer. It is passed in by the caller, who
 computed it with the function ``create_task`` uses, so the two cannot come from different rules.
 
-``differs_from_task`` carries a sub-cause, because the first thing to learn from the shadow is how
+``differs_from_task`` carries a sub-cause, because the first thing to learn from the shadow was how
 much of it is a legitimate decomposition (a task on a ``/24``, a proposal for one host inside it).
-That case is *recorded as its own sub-cause and judged as nothing*: it is still
-``differs_from_task`` (DP-13 -- a vocabulary value is added only with numbers in hand).
+
+**DP-13 (decided 2026-10-22, from the shadow numbers):** that decomposition is a match, with its own
+sub-cause -- ``matches_task`` / ``subset_of_task_range`` -- and only that. The condition is
+structural and has no model in it: the same action, a task whose target is a network, and a
+proposal whose target is one address in it or a smaller network in it, by the arithmetic the
+Authorization and Metadata resolvers already share
+(``canonicalizer.containment.address_contains``). It is not "related to the task": a host outside
+the network, a wider network, another action, a name or a URL (the ip/url form is a different
+problem, ACCEPTANCE 5.123) are all still ``differs_from_task``. The sub-cause keeps these apart
+from an identical match so that the rule's own use can be counted.
+``INSIDE_TASK_TARGET`` is no longer produced; it stays in the vocabulary because decisions stored
+before the rule carry it and must keep reading as what they were.
 """
 
 from __future__ import annotations
 
-import ipaddress
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import Connection, text
 
 from agents.base_agent import GOAL_FIT_VALUES, NOT_ASSESSED, NOT_ASSESSED_CAUSES
+from control_plane.canonicalizer.containment import address_contains
 
 #: The version of the whole signal object stored with a decision. Additive evolution only.
 VERSION = "plan_fit_v1"
@@ -60,11 +72,14 @@ TASK_STATUS_NOT_LIVE = "task_status_not_live"
 DIFFERENT_ACTION = "different_action"
 DIFFERENT_TARGET = "different_target"
 DIFFERENT_ACTION_AND_TARGET = "different_action_and_target"
+#: No longer produced (DP-13): the case is ``matches_task`` / ``subset_of_task_range``. Kept so that
+#: a decision stored before the rule still reads as what it was.
 INSIDE_TASK_TARGET = "same_action_target_inside_task_target"
+SUBSET_OF_TASK_RANGE = "subset_of_task_range"
 TASK_TARGET_NOT_CANONICAL = "task_target_not_canonical"
 PROPOSAL_TARGET_NOT_CANONICAL = "proposal_target_not_canonical"
 SUB_CAUSES = {
-    MATCHES_TASK: (None,),
+    MATCHES_TASK: (None, SUBSET_OF_TASK_RANGE),
     NO_TASK: (TASK_ID_ABSENT,),
     TASK_NOT_LIVE: (TASK_NOT_FOUND, TASK_STATUS_NOT_LIVE),
     DIFFERS_FROM_TASK: (DIFFERENT_ACTION, DIFFERENT_TARGET, DIFFERENT_ACTION_AND_TARGET,
@@ -152,20 +167,20 @@ def read_task_for_goal_fit(conn: Connection, task_id: str) -> dict[str, Any] | N
     return dict(row) if row else None
 
 
-def _inside(proposal_target: str | None, task_target: str | None) -> bool:
-    """True when ``ip:A`` / ``cidr:B`` lies inside ``cidr:C`` (and is not the same thing)."""
-    try:
-        p_type, _, p_value = (proposal_target or "").partition(":")
-        t_type, _, t_value = (task_target or "").partition(":")
-        if t_type != "cidr" or p_type not in ("ip", "cidr"):
-            return False
-        task_net = ipaddress.ip_network(t_value, strict=False)
-        if p_type == "ip":
-            return ipaddress.ip_address(p_value) in task_net
-        proposal_net = ipaddress.ip_network(p_value, strict=False)
-        return proposal_net != task_net and proposal_net.subnet_of(task_net)
-    except (ValueError, TypeError):
+def _subset_of_task_range(proposal_target: str | None, task_target: str | None) -> bool:
+    """True when the proposal's ``ip:A`` / ``cidr:B`` is inside the task's ``cidr:C``.
+
+    The arithmetic is ``address_contains``, the one the resolvers use (it never raises, and a value
+    it cannot read, a name, a URL or another address family is "not inside"). What is added here is
+    only the shape: the task must be a network. An identical target is an identical match and is
+    decided before this is asked; a child that is not an address or a network (a name, a URL) is
+    refused by ``address_contains`` itself.
+    """
+    p_type, _, p_value = (proposal_target or "").partition(":")
+    t_type, _, t_value = (task_target or "").partition(":")
+    if t_type != "cidr" or not p_value or not t_value:
         return False
+    return address_contains(t_value, p_type, p_value)
 
 
 def compare(
@@ -187,9 +202,9 @@ def compare(
         return TaskRelation(MATCHES_TASK, None, task_id, status)
     same_action = task["action"] == action
     same_target = task["canonical_target"] == canonical_target
-    if same_action and _inside(canonical_target, task["canonical_target"]):
-        cause = INSIDE_TASK_TARGET
-    elif same_action:
+    if same_action and _subset_of_task_range(canonical_target, task["canonical_target"]):
+        return TaskRelation(MATCHES_TASK, SUBSET_OF_TASK_RANGE, task_id, status)
+    if same_action:
         cause = DIFFERENT_TARGET
     elif same_target:
         cause = DIFFERENT_ACTION

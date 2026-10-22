@@ -812,6 +812,16 @@ test_matches_task_is_the_same_as_no_signal if {
 	with_signal.decision == "ALLOW"
 }
 
+# DP-13: a match by containment is a match; the sub-cause is for counting and the policy does not read it.
+test_a_subset_of_the_task_range_is_the_same_as_a_match_when_enforced if {
+	signal := {"version": "plan_fit_v1", "task_relation": "matches_task", "sub_cause": "subset_of_task_range"}
+	with_signal := authz.result with input as object.union(enforced, {"plan_fit": signal})
+	without := authz.result with input as enforced
+
+	with_signal == without
+	with_signal.decision == "ALLOW"
+}
+
 test_no_task_asks_for_a_human_when_enforced if {
 	r := authz.result with input as object.union(enforced, {"plan_fit": relation("no_task")})
 
