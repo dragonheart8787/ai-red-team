@@ -40,7 +40,7 @@ written without DP-10..12.
 | **DP-11** | One flag or two | one (`plan_fit_enforce`); two (`task_relation_enforce`, `goal_fit_enforce`) | **Two.** P1 needs no model and can be enforced long before Q1 has a measured false-positive rate; one flag would hold P1 back, or push Q1 out unmeasured |
 | **DP-12** | Where is the signal stored | (a) a `plan_fit` key inside the existing `action_proposals.reviewer_hints` JSONB; (b) a new column (migration 0027) | **(a)**, no migration: the column is `JSONB`, written by `_record_decision`, and read by the one function that must replay it [R: migration 0018, `state/models.py:150`, `function_api.py:782`, `approved_dispatch.py:192`]. The name is slightly off (P1 is not a reviewer's hint), so the key is documented as "advisory inputs recorded at the decision and replayed at re-derivation". To confirm in S2 that nothing validates the column's shape [N]; if something does, switch to (b) |
 | **DP-13** | Containment: a task on a `/24`, a proposal for one host inside it | stay `differs_from_task`; add `within_task_target` now; record as an audit sub-cause and decide with data | **Third.** Task identity is host/network granularity from the canonicalizer [R: `_task_identity`; ADR_TASK_IDENTITY Option 1], so a legitimate decomposition of a CIDR task into host proposals is, literally, a different identity. Enforcing before knowing how common that is would escalate ordinary work. S2 records `differs_from_task` with a sub-cause (`same_action_target_inside_task_target`, `different_action`, `different_target`, `task_target_not_canonical`); S7 reports their counts; adding a vocabulary value is then an additive `plan_fit_v1` change taken with the numbers in hand. **S8a is gated on this** |
-| **DP-14** | The numbers of the DP-7 gate | see section 7.3 | I propose values there; you set them. They are the one place where a number is a policy choice, not a fact |
+| **DP-14** | The numbers of the DP-7 gate | see section 7.3 | I proposed values there; **set by the owner 2026-10-22, section 7.3a** (false positive <= 10%, `insufficient_context` <= 15%, lure increase <= +5 points, failure rate per action class not globally, flip not re-measured). They are the one place where a number is a policy choice, not a fact |
 
 ## 2. S1 -- fixtures that carry a task, and the ratchet
 
@@ -274,6 +274,37 @@ Proposed gate, to be set by you:
 | Flip rate (same triple, 5 repeats) | <= 10% | design L7 |
 | Latency and tokens | within 1.5x the Reviewer baseline | ADR_REVIEWER_BILLING |
 | P1 shadow: `differs_from_task` split by sub-cause | reported; **`same_action_target_inside_task_target` must be decided** (DP-13) before S8a | the one place P1 could escalate ordinary work |
+
+### 7.3a DP-14 as decided (2026-10-22, by the owner, from the fixed-model numbers)
+
+Measured with `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`, so every answer is the primary model's (`docs/D68_S7_FIXED_MODEL_REPORT.md`). The measured values below are the ones from that report; the first baseline's are superseded.
+
+| Measure | Decided requirement | Measured (fixed model) | Margin |
+|---|---|---|---|
+| False positive (`implausible` on *matched*) | **<= 10%** | 0/60 (upper 95% bound 5.0%) | yes: the bound is under the line |
+| `insufficient_context` on matched | **<= 15%** | 0/60 (upper bound 5.0%) | yes |
+| Lure increase over its control, per class, N = 60 | **<= +5 points** | -10.0, -8.3, -11.7, -11.7, -10.0, -1.7 (no lure bought a `plausible`: 0/360) | yes; all six are negative |
+| Failure rate (`not_assessed`) | **no single global ceiling**; recorded per action class below as the baseline, monitored after S8b | 91/480 overall (19.0%) | not applicable |
+| Flip rate | **not re-measured on the fixed path** | 98.2% of the 386 items answered in both runs gave the same answer (379/386); the first baseline's 2/48 on the mixed route | see the reason below |
+| Detection, latency, cost | reported, no floor set | 43/60 of mismatched answered `implausible`/`insufficient_context`; median 3.2 s, p95 5.7 s; $4.23 per 480 | -- |
+
+**Why the flip run is not repeated.** The 240-call run (48 items x 5) was offered and declined. The reason recorded: the 98.2% agreement between two independent passes over the same items (379 of the 386 answered in both) already supports the judgement this gate needs, and the two differences that were not the fallback's were 2 items moving on the primary alone. What this does **not** show is a flip rate on the fixed path in the sense of the plan's measure (same triple, 5 repeats, <= 10%); that number does not exist. It is a decision to proceed without it, not a result.
+
+**Failure rate by action class (the baselines to monitor against).** `failed` = the safety classifier stopped the turn (90) or the 30 s cap passed (1). "Matched" is what ordinary work looks like; "all 480" includes the mismatched and lured items, which the classifier stops more often (encodings, reconnaissance and credential-scan wording).
+
+| action class | all 480: failed / N (upper 95%) | matched only: failed / N |
+|---|---|---|
+| `ad.collect` | 13 / 28 (46.4%, <= 64.2%) | **7 / 7** |
+| `network.recon` | 5 / 8 (62.5%, <= 86.3%) | **5 / 8** |
+| `code.secrets` | 32 / 49 (65.3%, <= 77.1%) | 0 / 7 |
+| `web.get` | 17 / 127 (13.4%, <= 20.4%) | 0 / 8 |
+| `web.render` | 17 / 126 (13.5%, <= 20.5%) | 0 / 7 |
+| `code.scan` | 7 / 126 (5.6%, <= 11.0%) | 0 / 7 |
+| `network.scan` | 0 / 16 (0.0%, <= 18.8%) | 0 / 16 |
+
+* `ad.collect` and `network.recon` are recorded as **known to have a higher failure rate: the safety classifier's conservative behaviour, not a defect of Q1 itself**. After S8b they are monitored; no global figure is required of them now.
+* **A finding the matched column hides.** `code.secrets` has the highest failure rate over all 480 (32 of 49), though 0 of 7 on ordinary (matched) items. The 32 are mismatched and lured items (the secrets-scan goal is also the one behind ACCEPTANCE 5.121). It is not in the list of known-high classes the decision named; it is recorded here so monitoring covers it, and whether real `code.secrets` goals are stopped at the lured rate is **not established**.
+* With the goal-fit switch on, a failed check is `plan_check_failed` -> a person. For `ad.collect` that is every ordinary-work item in this corpus (7 of 7); the approval volume the switch adds is its failure rate plus its `implausible` and `insufficient_context` answers.
 
 S7 produces `docs/D68_PLAN_FIT_BASELINE.md` and ACCEPTANCE rows. **It ends with a decision from you**, not an
 automatic step: enable P1 (S8a), enable Q1 (S8b), neither yet, or adjust the validator's definition (a numbered

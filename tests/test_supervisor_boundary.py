@@ -680,3 +680,17 @@ def test_a_failure_with_no_output_at_all_says_so():
     supervisor.plan(state=STATE, candidates=CANDIDATES)
     assert "no output at all" in supervisor.calls[-1].failure
     assert "137" in supervisor.calls[-1].failure
+
+
+def test_target_value_description_requires_a_prefix_for_a_network():
+    """5.122: the schema once said a network is "written as its network address", and the
+    planner wrote ``10.79.0.64`` for a /26, which the task canonicalizer reads as one host.
+    The description must say the prefix is part of the value and a bare address is a host."""
+    schema = plan_schema(scope_object_ids=("SCOPE-1",), actions=("network.scan",))
+    description = schema["properties"]["tasks"]["items"]["properties"]["target_value"][
+        "description"
+    ]
+    assert "prefix length" in description
+    assert "/26" in description
+    assert "one host" in description
+    assert "written as its network address" not in description

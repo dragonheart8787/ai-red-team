@@ -302,8 +302,10 @@ def plan_schema(
                             "type": "string",
                             "description": (
                                 "The target: an address, a network in CIDR form "
-                                "written as its network address, a hostname or "
-                                "a URL."
+                                "(the network address and its prefix length, "
+                                "e.g. 10.79.0.64/26: a bare address such as "
+                                "10.79.0.64 names that one host, not the "
+                                "network), a hostname or a URL."
                             ),
                         },
                         "scope_object_id": {
