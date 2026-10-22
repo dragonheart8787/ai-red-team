@@ -25,6 +25,7 @@ observed and nothing runs. Both are labelled in the output. Nothing is repaired.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ from control_plane.canonicalizer.target import normalize_target  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.policy.layers import load_effective_policy  # noqa: E402
 from control_plane.state.db import engagement_scope  # noqa: E402
+from tests.task_support import task_for  # noqa: E402
 from tool_gateway.sandbox import SandboxUnavailable  # noqa: E402
 
 
@@ -139,6 +141,8 @@ def main() -> int:
             action="web.render", target={"logical_identity": target},
             authorization={"source": "engagement_scope", "scope_object_id": scope_id},
             discovery={"source": "explicit_scope"})
+        # a proposal names the task it serves (D68): one made from this proposal, as a harness would
+        proposal = dataclasses.replace(proposal, task_id=task_for(main_id, proposal))
         outcome = function_api.propose_action(
             engagement_id=main_id, proposal=proposal, reviewer=HonestFakeReviewer(),
             policy=policy, agent_id="verify-d40-rerun", sandbox=AbsentSandbox(),

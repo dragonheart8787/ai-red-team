@@ -206,7 +206,7 @@ def ensure_baseline(engagement_id: str) -> None:
 
 def setup_engagement(engagement_id: str, *, nmap_ip: str, web_ip: str | None,
                      customer_id: str, extra_hosts: tuple[str, ...] = (),
-                     subnets: tuple[str, ...] = (),
+                     subnets: tuple[str, ...] = (), parent_range: bool = True,
                      web_actions: tuple[str, ...] = ("web.get", "web.render")) -> dict[str, str]:
     """Create the engagement and register scope — the real path, not raw SQL.
 
@@ -223,8 +223,11 @@ def setup_engagement(engagement_id: str, *, nmap_ip: str, web_ip: str | None,
             actor=ACTOR,
         )
         plan = [
-            ("cidr", NMAP_ALLOWLIST, ("network.recon", "network.scan"),
-             "the authorized lab range"),
+            # D68: with ``parent_range`` off the /24 is not a scope object (it stays the sandbox's
+            # allowlist); the authorized ranges are the sub-networks named, so a planner has
+            # several networks to scan and none that contains them all.
+            *([("cidr", NMAP_ALLOWLIST, ("network.recon", "network.scan"),
+                "the authorized lab range")] if parent_range else []),
             ("ip", nmap_ip, ("network.recon", "network.scan"),
              "the one live host in that range, authorized by name as well"),
         ]
@@ -347,7 +350,8 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
             reviewer, candidates: tuple[ScopeCandidate, ...],
             evidence_by_target: dict[str, dict[str, Any]],
             nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox,
-            proxy_url: str | None, round_index: int) -> dict[str, Any]:
+            proxy_url: str | None, round_index: int,
+            max_observation_chars: int | None = None) -> dict[str, Any]:
     record: dict[str, Any] = {"task_id": task_id, "goal": task.goal,
                               "action_offered": task.action}
 
@@ -361,7 +365,9 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
     if prior is not None:
         observations = (Observation(
             source=prior["source"], description=prior["description"],
-            content=prior["content"], evidence_id=prior["evidence_id"],
+            content=(prior["content"][:max_observation_chars]
+                     if max_observation_chars else prior["content"]),
+            evidence_id=prior["evidence_id"],
             run_id=prior["run_id"], observed_identities=(target_value,),
         ),)
     record["observations_given"] = len(observations)
@@ -462,8 +468,10 @@ def run_task(*, engagement_id: str, task_id: str, task: ProposedTask, worker,
 def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
             nmap_sandbox: DockerSandbox, browser_sandbox: DockerSandbox,
             engagement_id: str | None = None, extra_hosts: tuple[str, ...] = (),
-            subnets: tuple[str, ...] = (), web_actions: tuple[str, ...] = ("web.get", "web.render"),
-            fake_reviewer: bool = False) -> dict[str, Any]:
+            subnets: tuple[str, ...] = (), parent_range: bool = True,
+            web_actions: tuple[str, ...] = ("web.get", "web.render"),
+            fake_reviewer: bool = False, max_evidence_shown: int = MAX_EVIDENCE_SHOWN,
+            max_observation_chars: int | None = None) -> dict[str, Any]:
     # D59: the egress proxy belongs to one engagement, so main() names it before the
     # proxy is started and passes the same id here.
     engagement_id = engagement_id or uid("ENG-D40-MAIN")
@@ -471,7 +479,8 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
     ensure_baseline(engagement_id)
     registered = setup_engagement(engagement_id, nmap_ip=nmap_ip, web_ip=web_ip,
                                   customer_id="CUST-D40-LOCAL", extra_hosts=extra_hosts,
-                                  subnets=subnets, web_actions=web_actions)
+                                  subnets=subnets, parent_range=parent_range,
+                                  web_actions=web_actions)
     assert_policy_permits_scanning(engagement_id)
     candidates = candidates_for(engagement_id)
 
@@ -493,13 +502,16 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
     print(f"    web target   {web_ip}:{WEB_TARGET_PORT}  (via proxy {proxy_url})")
     print(f"    candidates   {[(c.type, c.value, c.allowed_actions) for c in candidates]}")
 
+    objective = (OBJECTIVE if parent_range else OBJECTIVE.replace(
+        "(10.79.0.0/24)", "(" + ", ".join(subnets) + ")"))
     evidence_by_target: dict[str, dict[str, Any]] = {}
     round_records: list[dict[str, Any]] = []
     all_evidence_ids: list[str] = []
 
     for i in range(rounds):
-        recent_evidence = tuple(all_evidence_ids[-MAX_EVIDENCE_SHOWN:])
-        state = build_state(engagement_id, objective=OBJECTIVE,
+        recent_evidence = (tuple(all_evidence_ids[-max_evidence_shown:])
+                           if max_evidence_shown else ())
+        state = build_state(engagement_id, objective=objective,
                             evidence_ids=recent_evidence, task_limit=50)
         print(f"\n-- round {i + 1}/{rounds}  ledger={len(state.tasks)} "
               f"findings={len(state.findings)} decisions={len(state.decisions)}")
@@ -555,6 +567,7 @@ def main_run(*, rounds: int, nmap_ip: str, web_ip: str, proxy_url: str,
                 evidence_by_target=evidence_by_target,
                 nmap_sandbox=nmap_sandbox, browser_sandbox=browser_sandbox,
                 proxy_url=proxy_url, round_index=i + 1,
+                max_observation_chars=max_observation_chars,
             )
             round_record["task_runs"].append(run_record)
             outcome = run_record.get("outcome") or {}
@@ -765,8 +778,17 @@ def main() -> int:
     parser.add_argument("--subnets", default="",
                         help="comma-separated sub-networks of 10.79.0.0/24 to register as "
                              "further authorized ranges (D68)")
+    parser.add_argument("--no-parent-range", action="store_true",
+                        help="do not register the /24 itself as a scope object (D68): the "
+                             "authorized ranges are the --subnets")
     parser.add_argument("--web-actions", choices=["both", "get"], default="both",
                         help="'get' offers the web host for web.get only")
+    parser.add_argument("--max-evidence-shown", type=int, default=MAX_EVIDENCE_SHOWN,
+                        help="evidence artifacts the Supervisor is shown per round (D68: with "
+                             "many hosts one scan's evidence can exceed the argv limit)")
+    parser.add_argument("--max-observation-chars", type=int, default=None,
+                        help="cut the prior evidence handed to the Worker as an observation to "
+                             "this many characters (D68: a /24 scan's evidence is 600 KB)")
     parser.add_argument("--fake-reviewer", action="store_true",
                         help="use the scripted honest Reviewer (D68 P1 shadow: the relation to "
                              "the task does not depend on it)")
@@ -820,7 +842,9 @@ def main() -> int:
             proxy_url=proxy_url, nmap_sandbox=nmap_sandbox,
             browser_sandbox=browser_sandbox, engagement_id=main_engagement_id,
             extra_hosts=extra_hosts, subnets=subnets, web_actions=web_actions,
-            fake_reviewer=args.fake_reviewer,
+            parent_range=not args.no_parent_range, fake_reviewer=args.fake_reviewer,
+            max_evidence_shown=args.max_evidence_shown,
+            max_observation_chars=args.max_observation_chars,
         )
         if not args.skip_injection:
             results["injection_experiment"] = injection_experiment(

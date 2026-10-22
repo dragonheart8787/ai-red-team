@@ -222,6 +222,10 @@ FILE_REGISTRY = {
         "reads the stages to know when everything is terminal at the end; moves none itself",
     "scripts/soak/report.py":
         "counts proposals by stage for the report; writes nothing",
+    "scripts/live_run/verify_d40_rerun.py":
+        "reads `pipeline_stage` of a finished D40 run's proposals to check that each ended at "
+        "`recorded` or `closed` (ACCEPTANCE 5.54); the two proposals it adds are decided by the "
+        "real pipeline, which this script does not move",
     "scripts/plan_fit_report.py":
         "reads `pipeline_stage` beside `decision` in `action_proposals` to count what was decided; "
         "writes nothing (a test requires the script to contain no write statement)",
