@@ -177,6 +177,17 @@ jobs:
             --run-dir "$RUN_DIR" --caps-file "$RUN_DIR/caps.json" \
             --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }} ${{ steps.plan.outputs.p1 }}
 
+      - name: S8a -- the enablement checks, made to fire (only in a run with P1 enforcement)
+        # A check that has only ever passed has shown nothing: this makes, in this database, each
+        # state the checks are for (a switch that does not reach an engagement, a switch on with
+        # nothing recorded, a validator switch on with no validator) and requires the verdict each
+        # should get. It fails the job if any state is let through.
+        if: always() && steps.plan.outputs.p1 != ''
+        run: |
+          set -a; . ./.env; set +a
+          .venv/bin/python -m scripts.soak.negative_controls --out "$RUN_DIR/negative_controls.json" 2>&1 | tee "$RUN_DIR/negative_controls.log"
+          { echo '### S8a: the enablement checks, made to fire'; echo '```'; cat "$RUN_DIR/negative_controls.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: What the heartbeat says about the run, and the logs of the daemons
         if: always()
         run: |
