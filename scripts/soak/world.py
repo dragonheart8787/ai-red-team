@@ -31,7 +31,8 @@ def _free_prefix(client, first: int) -> int:
     raise SystemExit("no free 10.66.x.0/24 range")
 
 
-def setup(run_dir: Path, engagements: int, *, p1_enforce: bool = False) -> dict:
+def setup(run_dir: Path, engagements: int, *, p1_enforce: bool = False, q1_enforce: bool = False,
+          via: str = "baseline") -> dict:
     lib.load_env()
     from tests import scheduler_support as sup
     from tests.helpers import (
@@ -46,13 +47,18 @@ def setup(run_dir: Path, engagements: int, *, p1_enforce: bool = False) -> dict:
     baseline = ensure_test_baseline()
     first = _free_prefix(client, 10)
     world = {"started": lib.stamp(), "baseline_layer_id": baseline, "engagements": []}
-    if p1_enforce:
-        # D68 S8a: a global baseline carrying the switch, published before the engagements exist
-        # (a baseline applies to engagements created after it, D54), by the same path the platform
-        # owner's script uses. Retired at teardown.
-        world["p1_enforce_layer_id"] = publish_global_layer(
-            layer="baseline_global", version=int(time.time()) % 2_000_000_000,
-            document={"task_relation_enforce": True}, actor="soak-harness")
+    switches = {name: True for name, on in (("task_relation_enforce", p1_enforce),
+                                           ("goal_fit_enforce", q1_enforce)) if on}
+    if switches:
+        # D68 S8a/S8b: one global layer carrying the switches, published before the engagements
+        # exist, by the path the platform owner's script uses. ``baseline`` (S8a) is frozen into
+        # each engagement at its creation (D54); ``overlay`` (S8b, the reversible form, ACCEPTANCE
+        # 5.124) applies to every engagement at once and is retired at teardown for all of them.
+        layer = {"baseline": "baseline_global", "overlay": "emergency_overlay"}[via]
+        world["enforce_layer_id"] = publish_global_layer(
+            layer=layer, version=int(time.time()) % 2_000_000_000, document=switches,
+            actor="soak-harness")
+        world["enforce"] = {"via": via, "switches": sorted(switches)}
     for index in range(engagements):
         eid = f"ENG-SOAK-{stamp}-{index}"
         make_engagement(eid, actor="soak-harness")
@@ -83,8 +89,8 @@ def teardown(run_dir: Path) -> dict:
     for eid in ids:
         sup.withdraw(eid)
     closed = residue.close_rows(ids)
-    if world.get("p1_enforce_layer_id"):
-        deactivate_global_layer(world["p1_enforce_layer_id"], actor="soak-harness")
+    if world.get("enforce_layer_id"):
+        deactivate_global_layer(world["enforce_layer_id"], actor="soak-harness")
     if world.get("baseline_layer_id"):
         deactivate_global_layer(world["baseline_layer_id"], actor="soak-harness")
     return {"withdrawn": ids, "closed_proposals": closed.proposals if hasattr(

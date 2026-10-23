@@ -241,3 +241,56 @@ def test_the_p1_check_is_expected_only_when_enforcement_is_asked_for():
     names = [n for n, _, _ in checks.execution_counts(ran, p1=True)]
     assert checks.P1_CHECK in names and checks.P1_CHECK not in [
         n for n, _, _ in checks.execution_counts(ran)]
+
+
+# ---------------------------------------------------------------------------------------------
+# D68 S8b: the Q1 check of a soak that runs with the goal-fit switch on
+# ---------------------------------------------------------------------------------------------
+
+Q1_ON = {"ENG-1": True, "ENG-2": True}
+
+
+def test_q1_switch_missing_from_an_engagement_is_a_failure_that_names_it():
+    got = checks.q1_verdict({"ENG-1": True, "ENG-2": False}, "claude_code", 50, {"plausible": 50})
+    assert not got.ok and "ENG-2" in got.detail and "NOT true" in got.detail
+
+
+def test_q1_with_no_validator_is_the_silent_no_op_and_fails_whatever_was_recorded():
+    for backend in (None, "", "fake", " Fake "):
+        got = checks.q1_verdict(Q1_ON, backend, 50, {"not_assessed/disabled": 50})
+        assert not got.ok and "no validator is configured" in got.detail, backend
+
+
+def test_q1_nothing_ever_answered_is_a_failure_once_enough_is_decided():
+    only_failures = {"not_assessed/failed": 30, "not_assessed/disabled": 5}
+    got = checks.q1_verdict(Q1_ON, "claude_code", 35, only_failures)
+    assert not got.ok and "no validator ever answered" in got.detail
+
+
+def test_q1_a_high_failure_rate_is_counted_and_not_judged():
+    """DP-14 sets no ceiling on the failure rate; the check reports it and passes while the
+    validator answers at all."""
+    mixed = {"plausible": 10, "not_assessed/failed": 40}
+    got = checks.q1_verdict(Q1_ON, "claude_code", 50, mixed)
+    assert got.ok and got.judged and "failed 40" in got.detail
+
+
+def test_q1_too_few_decided_is_an_execution_that_judged_nothing():
+    got = checks.q1_verdict(Q1_ON, "claude_code", 3, {"not_assessed/disabled": 3})
+    assert got.ok and not got.judged
+
+
+def test_q1_decisions_from_before_the_validator_are_not_answers():
+    got = checks.q1_verdict(Q1_ON, "claude_code", 40, {"absent": 40})
+    assert not got.ok
+
+
+def test_q1_check_is_expected_only_with_q1_and_counts_with_the_p1_one():
+    ran = [{"name": n, "judged": True} for n in checks.CYCLE_CHECKS] + [
+        {"name": checks.DRAIN_CHECK, "judged": True}]
+    assert checks.never_ran(ran, expect_drain=True, q1=True) == [
+        f"{checks.Q1_CHECK}: never executed"]
+    assert checks.never_ran(ran, expect_drain=True, p1=True, q1=True) == [
+        f"{checks.P1_CHECK}: never executed", f"{checks.Q1_CHECK}: never executed"]
+    names = [n for n, _, _ in checks.execution_counts(ran, q1=True)]
+    assert checks.Q1_CHECK in names and checks.P1_CHECK not in names

@@ -127,7 +127,9 @@ class Conductor:
             self.world = world_mod.load(self.run_dir)
         else:
             self.world = world_mod.setup(self.run_dir, self.args.engagements,
-                                         p1_enforce=bool(self.args.p1_enforce))
+                                         p1_enforce=bool(self.args.p1_enforce),
+                                         q1_enforce=bool(self.args.q1_enforce),
+                                         via=self.args.enforce_via)
         self.eids = [e["id"] for e in self.world["engagements"]]
         if self.args.p1_enforce:
             # both conditions or a loud stop (plan 8.1): the switch is in every engagement's
@@ -138,6 +140,26 @@ class Conductor:
             if off:
                 raise SystemExit("P1 enforcement was asked for and task_relation_enforce is not "
                                  f"true in the effective policy of {', '.join(off)}; not starting")
+        if self.args.q1_enforce:
+            lib.load_env()
+            off = [e for e, on in checks.q1_switches(self.eids).items() if not on]
+            if off:
+                raise SystemExit("Q1 enforcement was asked for and goal_fit_enforce is not true "
+                                 f"in the effective policy of {', '.join(off)}; not starting")
+            backend = os.environ.get("CYBERORCH_PLANFIT_BACKEND", "").strip().lower()
+            from scripts import s8_enablement_check as enablement
+
+            unmeasured = enablement.config_problems(
+                backend=backend, model=os.environ.get(enablement.PLANFIT_MODEL_ENV),
+                fallback_off=os.environ.get(enablement.NO_FALLBACK_ENV))
+            if unmeasured:
+                raise SystemExit("Q1 enforcement was asked for with a configuration DP-14 did not "
+                                 "measure; not starting: " + "; ".join(unmeasured))
+            if not backend or backend == "fake":
+                raise SystemExit("Q1 enforcement was asked for and no validator is configured "
+                                 "(CYBERORCH_PLANFIT_BACKEND); with the switch on and no "
+                                 "validator every proposal would record not_assessed/disabled "
+                                 "and nothing would be checked; not starting")
         lib.load_env()
         env = {**os.environ, **RECONCILER_ENV, "PYTHONUNBUFFERED": "1"}
         for line in (REPO_ROOT / ".env.example").read_text().splitlines():
@@ -528,6 +550,8 @@ class Conductor:
         ]
         if self.args.p1_enforce:
             steps.append(lambda: checks.p1_enforcement(self.eids))
+        if self.args.q1_enforce:
+            steps.append(lambda: checks.q1_enforcement(self.eids))
         for step in steps:
             for attempt in range(3):
                 try:
@@ -627,7 +651,8 @@ class Conductor:
         """A check that never ran, or never judged anything, has verified nothing: a finding. So is
         a fault kind that never took effect in a run long enough to have drawn all six."""
         for line in checks.never_ran(self.check_results, expect_drain=True,
-                                     p1=bool(self.args.p1_enforce)):
+                                     p1=bool(self.args.p1_enforce),
+                                     q1=bool(self.args.q1_enforce)):
             self.finding("check_never_ran", line)
         arr = checks._quote(self.eids)
         rows = lib.psql(
@@ -739,6 +764,14 @@ def main(argv: list[str] | None = None) -> int:
                              "checks every two minutes, a short drain")
     parser.add_argument("--seed", default="d66")
     parser.add_argument("--reuse-world", action="store_true")
+    parser.add_argument("--q1-enforce", action="store_true",
+                        help="D68 S8b: publish goal_fit_enforce true with the layer (see "
+                             "--enforce-via), require a configured validator "
+                             "(CYBERORCH_PLANFIT_BACKEND), and check that it answers")
+    parser.add_argument("--enforce-via", choices=("baseline", "overlay"), default="baseline",
+                        help="the layer that carries the switches: a baseline is frozen into each "
+                             "engagement at its creation, an overlay applies to all and is the "
+                             "reversible form (ACCEPTANCE 5.124)")
     parser.add_argument("--p1-enforce", action="store_true",
                         help="D68 S8a: publish a baseline with task_relation_enforce true before "
                              "the engagements are made, and check that P1 is enforced and records")

@@ -36,6 +36,10 @@ on:
         description: 'D68 S8a: run with task_relation_enforce published in the baseline (true/false)'
         default: 'false'
         required: false
+      q1_enforce:
+        description: 'D68 S8b: run with both switches published in an emergency overlay, a real validator and the Q1 stream (true/false)'
+        default: 'false'
+        required: false
   push:
     branches: ['claude/mvp-kernel-cybersecurity-platform-su841g']
     paths: ['.github/soak-request.json']
@@ -79,14 +83,28 @@ jobs:
             push) P1="$(python3 -c 'import json;print(str(json.load(open(".github/soak-request.json")).get("p1_enforce", False)).lower())')" ;;
             *) P1=false ;;
           esac
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) Q1="${{ github.event.inputs.q1_enforce }}" ;;
+            push) Q1="$(python3 -c 'import json;print(str(json.load(open(".github/soak-request.json")).get("q1_enforce", False)).lower())')" ;;
+            *) Q1=false ;;
+          esac
           P1FLAG=""
           if [ "$P1" = "true" ]; then P1FLAG="--p1-enforce"; fi
+          Q1FLAG=""
+          if [ "$Q1" = "true" ]; then
+            # S8b: the switches in an emergency overlay (the reversible form, ACCEPTANCE 5.124), both on
+            # as they would be after S8a, and the workload slowed so that a real validator is asked
+            # about each proposal at a rate a subscription allows (~5/min instead of ~40/min)
+            P1FLAG="--p1-enforce"
+            Q1FLAG="--q1-enforce --enforce-via overlay --mean-gap 45"
+          fi
           echo "p1=$P1FLAG" >> "$GITHUB_OUTPUT"
+          echo "q1=$Q1FLAG" >> "$GITHUB_OUTPUT"
           SMOKE=""
           if python3 -c "import sys; sys.exit(0 if float('$H') <= 0.5 else 1)"; then SMOKE="--smoke"; fi
           echo "hours=$H" >> "$GITHUB_OUTPUT"
           echo "smoke=$SMOKE" >> "$GITHUB_OUTPUT"
-          echo "hours=$H smoke='${SMOKE}' p1_enforce='${P1FLAG}' event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "hours=$H smoke='${SMOKE}' p1_enforce='${P1FLAG}' q1='${Q1FLAG}' event=$GITHUB_EVENT_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fetch the deadline helper built and verified by the previous job
         uses: actions/download-artifact@v4
@@ -170,12 +188,49 @@ jobs:
           .venv/bin/python -m scripts.soak.measure --dir "$RUN_DIR" | tee /tmp/caps.txt
           { echo '### The runner, measured'; echo '```json'; cat "$RUN_DIR/caps.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: The soak (unprivileged; sudo only for the two restarts)
+      - name: S8b pre-flight -- the validator answers once (only in a Q1 run)
+        # A Q1 soak whose validator cannot answer (no CLI on the runner, no login, a rate-limited
+        # account) would run four hours to say so. One real call, before anything starts.
+        if: steps.plan.outputs.q1 != ''
+        env:
+          CYBERORCH_PLANFIT_BACKEND: claude_code
+          CYBERORCH_PLANFIT_MODEL: sonnet
+          CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: '1'
         run: |
           set -a; . ./.env; set +a
+          .venv/bin/python -m scripts.soak.q1_preflight
+
+      - name: The soak (unprivileged; sudo only for the two restarts)
+        env:
+          Q1: ${{ steps.plan.outputs.q1 }}
+        run: |
+          set -a; . ./.env; set +a
+          STREAM_PID=""
+          if [ -n "$Q1" ]; then
+            # S8b: a real validator for the soak's own proposals, and a stream of proposals of every
+            # action class beside it (scripts/soak/q1_stream.py), for the failure rate by class
+            export CYBERORCH_PLANFIT_BACKEND=claude_code
+            # the configuration DP-14's numbers were measured with (D68_S7_FIXED_MODEL_REPORT)
+            export CYBERORCH_PLANFIT_MODEL=sonnet CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1
+            .venv/bin/python -m scripts.soak.q1_stream --hours "${{ steps.plan.outputs.hours }}" \
+              --per-hour 100 --out "$RUN_DIR/q1_stream.jsonl" > "$RUN_DIR/q1_stream.log" 2>&1 &
+            STREAM_PID=$!
+          fi
+          set +e
           .venv/bin/python -m scripts.soak.conductor \
             --run-dir "$RUN_DIR" --caps-file "$RUN_DIR/caps.json" \
-            --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }} ${{ steps.plan.outputs.p1 }}
+            --hours "${{ steps.plan.outputs.hours }}" ${{ steps.plan.outputs.smoke }} ${{ steps.plan.outputs.p1 }} ${{ steps.plan.outputs.q1 }}
+          RC=$?
+          if [ -n "$STREAM_PID" ]; then kill "$STREAM_PID" 2>/dev/null; wait "$STREAM_PID" 2>/dev/null; fi
+          exit $RC
+
+      - name: S8b -- the Q1 stream, by action class and by the wording of the goal
+        if: always() && steps.plan.outputs.q1 != ''
+        run: |
+          set -a; . ./.env; set +a
+          tail -5 "$RUN_DIR/q1_stream.log" 2>/dev/null || true
+          .venv/bin/python -m scripts.soak.q1_report --stream "$RUN_DIR/q1_stream.jsonl" --out "$RUN_DIR/q1_report.md"
+          { echo '### S8b: the Q1 stream'; cat "$RUN_DIR/q1_report.md"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: S8a -- the enablement checks, made to fire (only in a run with P1 enforcement)
         # A check that has only ever passed has shown nothing: this makes, in this database, each
@@ -185,6 +240,7 @@ jobs:
         if: always() && steps.plan.outputs.p1 != ''
         run: |
           set -a; . ./.env; set +a
+          unset CYBERORCH_PLANFIT_BACKEND
           .venv/bin/python -m scripts.soak.negative_controls --out "$RUN_DIR/negative_controls.json" 2>&1 | tee "$RUN_DIR/negative_controls.log"
           { echo '### S8a: the enablement checks, made to fire'; echo '```'; cat "$RUN_DIR/negative_controls.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

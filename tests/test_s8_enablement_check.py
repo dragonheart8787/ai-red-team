@@ -54,3 +54,21 @@ def test_q1_decisions_from_before_the_validator_do_not_count_as_answers():
 
 def test_q1_with_no_traffic_yet_judges_only_the_switch_and_the_configuration():
     assert c.verdict_q1(switches=ON, backend="claude_code", goal_fit=Counter(), decided=0) == []
+
+
+def test_q1_the_measured_configuration_is_clean_and_each_departure_is_named():
+    ok = dict(backend="claude_code", model="sonnet", fallback_off="1")
+    assert c.config_problems(**ok) == []
+    assert any("model" in p for p in c.config_problems(**{**ok, "model": None}))
+    assert any("model" in p for p in c.config_problems(**{**ok, "model": "opus"}))
+    assert any("fallback" in p for p in c.config_problems(**{**ok, "fallback_off": None}))
+    assert any("fallback" in p for p in c.config_problems(**{**ok, "fallback_off": "0"}))
+    assert any("not measured" in p for p in c.config_problems(**{**ok, "backend": "api"}))
+    # no validator at all is a different anomaly, reported by verdict_q1 and not twice
+    assert c.config_problems(backend=None, model=None, fallback_off=None) == []
+
+
+def test_q1_verdict_reports_an_unmeasured_configuration_beside_the_other_anomalies():
+    got = c.verdict_q1(switches=ON, backend="claude_code", model="opus", fallback_off=None,
+                       goal_fit=Counter({"plausible/-": 4}), decided=4)
+    assert len(got) == 2 and any("opus" in p for p in got) and any("fallback" in p for p in got)

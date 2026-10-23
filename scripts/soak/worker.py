@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import os
 import random
 import signal
 import sys
@@ -81,6 +82,13 @@ class Worker:
         self.events = lib.Journal(run_dir / "events.jsonl")
         self.stop = threading.Event()
         self.rng = random.Random(args.seed)
+        # D68 S8b: the validator Q1 asks, built only when a real backend is named; with none (the
+        # default, and every run before S8b) no validator is passed and Q1 records `disabled`
+        self.validator = None
+        if os.environ.get("CYBERORCH_PLANFIT_BACKEND", "").strip().lower() not in ("", "fake"):
+            from agents.llm.selection import build_plan_fit_validator
+
+            self.validator = build_plan_fit_validator()
 
     # -- one request ----------------------------------------------------------------------
 
@@ -116,7 +124,8 @@ class Worker:
             reviewer=reviewer, policy=sup.effective_policy(req["eid"]), agent_id="soak-worker",
             sandbox=DockerSandbox() if req["what"] == "allow" else None,
             network_allowlist=[req["cidr"]],
-            budget=Budget(max_duration_seconds=self.args.budget), idempotency_key=req["key"])
+            budget=Budget(max_duration_seconds=self.args.budget), idempotency_key=req["key"],
+            plan_fit_validator=self.validator)
 
     def run_request(self, req: dict, *, resumed: bool = False) -> None:
         self.requests.write("started", **req, resumed=resumed)

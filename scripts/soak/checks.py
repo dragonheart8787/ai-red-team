@@ -58,6 +58,9 @@ CYCLE_CHECKS = (
 #: D68 S8a. Present in a run only when P1 enforcement is on (``--p1-enforce``); then it must have
 #: run and judged, like the others.
 P1_CHECK = "P1 enforcement is on, is recorded, and escalates nothing the workload does not earn"
+#: D68 S8b. Present in a run only with ``--q1-enforce``: the second switch, and a validator that
+#: answers.
+Q1_CHECK = "Q1 enforcement is on, a validator answers, and what it records is read"
 #: the check made once, after the drain
 DRAIN_CHECK = "after the drain nothing of the soak is left"
 #: checks that are listed and not judged by design: their executions count, their judgement does not
@@ -93,9 +96,10 @@ def workload_exercised(allow_recorded: int, human_recorded: int) -> list[str]:
     return problems
 
 
-def never_ran(results: list[dict], *, expect_drain: bool, p1: bool = False) -> list[str]:
+def never_ran(results: list[dict], *, expect_drain: bool, p1: bool = False,
+              q1: bool = False) -> list[str]:
     """Names of the checks with no execution (or, for the judged ones, no judgement) in a run."""
-    wanted = (list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else [])
+    wanted = (list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else []) + ([Q1_CHECK] if q1 else [])
               + ([DRAIN_CHECK] if expect_drain else []))
     missing = []
     for name in wanted:
@@ -107,10 +111,12 @@ def never_ran(results: list[dict], *, expect_drain: bool, p1: bool = False) -> l
     return missing
 
 
-def execution_counts(results: list[dict], *, p1: bool = False) -> list[tuple[str, int, int]]:
+def execution_counts(results: list[dict], *, p1: bool = False,
+                     q1: bool = False) -> list[tuple[str, int, int]]:
     """``(name, executions, judged executions)`` for every expected check, zero included."""
     out = []
-    for name in list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else []) + [DRAIN_CHECK]:
+    for name in (list(CYCLE_CHECKS) + ([P1_CHECK] if p1 else []) + ([Q1_CHECK] if q1 else [])
+                 + [DRAIN_CHECK]):
         rows = [r for r in results if r["name"] == name]
         out.append((name, len(rows), sum(1 for r in rows if r.get("judged", True))))
     return out
@@ -151,17 +157,82 @@ def p1_verdict(switches: dict[str, bool], stored: int, proposals: int,
                   f"{proposals} decided proposals carry a plan_fit; no P1 escalation")
 
 
-def p1_switches(engagements: list[str]) -> dict[str, bool]:
-    """``task_relation_enforce`` in the effective policy of each engagement, read the way the
-    pipeline reads it (``load_effective_policy`` on the engagement's own connection)."""
+def _switches(engagements: list[str], name: str) -> dict[str, bool]:
     from control_plane.policy.layers import load_effective_policy
     from control_plane.state.db import engagement_scope
 
     out = {}
     for eid in engagements:
         with engagement_scope(eid) as conn:
-            out[eid] = bool(load_effective_policy(conn, eid).task_relation_enforce)
+            out[eid] = bool(getattr(load_effective_policy(conn, eid), name))
     return out
+
+
+def p1_switches(engagements: list[str]) -> dict[str, bool]:
+    """``task_relation_enforce`` in the effective policy of each engagement, read the way the
+    pipeline reads it (``load_effective_policy`` on the engagement's own connection)."""
+    return _switches(engagements, "task_relation_enforce")
+
+
+def q1_switches(engagements: list[str]) -> dict[str, bool]:
+    return _switches(engagements, "goal_fit_enforce")
+
+
+#: how many decided proposals must exist before "nothing answered" is a finding rather than "too
+#: early to say"
+Q1_MIN_DECIDED = 20
+
+
+def q1_verdict(switches: dict[str, bool], backend: str | None, decided: int,
+               by_value: dict[str, int]) -> Result:
+    """The Q1 check from what was read: the switch in each engagement's effective policy, the
+    configured backend, and the ``goal_fit`` values (``value/cause``) stored with the decisions.
+
+    **Failing**: the switch absent from an engagement; no real backend configured (the default
+    ``fake`` passes no validator, so every proposal records ``not_assessed/disabled`` -- the
+    silent no-op of plan 8.1); and, once ``Q1_MIN_DECIDED`` proposals are decided, **no value but
+    ``not_assessed/disabled`` and ``not_assessed/failed``** -- the validator never produced an
+    answer. A *rate* of ``failed`` is not judged (DP-14 sets no global ceiling); it is counted in
+    the detail and in the report, by action class."""
+    off = sorted(e for e, on in switches.items() if not on)
+    if off:
+        return Result(Q1_CHECK, False, f"goal_fit_enforce is NOT true in the effective policy of "
+                      f"{', '.join(off)}")
+    name = (backend or "").strip().lower()
+    if not name or name == "fake":
+        return Result(Q1_CHECK, False, f"no validator is configured "
+                      f"(CYBERORCH_PLANFIT_BACKEND={backend!r}): the switch is on and every "
+                      "proposal records not_assessed/disabled")
+    answered = sum(n for key, n in by_value.items()
+                   if not key.startswith("not_assessed") and not key.startswith("absent"))
+    failed = by_value.get("not_assessed/failed", 0)
+    disabled = by_value.get("not_assessed/disabled", 0)
+    detail = (f"{decided} decided; answered {answered}, failed {failed}, disabled {disabled}; "
+              f"{ {k: v for k, v in sorted(by_value.items())} }")
+    if decided < Q1_MIN_DECIDED:
+        return Result(Q1_CHECK, True, f"switch true, backend {name}; too few decided to judge "
+                      f"({detail})", judged=False)
+    if answered == 0:
+        return Result(Q1_CHECK, False, f"enabled and no validator ever answered ({detail})")
+    return Result(Q1_CHECK, True, detail)
+
+
+def q1_enforcement(engagements: list[str]) -> Result:
+    import os
+
+    arr = _quote(engagements)
+    rows = lib.psql(
+        "SELECT reviewer_hints->'plan_fit'->>'goal_fit', reviewer_hints->'plan_fit'->>"
+        "'goal_fit_cause', count(*) FROM action_proposals WHERE engagement_id = ANY(" + arr
+        + ") AND decision IS NOT NULL GROUP BY 1, 2")
+    by_value: dict[str, int] = {}
+    decided = 0
+    for value, cause, n in rows:
+        decided += int(n)
+        key = (f"{value}/{cause}" if cause else value) if value else "absent"
+        by_value[key] = by_value.get(key, 0) + int(n)
+    return q1_verdict(q1_switches(engagements), os.environ.get("CYBERORCH_PLANFIT_BACKEND"),
+                      decided, by_value)
 
 
 def p1_enforcement(engagements: list[str]) -> Result:

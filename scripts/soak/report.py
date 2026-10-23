@@ -258,9 +258,11 @@ def _check_counts(conductor) -> list[str]:
            "shorter than its windows) -- has verified nothing, and is a failure "
            "(`check_never_ran`).\n",
            "| check | executions | judged | verdict |", "|---|---|---|---|"]
-    p1 = bool(getattr(getattr(conductor, "args", None), "p1_enforce", False))
-    missing = checks.never_ran(conductor.check_results, expect_drain=not conductor.halted, p1=p1)
-    for name, runs, judged in checks.execution_counts(conductor.check_results, p1=p1):
+    args = getattr(conductor, "args", None)
+    p1, q1 = (bool(getattr(args, "p1_enforce", False)), bool(getattr(args, "q1_enforce", False)))
+    missing = checks.never_ran(conductor.check_results, expect_drain=not conductor.halted,
+                               p1=p1, q1=q1)
+    for name, runs, judged in checks.execution_counts(conductor.check_results, p1=p1, q1=q1):
         failed = [m for m in missing if m.startswith(name + ":")]
         if failed:
             verdict = f"**FAILED: {failed[0]}**"
