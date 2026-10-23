@@ -48,3 +48,10 @@ The owner's instruction: a repository secret named **`CLAUDE_CODE_OAUTH_TOKEN`**
 ## 6. What is waiting
 
 * The CI of the commit that holds this wiring; then the 0.2 h smoke (the validator really called: answered `goal_fit` values in the stored decisions, the enablement check clean, the five negative controls), then the 4 h run. The result goes into this report, with the section 3 judgement read from `q1_report.md`.
+
+## 7. First smoke attempt (soak run 10, 2026-10-23 12:01 UTC): stopped at the login step [E]
+
+The CI of the wiring commit was green (`test` #269, normal and enforced jobs). The smoke was requested. The runner installed the CLI -- `2.1.307 (Claude Code)` -- and **the login step failed in under a second: `CLAUDE_CODE_OAUTH_TOKEN` was empty in the job's environment** ("the repository secret CLAUDE_CODE_OAUTH_TOKEN is not set"). The pre-flight and the soak were skipped, as designed; nothing called a model and nothing was run against the database. (The later steps of the job -- the stream report, which found no stream file, and the negative controls, which passed -- are consequences, not findings.)
+
+So the workflow reads the secret by the name given and the secret is not there from the workflow's point of view. Nothing was configured or worked around. The ways a secret that "exists" is empty in a job: it has not been added yet; it was added under *Environments* and not as a *repository* secret; it is in the *Dependabot* or *Codespaces* secret store (separate from Actions); or the name differs by a character. The smoke is requested again by a new push of `.github/soak-request.json` once the owner says the secret is in place.
+
