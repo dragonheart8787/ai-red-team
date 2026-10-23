@@ -188,6 +188,30 @@ jobs:
           .venv/bin/python -m scripts.soak.measure --dir "$RUN_DIR" | tee /tmp/caps.txt
           { echo '### The runner, measured'; echo '```json'; cat "$RUN_DIR/caps.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: S8b -- the claude CLI on the runner, at the version DP-14 was measured with (Q1 run)
+        if: steps.plan.outputs.q1 != ''
+        run: |
+          sudo npm install -g @anthropic-ai/claude-code@2.1.307 2>&1 | tail -3
+          claude --version
+
+      - name: S8b -- the login is the repository secret CLAUDE_CODE_OAUTH_TOKEN, and nothing else (Q1 run)
+        # The subscription path of D10/D10.5 and the S7 baseline. It is read from the secret by name and
+        # never printed; ANTHROPIC_API_KEY (the pay-per-use path) must not be present, because the CLI
+        # would prefer it. A missing secret stops the job here, in a second, with the name to set.
+        if: steps.plan.outputs.q1 != ''
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::the repository secret CLAUDE_CODE_OAUTH_TOKEN is not set (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY is present in the environment; the Q1 run uses the subscription login only"
+            exit 1
+          fi
+          echo "CLAUDE_CODE_OAUTH_TOKEN is set (value not shown); ANTHROPIC_API_KEY is absent"
+
       - name: S8b pre-flight -- the validator answers once (only in a Q1 run)
         # A Q1 soak whose validator cannot answer (no CLI on the runner, no login, a rate-limited
         # account) would run four hours to say so. One real call, before anything starts.
@@ -196,6 +220,8 @@ jobs:
           CYBERORCH_PLANFIT_BACKEND: claude_code
           CYBERORCH_PLANFIT_MODEL: sonnet
           CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: '1'
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ''
         run: |
           set -a; . ./.env; set +a
           .venv/bin/python -m scripts.soak.q1_preflight
@@ -203,6 +229,9 @@ jobs:
       - name: The soak (unprivileged; sudo only for the two restarts)
         env:
           Q1: ${{ steps.plan.outputs.q1 }}
+          # empty on a run without Q1 (a run before S8b never had it); the subscription login on a Q1 run
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.plan.outputs.q1 != '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          ANTHROPIC_API_KEY: ''
         run: |
           set -a; . ./.env; set +a
           STREAM_PID=""

@@ -36,7 +36,15 @@ Rule 3 exists because 1 and 2 alone would pass a `code.secrets` rate of 60% besi
 
 About 1,300 validator calls in a 4 h run (the workload at ~5/min is ~1,150, the stream ~400, less what is denied before it): at S7's $0.009 a call about $14 list price, and about 20 points of the five-hour usage window, spread over four hours. The 0.2 h smoke is about 100 calls.
 
-## 5. What is waiting
+## 5. The credential, and how the workflow reads it (2026-10-23)
 
-* The owner adds the login credential to the repository settings and gives its **name**. Then: the workflow is checked to read it (the single place it is wired is the job's environment and the CLI install step), the pre-flight is read, and only then the 0.2 h smoke (the validator really called: answered `goal_fit` values in the stored decisions, the enablement check clean, the five negative controls) and then the 4 h run.
-* The runner needs the `claude` CLI installed. That install step is part of what is not yet written.
+The owner's instruction: a repository secret named **`CLAUDE_CODE_OAUTH_TOKEN`**, the OAuth login of the owner's own account -- the same account path as D10/D10.5 and the S7 baseline (a subscription, not `ANTHROPIC_API_KEY`, which is pay-per-use). Nothing in the repository holds or creates it. `.github/workflows/soak.yml` reads it **by that name and in a Q1 run only**:
+
+* a step installs the CLI at **2.1.307**, the version of the fixed-model baseline DP-14 was set from (the version had moved from 2.1.306 to 2.1.307 during S7; `latest` is 2.1.309 and the undocumented fallback switch is a CLI detail that can change with a version);
+* a step fails the job in a second if the secret is empty (naming it and where to set it) or if `ANTHROPIC_API_KEY` is in the environment (the CLI would prefer it); it never prints the value;
+* the pre-flight and the soak step get `CLAUDE_CODE_OAUTH_TOKEN` in their environment, `ANTHROPIC_API_KEY` set empty, and the pinned model and fallback switch. The validator's command uses `--safe-mode`, chosen over `--bare` precisely because `--bare` forces `ANTHROPIC_API_KEY` [R: `agents/llm/headless.py`], so the token reaches the CLI. A run that is not a Q1 run gets an empty value, as before.
+* **Not verifiable from here [N]:** whether the secret exists and is valid. The job's login step and the pre-flight are what say so.
+
+## 6. What is waiting
+
+* The CI of the commit that holds this wiring; then the 0.2 h smoke (the validator really called: answered `goal_fit` values in the stored decisions, the enablement check clean, the five negative controls), then the 4 h run. The result goes into this report, with the section 3 judgement read from `q1_report.md`.

@@ -24,23 +24,23 @@ def main() -> int:
     if not backend or backend == "fake":
         print("no validator is configured (CYBERORCH_PLANFIT_BACKEND)", file=sys.stderr)
         return 2
-    from agents.base_agent import GOAL_FIT_VALUES, PlanFitQuery
+    from agents.base_agent import GOAL_FIT_VALUES
     from agents.llm.selection import build_plan_fit_validator
+    from scripts.plan_fit_baseline import run_corpus
+    from tests.plan_fit_corpus import MATCHED, build_corpus
 
+    # the baseline script is the one sanctioned caller of a validator outside the control plane
+    # (tests/test_plan_fit_baseline.py), so the call goes through its runner, which also records a
+    # raised error as a failed call and never lets it escape
+    item = next(i for i in build_corpus() if i.group == MATCHED
+                and i.query.proposal_action == "network.scan")
     validator = build_plan_fit_validator()
-    query = PlanFitQuery(
-        goal="Scan 10.66.252.20 for open ports and the services behind them",
-        task_action="network.scan", task_target="ip:10.66.252.20",
-        proposal_action="network.scan", proposal_target="ip:10.66.252.20")
     started = time.monotonic()
-    try:
-        result = validator.assess(query=query)
-    except Exception as exc:  # noqa: BLE001 - the point is to say what went wrong
-        print(f"the validator raised {type(exc).__name__}: {str(exc)[:300]}", file=sys.stderr)
-        return 1
+    record = run_corpus(validator, (item,))[0]
     seconds = round(time.monotonic() - started, 1)
-    print(f"backend {backend}: goal_fit={result.goal_fit} cause={result.cause} in {seconds}s")
-    if result.goal_fit not in GOAL_FIT_VALUES:
+    print(f"backend {backend}: goal_fit={record['goal_fit']} cause={record['cause']} "
+          f"in {seconds}s")
+    if record["goal_fit"] not in GOAL_FIT_VALUES:
         print("the validator did not answer: a Q1 soak would record nothing but failures",
               file=sys.stderr)
         return 1
