@@ -1,1 +1,1 @@
-{"hours": 0.2, "p1_enforce": true, "q1_enforce": true, "attempt": 1, "purpose": "D68 S8b smoke: the validator is really called, the enablement check, the five negative controls, the Q1 stream"}
+{"hours": 0.2, "p1_enforce": true, "q1_enforce": true, "attempt": 2, "purpose": "D68 S8b smoke, attempt 2: the repository secret CLAUDE_CODE_OAUTH_TOKEN was updated; the validator is really called, the enablement check, the five negative controls, the Q1 stream"}
