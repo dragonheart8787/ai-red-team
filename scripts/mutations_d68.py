@@ -33,6 +33,8 @@ SELECTION = "agents/llm/selection.py"
 API = "control_plane/api/function_api.py"
 TESTS = ("tests/test_plan_fit_relation.py",)
 CLASSES = ("tests/test_plan_fit_class_store.py",)
+DP15 = "scripts/dp15_record_mode.py"
+GENERATOR = ("tests/test_dp15_record_mode.py",)
 KINDPY = "control_plane/plan_fit/failure_kind.py"
 KINDS_PURE = ("tests/test_plan_fit_failure_kind.py", "tests/test_plan_fit_classes.py")
 KINDS_DB = KINDS_PURE + tuple(('tests/test_plan_fit_class_store.py::test_thirty_transport_failures_do_not_suspend_a_class_and_neither_do_a_hundred', 'tests/test_plan_fit_class_store.py::test_thirty_refusal_failures_suspend_the_class_at_the_thirtieth', 'tests/test_plan_fit_class_store.py::test_unclassified_failures_count_as_the_class_own', 'tests/test_plan_fit_class_store.py::test_the_mixed_boundary_counts_only_refusal_and_unclassified_among_the_non_transport', 'tests/test_plan_fit_class_store.py::test_transport_failures_do_not_hide_a_class_that_really_fails', 'tests/test_plan_fit_class_store.py::test_a_transport_failure_is_recorded_but_is_not_in_the_window_or_the_judgements', 'tests/test_plan_fit_class_store.py::test_the_database_ties_a_kind_to_a_failure', 'tests/test_plan_fit_class_store.py::test_through_the_pipeline_transport_failures_never_suspend_and_still_ask_a_person', 'tests/test_plan_fit_class_store.py::test_through_the_pipeline_refusals_suspend_the_class_and_the_next_one_is_quiet'))
@@ -741,6 +743,57 @@ CATALOGUE += [
                           "DELETE FROM goal_fit_suspensions WHERE action LIKE 'mut.r%'",
                           "ALTER TABLE goal_fit_suspensions FORCE ROW LEVEL SECURITY"),
              targets=("test_the_report_does_not_change_the_list_a_suspension_or_a_call",)),
+    # ---- DP-15 record-mode preparation: the migrations' round trip, the dry run, the generator --
+    Mutation("D68-DP15-da", "the downgrade of 0029 leaves the failure kind behind",
+             ('tests/test_migrations_roundtrip.py::test_0029_adds_the_kind_and_the_outage_table_and_old_failures_become_unclassified',),
+             edits=(Edit("db/migrations/versions/0029_goal_fit_failure_kind.py", "    op.execute(\"ALTER TABLE goal_fit_calls DROP COLUMN IF EXISTS failure_kind;\")\n", ""),),
+             targets=("test_0029_adds_the_kind_and_the_outage_table_and_old_failures_become_unclassified",)),
+    Mutation("D68-DP15-db", "the outage alert compares the window with itself (it can never fire)",
+             OUTAGE,
+             edits=(Edit(CLASSES_PY, "    before = review_outage(list(kinds)[1:])", "    before = review_outage(list(kinds))"),),
+             targets=("test_one_alert_per_outage_it_fires_when_the_window_crosses_half_and_not_again_while_over",
+                      "test_it_is_armed_again_once_the_window_is_back_to_half_or_less",
+                      "test_more_than_half_of_the_last_thirty_calls_failing_in_transport_raises_one_alert")),
+    Mutation("D68-DP15-dc", "the call lines show no transport share",
+             ("tests/test_plan_fit_classes.py", 'tests/test_plan_fit_class_store.py::test_the_class_table_counts_transport_failures_and_their_share_of_all_calls', 'tests/test_plan_fit_class_store.py::test_both_reports_show_a_classes_transport_failures_and_share_and_decide_nothing'),
+             edits=(Edit(CLASSES_PY, "{r['transport_total']:>10}{r['transport_share']:>14.1%}", "{r['transport_total']:>10}{0.0:>14.1%}"),),
+             targets=("test_class_call_lines_show_transport_failures_and_their_share_beside_the_judgements",
+                      "test_both_reports_show_a_classes_transport_failures_and_share_and_decide_nothing")),
+    Mutation("D68-DP15-dd", "a dry run keeps the layer it tried",
+             ("tests/test_policy_publish_dry_run.py",),
+             edits=(Edit("control_plane/policy/layers.py", "        finally:\n            attempt.rollback()\n        return 0", "        finally:\n            pass\n        return 0"),),
+             cleanup_sql=("ALTER TABLE policy_layers NO FORCE ROW LEVEL SECURITY",
+                          "DELETE FROM policy_layers WHERE version = 1 AND engagement_id IS NULL AND document ? 'goal_fit_actions'",
+                          "ALTER TABLE policy_layers FORCE ROW LEVEL SECURITY"),
+             targets=("test_a_dry_run_of_the_draft_is_accepted_and_changes_nothing",)),
+    Mutation("D68-DP15-de", "the generator counts only finished judgements, not the calls in flight (it overshoots 50)",
+             GENERATOR,
+             edits=(Edit(DP15, "and state.judged.get(c, 0) + inflight[c] < self.n", "and state.judged.get(c, 0) < self.n"),),
+             targets=("test_a_clean_run_makes_exactly_fifty_judgements_per_class_two_at_a_time",)),
+    Mutation("D68-DP15-df", "the generator does not stop when transport is more than half of the last 30",
+             GENERATOR,
+             edits=(Edit(DP15, "        if review_outage(state.kinds_newest_first).suspected:\n            return \"transport failures are more than half of the last 30 calls\"\n", ""),),
+             targets=("test_more_than_half_of_the_last_thirty_in_transport_stops_the_run_without_a_retry",)),
+    Mutation("D68-DP15-dg", "a cap can be raised",
+             GENERATOR,
+             edits=(Edit(DP15, "        if max_proposals > MAX_PROPOSALS or max_cost > MAX_COST_USD or max_seconds > MAX_SECONDS:\n            raise ValueError(\"a cap may be lowered, never raised\")\n", ""),),
+             targets=("test_a_cap_may_be_lowered_and_never_raised_and_two_is_the_most_in_flight",)),
+    Mutation("D68-DP15-dh", "a transport loss is counted as a judgement",
+             GENERATOR,
+             edits=(Edit(DP15, "\"SELECT action, count(*) FILTER (WHERE failure_kind IS DISTINCT FROM 'transport'), \"", "\"SELECT action, count(*), \""),),
+             targets=("test_the_state_read_from_the_tables_counts_judgements_apart_from_transport_losses",)),
+    Mutation("D68-DP15-di", "a suspended class goes on being sent proposals",
+             GENERATOR,
+             edits=(Edit(DP15, "                        if (c not in state.suspended\n                                and state.judged", "                        if (state.judged"),),
+             targets=("test_a_suspended_class_is_censored_where_it_stands_and_the_others_go_on",)),
+    Mutation("D68-DP15-dj", "the end-of-run summary shows a failure column",
+             GENERATOR,
+             edits=(Edit(DP15, "{'judgements':>12}  suspended", "{'failed':>12}  suspended"),),
+             targets=("test_the_end_of_run_summary_has_calls_and_suspension_and_no_failure_count_or_rate",)),
+    Mutation("D68-DP15-dk", "two code classes share their target hosts",
+             GENERATOR,
+             edits=(Edit(DP15, "    g = code_offset + index\n", "    g = index\n"),),
+             targets=("test_the_plan_is_sixty_distinct_proposals_per_class_interleaved",)),
 ]
 
 if __name__ == "__main__":

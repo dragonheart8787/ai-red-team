@@ -917,3 +917,156 @@ def test_0026_refuses_to_patch_a_definition_it_was_not_written_against():
     patched = module._with_has_decision(earlier._stuck_function("public"))
     assert patched.count("has_decision") == 1 and "p.decision IS NOT NULL" in patched
     assert "p.decision IS NOT NULL" not in earlier._stuck_function("public")
+
+
+# ---------------------------------------------------------------------------------------------
+# 0027-0030 (D68 DP-15): Q1 per action class. Each step adds objects and nothing else, comes back
+# identical when taken down, and keeps (or, for the one data statement, rewrites) the rows.
+# ---------------------------------------------------------------------------------------------
+
+def _additions_only(before: dict[str, str], after: dict[str, str]) -> set[str]:
+    """The keys a step added -- and a failure if it also changed or removed anything but the
+    revision row."""
+    lines = snapshot_diff(before, after)
+    foreign = [line for line in lines
+               if not line.startswith("+ new") and "alembic:version" not in line]
+    assert not foreign, foreign
+    return {line.split(": ", 1)[1].split("  [")[0].strip() for line in lines
+            if line.startswith("+ new")}
+
+
+def _unforced(scratch: Scratch, table: str, *statements: str) -> None:
+    """Run seed statements on a table whose FORCE ROW LEVEL SECURITY is off for the moment, the
+    way a migration's own data statement does it, and put it back."""
+    with scratch.engine.begin() as conn:
+        conn.execute(text(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY"))
+        for statement in statements:
+            conn.execute(text(statement))
+        conn.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+
+
+def _read_unforced(scratch: Scratch, table: str, query: str) -> list[tuple]:
+    with scratch.engine.begin() as conn:
+        conn.execute(text(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY"))
+        rows = [tuple(r) for r in conn.execute(text(query)).all()]
+        conn.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+    return rows
+
+
+def test_0027_adds_the_two_class_tables_with_their_guard_and_takes_them_all_back(scratch):
+    scratch.alembic("upgrade", "0026")
+    s26 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0027")
+    s27 = scratch.snapshot()
+    added = _additions_only(s26, s27)
+    assert {"column:goal_fit_calls.call_id", "column:goal_fit_calls.action",
+            "column:goal_fit_calls.outcome", "column:goal_fit_suspensions.action",
+            "column:goal_fit_suspensions.cleared_at", "index:goal_fit_calls_recent",
+            "index:goal_fit_suspensions_live",
+            "policy:goal_fit_calls.runtime_insert",
+            "policy:goal_fit_suspensions.operator_clear"} <= added, sorted(added)
+    assert any(k.startswith("function:goal_fit_suspensions_guard") for k in added), sorted(added)
+    assert scratch.revision() == "0027"
+
+    scratch.alembic("downgrade", "0026")
+    assert scratch.revision() == "0026"
+    assert not snapshot_diff(s26, scratch.snapshot()), "\n".join(
+        snapshot_diff(s26, scratch.snapshot()))
+    assert not {"goal_fit_calls", "goal_fit_suspensions"} & scratch.tables()
+
+    scratch.alembic("upgrade", "0027")
+    assert not snapshot_diff(s27, scratch.snapshot()), "\n".join(
+        snapshot_diff(s27, scratch.snapshot()))
+
+
+def test_0028_adds_one_column_and_its_checks_and_gives_old_clearings_a_reason(scratch):
+    scratch.alembic("upgrade", "0027")
+    _unforced(scratch, "goal_fit_suspensions",
+              "INSERT INTO goal_fit_suspensions (action, window_n, window_failed) "
+              "VALUES ('rt.live', 30, 30)",
+              "INSERT INTO goal_fit_suspensions (action, window_n, window_failed, cleared_at, "
+              "cleared_by) VALUES ('rt.cleared', 30, 30, now(), 'someone')")
+    s27 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0028")
+    s28 = scratch.snapshot()
+    added = _additions_only(s27, s28)
+    assert {"column:goal_fit_suspensions.cleared_reason",
+            "constraint:goal_fit_suspensions.goal_fit_suspensions_reason_shape",
+            "constraint:goal_fit_suspensions.goal_fit_suspensions_reason_with_clearing"} <= added
+    rows = dict(_read_unforced(
+        scratch, "goal_fit_suspensions",
+        "SELECT action, cleared_reason FROM goal_fit_suspensions ORDER BY action"))
+    assert rows == {"rt.cleared": "(cleared before reasons were recorded)", "rt.live": None}
+
+    scratch.alembic("downgrade", "0027")
+    assert scratch.revision() == "0027"
+    assert not snapshot_diff(s27, scratch.snapshot()), "\n".join(
+        snapshot_diff(s27, scratch.snapshot()))
+    kept = _read_unforced(scratch, "goal_fit_suspensions",
+                          "SELECT action, cleared_by FROM goal_fit_suspensions ORDER BY action")
+    assert kept == [("rt.cleared", "someone"), ("rt.live", None)]        # rows kept, reason gone
+
+    scratch.alembic("upgrade", "0028")
+    assert not snapshot_diff(s28, scratch.snapshot()), "\n".join(
+        snapshot_diff(s28, scratch.snapshot()))
+
+
+def test_0029_adds_the_kind_and_the_outage_table_and_old_failures_become_unclassified(scratch):
+    scratch.alembic("upgrade", "0028")
+    _unforced(scratch, "goal_fit_calls",
+              "INSERT INTO goal_fit_calls (action, outcome) VALUES "
+              "('rt.a', 'answered'), ('rt.a', 'failed'), ('rt.b', 'failed'), ('rt.b', 'answered')")
+    s28 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0029")
+    s29 = scratch.snapshot()
+    added = _additions_only(s28, s29)
+    assert {"column:goal_fit_calls.failure_kind",
+            "constraint:goal_fit_calls.goal_fit_calls_kind_vocabulary",
+            "constraint:goal_fit_calls.goal_fit_calls_kind_with_failure",
+            "index:goal_fit_calls_all_recent",
+            "column:goal_fit_outage_suspicions.window_transport",
+            "policy:goal_fit_outage_suspicions.operator_read"} <= added, sorted(added)
+    kinds = _read_unforced(scratch, "goal_fit_calls",
+                           "SELECT outcome, failure_kind FROM goal_fit_calls ORDER BY call_id")
+    assert kinds == [("answered", None), ("failed", "unclassified"),
+                     ("failed", "unclassified"), ("answered", None)]
+
+    scratch.alembic("downgrade", "0028")
+    assert scratch.revision() == "0028"
+    assert not snapshot_diff(s28, scratch.snapshot()), "\n".join(
+        snapshot_diff(s28, scratch.snapshot()))
+    assert len(_read_unforced(scratch, "goal_fit_calls", "SELECT 1 FROM goal_fit_calls")) == 4
+    assert "goal_fit_outage_suspicions" not in scratch.tables()
+
+    scratch.alembic("upgrade", "0029")
+    assert not snapshot_diff(s29, scratch.snapshot()), "\n".join(
+        snapshot_diff(s29, scratch.snapshot()))
+    assert _read_unforced(scratch, "goal_fit_calls",
+                          "SELECT count(*) FROM goal_fit_calls WHERE failure_kind IS NOT NULL"
+                          ) == [(2,)]
+
+
+def test_0030_adds_only_the_record_of_looks_and_takes_it_back(scratch):
+    scratch.alembic("upgrade", "0029")
+    s29 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0030")
+    s30 = scratch.snapshot()
+    added = _additions_only(s29, s30)
+    assert {"column:goal_fit_report_views.window_n", "column:goal_fit_report_views.viewer",
+            "index:goal_fit_report_views_action", "policy:goal_fit_report_views.runtime_insert",
+            "policy:goal_fit_report_views.runtime_read"} <= added, sorted(added)
+    assert not any("operator" in key for key in added if key.startswith("policy:"))
+
+    scratch.alembic("downgrade", "0029")
+    assert scratch.revision() == "0029"
+    assert not snapshot_diff(s29, scratch.snapshot()), "\n".join(
+        snapshot_diff(s29, scratch.snapshot()))
+    assert "goal_fit_report_views" not in scratch.tables()
+
+    scratch.alembic("upgrade", "0030")
+    assert not snapshot_diff(s30, scratch.snapshot()), "\n".join(
+        snapshot_diff(s30, scratch.snapshot()))

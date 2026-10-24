@@ -94,8 +94,17 @@ def publish_policy_layer(
     actor: str,
     scoped_to_engagement: bool = False,
     customer_id: str | None = None,
+    dry_run: bool = False,
 ) -> int:
     """Publish one policy layer, or refuse (§4.5).
+
+    **``dry_run=True`` publishes nothing.** Every check runs exactly as for a real publication --
+    the code's validation, the tighten-only rule of an overlay, the global-admin connection, and
+    the database's own CHECK constraints, by attempting the INSERT inside a savepoint that is
+    rolled back -- and then the row is gone. No audit record is written (a dry run is not a
+    publication), no layer becomes active, and the policy version does not move. The one trace is
+    a consumed value of the id sequence, which only means that the real publication's id will not
+    be the next number. Returns ``0`` (there is no id).
 
     ``scoped_to_engagement`` decides whether the layer applies globally
     (``engagement_id IS NULL``, which is how baseline and emergency layers reach
@@ -165,20 +174,26 @@ def publish_policy_layer(
         # Checked after the validation above so a malformed request is still reported as one.
         assert_global_policy_admin(conn)
 
-    row_id = conn.execute(
-        text("""
-            INSERT INTO policy_layers (layer, version, engagement_id, customer_id,
-                                       document, active)
-            VALUES (:layer, :version, :eid, :cid, CAST(:doc AS jsonb), TRUE)
-            RETURNING id
-        """),
-        {
-            "layer": layer, "version": version,
-            "eid": engagement_id if scoped_to_engagement else None,
-            "cid": customer_id,
-            "doc": json.dumps(dict(document), sort_keys=True),
-        },
-    ).scalar_one()
+    insert = text("""
+        INSERT INTO policy_layers (layer, version, engagement_id, customer_id,
+                                   document, active)
+        VALUES (:layer, :version, :eid, :cid, CAST(:doc AS jsonb), TRUE)
+        RETURNING id
+    """)
+    params = {
+        "layer": layer, "version": version,
+        "eid": engagement_id if scoped_to_engagement else None,
+        "cid": customer_id,
+        "doc": json.dumps(dict(document), sort_keys=True),
+    }
+    if dry_run:
+        attempt = conn.begin_nested()
+        try:
+            conn.execute(insert, params)
+        finally:
+            attempt.rollback()
+        return 0
+    row_id = conn.execute(insert, params).scalar_one()
 
     # D11-7: a layer published globally is a global operation, so its audit
     # record is global too (engagement_id NULL, readable by global_auditor)

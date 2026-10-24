@@ -1,0 +1,14 @@
+DRY RUN -- nothing was sent, no model was called, no database was opened.
+classes: network.scan, code.scan, code.secrets   registered judgements per class: 50
+proposals planned: 180 (60 per class: 50 + 10 spare targets, used only to replace a transport loss)
+bounds: at most 2 in flight, 180 proposals, US$3.00, 60 minutes; stops (no retry, no resume) when transport failures are more than half of the last 30 calls
+cost estimate: 150 calls x US$0.0088 = US$1.32 planned, US$1.58 worst case (180 calls), cap US$3.0
+time estimate: about 4.0 min planned, 8.6 min worst case at two in flight
+goal sentences (fixed):
+  network.scan Scan {host} for open ports and the services behind them   e.g. 10.77.1.1
+  code.scan    Scan the source at {host} for insecure patterns   e.g. www01.corp.example
+  code.secrets Scan the repository at {host} for committed secrets   e.g. www05.corp.example
+targets: 180 distinct hosts for 180 proposals (60 addresses, 120 host names)
+order (first twelve): network.scan#0, code.scan#0, code.secrets#0, network.scan#1, code.scan#1, code.secrets#1, network.scan#2, code.scan#2, code.secrets#2, network.scan#3, code.scan#3, code.secrets#3
+plan checks: ok (no host repeated, 60 per class in order, sentences as registered)
+preflight (not run in a dry run): validator configured as DP-14 measured it; the three classes listed by an active global layer; goal_fit_enforce off; no class suspended; a baseline in force.

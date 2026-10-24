@@ -78,11 +78,42 @@ def _list() -> int:
     return 0
 
 
+def _affected_classes(conn, document: dict) -> list[str]:
+    """The Q1 action classes a document would list (DP-15), each with where it stands now: the
+    calls recorded, whether it is suspended, whether another active layer already lists it."""
+    from sqlalchemy import text
+
+    from control_plane.plan_fit import class_store
+    from control_plane.policy.merge import goal_fit_actions_of
+
+    listed = sorted(goal_fit_actions_of(document.get("goal_fit_actions")))
+    if not listed:
+        return []
+    already = set()
+    for (doc,) in conn.execute(text(
+            "SELECT document FROM policy_layers WHERE active IS TRUE AND engagement_id IS NULL")):
+        already |= goal_fit_actions_of((doc or {}).get("goal_fit_actions"))
+    by_class = {r["action"]: r for r in class_store.class_table(conn, sorted(already))}
+    lines = [f"Q1 would be asked about {len(listed)} action class(es) (when a validator is "
+             "configured; with goal_fit_enforce off nothing it says changes a decision):"]
+    for action in listed:
+        row = by_class.get(action)
+        state = ("not recorded yet" if row is None else
+                 f"{row['n_total']} judgement(s) and {row['transport_total']} transport failure(s) "
+                 f"recorded, {row['state']}")
+        also = "; already listed by an active global layer" if action in already else ""
+        lines.append(f"  {action:<16}{state}{also}")
+    lines.append(f"  goal_fit_enforce in this document: {document.get('goal_fit_enforce', False)}")
+    return lines
+
+
 def _publish(args: argparse.Namespace) -> int:
     if args.document_file:
         document = json.loads(Path(args.document_file).read_text(encoding="utf-8"))
     else:
         document = json.loads(args.document)
+    if args.dry_run:
+        return _publish_dry_run(args, document)
     effect = (
         "It only tightens (an emergency overlay cannot relax)."
         if args.layer == EMERGENCY_OVERLAY
@@ -105,6 +136,27 @@ def _publish(args: argparse.Namespace) -> int:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
     print(f"published layer id={layer_id}")
+    return 0
+
+
+def _publish_dry_run(args: argparse.Namespace, document: dict) -> int:
+    """Everything a publication checks, and nothing published: no confirmation (there is nothing to
+    confirm), no audit record, no new layer, no policy version. See ``publish_policy_layer``."""
+    try:
+        with global_policy_admin_scope() as conn:
+            publish_policy_layer(
+                conn, engagement_id=None, layer=args.layer, version=args.version,
+                document=document, actor=args.actor, scoped_to_engagement=False,
+                customer_id=args.customer_id, dry_run=True)
+            affected = _affected_classes(conn, document)
+    except (PolicyLayerError, EmergencyOverlayError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+    print(f"DRY RUN: global {args.layer} v{args.version} as {args.actor} would be accepted.")
+    print(f"  document: {json.dumps(document, sort_keys=True)}")
+    for line in affected:
+        print(line)
+    print("Nothing was published, audited or changed.")
     return 0
 
 
@@ -157,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
                      help="required for a global 'customer' layer; scopes the layer to it")
     pub.add_argument("--actor", required=True, help="who is publishing (audited)")
     pub.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    pub.add_argument("--dry-run", action="store_true",
+                     help="run every check of a publication, publish nothing, audit nothing")
 
     deact = sub.add_parser("deactivate", help="retire a global layer")
     deact.add_argument("--layer-id", required=True, type=int)

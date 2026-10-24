@@ -1,0 +1,7 @@
+{
+  "goal_fit_actions": [
+    "code.scan",
+    "code.secrets",
+    "network.scan"
+  ]
+}

@@ -1209,3 +1209,40 @@ def test_the_record_of_looks_is_append_only_and_only_the_runtime_role_writes_it(
             conn.execute(text("INSERT INTO goal_fit_report_views (action, window_n, window_failed, "
                               "upper95, viewer, identity_unverified) "
                               "VALUES (:a, 0, 0, 1, '', false)"), {"a": action})
+
+
+# -- transport failures are shown per class, with their share, in both reports -------------------
+
+def test_the_class_table_counts_transport_failures_and_their_share_of_all_calls():
+    action = fresh_class()
+    record(action, [OK] * 30 + [REF] * 3 + [TRA] * 10 + [UNC] * 2)
+    row = table_row(action)
+    assert (row["n_total"], row["failed_total"]) == (35, 5)             # judgements only
+    assert (row["refusal_total"], row["unclassified_total"], row["transport_total"]) == (3, 2, 10)
+    assert row["calls_all"] == 45 and row["transport_share"] == pytest.approx(10 / 45, abs=1e-4)
+    quiet = fresh_class()
+    record(quiet, [OK] * 3)
+    assert table_row(quiet)["transport_share"] == 0.0 and table_row(quiet)["transport_total"] == 0
+
+
+def test_both_reports_show_a_classes_transport_failures_and_share_and_decide_nothing(
+        monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+    from scripts import plan_fit_report as report
+
+    action = fresh_class()
+    record(action, [OK] * 40 + [TRA] * 10)
+    shown = None
+    with global_policy_admin_scope() as conn:
+        shown = tool.render(store.class_table(conn, ()), [], None, [], {}, True)
+    line = next(ln for ln in shown.splitlines() if ln.startswith(action + " ")).split()
+    header = next(ln for ln in shown.splitlines() if ln.startswith("class")).split()
+    assert line[header.index("transp")] == "10"
+    assert line[header.index("transp%")] == "20.0%"                     # 10 of 50 calls
+    rows = report.collect_class_calls()
+    mine = next(r_ for r_ in rows if r_["action"] == action)
+    assert (mine["transport_total"], mine["transport_share"]) == (10, 0.2)
+    text_ = "\n".join(c.class_call_lines(rows))
+    assert action in text_ and "20.0%" in text_
+    # the admission recommendation is the 40 judgements, untouched by the 10 transport failures
+    assert table_row(action)["recommend_admission"] is True

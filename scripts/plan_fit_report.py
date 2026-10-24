@@ -31,6 +31,9 @@ How to read it, so that a number is not mistaken for more than it is:
   ``differs_from_task`` with ``same_action_target_inside_task_target``. Both are reported (a
   database can hold both), and the rule's own use -- how many matches it decided, and what share
   of all matches -- is a line of its own, so that its use can be watched.
+* **Q1 calls by action class** (D68 DP-15): per class, the judgements, the failures by kind and
+  the ``transport`` failures with their share of all the class's calls (since the class was last
+  cleared, not bounded by ``--since``). Shown beside the judgements and decides nothing.
 * **Classes suspended this period** (D68 DP-15): the action classes the control plane took out of
   Q1's list because their recent calls failed too often (``--since`` bounds the period; all time
   without it). They are global, not an engagement's, so they are listed once after the totals,
@@ -182,6 +185,13 @@ def collect_class_suspensions(since: str | None = None) -> list[dict[str, Any]]:
         return class_store.suspensions_in_period(conn, since)
 
 
+def collect_class_calls() -> list[dict[str, Any]]:
+    """Per class, the calls Q1 has made and how they ended (global tables; the runtime role reads
+    them without naming an engagement)."""
+    with get_engine().begin() as conn:
+        return class_store.class_table(conn, ())
+
+
 def collect_validator_outages(since: str | None = None) -> list[dict[str, Any]]:
     """The periods when the validator service looked to be down (global table; the runtime role
     reads it without naming an engagement)."""
@@ -269,6 +279,7 @@ def render(report: dict[str, Any]) -> str:
                       f"{v['prompts']}, exceptions {v['errors']}, latency median "
                       f"{v['latency_median']}s p95 {v['latency_p95']}s, tokens {v['tokens']}"]
         lines.append("")
+    lines += [*classes.class_call_lines(report.get("class_calls", [])), ""]
     lines += [*classes.suspension_lines(report.get("class_suspensions", []),
                                        report.get("since")), ""]
     lines += [*classes.outage_lines(report.get("validator_outages", []), report.get("since")), ""]
@@ -288,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     per = {eid: collect(eid, since=args.since) for eid in args.engagements}
     report = {"engagements": per, "total": combine(per), "since": args.since,
+              "class_calls": collect_class_calls(),
               "class_suspensions": collect_class_suspensions(args.since),
               "validator_outages": collect_validator_outages(args.since)}
     if args.as_json:

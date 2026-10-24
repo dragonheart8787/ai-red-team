@@ -170,10 +170,12 @@ def class_table(conn: Connection, listed: Sequence[str] = ()) -> list[dict[str, 
         adm = classes.admission_over_window(action, recent.get(action, []))
         total_n, total_failed, refusal, unclassified, transport = totals.get(
             action, (0, 0, 0, 0, 0))
+        calls_all = total_n + transport
         out.append({**_row(adm, action in listed, action in live),
                     "n_total": total_n, "failed_total": total_failed,
                     "refusal_total": refusal, "unclassified_total": unclassified,
-                    "transport_total": transport})
+                    "transport_total": transport, "calls_all": calls_all,
+                    "transport_share": round(transport / calls_all, 4) if calls_all else 0.0})
     return out
 
 

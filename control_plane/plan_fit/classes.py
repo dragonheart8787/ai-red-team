@@ -213,3 +213,21 @@ def outage_lines(rows: Sequence[dict], since: str | None = None) -> list[str]:
                      f"{r['window_transport']} of the last {r['window_n']} calls failed in "
                      "transport (timeout, connection, 5xx, authentication or usage)")
     return lines
+
+
+def class_call_lines(rows: Sequence[dict]) -> list[str]:
+    """Every class's calls by kind, as report lines (the same wording in every report): the
+    judgements, how many of them failed, the failures by kind, and the **transport** failures --
+    their number and their share of all the class's calls. Transport is shown beside the
+    judgements and is not one of them; none of it decides anything."""
+    lines = ["Q1 calls by action class, since each class was last cleared (transport failures "
+             "are shown, are not judgements, and decide nothing):",
+             f"  {'class':<18}{'judged':>7}{'failed':>8}{'refusal':>8}{'unclass':>8}"
+             f"{'transport':>10}{'of all calls':>14}"]
+    if not rows:
+        lines.append("  no call has been recorded")
+    for r in rows:
+        lines.append(f"  {r['action']:<18}{r['n_total']:>7}{r['failed_total']:>8}"
+                     f"{r['refusal_total']:>8}{r['unclassified_total']:>8}"
+                     f"{r['transport_total']:>10}{r['transport_share']:>14.1%}")
+    return lines

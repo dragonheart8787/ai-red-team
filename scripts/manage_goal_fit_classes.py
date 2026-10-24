@@ -110,7 +110,8 @@ def render(rows: list[dict], suspensions: list[dict] | None = None,
     if not rows:
         lines.append("no call has been made and no class is listed: nothing to report")
     lines.append(f"{'class':<16}{'window':>7}{'failed':>8}{'upper95':>9}{'total':>7}{'tot.fail':>9}"
-                 f"{'refusal':>8}{'unclass':>8}{'transp':>7}{'looks':>7}{'n@first':>8}  "
+                 f"{'refusal':>8}{'unclass':>8}{'transp':>7}{'transp%':>8}{'looks':>7}"
+                 f"{'n@first':>8}  "
                  f"{'state':<16}advice")
     for r in rows:
         advice = "RECOMMEND ADMISSION" if r["recommend_admission"] else r["reason"]
@@ -121,7 +122,8 @@ def render(rows: list[dict], suspensions: list[dict] | None = None,
             looks, first = str(count), (str(first_n) if count else "-")
         lines.append(f"{r['action']:<16}{r['n']:>7}{r['failed']:>8}{r['upper95']:>9.1%}"
                      f"{r['n_total']:>7}{r['failed_total']:>9}{r['refusal_total']:>8}"
-                     f"{r['unclassified_total']:>8}{r['transport_total']:>7}{looks:>7}{first:>8}  "
+                     f"{r['unclassified_total']:>8}{r['transport_total']:>7}"
+                     f"{r['transport_share']:>8.1%}{looks:>7}{first:>8}  "
                      f"{r['state']:<16}{advice}")
     if suspensions is not None:
         lines += ["", *classes.suspension_lines(suspensions, since)]
