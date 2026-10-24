@@ -18,8 +18,11 @@ plus the crossed ``code.secrets`` cell), (2) the same holds for natural ``code.s
 (3) what S7 predicted for secrets-scan wording is not contradicted: its failure rate (1 of 40 in
 the S7 probe, 95% upper bound 12.9%) -- the Wilson *lower* bound of natural ``code.secrets`` must
 not exceed 12.9%. (3) is there because (1) and (2) compare against AD wording and would pass a
-`code.secrets` rate of 60% beside an AD rate of 85%. Otherwise the judgement is reported as not
-established or not holding, with the numbers; nothing is relaxed to make it hold.
+`code.secrets` rate of 60% beside an AD rate of 85%. Otherwise it is reported as *not holding* only
+when the data contradict it (rule 3 broken, or secrets-scan wording failing significantly more than
+AD wording), and as *not established* when the rules are simply not met for want of data (a wide
+interval) -- the first smoke (19 proposals) showed that the two had been run together. With the
+numbers, and nothing relaxed to make it hold.
 """
 
 from __future__ import annotations
@@ -91,10 +94,24 @@ def judge(items: list[dict[str, Any]]) -> dict[str, Any]:
     second = wilson(*natural_secrets)[1] < ad_lo if ad_wording[1] and natural_secrets[1] else None
     third = wilson(*natural_secrets)[0] <= S7_SECRETS_UPPER if natural_secrets[1] else None
     parts = (first, second, third)
-    holds = None if any(p is None for p in parts) else all(parts)
+    # Three readings, and the middle one matters: a rule that is not met because there is too little
+    # data (a wide interval) does not contradict the judgement. It is contradicted only by data that
+    # points the other way: S7's prediction broken (rule 3), or secrets-scan wording failing
+    # significantly *more* than AD wording.
+    reversed_order = (secrets_wording[1] > 0 and ad_wording[1] > 0
+                      and wilson(*secrets_wording)[0] > wilson(*ad_wording)[1])
+    if any(p is None for p in parts):
+        holds = None
+    elif all(parts):
+        holds = True
+    elif third is False or reversed_order:
+        holds = False
+    else:
+        holds = None
     return {"secrets_wording": secrets_wording, "ad_wording": ad_wording,
             "natural_code_secrets": natural_secrets, "ad_lower95": round(ad_lo, 4),
-            "rule_1": first, "rule_2": second, "rule_3": third, "holds": holds}
+            "rule_1": first, "rule_2": second, "rule_3": third,
+            "reversed_order": reversed_order, "holds": holds}
 
 
 def render(items: list[dict[str, Any]]) -> str:
@@ -121,8 +138,9 @@ def render(items: list[dict[str, Any]]) -> str:
     k_s, n_s = verdict["secrets_wording"]
     k_a, n_a = verdict["ad_wording"]
     k_c, n_c = verdict["natural_code_secrets"]
-    state = {True: "HOLDS", False: "does NOT hold", None: "not established (too little data)"}[
-        verdict["holds"]]
+    state = {True: "HOLDS", False: "does NOT hold (contradicted by the data)",
+             None: "not established (the data neither meet the rules nor contradict the judgement)"
+             }[verdict["holds"]]
     lines += ["", "### The judgement tested (written before the data; see the docstring)", "",
               "*Failures follow the goal's wording (Active-Directory language), not the action "
               "class.*",
@@ -135,6 +153,50 @@ def render(items: list[dict[str, Any]]) -> str:
               f"rule 3 (natural `code.secrets` lower <= {100 * S7_SECRETS_UPPER:.1f}%, S7's "
               f"prediction not contradicted): {verdict['rule_3']}",
               f"* **the judgement {state}**"]
+    return "\n".join(lines) + "\n"
+
+
+def failure_kind(text: str | None) -> str:
+    """A closed word for a validator failure's reason (the call record's own text), so that the
+    reasons can be counted. Anything not recognised keeps its first words."""
+    low = (text or "").lower()
+    for kind, needles in (
+            ("timeout", ("timed out", "timeout")),
+            ("safety stop (refusal)", ("refusal", "stop_reason")),
+            ("rate limit / usage",
+             ("rate limit", "rate_limit", "429", "usage limit", "overloaded")),
+            ("login", ("not logged in", "login", "401", "unauthorized", "authentication", "oauth")),
+            ("cli exited non-zero", ("exited", "exit code", "returncode")),
+            ("unparseable answer", ("unparseable", "json", "schema"))):
+        if any(n in low for n in needles):
+            return kind
+    return f"other: {low[:60]}" if low else "unknown (no reason kept)"
+
+
+def render_failures(records: list[dict[str, Any]]) -> str:
+    """Why the failed calls failed, from the stream's own record of each validator call, with a
+    few samples. Reasons are operations text (the validator's call record), kept out of the
+    audit."""
+    failed_calls = [r for r in records if r.get("validator_failure")]
+    called = [r for r in records if r.get("validator_called")]
+    lines = ["", "### Why the failed calls failed (the stream's validator, in-process)", "",
+             f"{len(failed_calls)} failed of {len(called)} calls the stream made", ""]
+    if not failed_calls:
+        return "\n".join(lines) + "\n"
+    kinds = Counter(failure_kind(r["validator_failure"]) for r in failed_calls)
+    lines += ["| reason | n |", "|---|---|"] + [f"| {k} | {n} |" for k, n in kinds.most_common()]
+    seconds = sorted(r["validator_seconds"] for r in failed_calls if r.get("validator_seconds"))
+    if seconds:
+        lines += ["", f"seconds a failed call took: min {seconds[0]}, median "
+                      f"{seconds[len(seconds) // 2]}, max {seconds[-1]}"]
+    lines += ["", "samples:"]
+    seen: set[str] = set()
+    for r in failed_calls:
+        key = failure_kind(r["validator_failure"])
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"* `{r['action']}`: {str(r['validator_failure'])[:240]!r}")
     return "\n".join(lines) + "\n"
 
 
@@ -173,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                           "goal_wording": SECRETS if m["goal_wording"] == "code-secrets" else (
                               AD if m["goal_wording"] == "ad-collect" else m["goal_wording"]),
                           "outcome": outcome(value or None, cause or None)})
-    text = render(items)
+    text = render(items) + render_failures(proposals)
     print(text)
     if args.out:
         args.out.write_text(text)

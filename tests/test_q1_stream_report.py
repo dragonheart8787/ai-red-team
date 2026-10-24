@@ -89,3 +89,37 @@ def test_wilson_is_a_proper_interval_and_the_outcome_words_are_closed():
     assert rep.outcome(None, None) == "absent"
     assert rep.outcome("not_assessed", "failed") == "not_assessed/failed"
     assert rep.failed("not_assessed/failed") and not rep.failed("not_assessed/disabled")
+
+
+def test_too_little_data_is_not_established_and_only_contradicting_data_is_not_holding():
+    """The first smoke (19 proposals) reported "does NOT hold" for n=2 beside n=6: the rules were
+    unmet for want of data, which contradicts nothing."""
+    few = ([item("code.secrets", "natural", "code-secrets", "plausible")] * 5
+           + [item("code.secrets", "crossed", "ad-collect", "not_assessed/failed")] * 2)
+    verdict = rep.judge(few)
+    assert verdict["holds"] is None and not verdict["reversed_order"]
+    assert "not established" in rep.render(few)
+    # contradicted by rule 3: code.secrets fails on its own wording, whatever AD does
+    broken = ([item("code.secrets", "natural", "code-secrets", "not_assessed/failed")] * 40
+              + [item("code.secrets", "natural", "code-secrets", "plausible")] * 10
+              + [item("ad.collect", "natural", "ad-collect", "not_assessed/failed")] * 5)
+    assert rep.judge(broken)["holds"] is False
+    # contradicted by the order being the other way round, with enough data
+    reversed_ = ([item("code.secrets", "natural", "code-secrets", "not_assessed/failed")] * 60
+                 + [item("ad.collect", "natural", "ad-collect", "plausible")] * 60)
+    assert rep.judge(reversed_)["reversed_order"] is True and rep.judge(reversed_)["holds"] is False
+
+
+def test_failure_reasons_are_counted_in_closed_words_and_unknown_ones_keep_their_start():
+    assert rep.failure_kind("claude exited 1: stop_reason refusal") == "safety stop (refusal)"
+    assert rep.failure_kind("timed out after 30s") == "timeout"
+    assert rep.failure_kind("Not logged in") == "login"
+    assert rep.failure_kind("rate_limit_event: usage limit reached") == "rate limit / usage"
+    assert rep.failure_kind("something new happened here") .startswith("other: something new")
+    assert rep.failure_kind(None) == "unknown (no reason kept)"
+    records = [{"action": "network.scan", "validator_called": True, "validator_seconds": 30.0,
+                "validator_failure": "timed out after 30s"},
+               {"action": "network.scan", "validator_called": True, "validator_seconds": 3.0,
+                "validator_failure": None}]
+    text = rep.render_failures(records)
+    assert "1 failed of 2 calls" in text and "| timeout | 1 |" in text

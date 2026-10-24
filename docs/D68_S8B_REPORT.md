@@ -55,3 +55,15 @@ The CI of the wiring commit was green (`test` #269, normal and enforced jobs). T
 
 So the workflow reads the secret by the name given and the secret is not there from the workflow's point of view. Nothing was configured or worked around. The ways a secret that "exists" is empty in a job: it has not been added yet; it was added under *Environments* and not as a *repository* secret; it is in the *Dependabot* or *Codespaces* secret store (separate from Actions); or the name differs by a character. The smoke is requested again by a new push of `.github/soak-request.json` once the owner says the secret is in place.
 
+## 8. Smoke attempt 2 (soak run 11, 2026-10-24 09:16-09:29 UTC): it ran, and it found something [E]
+
+The login step passed (the secret is visible), the CLI was 2.1.307, and the **pre-flight called the real validator once: `goal_fit=plausible` in 2.6 s**. The soak ran 13 minutes with no finding; the five negative controls fired (5 of 5); the P1 check judged 6 of 6 (62 of 62 decided proposals carry a plan_fit, no P1 escalation); the Q1 check executed 6 times and judged 4.
+
+**What it found: the validator failed on 27 of the 62 decided proposals (44%)** -- `{'plausible': 35, 'not_assessed/failed': 27}`. The Q1 stream (19 proposals) failed on 7: `network.scan` 3 of 4, `network.recon` 2 of 2, the crossed `code.secrets` cell 2 of 2; natural `code.secrets` 0 of 5, `code.scan` 0 of 3. So:
+
+* The rate is far above S7's for `network.scan` (0 of 16 failed on matched items), on the class that is nearly all the soak's own workload. With the switch on, each failure is `plan_check_failed`, i.e. a person: about half of ordinary scan proposals. [E] The check does not judge a rate (DP-14), and that is why it passed; the number is what it is.
+* **The cause is not known [N].** The failure reason is in the validator's call record, not in the audit, and the run did not keep it. Candidates, none tested: the safety classifier on scan wording from this environment; the validator's 30 s timeout under five concurrent CLI processes on a 4-core runner; an account rate limit; the CLI at 2.1.307 against 2.1.309 on the machine S7 ran on.
+* The report's judgement read "does NOT hold" for 2 AD-wording items beside 6 secrets-wording ones. That was the report, not the data: the three rules had been run together as "not met", and 6 against 2 contradicts nothing. Fixed: `holds` has three readings (holds / contradicted by the data / not established), with a test; the criteria for "holds" are unchanged.
+
+**The 4 h run was not requested**, against the plan that said to request it if the smoke was clean: it was mechanically clean and substantively not, and four hours would spend about $14 and 20 points of the usage window to measure a failure rate whose cause is unknown. Added instead, to read the cause: the stream records each validator call's failure reason and seconds, the report lists them by closed kind with samples, and the soak's workers keep a validator per thread and write `worker.q1_failure` events with the reason (printed in the job log). A third smoke (attempt 3) is requested to read them.
+

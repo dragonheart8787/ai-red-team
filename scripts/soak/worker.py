@@ -84,11 +84,20 @@ class Worker:
         self.rng = random.Random(args.seed)
         # D68 S8b: the validator Q1 asks, built only when a real backend is named; with none (the
         # default, and every run before S8b) no validator is passed and Q1 records `disabled`
-        self.validator = None
-        if os.environ.get("CYBERORCH_PLANFIT_BACKEND", "").strip().lower() not in ("", "fake"):
+        self.q1 = os.environ.get("CYBERORCH_PLANFIT_BACKEND", "").strip().lower() not in (
+            "", "fake")
+        self._local = threading.local()
+
+    def validator(self):
+        """One validator per thread (same class and settings): a validator keeps a record of its
+        calls, and the reason a call failed is in that record, so it has to be this thread's."""
+        if not self.q1:
+            return None
+        if getattr(self._local, "validator", None) is None:
             from agents.llm.selection import build_plan_fit_validator
 
-            self.validator = build_plan_fit_validator()
+            self._local.validator = build_plan_fit_validator()
+        return self._local.validator
 
     # -- one request ----------------------------------------------------------------------
 
@@ -118,14 +127,24 @@ class Worker:
         if "task_id" not in req:
             req["task_id"] = task_for(req["eid"], proposal)
         proposal = dataclasses.replace(proposal, task_id=req["task_id"])
-        return propose_action(
+        validator = self.validator()
+        calls_before = len(validator.calls) if validator is not None else 0
+        outcome = propose_action(
             engagement_id=req["eid"],
             proposal=proposal,
             reviewer=reviewer, policy=sup.effective_policy(req["eid"]), agent_id="soak-worker",
             sandbox=DockerSandbox() if req["what"] == "allow" else None,
             network_allowlist=[req["cidr"]],
             budget=Budget(max_duration_seconds=self.args.budget), idempotency_key=req["key"],
-            plan_fit_validator=self.validator)
+            plan_fit_validator=validator)
+        if validator is not None and len(validator.calls) > calls_before:
+            call = validator.calls[-1]
+            if call.failed:
+                # operations text (the call record), never the audit: why this answer is missing
+                self.events.write("worker.q1_failure", req=req["req"], what=req["what"],
+                                  seconds=round(call.latency_seconds, 2),
+                                  reason=str(call.failure)[:400])
+        return outcome
 
     def run_request(self, req: dict, *, resumed: bool = False) -> None:
         self.requests.write("started", **req, resumed=resumed)

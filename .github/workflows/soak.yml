@@ -286,6 +286,8 @@ jobs:
         run: |
           echo "=== findings and stops"
           grep -E '"kind": "(FINDING|soak.stopping)"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-900 || true
+          echo "=== Q1 validator failures in the soak's own workload (reason, first 20)"
+          grep -E '"kind": "worker.q1_failure"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-500 | head -20 || true
           echo "=== service exits"
           grep -E '"kind": "service.exited"' "$RUN_DIR/events.jsonl" 2>/dev/null | cut -c1-300 || true
           echo "=== faults"

@@ -139,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             authorization={"source": "engagement_scope", "scope_object_id": scope_id},
             discovery={"source": "explicit_scope"})
         started = time.monotonic()
+        calls_before = len(getattr(validator, "calls", ()))
         try:
             import dataclasses
 
@@ -148,10 +149,17 @@ def main(argv: list[str] | None = None) -> int:
                 engagement_id=eid, proposal=proposal, reviewer=HonestFakeReviewer(),
                 policy=sup.effective_policy(eid), agent_id="soak-q1-stream",
                 plan_fit_validator=validator, network_allowlist=[CIDR])
+            # why a call failed is kept in the validator's own call record (operations), not in the
+            # audit; this stream is single-threaded, so the new record is this proposal's
+            calls = getattr(validator, "calls", [])
+            call = calls[-1] if len(calls) > calls_before else None
             journal.write("proposal", **item, proposal_id=outcome.proposal_id,
                           decision=outcome.decision, reasons=list(outcome.approval_reasons),
-                          failure=outcome.failure,
-                          seconds=round(time.monotonic() - started, 2))
+                          failure=outcome.failure, seconds=round(time.monotonic() - started, 2),
+                          validator_called=call is not None,
+                          validator_seconds=round(call.latency_seconds, 2) if call else None,
+                          validator_failure=(str(call.failure)[:400] if call and call.failed
+                                             else None))
         except Exception as exc:  # noqa: BLE001 - recorded, and counted as an error, never dropped
             journal.write("error", **item, type=type(exc).__name__, message=str(exc)[:300])
         sent += 1
