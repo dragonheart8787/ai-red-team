@@ -19,7 +19,6 @@ import urllib.request
 from typing import Any
 
 from agents.base_agent import GoalFitAssessment, PlanFitQuery
-from agents.failure_kind import REFUSAL, UNCLASSIFIED, classify_failure
 from agents.llm import headless
 from agents.llm.headless import CLI, DEFAULT_MODEL, HeadlessError
 from agents.llm.local_reviewer import DEFAULT_BASE_URL, LOCAL_TIMEOUT_SECONDS
@@ -31,6 +30,7 @@ from agents.llm.plan_fit_base import (
     BasePlanFitValidator,
 )
 from control_plane.config import require_env
+from control_plane.plan_fit.failure_kind import REFUSAL, UNCLASSIFIED, classify_failure
 
 __all__ = [
     "API_MODEL", "BASE_URL_ENV", "MODEL_ENV", "ClaudeCodeHeadlessPlanFitValidator",

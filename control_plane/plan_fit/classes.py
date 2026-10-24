@@ -31,7 +31,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from agents.failure_kind import TRANSPORT
+from control_plane.plan_fit.failure_kind import TRANSPORT
 
 #: admission: judgements on the real path, and the bound the failure rate must be under
 ADMIT_MIN = 40

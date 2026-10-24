@@ -17,8 +17,8 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
-from agents.failure_kind import FAILURE_KINDS, TRANSPORT, UNCLASSIFIED
 from control_plane.plan_fit import classes
+from control_plane.plan_fit.failure_kind import FAILURE_KINDS, TRANSPORT, UNCLASSIFIED
 
 
 def suspended_actions(conn: Connection) -> frozenset[str]:

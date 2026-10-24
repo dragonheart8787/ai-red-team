@@ -101,8 +101,9 @@ class HeadlessError(RuntimeError):
 
     The message is unchanged by what follows. Three optional attributes keep what the CLI said
     about *why*, read from its result envelope before the message is truncated, so that a plan-fit
-    validator can tell a safety stop from an outage (``agents/failure_kind.py``): ``stop_reason``,
-    ``api_error_status`` and ``timed_out``. No caller that ignores them is affected.
+    validator can tell a safety stop from an outage (``failure_kind.py`` in
+    ``control_plane/plan_fit``): ``stop_reason``, ``api_error_status`` and ``timed_out``. No
+    caller that ignores them is affected.
     """
 
     def __init__(self, message: str = "", *, stop_reason: Any = None,

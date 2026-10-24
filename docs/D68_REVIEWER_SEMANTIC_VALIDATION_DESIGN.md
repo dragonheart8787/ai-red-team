@@ -219,7 +219,7 @@ Two threats of that mechanism are written down here.
 
 1. **The automatic suspension can be used to switch Q1 off for a class.** [D: derived from the
    rules below; no one has tried it]
-   * *What counts.* A failed call has a kind, recorded with it (`agents/failure_kind.py`, migration
+   * *What counts.* A failed call has a kind, recorded with it (`control_plane/plan_fit/failure_kind.py`, migration
      0029): `refusal` (the service's safety classifier stopped the turn, `stop_reason: refusal`),
      `transport` (a timeout, a connection error, a 5xx, an authentication or usage/rate-limit
      error) or `unclassified` (everything else). The exit rule suspends a class when more than

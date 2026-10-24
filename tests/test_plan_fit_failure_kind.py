@@ -15,7 +15,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.failure_kind import (
+from agents.fake.fake_plan_fit import ScriptedPlanFit, UnavailableFakePlanFit
+from agents.llm.headless import HeadlessError, run_headless
+from control_plane.plan_fit import goal_fit as gf
+from control_plane.plan_fit import relation as r
+from control_plane.plan_fit.failure_kind import (
     FAILURE_KINDS,
     REFUSAL,
     TRANSPORT,
@@ -23,10 +27,6 @@ from agents.failure_kind import (
     classify_failure,
     status_is_transport,
 )
-from agents.fake.fake_plan_fit import ScriptedPlanFit, UnavailableFakePlanFit
-from agents.llm.headless import HeadlessError, run_headless
-from control_plane.plan_fit import goal_fit as gf
-from control_plane.plan_fit import relation as r
 from tests.test_plan_fit_validator import answer, api, asked, cli, cli_envelope, local
 
 

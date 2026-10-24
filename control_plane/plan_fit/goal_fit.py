@@ -32,8 +32,8 @@ from agents.base_agent import (
     GoalFitAssessment,
     PlanFitQuery,
 )
-from agents.failure_kind import FAILURE_KINDS, UNCLASSIFIED, classify_failure
 from control_plane.plan_fit import relation as r
+from control_plane.plan_fit.failure_kind import FAILURE_KINDS, UNCLASSIFIED, classify_failure
 
 #: Who the system-set assessments come from (no validator was asked).
 SYSTEM = "control-plane"
@@ -61,7 +61,7 @@ class GoalFit:
     @property
     def failure_kind(self) -> str | None:
         """Of a call that failed: ``refusal``, ``transport`` or ``unclassified``
-        (``agents/failure_kind.py``); ``None`` for anything else. Read by the per-class exit rule
+        (``failure_kind.py``); ``None`` for anything else. Read by the per-class exit rule
         and by nothing that decides a proposal. A value a validator's call record should not hold
         is read as ``unclassified``."""
         if self.outcome != "failed":
