@@ -219,16 +219,22 @@ Two threats of that mechanism are written down here.
 
 1. **The automatic suspension can be used to switch Q1 off for a class.** [D: derived from the
    rules below; no one has tried it]
-   * *Path.* The exit rule counts a call as failed whenever the validator does not answer -- a
-     safety-classifier stop, a timeout, a malformed reply, an outage. It suspends a class when
-     the last 50 calls of that class, at least 30, failed more than 30%. An attacker who controls
-     what is proposed (an agent, or anything that can make an agent propose) submits proposals
-     that make the validator fail: wording the service's classifier stops (Active-Directory and
-     reconnaissance wording failed 32 of 40 calls in S7's probe, `docs/D68_S7_CODE_SECRETS_FAILURE.md`), or anything else the validator
-     cannot answer. On an idle class that takes 30 calls with at least 10 failed; on a busy class
-     the failures must be more than 30% of the last 50 (16 of 50). The class is then suspended,
-     and later proposals of that class are `not_assessed / class_suspended`: not asked, and quiet
-     (no rule reads it), until an operator clears it.
+   * *What counts.* A failed call has a kind, recorded with it (`agents/failure_kind.py`, migration
+     0029): `refusal` (the service's safety classifier stopped the turn, `stop_reason: refusal`),
+     `transport` (a timeout, a connection error, a 5xx, an authentication or usage/rate-limit
+     error) or `unclassified` (everything else). The exit rule suspends a class when more than
+     30% of its last 50 calls that say something about the class -- answered, `refusal` or
+     `unclassified` -- failed, at least 30 of them. **A `transport` failure is in neither the
+     numerator nor the denominator**: it is recorded and shown, and it fails closed exactly as
+     before (`not_assessed / failed`, a person is asked), but it cannot suspend a class.
+   * *Path.* An attacker who controls what is proposed (an agent, or anything that can make an
+     agent propose) submits proposals that make the validator fail in a way that counts: wording
+     the service's classifier stops (Active-Directory and reconnaissance wording failed 32 of 40
+     calls in S7's probe, `docs/D68_S7_CODE_SECRETS_FAILURE.md`), or an input the validator cannot
+     answer inside the contract. On an idle class that takes 30 judged calls with at least 10
+     failed; on a busy class the failures must be more than 30% of the last 50 (16 of 50). The
+     class is then suspended, and later proposals of that class are `not_assessed /
+     class_suspended`: not asked, and quiet (no rule reads it), until an operator clears it.
    * *What the attacker needs* [R: `_decide`, order of the steps]: a proposal that names a live
      task of its engagement with the same action and target (`matches_task`) -- Q1 is asked only
      then -- and nothing more. The validator is asked at step 4b, before the policy engine at
@@ -244,6 +250,36 @@ Two threats of that mechanism are written down here.
      Failures produced in one engagement therefore count toward the class everywhere, and the
      suspension it causes removes Q1 for that class **in every engagement**, including ones whose
      traffic is entirely legitimate.
+   * *A service outage no longer does this.* Before kinds existed, 30 failed calls in a row --
+     an outage of the validator service, not an attack -- suspended every class that had
+     traffic. Now they are `transport`, suspend nothing, and instead raise a suspicion: when
+     more than half of the last 30 calls (of any class) failed in transport, one global audit
+     event `plan_fit.validator_outage_suspected` and one row are written, once per outage, and
+     both reports end with "validator outage suspected this period". It is an alert for a
+     person. During the outage the check keeps failing closed: every affected proposal still
+     asks a person (`plan_check_failed`), which is today's behaviour and is not changed here.
+   * *The attacker cannot choose `transport`.* [R, E] The kind is read from what the service or
+     the transport said -- a status code, a stop reason, a timeout flag, an exception's type --
+     and never from the text of a message, a goal or a target (tested: a message saying "503" or
+     "timed out" is `unclassified`). No content lever is known: the answer is a one-word enum
+     under a 30 s cap, and S7 saw 1 timeout in 480 calls, not tied to any goal [E]; whether some
+     input can make a call run past 30 s was not tried [N]. What the attacker can do is volume:
+     the validator spends the same account's allowance as everything else, and enough proposals
+     may bring a usage or rate limit (429), which is `transport`. That moves the outage alert and
+     the approval load (2.4), and suspends nothing. So the lever this threat needs -- failures
+     that count -- has to be `refusal` or `unclassified`.
+   * *`unclassified` counts, on purpose.* Everything that cannot be shown to be infrastructure is
+     treated as the class's own. The reasons: (a) the exit rule exists so that a class that keeps
+     failing stops sending a person every proposal, and a failure mode nobody anticipated (a new
+     CLI message, a changed envelope) must not become a permanent flood with no relief because
+     the classifier did not know it; (b) it is the conservative direction for the people being
+     asked, and a wrong suspension is visible and reversible -- the summary lists it and an
+     operator clears it -- while a wrong exemption is neither; (c) the reports print `refusal`,
+     `unclassified` and `transport` per class, so a rise in `unclassified` is a prompt to teach
+     the classifier a new failure, not a silent drift. The cost is the other direction: an outage
+     that surfaces as something the classifier does not recognise (a proxy answering with an HTML
+     page and exit 0, say) counts against the classes, and an attacker who finds an input the
+     validator cannot answer inside the contract is not stopped by the kind.
    * *The result is today's behaviour, and it is a failure of detection, not a new hole.* Q1 only
      adds friction (section 0: monotone and absorbing): a suspended class is decided as if Q1 did
      not exist, which is the platform as it was before D68. Nothing becomes allowed that was not.
@@ -253,18 +289,18 @@ Two threats of that mechanism are written down here.
      On the way there it is loud: while the failures accumulate and the switch is on, each failed
      call is a person asked (2.4, approval fatigue).
    * *The mechanism cannot tell an attack from a class that really fails.* A real Active-Directory
-     engagement fails the same way, and so does an outage of the validator service (30 failed
-     calls in a row suspend every class that has traffic). The rule is right about those and wrong
-     about the attack, and has no way to see the difference.
+     engagement fails the same way. The rule is right about that and wrong about the attack, and
+     has no way to see the difference.
    * *Mitigation -- a human process, not a technical protection* [R: nothing pages anyone]: the
-     classes suspended in the period are printed at the end of `scripts/plan_fit_report.py` and of
-     `scripts/manage_goal_fit_classes.py report`, each with when, on how many failed of how many,
-     and how it ended. **Someone has to read that summary, on a schedule, and decide whether a
-     suspension is a class that really fails or an attack.** Nothing in the system raises an
-     alarm, sends a message, or blocks on an unread suspension; the audit event that records the
-     suspension (`plan_fit.class_suspended`) is written to the engagement that happened to make
-     the call that tipped it, so the engagement the attacker used is the one that holds it. If
-     the summary is not read, a suspension is as quiet as the attack that caused it.
+     classes suspended in the period, and the validator outages suspected in it, are printed at the
+     end of `scripts/plan_fit_report.py` and of `scripts/manage_goal_fit_classes.py report`, each
+     with when and on how many calls, and a suspension with how it ended. **Someone has to read
+     that summary, on a schedule, and decide whether a suspension is a class that really fails or
+     an attack.** Nothing in the system raises an alarm, sends a message, or blocks on an unread
+     suspension; the audit event that records a suspension (`plan_fit.class_suspended`) is
+     written to the engagement that happened to make the call that tipped it, so the engagement
+     the attacker used is the one that holds it. If the summary is not read, a suspension is as
+     quiet as the attack that caused it.
 
 2. **The operator role can put a failing class back, and it is the same role that publishes global
    policy.** `global_policy_admin` may clear a suspension (`UPDATE (cleared_at, cleared_by,

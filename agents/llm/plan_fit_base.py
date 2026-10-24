@@ -43,6 +43,7 @@ from agents.base_agent import (
     GoalFitAssessment,
     PlanFitQuery,
 )
+from agents.failure_kind import UNCLASSIFIED
 from agents.llm.reviewer_base import MAX_TOKENS, TIMEOUT_SECONDS, ReviewCall
 from agents.llm.untrusted import UNTRUSTED_TAG, wrap_untrusted
 
@@ -194,13 +195,17 @@ class BasePlanFitValidator:
 
     def _fail(
         self, started: float, reason: str, *, input_tokens: int = 0, output_tokens: int = 0,
+        kind: str = UNCLASSIFIED,
     ) -> GoalFitAssessment:
         """The fail-closed path: no answer is ``not_assessed`` / ``failed``, which asks for a human.
 
         The reason goes into the call record (operations), not into the assessment: the assessment
-        carries no text.
+        carries no text. ``kind`` (``agents/failure_kind.py``) goes into the call record too; it is
+        what the control plane's per-class exit rule reads, and it changes nothing about the
+        outcome -- every kind fails closed the same way.
         """
         self.calls.append(ValidationCall(
             latency_seconds=time.monotonic() - started, input_tokens=input_tokens,
-            output_tokens=output_tokens, model=self.model, failed=True, failure=reason))
+            output_tokens=output_tokens, model=self.model, failed=True, failure=reason,
+            failure_kind=kind))
         return GoalFitAssessment(self.validator_id, NOT_ASSESSED, "failed")

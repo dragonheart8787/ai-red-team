@@ -24,6 +24,12 @@ from control_plane.state.db import get_engine
 
 #: (table, constraint) -> why a NULL in a nullable column it mentions is acceptable.
 NULL_IS_A_STATE = {
+    ("goal_fit_calls", "goal_fit_calls_kind_vocabulary"):
+        "`failure_kind IS NULL OR failure_kind IN (...)`: NULL is an answered call, written out "
+        "in the check itself (D68 DP-15, 0029).",
+    ("goal_fit_calls", "goal_fit_calls_kind_with_failure"):
+        "`(outcome = 'failed') = (failure_kind IS NOT NULL)`: a failure has a kind and an answer "
+        "has none -- NULL is the answered state and both sides say so (D68 DP-15, 0029).",
     ("goal_fit_suspensions", "goal_fit_suspensions_reason_shape"):
         "`cleared_reason IS NULL OR (<> '' AND length <= 500)`: NULL is the live state, written "
         "out in the check itself (D68 DP-15, 0028).",

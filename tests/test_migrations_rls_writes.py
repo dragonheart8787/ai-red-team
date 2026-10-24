@@ -47,6 +47,8 @@ EXPECTED = {
     ("0022_abandoned_stage.py", "downgrade"): {"action_proposals"},
     # D68 DP-15: gives the reasons of suspensions cleared during development a value, FORCE off
     ("0028_goal_fit_clear_reason.py", "upgrade"): {"goal_fit_suspensions"},
+    # D68 DP-15: gives the failed calls recorded before kinds existed the kind 'unclassified'
+    ("0029_goal_fit_failure_kind.py", "upgrade"): {"goal_fit_calls"},
 }
 
 

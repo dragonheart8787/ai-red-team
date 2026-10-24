@@ -31,6 +31,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from agents.failure_kind import TRANSPORT
+
 #: admission: judgements on the real path, and the bound the failure rate must be under
 ADMIT_MIN = 40
 ADMIT_UPPER = 0.15
@@ -42,6 +44,11 @@ ADMIT_WINDOW = 50
 EXIT_WINDOW = 50
 EXIT_MIN = 30
 EXIT_RATE = 0.30
+
+#: a suspected outage of the validator service: more than OUTAGE_RATE of the last OUTAGE_WINDOW
+#: calls (of any class) failed for a reason that is the service's and not the question's
+OUTAGE_WINDOW = 30
+OUTAGE_RATE = 0.50
 
 ANSWERED = "answered"
 FAILED = "failed"
@@ -158,3 +165,51 @@ def review_exit(recent: Sequence[str]) -> ExitVerdict:
     failed = sum(1 for o in window if o == FAILED)
     rate = failed / n if n else 0.0
     return ExitVerdict(take_out=n >= EXIT_MIN and rate > EXIT_RATE, n=n, failed=failed, rate=rate)
+
+
+@dataclass(frozen=True)
+class OutageVerdict:
+    suspected: bool
+    n: int
+    transport: int
+    rate: float
+
+
+def review_outage(kinds: Sequence[str | None]) -> OutageVerdict:
+    """Whether the validator service looks to be down, from the failure kinds of the most recent
+    calls of every class, newest first (``None`` for a call that was answered).
+
+    Only the last :data:`OUTAGE_WINDOW` are read, and fewer than that is too few to say. Strictly
+    more than :data:`OUTAGE_RATE` of them being ``transport`` failures raises the suspicion. It
+    suspends nothing: the exit rule does not count these calls, and the check keeps failing
+    closed whatever this says.
+    """
+    window = list(kinds)[:OUTAGE_WINDOW]
+    n = len(window)
+    transport = sum(1 for kind in window if kind == TRANSPORT)
+    rate = transport / n if n else 0.0
+    return OutageVerdict(suspected=n >= OUTAGE_WINDOW and rate > OUTAGE_RATE, n=n,
+                         transport=transport, rate=rate)
+
+
+def outage_started(kinds: Sequence[str | None]) -> bool:
+    """True when the call just recorded is the one that raised the suspicion: the window ending
+    with it is over the line and the window ending one call earlier was not. One event per
+    outage, not one per call while it lasts."""
+    now = review_outage(kinds)
+    before = review_outage(list(kinds)[1:])
+    return now.suspected and not before.suspected
+
+
+def outage_lines(rows: Sequence[dict], since: str | None = None) -> list[str]:
+    """The suspected outages of a period, as report lines (the same wording in every report)."""
+    period = f"since {since}" if since else "all time"
+    if not rows:
+        return [f"validator outage suspected this period ({period}): none"]
+    lines = [f"validator outage suspected this period ({period}): {len(rows)} time(s); nothing "
+             "was suspended by it, and every affected call still asked a person"]
+    for r in rows:
+        lines.append(f"  #{r['suspicion_id']} {r['detected_at']:%Y-%m-%d %H:%M}: "
+                     f"{r['window_transport']} of the last {r['window_n']} calls failed in "
+                     "transport (timeout, connection, 5xx, authentication or usage)")
+    return lines

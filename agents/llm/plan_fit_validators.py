@@ -19,6 +19,7 @@ import urllib.request
 from typing import Any
 
 from agents.base_agent import GoalFitAssessment, PlanFitQuery
+from agents.failure_kind import REFUSAL, UNCLASSIFIED, classify_failure
 from agents.llm import headless
 from agents.llm.headless import CLI, DEFAULT_MODEL, HeadlessError
 from agents.llm.local_reviewer import DEFAULT_BASE_URL, LOCAL_TIMEOUT_SECONDS
@@ -87,16 +88,17 @@ class LLMPlanFitValidator(BasePlanFitValidator):
             response = self._get_client().messages.create(
                 **self.request(self.build_prompt(query=query)))
         except Exception as exc:  # noqa: BLE001 - every failure is "no answer"
-            return self._fail(started, f"{type(exc).__name__}: {exc}")
+            return self._fail(started, f"{type(exc).__name__}: {exc}",
+                              kind=classify_failure(exception=exc))
         usage = getattr(response, "usage", None)
         tokens = {"input_tokens": getattr(usage, "input_tokens", 0) or 0,
                   "output_tokens": getattr(usage, "output_tokens", 0) or 0}
         if getattr(response, "stop_reason", None) == "refusal":
-            return self._fail(started, "model refused to answer", **tokens)
+            return self._fail(started, "model refused to answer", kind=REFUSAL, **tokens)
         try:
             payload = self._parse_json_object(self._text_block(response))
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            return self._fail(started, f"unparseable reply: {exc}", **tokens)
+            return self._fail(started, f"unparseable reply: {exc}", kind=UNCLASSIFIED, **tokens)
         return self._to_assessment(
             started, payload, **tokens,
             cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0)
@@ -137,7 +139,9 @@ class ClaudeCodeHeadlessPlanFitValidator(BasePlanFitValidator):
                 command=self.build_command(prompt), timeout_seconds=self.timeout_seconds,
                 runner=self._runner)
         except HeadlessError as exc:
-            return self._fail(started, str(exc))
+            return self._fail(started, str(exc), kind=classify_failure(
+                stop_reason=exc.stop_reason, api_error_status=exc.api_error_status,
+                timed_out=exc.timed_out))
         return self._to_assessment(
             started, result.payload, input_tokens=result.input_tokens,
             output_tokens=result.output_tokens)
@@ -176,7 +180,8 @@ class LocalPlanFitValidator(BasePlanFitValidator):
             envelope = self._post(self.build_request(prompt))
             payload = self._parse_json_object(envelope["choices"][0]["message"]["content"])
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
-            return self._fail(started, f"{type(exc).__name__}: {exc}")
+            return self._fail(started, f"{type(exc).__name__}: {exc}",
+                              kind=classify_failure(exception=exc))
         except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
             return self._fail(started, f"unparseable reply: {exc}")
         usage = envelope.get("usage") or {}

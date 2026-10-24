@@ -176,6 +176,9 @@ class ReviewCall:
     model: str = ""
     failed: bool = False
     failure: str | None = None
+    #: Plan-fit validators only (``agents/failure_kind.py``): ``refusal``, ``transport`` or
+    #: ``unclassified`` for a failed call, ``None`` otherwise. The Reviewer does not set it.
+    failure_kind: str | None = None
 
     #: List prices, USD per million tokens, as of the model table this was
     #: written against. Kept here rather than computed elsewhere so a stale

@@ -32,6 +32,7 @@ from agents.base_agent import (
     GoalFitAssessment,
     PlanFitQuery,
 )
+from agents.failure_kind import FAILURE_KINDS, UNCLASSIFIED, classify_failure
 from control_plane.plan_fit import relation as r
 
 #: Who the system-set assessments come from (no validator was asked).
@@ -56,6 +57,17 @@ class GoalFit:
         if not self.asked:
             return None
         return "answered" if self.assessment.goal_fit in GOAL_FIT_VALUES else "failed"
+
+    @property
+    def failure_kind(self) -> str | None:
+        """Of a call that failed: ``refusal``, ``transport`` or ``unclassified``
+        (``agents/failure_kind.py``); ``None`` for anything else. Read by the per-class exit rule
+        and by nothing that decides a proposal. A value a validator's call record should not hold
+        is read as ``unclassified``."""
+        if self.outcome != "failed":
+            return None
+        kind = self.detail.get("failure_kind")
+        return kind if kind in FAILURE_KINDS else UNCLASSIFIED
 
     @property
     def value(self) -> str:
@@ -139,6 +151,7 @@ def assess_goal_fit(
         result = _ask(validator, query, detail)
     except Exception as exc:  # noqa: BLE001 - a validator that raises did not answer
         detail["error_type"] = type(exc).__name__
+        detail["failure_kind"] = classify_failure(exception=exc)
         detail.update(_provenance(validator))
         return GoalFit(GoalFitAssessment(SYSTEM, NOT_ASSESSED, "failed"), detail, asked=True)
     return GoalFit(result, detail, asked=True)
@@ -162,7 +175,14 @@ def _ask(validator: Any, query: PlanFitQuery, detail: dict[str, Any]) -> GoalFit
         }
     if not _valid(result):
         detail["error_type"] = "invalid_answer"
+        detail["failure_kind"] = UNCLASSIFIED
         return GoalFitAssessment(SYSTEM, NOT_ASSESSED, "failed")
+    if result.goal_fit not in GOAL_FIT_VALUES:
+        # a valid "no answer": the validator already failed closed; its call record says how
+        last = calls[-1] if before is not None and isinstance(calls, list) and len(calls) > before \
+            else None
+        detail["failure_kind"] = (getattr(last, "failure_kind", None) if last is not None
+                                  else None) or UNCLASSIFIED
     return result
 
 

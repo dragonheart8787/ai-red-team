@@ -98,7 +98,32 @@ class HeadlessError(RuntimeError):
     Carries the reason rather than a partial answer. Every caller turns this
     into its own role's fail-closed outcome — a worried opinion for the
     Reviewer, no proposal at all for the Worker — and neither may guess.
+
+    The message is unchanged by what follows. Three optional attributes keep what the CLI said
+    about *why*, read from its result envelope before the message is truncated, so that a plan-fit
+    validator can tell a safety stop from an outage (``agents/failure_kind.py``): ``stop_reason``,
+    ``api_error_status`` and ``timed_out``. No caller that ignores them is affected.
     """
+
+    def __init__(self, message: str = "", *, stop_reason: Any = None,
+                 api_error_status: Any = None, timed_out: bool = False) -> None:
+        super().__init__(message)
+        self.stop_reason = stop_reason
+        self.api_error_status = api_error_status
+        self.timed_out = timed_out
+
+
+def _envelope_facts(stdout: str | None) -> dict[str, Any]:
+    """``stop_reason`` and ``api_error_status`` from a result envelope, if stdout is one. Never
+    raises: this runs on the failure path and must not hide the failure it is describing."""
+    try:
+        envelope = json.loads(stdout or "")
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(envelope, dict):
+        return {}
+    return {"stop_reason": envelope.get("stop_reason"),
+            "api_error_status": envelope.get("api_error_status")}
 
 
 def build_command(
@@ -150,7 +175,7 @@ def run_headless(
             timeout=timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise HeadlessError(f"timed out after {timeout_seconds}s") from exc
+        raise HeadlessError(f"timed out after {timeout_seconds}s", timed_out=True) from exc
     except (OSError, ValueError) as exc:
         raise HeadlessError(f"{type(exc).__name__}: {exc}") from exc
     finally:
@@ -175,13 +200,15 @@ def run_headless(
             # echoed back, which is why that one stays first and stays capped.
             out = (completed.stdout or "").strip()[:200]
             detail = f"no stderr; stdout: {out}" if out else "no output at all"
-        raise HeadlessError(f"cli exited {completed.returncode}: {detail}")
+        raise HeadlessError(f"cli exited {completed.returncode}: {detail}",
+                            **_envelope_facts(completed.stdout))
 
     try:
         envelope = parse_json_object(completed.stdout)
         payload = unwrap(envelope)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise HeadlessError(f"unparseable reply: {exc}") from exc
+        raise HeadlessError(f"unparseable reply: {exc}",
+                            **_envelope_facts(completed.stdout)) from exc
 
     return HeadlessResult(
         payload=payload,

@@ -267,9 +267,9 @@ def test_global_policy_admin_can_neither_rewrite_nor_delete_a_layer(global_overl
 
 def test_global_policy_admin_holds_nothing_but_policy_layers():
     """The catalogue: ``policy_layers`` with INSERT, SELECT and ``UPDATE (active)``, and -- since
-    D68 DP-15 -- SELECT on the two Q1 class tables plus ``UPDATE (cleared_at, cleared_by,
-    cleared_reason)`` on ``goal_fit_suspensions`` (re-including a class is this role's act, and
-    nothing else). A later blanket GRANT fails here."""
+    D68 DP-15 -- SELECT on the three Q1 class tables (calls, suspensions, suspected outages) plus
+    ``UPDATE (cleared_at, cleared_by, cleared_reason)`` on ``goal_fit_suspensions`` (re-including
+    a class is this role's act, and nothing else). A later blanket GRANT fails here."""
     with global_policy_admin_scope() as conn:
         tables = [r[0] for r in conn.execute(text(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))]
@@ -308,7 +308,8 @@ def test_global_policy_admin_holds_nothing_but_policy_layers():
             "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles "
             "WHERE rolname = current_user")).one()
     assert held == {"policy_layers": {"SELECT", "INSERT"},
-                    "goal_fit_calls": {"SELECT"}, "goal_fit_suspensions": {"SELECT"}}, held
+                    "goal_fit_calls": {"SELECT"}, "goal_fit_suspensions": {"SELECT"},
+                    "goal_fit_outage_suspicions": {"SELECT"}}, held
     assert updatable == {"active"}
     assert suspension_columns == {"cleared_at", "cleared_by", "cleared_reason"}
     assert sequences == {"policy_layers_id_seq"}

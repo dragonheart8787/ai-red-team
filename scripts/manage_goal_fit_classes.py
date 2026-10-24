@@ -18,6 +18,19 @@ ends with the **classes suspended this period** (``--since``; all time without i
 (``scripts/manage_global_policy.py publish ... --document
 '{"goal_fit_actions": ["network.scan"]}'``); nothing here writes a list.
 
+**What counts, and every look is counted.** A failed call has a kind: ``refusal`` (the service's
+safety classifier stopped it), ``transport`` (timeout, connection, 5xx, authentication, usage) or
+``unclassified``. The window, the admission rule and the exit rule read judgements -- answered,
+``refusal`` and ``unclassified`` -- and never ``transport`` (an outage says nothing about a class;
+the check still fails closed). ``report`` shows each kind per class, and ends with the classes
+suspended this period and the **validator outages suspected this period** (more than half of the
+last 30 calls, of any class, failed in transport; nothing is suspended by it). **Every run of
+``report`` is recorded as a look at each class** (when, the window's ``n``, failures, bound, who);
+the report shows ``looks`` and the ``n`` at the first look. Read it once, at a number of calls
+decided beforehand, and do not keep reading it: looking again and again overstates how often a
+class passes, and the count is how that is checked afterwards. The record is never an input to
+anything, and a report whose look cannot be written is still printed, marked as not recorded.
+
 **Exit is automatic, re-inclusion is not.** The control plane suspends a class when its last 50
 calls (at least 30) failed above 30% (``control_plane/plan_fit/classes.py``). ``clear`` lifts a
 suspension -- that is all re-inclusion is: the class is asked about again if the policy still lists
@@ -62,7 +75,7 @@ from control_plane.audit.logger import record_audit  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.plan_fit import class_store, classes  # noqa: E402
 from control_plane.policy.merge import goal_fit_actions_of  # noqa: E402
-from control_plane.state.db import global_policy_admin_scope  # noqa: E402
+from control_plane.state.db import get_engine, global_policy_admin_scope  # noqa: E402
 from scripts.manage_global_policy import _confirm  # noqa: E402
 
 
@@ -78,34 +91,85 @@ def global_list(conn) -> list[str]:
 
 
 def render(rows: list[dict], suspensions: list[dict] | None = None,
-           since: str | None = None) -> str:
+           since: str | None = None, outages: list[dict] | None = None,
+           views: dict[str, tuple[int, int]] | None = None,
+           recorded: bool | None = None) -> str:
     lines = [f"admission: at least {classes.ADMIT_MIN} of the class's last {classes.ADMIT_WINDOW} "
-             f"calls on the real path and a Wilson 95% upper bound of at most "
+             f"judgements on the real path and a Wilson 95% upper bound of at most "
              f"{classes.ADMIT_UPPER:.0%} over that window; exit: last {classes.EXIT_WINDOW} "
-             f"calls (at least {classes.EXIT_MIN}) failing above {classes.EXIT_RATE:.0%}. This is "
-             "advice: a class is admitted only by publishing the layer that lists it.", ""]
+             f"judgements (at least {classes.EXIT_MIN}) failing above {classes.EXIT_RATE:.0%}. "
+             "A transport failure (timeout, connection, 5xx, authentication, usage) is shown and "
+             "is neither a failure nor a success for either rule. This is advice: a class is "
+             "admitted only by publishing the layer that lists it. Read it once, at a number of "
+             "calls decided beforehand; every run is recorded and counted in 'looks'.", ""]
+    if recorded is True:
+        lines += ["this run is recorded as a look at each class below", ""]
+    elif recorded is False:
+        lines += ["THIS RUN WAS NOT RECORDED: the look could not be written; the 'looks' below "
+                  "do not include it", ""]
     if not rows:
         lines.append("no call has been made and no class is listed: nothing to report")
     lines.append(f"{'class':<16}{'window':>7}{'failed':>8}{'upper95':>9}{'total':>7}{'tot.fail':>9}"
-                 f"  {'state':<16}advice")
+                 f"{'refusal':>8}{'unclass':>8}{'transp':>7}{'looks':>7}{'n@first':>8}  "
+                 f"{'state':<16}advice")
     for r in rows:
         advice = "RECOMMEND ADMISSION" if r["recommend_admission"] else r["reason"]
+        if views is None:
+            looks, first = "?", "?"
+        else:
+            count, first_n = views.get(r["action"], (0, 0))
+            looks, first = str(count), (str(first_n) if count else "-")
         lines.append(f"{r['action']:<16}{r['n']:>7}{r['failed']:>8}{r['upper95']:>9.1%}"
-                     f"{r['n_total']:>7}{r['failed_total']:>9}  {r['state']:<16}{advice}")
+                     f"{r['n_total']:>7}{r['failed_total']:>9}{r['refusal_total']:>8}"
+                     f"{r['unclassified_total']:>8}{r['transport_total']:>7}{looks:>7}{first:>8}  "
+                     f"{r['state']:<16}{advice}")
     if suspensions is not None:
         lines += ["", *classes.suspension_lines(suspensions, since)]
+    if outages is not None:
+        lines += ["", *classes.outage_lines(outages, since)]
     return "\n".join(lines)
+
+
+def record_looks(
+    rows: list[dict], who: Identity,
+) -> tuple[bool, dict[str, tuple[int, int]] | None]:
+    """Write this run as a look at every class shown, and read the counts back.
+
+    ``(recorded, counts)``. Never raises and never decides anything: if the look cannot be written
+    the report is printed all the same and says so; if the counts cannot be read they are shown
+    as unknown. Over the runtime connection -- the one the tool already uses to write the audit
+    event of a clearing -- so that the operator role is given no new write."""
+    recorded = False
+    try:
+        with get_engine().begin() as conn:
+            class_store.record_views(conn, rows, who.name, who.unverified)
+            counts = class_store.view_counts(conn)
+        return True, counts
+    except Exception:  # noqa: BLE001 - a report that cannot be recorded is still a report
+        pass
+    try:
+        with get_engine().begin() as conn:
+            return recorded, class_store.view_counts(conn)
+    except Exception:  # noqa: BLE001
+        return recorded, None
 
 
 def _report(as_json: bool, since: str | None) -> int:
     with global_policy_admin_scope() as conn:
         rows = class_store.class_table(conn, global_list(conn))
         suspended = class_store.suspensions_in_period(conn, since)
+        outages = class_store.outages_in_period(conn, since)
+    recorded, views = record_looks(rows, login_identity())
     if as_json:
-        print(json.dumps({"classes": rows, "suspended_this_period": suspended, "since": since},
-                         indent=1, default=str))
+        for r in rows:
+            count, first_n = (views or {}).get(r["action"], (0, 0))
+            r["looks"] = count if views is not None else None
+            r["n_at_first_look"] = first_n if count else None
+        print(json.dumps({"classes": rows, "suspended_this_period": suspended,
+                          "validator_outage_suspected_this_period": outages, "since": since,
+                          "this_run_recorded": recorded}, indent=1, default=str))
     else:
-        print(render(rows, suspended, since))
+        print(render(rows, suspended, since, outages, views, recorded))
     return 0
 
 

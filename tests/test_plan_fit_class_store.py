@@ -8,6 +8,7 @@ rule write global tables nothing can empty, so every test here uses a class name
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 
 import pytest
@@ -48,12 +49,15 @@ def fresh_class() -> str:
     return f"dp15x.c{uuid.uuid4().hex[:10]}"
 
 
-def record(action: str, outcomes: list[str]) -> list:
-    """Append the outcomes in order (oldest first) through the pipeline's own function."""
+def record(action: str, outcomes: list) -> list:
+    """Append the outcomes in order (oldest first) through the pipeline's own function. An item is
+    an outcome (a failure with no kind is ``unclassified``, as every failure was before kinds), or
+    ``(outcome, kind)``."""
     verdicts = []
     for outcome in outcomes:
+        outcome, kind = outcome if isinstance(outcome, tuple) else (outcome, None)
         with get_engine().begin() as conn:
-            verdicts.append(store.record_and_review(conn, action, outcome))
+            verdicts.append(store.record_and_review(conn, action, outcome, kind))
     return verdicts
 
 
@@ -71,6 +75,7 @@ def admin_clear(action: str, who: str = "operator-test", reason: str = REASON) -
 
 
 OK, BAD = c.ANSWERED, c.FAILED
+REF, TRA, UNC = (BAD, "refusal"), (BAD, "transport"), (BAD, "unclassified")
 
 
 # -- the gate: which classes are asked -----------------------------------------------------------
@@ -824,3 +829,383 @@ def test_both_reports_end_with_the_classes_suspended_this_period():
     assert "classes suspended this period" in out and action in out
     assert "classes suspended this period (all time): none" in report.render(
         {"engagements": {}, "total": empty_summary, "since": None, "class_suspensions": []})
+
+
+# -- failure kinds: what the exit rule counts ------------------------------------------------------
+
+def suspended(action):
+    return live_suspension(action)
+
+
+def test_thirty_transport_failures_do_not_suspend_a_class_and_neither_do_a_hundred():
+    action = fresh_class()
+    assert record(action, [TRA] * 30) == [None] * 30
+    assert record(action, [TRA] * 70) == [None] * 70
+    assert not suspended(action)
+
+
+def test_thirty_refusal_failures_suspend_the_class_at_the_thirtieth():
+    action = fresh_class()
+    verdicts = record(action, [REF] * 30)
+    assert verdicts[:29] == [None] * 29 and verdicts[29] is not None
+    assert (verdicts[29].n, verdicts[29].failed) == (30, 30) and suspended(action)
+
+
+def test_unclassified_failures_count_as_the_class_own():
+    action = fresh_class()
+    assert record(action, [UNC] * 29) == [None] * 29 and not suspended(action)
+    assert record(action, [UNC])[-1] is not None and suspended(action)
+    legacy = fresh_class()                               # a failure recorded with no kind at all
+    assert record(legacy, [BAD] * 30)[-1] is not None and suspended(legacy)
+
+
+def test_the_mixed_boundary_counts_only_refusal_and_unclassified_among_the_non_transport():
+    """9 of 30 is 30%: stays. 10 of 30 is 33%: goes. Transport failures are in neither the
+    numerator nor the denominator, so no number of them moves the line either way."""
+    stays, goes, hidden = fresh_class(), fresh_class(), fresh_class()
+    assert record(stays, [OK] * 21 + [REF] * 9) == [None] * 30
+    assert record(goes, [OK] * 20 + [REF] * 9 + [UNC])[-1] is not None
+    # the same 9 failures in 30 judgements with 60 outage failures interleaved: still stays
+    mixed = []
+    for item in [OK] * 21 + [REF] * 9:
+        mixed += [item, TRA, TRA]
+    assert record(hidden, mixed) == [None] * len(mixed)
+    assert not suspended(stays) and not suspended(hidden) and suspended(goes)
+
+
+def test_transport_failures_do_not_hide_a_class_that_really_fails():
+    """Ten refusals among thirty judgements suspend the class however many transport failures
+    are mixed in: they do not dilute the rate."""
+    action = fresh_class()
+    mixed = []
+    for item in [OK] * 20 + [REF] * 10:
+        mixed += [item, TRA]
+    verdicts = record(action, mixed)
+    assert verdicts[-1] is not None or any(v is not None for v in verdicts)
+    assert suspended(action)
+
+
+def test_a_transport_failure_is_recorded_but_is_not_in_the_window_or_the_judgements():
+    action = fresh_class()
+    record(action, [OK] * 40 + [TRA] * 10 + [REF])
+    with get_engine().begin() as conn:
+        assert store.recent_outcomes(conn, action)[:3] == ["failed", "answered", "answered"]
+        assert len(store.recent_outcomes(conn, action)) == 41
+    row = table_row(action)
+    assert (row["n"], row["failed"]) == (41, 1)                 # judgements only
+    assert (row["refusal_total"], row["transport_total"], row["unclassified_total"]) == (1, 10, 0)
+    assert (row["n_total"], row["failed_total"]) == (41, 1)
+    assert len(class_calls(action)) == 51                       # but every call is on record
+
+
+def test_the_database_ties_a_kind_to_a_failure():
+    action = fresh_class()
+    insert = "INSERT INTO goal_fit_calls (action, outcome, failure_kind) VALUES (:a, "
+    for statement in (
+            insert + "'answered', 'refusal')",
+            "INSERT INTO goal_fit_calls (action, outcome) VALUES (:a, 'failed')",
+            insert + "'failed', 'novel')",
+            insert + "'failed', '')"):
+        with pytest.raises(DBAPIError):
+            with get_engine().begin() as conn:
+                conn.execute(text(statement), {"a": action})
+    with get_engine().begin() as conn:
+        for outcome, kind in ((c.ANSWERED, None), (c.FAILED, "refusal"), (c.FAILED, "transport"),
+                              (c.FAILED, "unclassified")):
+            conn.execute(text("INSERT INTO goal_fit_calls (action, outcome, failure_kind) "
+                              "VALUES (:a, :o, :k)"), {"a": action, "o": outcome, "k": kind})
+    with pytest.raises(ValueError):
+        with get_engine().begin() as conn:
+            store.record_call(conn, action, c.FAILED, "novel")
+
+
+def test_through_the_pipeline_transport_failures_never_suspend_and_still_ask_a_person(
+        engagement_id, registry):
+    action = fresh_class()
+    world = pipeline_world(engagement_id, registry, action)
+    validator = UnavailableFakePlanFit("transport")
+    outs = [run(world, validator, switch=True, listed={action}, action=action) for _ in range(32)]
+    assert len(validator.queries) == 32 and not suspended(action)        # asked every time
+    assert all(o.decision == "HUMAN_APPROVAL" and o.approval_reasons == ("plan_check_failed",)
+               for o in outs)                                             # fail-closed, unchanged
+    assert stored_goal_fit(world, outs[-1].proposal_id) == ("not_assessed", "failed")
+
+
+def test_through_the_pipeline_refusals_suspend_the_class_and_the_next_one_is_quiet(
+        engagement_id, registry):
+    action = fresh_class()
+    world = pipeline_world(engagement_id, registry, action)
+    validator = UnavailableFakePlanFit("refusal")
+    for _ in range(30):
+        run(world, validator, switch=True, listed={action}, action=action)
+    assert suspended(action) and len(validator.queries) == 30
+    after = run(world, validator, switch=True, listed={action}, action=action)
+    assert len(validator.queries) == 30 and after.approval_reasons == ()
+    assert stored_goal_fit(world, after.proposal_id) == ("not_assessed", "class_suspended")
+
+
+# -- a suspected outage of the validator ----------------------------------------------------------
+
+def flush_window():
+    """30 answered calls on a class of their own, so the last 30 calls of the whole table (which
+    other tests also write to) are known."""
+    record(fresh_class(), [OK] * 30)
+
+
+def outage_rows():
+    with get_engine().begin() as conn:
+        return store.outages_in_period(conn)
+
+
+def global_outage_events():
+    with global_auditor_scope() as conn:
+        return [row[0] for row in conn.execute(text(
+            "SELECT payload FROM audit_log WHERE event_type = "
+            "'plan_fit.validator_outage_suspected' ORDER BY audit_id"))]
+
+
+def reviewed(kind, action):
+    """One call through the pipeline's own recording function, as the pipeline makes it."""
+    from control_plane.api import function_api
+
+    fit = gf.GoalFit(GoalFitAssessment("v", "not_assessed", "failed"),
+                     {"failure_kind": kind}, asked=True)
+    return function_api._review_class(fit, action)
+
+
+def test_more_than_half_of_the_last_thirty_calls_failing_in_transport_raises_one_alert():
+    flush_window()
+    action = fresh_class()
+    before_rows, before_events = len(outage_rows()), len(global_outage_events())
+    for _ in range(15):
+        reviewed("transport", action)                      # 15 of 30: exactly half: nothing
+    assert len(outage_rows()) == before_rows
+    reviewed("transport", action)                          # 16 of 30: over half
+    assert len(outage_rows()) == before_rows + 1
+    assert len(global_outage_events()) == before_events + 1
+    row = outage_rows()[-1]
+    assert (row["window_n"], row["window_transport"]) == (30, 16)
+    event = global_outage_events()[-1]
+    assert (event["window_calls"], event["window_transport"]) == (30, 16)
+    for _ in range(14):
+        reviewed("transport", action)                      # the outage goes on: still one alert
+    assert len(outage_rows()) == before_rows + 1 and not suspended(action)
+
+
+def test_the_alert_suspends_nothing_and_the_classes_involved_stay_in():
+    flush_window()
+    classes_ = [fresh_class() for _ in range(3)]
+    for i in range(24):
+        reviewed("transport", classes_[i % 3])
+    assert all(not suspended(a) for a in classes_)
+
+
+def test_fewer_than_thirty_calls_or_other_kinds_do_not_raise_the_alert():
+    flush_window()
+    before = len(outage_rows())
+    action = fresh_class()
+    for _ in range(14):
+        reviewed("transport", action)
+    for kind in ("refusal", "unclassified"):
+        for _ in range(16):
+            reviewed(kind, fresh_class())
+    assert len(outage_rows()) == before                    # 14 transport of 46: never over half
+    flush_window()
+    for _ in range(15):
+        reviewed("transport", action)
+        reviewed("refusal", fresh_class())
+    assert len(outage_rows()) == before                    # alternating: exactly half, not over
+
+
+def test_a_new_alert_follows_a_recovery():
+    flush_window()
+    before = len(outage_rows())
+    action = fresh_class()
+    for _ in range(16):
+        reviewed("transport", action)
+    flush_window()                                         # the service is back
+    for _ in range(16):
+        reviewed("transport", action)
+    assert len(outage_rows()) == before + 2
+
+
+def test_the_runtime_role_cannot_rewrite_or_remove_an_alert():
+    flush_window()
+    for _ in range(16):
+        reviewed("transport", fresh_class())
+    for statement in ("UPDATE goal_fit_outage_suspicions SET window_transport = 0",
+                      "DELETE FROM goal_fit_outage_suspicions"):
+        with pytest.raises(DBAPIError):
+            with get_engine().begin() as conn:
+                conn.execute(text(statement))
+
+
+def test_both_reports_end_with_the_validator_outages_of_the_period():
+    from scripts import manage_goal_fit_classes as tool
+    from scripts import plan_fit_report as report
+
+    flush_window()
+    for _ in range(16):
+        reviewed("transport", fresh_class())
+    with get_engine().begin() as conn:
+        rows = store.outages_in_period(conn)
+    text_ = tool.render([], [], None, rows)
+    assert "validator outage suspected this period (all time):" in text_
+    assert "16 of the last 30 calls failed in transport" in text_
+    empty = {"proposals": 0, "decided": 0, "decisions": {}, "with_plan_fit": 0,
+             "without_plan_fit": 0, "task_relation": {}, "task_relation_sub_cause": {},
+             "goal_fit": {}, "dp13_inside_task_target": report.rate(0, 0),
+             "dp13_rule_use": {"of_proposals": report.rate(0, 0), "of_matches": report.rate(0, 0)},
+             "dp13_proposals_on_network_tasks": {
+                 "single_host_inside": report.rate(0, 0), "by_relation": {}}, "would_add": {}}
+    out = report.render({"engagements": {}, "total": empty, "since": None,
+                         "class_suspensions": [], "validator_outages": rows})
+    assert "validator outage suspected this period (all time):" in out
+    assert "validator outage suspected this period (all time): none" in report.render(
+        {"engagements": {}, "total": empty, "since": None, "class_suspensions": [],
+         "validator_outages": []})
+
+
+# -- every look at the admission report is recorded -----------------------------------------------
+
+def _as(monkeypatch, tool, name="judy", source="loginuid"):
+    monkeypatch.setattr(tool, "login_identity", lambda: tool.Identity(name, source))
+
+
+def _class_line(output, action):
+    (line,) = [ln for ln in output.splitlines() if ln.startswith(action + " ")]
+    return line.split()
+
+
+def _views(action):
+    with get_engine().begin() as conn:
+        return [tuple(r_) for r_ in conn.execute(text(
+            "SELECT window_n, window_failed, upper95, viewer, identity_unverified "
+            "FROM goal_fit_report_views WHERE action = :a ORDER BY view_id"), {"a": action})]
+
+
+def test_each_run_of_the_report_is_a_look_and_the_count_accumulates(monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    _as(monkeypatch, tool)
+    action = fresh_class()
+    record(action, [OK] * 12 + [BAD] * 3)
+    assert tool._report(False, None) == 0
+    first = _class_line(capsys.readouterr().out, action)
+    looks_at = ["class", "window", "failed", "upper95", "total", "tot.fail", "refusal", "unclass",
+                "transp", "looks", "n@first"].index("looks")
+    assert first[looks_at] == "1" and first[looks_at + 1] == "15"       # first look: n was 15
+    record(action, [OK] * 20)
+    assert tool._report(False, None) == 0
+    second = _class_line(capsys.readouterr().out, action)
+    assert second[looks_at] == "2" and second[looks_at + 1] == "15"     # the first n is kept
+    assert second[1] == "35"                                            # the window has moved on
+    assert tool._report(True, None) == 0
+    shown = json.loads(capsys.readouterr().out)
+    row = next(r_ for r_ in shown["classes"] if r_["action"] == action)
+    assert (row["looks"], row["n_at_first_look"], shown["this_run_recorded"]) == (3, 15, True)
+    assert [v[:2] for v in _views(action)] == [(15, 3), (35, 3), (35, 3)]
+
+
+def test_a_look_records_the_window_and_who_looked_by_the_same_path_as_a_clearing(
+        monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    action = fresh_class()
+    record(action, [OK] * 40)
+    _as(monkeypatch, tool, "kim", "loginuid")
+    tool._report(False, None)
+    _as(monkeypatch, tool, "lee", "environment")
+    tool._report(False, None)
+    capsys.readouterr()
+    views = _views(action)
+    assert len(views) == 2, views
+    (n1, f1, u1, who1, weak1), (n2, f2, u2, who2, weak2) = views
+    assert (n1, f1, who1, weak1) == (40, 0, "kim", False)
+    assert (n2, f2, who2, weak2) == (40, 0, "lee", True)
+    assert u1 == pytest.approx(c.wilson_upper(0, 40), abs=1e-4) == pytest.approx(u2, abs=1e-4)
+
+
+def test_the_report_does_not_change_the_list_a_suspension_or_a_call(monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    _as(monkeypatch, tool)
+    live, spare = fresh_class(), fresh_class()
+    record(live, [REF] * 30)                       # suspended
+    record(spare, [OK] * 45)
+
+    def snapshot():
+        with global_policy_admin_scope() as conn:
+            return {
+                "suspensions": conn.execute(text(
+                    "SELECT suspension_id, action, cleared_at, cleared_by, cleared_reason "
+                    "FROM goal_fit_suspensions ORDER BY suspension_id")).all(),
+                "calls": conn.execute(text("SELECT count(*), max(call_id) "
+                                           "FROM goal_fit_calls")).all(),
+                "layers": conn.execute(text(
+                    "SELECT count(*), max(id), count(*) FILTER (WHERE active) "
+                    "FROM policy_layers")).all(),
+                "outages": conn.execute(text(
+                    "SELECT count(*) FROM goal_fit_outage_suspicions")).all(),
+            }
+
+    before = snapshot()
+    assert tool._report(False, None) == 0 and tool._report(True, "2000-01-01") == 0
+    capsys.readouterr()
+    assert snapshot() == before
+    assert suspended(live)
+
+
+def test_a_look_that_cannot_be_written_still_prints_the_report_and_says_so(monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    _as(monkeypatch, tool)
+    action = fresh_class()
+    record(action, [OK] * 41)
+    tool._report(False, None)
+    capsys.readouterr()                                                # one look is on record
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("the table is not writable")
+
+    monkeypatch.setattr(store, "record_views", refuse)
+    assert tool._report(False, None) == 0                              # it is still a report
+    out = capsys.readouterr().out
+    assert "THIS RUN WAS NOT RECORDED" in out
+    line = _class_line(out, action)
+    assert line[line.index("41") + 0] == "41"                          # the numbers are all there
+    assert "RECOMMEND ADMISSION" in out
+    assert len(_views(action)) == 1                                    # and nothing was written
+    assert tool._report(True, None) == 0
+    assert json.loads(capsys.readouterr().out)["this_run_recorded"] is False
+
+    monkeypatch.setattr(store, "view_counts", refuse)                  # nothing can be read either
+    assert tool._report(False, None) == 0
+    out = capsys.readouterr().out
+    assert "THIS RUN WAS NOT RECORDED" in out and _class_line(out, action)[10] == "?"
+
+
+def test_the_record_of_looks_is_append_only_and_only_the_runtime_role_writes_it():
+    action = fresh_class()
+    with get_engine().begin() as conn:
+        store.record_views(conn, [{"action": action, "n": 0, "failed": 0, "upper95": 1.0}],
+                           "mia", False)
+    for statement in ("UPDATE goal_fit_report_views SET window_n = 0",
+                      "DELETE FROM goal_fit_report_views"):
+        with pytest.raises(DBAPIError):
+            with get_engine().begin() as conn:
+                conn.execute(text(statement))
+    for statement in ("SELECT * FROM goal_fit_report_views",
+                      "INSERT INTO goal_fit_report_views (action, window_n, window_failed, "
+                      "upper95, viewer, identity_unverified) VALUES ('a.b', 0, 0, 1, 'x', false)"):
+        with pytest.raises(DBAPIError):
+            with global_policy_admin_scope() as conn:
+                conn.execute(text(statement))
+    with pytest.raises(ValueError):
+        with get_engine().begin() as conn:
+            store.record_views(conn, [], "", False)
+    with pytest.raises(DBAPIError):                                     # a view names its viewer
+        with get_engine().begin() as conn:
+            conn.execute(text("INSERT INTO goal_fit_report_views (action, window_n, window_failed, "
+                              "upper95, viewer, identity_unverified) "
+                              "VALUES (:a, 0, 0, 1, '', false)"), {"a": action})

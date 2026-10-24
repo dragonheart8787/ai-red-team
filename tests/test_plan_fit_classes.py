@@ -112,3 +112,49 @@ def test_suspension_lines_say_how_each_ended():
     assert "20 of 40 failed; cleared 2026-10-24 09:30 by ann: fixed it" in lines[1]
     assert lines[2].endswith("30 of 30 failed; STILL SUSPENDED")
     assert c.suspension_lines([], None) == ["classes suspended this period (all time): none"]
+
+
+# -- the validator outage suspicion (D68 DP-15) --------------------------------------------------
+
+T, R, U, A = "transport", "refusal", "unclassified", None            # a call's kind; None answered
+
+
+def test_the_outage_needs_thirty_calls_and_strictly_more_than_half_in_transport():
+    assert c.OUTAGE_WINDOW == 30 and c.OUTAGE_RATE == 0.5
+    assert not c.review_outage([T] * 29).suspected                    # too few to say
+    assert not c.review_outage([T] * 15 + [A] * 15).suspected         # exactly half
+    assert c.review_outage([T] * 16 + [A] * 14).suspected
+    assert c.review_outage([T] * 30).suspected
+    got = c.review_outage([T] * 16 + [A] * 14)
+    assert (got.n, got.transport) == (30, 16) and got.rate == pytest.approx(16 / 30)
+
+
+def test_only_transport_counts_toward_the_outage_and_only_the_last_thirty_are_read():
+    assert not c.review_outage([R] * 30).suspected
+    assert not c.review_outage([U] * 30).suspected
+    assert not c.review_outage([T] * 15 + [R] * 15).suspected
+    assert not c.review_outage([A] * 30 + [T] * 100).suspected        # the transport is older
+    assert c.review_outage([T] * 30 + [A] * 100).suspected            # newest first
+
+
+def test_the_alert_fires_on_the_call_that_crosses_the_line_and_not_while_the_outage_lasts():
+    started = [T] * 16 + [A] * 14 + [A]          # newest first: 16 transport in the last 30
+    before = [T] * 15 + [A] * 14 + [A] * 2       # the window one call earlier
+    assert c.outage_started(started)
+    assert not c.outage_started([T] * 17 + [A] * 14)           # still over: no second alert
+    assert not c.outage_started(before)
+    assert not c.outage_started([T] * 5)
+    assert not c.outage_started([])
+
+
+def test_outage_lines_say_when_and_that_nothing_was_suspended():
+    import datetime as dt
+
+    at = dt.datetime(2026, 10, 24, 9, 30)
+    rows = [{"suspicion_id": 4, "detected_at": at, "window_n": 30, "window_transport": 17}]
+    lines = c.outage_lines(rows, "2026-10-01")
+    assert lines[0].startswith(
+        "validator outage suspected this period (since 2026-10-01): 1 time(s)")
+    assert "nothing was suspended" in lines[0]
+    assert "17 of the last 30 calls failed in transport" in lines[1]
+    assert c.outage_lines([], None) == ["validator outage suspected this period (all time): none"]

@@ -36,6 +36,10 @@ How to read it, so that a number is not mistaken for more than it is:
   without it). They are global, not an engagement's, so they are listed once after the totals,
   each with how it ended -- still out, or let back in by whom and why. A class that is out is
   not asked and records ``class_suspended``; nothing else in this report counts it as a failure.
+* **Validator outage suspected this period** (D68 DP-15): the times the share of ``transport``
+  failures (timeout, connection, 5xx, authentication or usage) among the last 30 calls of any
+  class rose above half. Listed after the suspended classes. It suspends nothing -- those calls
+  do not count toward a class's suspension, and each still failed closed and asked a person.
 * No real engagement traffic is implied by a run on a test or soak engagement.
 """
 
@@ -178,6 +182,13 @@ def collect_class_suspensions(since: str | None = None) -> list[dict[str, Any]]:
         return class_store.suspensions_in_period(conn, since)
 
 
+def collect_validator_outages(since: str | None = None) -> list[dict[str, Any]]:
+    """The periods when the validator service looked to be down (global table; the runtime role
+    reads it without naming an engagement)."""
+    with get_engine().begin() as conn:
+        return class_store.outages_in_period(conn, since)
+
+
 def combine(per_engagement: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Totals across the named engagements (counters add; rates are recomputed, never averaged)."""
     total: dict[str, Any] = {"engagements": len(per_engagement)}
@@ -260,6 +271,7 @@ def render(report: dict[str, Any]) -> str:
         lines.append("")
     lines += [*classes.suspension_lines(report.get("class_suspensions", []),
                                        report.get("since")), ""]
+    lines += [*classes.outage_lines(report.get("validator_outages", []), report.get("since")), ""]
     lines += ["Nothing here is a decision. Enabling a switch is S8; the gate is S7's.", ""]
     return "\n".join(lines)
 
@@ -276,7 +288,8 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     per = {eid: collect(eid, since=args.since) for eid in args.engagements}
     report = {"engagements": per, "total": combine(per), "since": args.since,
-              "class_suspensions": collect_class_suspensions(args.since)}
+              "class_suspensions": collect_class_suspensions(args.since),
+              "validator_outages": collect_validator_outages(args.since)}
     if args.as_json:
         print(json.dumps(report, indent=2, default=str))
     else:

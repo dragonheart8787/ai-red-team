@@ -109,6 +109,27 @@ def test_only_the_tests_of_the_class_rules_use_the_real_class_store():
     }, users
 
 
+def test_only_the_class_store_touches_the_records_of_looks_and_of_suspected_outages():
+    """``goal_fit_report_views`` (a look at the admission report) and
+    ``goal_fit_outage_suspicions`` (the validator service looked to be down) are records for
+    people. No decision, no policy input and no pipeline stage may read or write them except
+    through the class store, whose own callers are the pipeline's recording step and the reports."""
+    for table in ("goal_fit_report_views", "goal_fit_outage_suspicions"):
+        users = sorted(
+            p.relative_to(REPO).as_posix() for top in SHIPPED
+            for p in (REPO / top).rglob("*.py") if table in p.read_text())
+        assert users == ["control_plane/plan_fit/class_store.py"], (table, users)
+
+
+def test_the_failure_kind_is_read_by_the_class_store_and_the_reports_and_by_no_decision():
+    """The kind of a failed call (``agents/failure_kind.py``) feeds the per-class exit rule and
+    the reports. The policy input, the engine and the approval re-derivation never see it."""
+    for name in ("control_plane/policy/engine.py", "control_plane/api/approved_dispatch.py",
+                 "control_plane/policy/rego/authz.rego"):
+        source = (REPO / name).read_text()
+        assert "failure_kind" not in source and "transport" not in source.lower(), name
+
+
 def test_the_enforcement_seam_is_engaged_exactly_when_asked():
     """With the variable set the suite runs enforced; without it, it does not. Asserted both ways
     so that the CI step that sets it cannot silently run a suite that is not enforced."""

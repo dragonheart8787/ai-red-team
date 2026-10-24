@@ -712,17 +712,34 @@ def _common(run: _Run, proposal_id: str) -> dict[str, Any]:
 
 def _review_class(goal_fit: Any, action: str):
     """DP-15 exit rule, after a call the validator was actually asked: append it to the class's
-    record and run the rule over the class's last calls. Returns the verdict if this call took the
-    class out. Never raises: a store that cannot be written means the rule did not run this time,
-    and the proposal goes on."""
+    record (with its failure kind, if it failed) and run the rule over the class's last calls.
+    Returns the verdict if this call took the class out. A ``transport`` failure is recorded and
+    never counts toward a suspension; if it makes the share of transport failures among the last
+    calls of any class rise above half, a suspected outage is recorded and audited instead
+    (nothing is suspended, and the proposal fails closed as it always did). Never raises: a store
+    that cannot be written means the rule did not run this time, and the proposal goes on."""
     outcome = goal_fit.outcome
     if outcome is None:
         return None
     try:
         with get_engine().begin() as conn:
-            return plan_classes.record_and_review(conn, action, outcome)
+            verdict = plan_classes.record_and_review(conn, action, outcome, goal_fit.failure_kind)
+            outage = plan_classes.check_outage(conn)
     except Exception:  # noqa: BLE001 - recording is not part of the decision
         return None
+    if outage is not None:
+        try:
+            record_audit(
+                engagement_id=None, scope="global", actor="control-plane",
+                event_type="plan_fit.validator_outage_suspected", subject_type="plan_fit_validator",
+                subject_id="plan-fit-validator",
+                payload={"window_calls": outage.n, "window_transport": outage.transport,
+                         "window_rate": round(outage.rate, 4),
+                         "note": "nothing was suspended; transport failures do not count toward "
+                                 "a class's suspension and every call still failed closed"})
+        except Exception:  # noqa: BLE001 - the row written by check_outage is the record
+            pass
+    return verdict
 
 
 def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:

@@ -14,6 +14,8 @@ from agents.base_agent import (
     GoalFitAssessment,
     PlanFitQuery,
 )
+from agents.failure_kind import FAILURE_KINDS, UNCLASSIFIED
+from agents.llm.reviewer_base import ReviewCall
 
 
 def _provenance(validator) -> dict[str, str]:
@@ -68,16 +70,29 @@ class AdversarialFakePlanFit(ScriptedPlanFit):
 
 
 class UnavailableFakePlanFit:
-    """A validator that cannot answer: every call is ``not_assessed`` / ``failed``."""
+    """A validator that cannot answer: every call is ``not_assessed`` / ``failed``.
+
+    ``kind`` is the failure kind its call record carries (``agents/failure_kind.py``): the default
+    is ``unclassified``; tests give ``refusal`` or ``transport`` to make a validator fail the way
+    a safety stop or an outage does. It changes nothing about the answer, which is always the same
+    fail-closed ``not_assessed`` / ``failed``.
+    """
 
     validator_id = "unavailable-fake-plan-fit"
 
-    def __init__(self) -> None:
+    def __init__(self, kind: str = UNCLASSIFIED) -> None:
+        if kind not in FAILURE_KINDS:
+            raise ValueError(f"not a failure kind: {kind!r}")
+        self.kind = kind
         self.queries: list[PlanFitQuery] = []
+        self.calls: list[ReviewCall] = []
 
     def provenance(self) -> dict[str, str]:
         return _provenance(self)
 
     def assess(self, *, query: PlanFitQuery) -> GoalFitAssessment:
         self.queries.append(query)
+        self.calls.append(ReviewCall(
+            latency_seconds=0.0, input_tokens=0, output_tokens=0, model="none", failed=True,
+            failure=f"scripted {self.kind} failure", failure_kind=self.kind))
         return GoalFitAssessment(self.validator_id, NOT_ASSESSED, "failed")
