@@ -34,6 +34,7 @@ from control_plane.policy.merge import (
 from control_plane.state.db import (
     engagement_scope,
     get_engine,
+    global_auditor_scope,
     global_policy_admin_scope,
 )
 from tests.task_support import task_for
@@ -241,15 +242,57 @@ def test_the_same_proposal_is_asked_once_the_class_is_listed(engagement_id, regi
     assert len(validator.queries) == 1
 
 
-def test_a_listed_class_with_the_switch_off_is_asked_and_recorded_but_changes_nothing(
-        engagement_id, registry):
-    """Shadow mode is how a class earns its numbers: asked, stored, no decision moved."""
-    world = pipeline_world(engagement_id, registry)
-    validator = ScriptedPlanFit("implausible")
-    out = run(world, validator, switch=False, listed={"network.scan"})
-    assert out.decision == "ALLOW" and out.approval_reasons == ()
-    assert len(validator.queries) == 1
-    assert stored_goal_fit(world, out.proposal_id) == ("implausible", None)
+def class_calls(action):
+    """(outcome, ...) of the calls recorded for a class, oldest first."""
+    with get_engine().begin() as conn:
+        return [r_[0] for r_ in conn.execute(text(
+            "SELECT outcome FROM goal_fit_calls WHERE action = :a ORDER BY call_id"),
+            {"a": action})]
+
+
+def plan_fit_without_goal_fit(world, proposal_id):
+    got = rows(world, "SELECT reviewer_hints FROM action_proposals WHERE proposal_id = :p",
+               p=proposal_id)[0]["reviewer_hints"]["plan_fit"]
+    return {k: v for k, v in got.items() if not k.startswith("goal_fit")}
+
+
+@pytest.mark.parametrize("make_validator,stored,outcome", [
+    (lambda: ScriptedPlanFit("plausible"), ("plausible", None), c.ANSWERED),
+    (lambda: ScriptedPlanFit("implausible"), ("implausible", None), c.ANSWERED),
+    (lambda: UnavailableFakePlanFit(), ("not_assessed", "failed"), c.FAILED),
+], ids=["passes", "judged-not-matching", "always-fails"])
+def test_a_listed_class_with_goal_fit_enforce_off_is_asked_and_counted_and_decides_as_unlisted(
+        engagement_id, registry, make_validator, stored, outcome):
+    """The shadow mode a class earns its numbers in. ``switch`` is ``goal_fit_enforce`` (Q1's
+    switch; ``task_relation_enforce`` is P1's and plays no part here). With the class listed and
+    the switch off: (a) the validator is really called, (b) each call is recorded, so ``n``
+    accumulates, and (c) whatever the validator says -- including failing every time -- the
+    decision, its reasons and the task relation stored with it are exactly those of the same
+    proposal with the class outside the list, and no ``plan_check_failed`` arises. The one thing
+    that differs is the goal fit stored: the answer, which is what the recording is for."""
+    action = fresh_class()
+    world = pipeline_world(engagement_id, registry, action)
+    unlisted_validator, listed_validator = make_validator(), make_validator()
+
+    unlisted = run(world, unlisted_validator, switch=False, listed=frozenset(), action=action)
+    assert unlisted_validator.queries == [] and class_calls(action) == []
+
+    first = run(world, listed_validator, switch=False, listed={action}, action=action)
+    second = run(world, listed_validator, switch=False, listed={action}, action=action)
+
+    assert len(listed_validator.queries) == 2                                     # (a)
+    assert class_calls(action) == [outcome, outcome]                              # (b)
+    row = table_row(action)
+    assert (row["n"], row["failed"]) == (2, 2 if outcome == c.FAILED else 0)
+    for listed in (first, second):                                                # (c)
+        assert (listed.decision, listed.approval_reasons, listed.deny_reasons) == (
+            unlisted.decision, unlisted.approval_reasons, unlisted.deny_reasons)
+        assert "plan_check_failed" not in listed.approval_reasons
+        assert listed.approval_reasons == () and listed.decision == "ALLOW"
+        assert stored_goal_fit(world, listed.proposal_id) == stored
+        assert (plan_fit_without_goal_fit(world, listed.proposal_id)
+                == plan_fit_without_goal_fit(world, unlisted.proposal_id))
+    assert stored_goal_fit(world, unlisted.proposal_id) == ("not_assessed", "class_not_enabled")
 
 
 # -- the exit rule, on the real store and the real pipeline ---------------------------------------
@@ -479,7 +522,7 @@ def test_the_tool_has_no_way_to_write_the_list():
     assert "publish_policy_layer" not in source and "INSERT INTO policy_layers" not in source
 
 
-# -- admission is judged over a fixed window ------------------------------------------------------
+# -- admission is judged over a rolling window ---------------------------------------------------
 
 def test_admission_reads_the_last_fifty_calls_and_not_the_whole_history():
     """200 good calls long ago, then 8 failures in the most recent calls: over everything that is
@@ -583,38 +626,139 @@ def test_the_tool_refuses_a_clearing_by_a_shared_account_or_under_another_name()
     assert tool.identity_problem(None, "") is not None
 
 
-def test_the_tool_takes_the_name_from_the_login_and_not_from_a_flag(monkeypatch):
+def _loginuid_file(tmp_path, content):
+    path = tmp_path / "loginuid"
+    if content is not None:
+        path.write_text(content)
+    return str(path)
+
+
+def _account(monkeypatch, tool, name):
+    import pwd
+
+    monkeypatch.setattr(tool.pwd, "getpwuid", lambda uid: pwd.struct_passwd(
+        (name, "x", uid, uid, "", f"/home/{name}", "/bin/sh")))
+
+
+def test_the_kernels_login_uid_is_the_identity_when_it_is_readable(tmp_path, monkeypatch):
     from scripts import manage_goal_fit_classes as tool
 
-    monkeypatch.setenv("SUDO_USER", "carol")
-    assert tool.login_identity() == "carol"
-    monkeypatch.delenv("SUDO_USER")
+    _account(monkeypatch, tool, "gina")
+    got = tool.resolve_identity(loginuid_path=_loginuid_file(tmp_path, "1000\n"),
+                                environ={"SUDO_USER": "someone-else"})
+    assert (got.name, got.source, got.unverified) == ("gina", "loginuid", False)
+
+
+def test_an_environment_variable_cannot_change_who_the_kernel_says_is_logged_in(
+        tmp_path, monkeypatch):
+    """The point of reading ``/proc/self/loginuid``: ``SUDO_USER=somebody python ...`` forges the
+    fallback and nothing else."""
+    from scripts import manage_goal_fit_classes as tool
+
+    _account(monkeypatch, tool, "gina")
+    monkeypatch.setattr(tool.getpass, "getuser", lambda: "also-not-gina")
+    path = _loginuid_file(tmp_path, "1000")
+    for forged in ({"SUDO_USER": "mallory"}, {"SUDO_USER": "root"},
+                   {"LOGNAME": "mallory", "USER": "mallory"}, {}):
+        got = tool.resolve_identity(loginuid_path=path, environ=forged)
+        assert got.name == "gina" and not got.unverified, forged
+
+
+def test_a_login_uid_with_no_account_is_still_the_kernels_answer(tmp_path, monkeypatch):
+    from scripts import manage_goal_fit_classes as tool
+
+    def nobody(uid):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(tool.pwd, "getpwuid", nobody)
+    got = tool.resolve_identity(loginuid_path=_loginuid_file(tmp_path, "4242"), environ={})
+    assert (got.name, got.source) == ("uid:4242", "loginuid")
+
+
+@pytest.mark.parametrize("content", [None, "4294967295", "4294967295\n", "", "not a number",
+                                     "-1"])
+def test_without_a_usable_login_uid_it_falls_back_to_the_environment_and_says_so(
+        tmp_path, monkeypatch, content):
+    """Unreadable (no file), unset (4294967295: containers, some services), empty or garbage:
+    the environment's answer, which can be forged, marked as unverified."""
+    from scripts import manage_goal_fit_classes as tool
+
     monkeypatch.setattr(tool.getpass, "getuser", lambda: "dave")
-    assert tool.login_identity() == "dave"
+    path = _loginuid_file(tmp_path, content)
+    assert tool.read_loginuid(path) is None
+    got = tool.resolve_identity(loginuid_path=path, environ={"SUDO_USER": "carol"})
+    assert (got.name, got.source, got.unverified) == ("carol", "environment", True)
+    got = tool.resolve_identity(loginuid_path=path, environ={})
+    assert (got.name, got.source, got.unverified) == ("dave", "environment", True)
+
+
+def test_a_directory_where_the_file_should_be_is_unreadable_not_an_error(tmp_path):
+    from scripts import manage_goal_fit_classes as tool
+
+    assert tool.read_loginuid(str(tmp_path)) is None
+
+
+def _cleared_events(action):
+    """The global audit events of the clearing, read as ``global_auditor`` (global-scope records
+    are not visible to an engagement's role)."""
+    with global_auditor_scope() as conn:
+        return [row[0] for row in conn.execute(text(
+            "SELECT payload FROM audit_log WHERE event_type = 'plan_fit.class_cleared' "
+            "AND subject_id = :a ORDER BY audit_id"), {"a": action})]
 
 
 def test_the_tool_clears_as_the_login_with_the_reason_and_refuses_otherwise(monkeypatch, capsys):
     from scripts import manage_goal_fit_classes as tool
 
+    def as_(name, source="loginuid"):
+        monkeypatch.setattr(tool, "login_identity", lambda: tool.Identity(name, source))
+
     action = fresh_class()
     record(action, [BAD] * 30)
-    monkeypatch.setattr(tool, "login_identity", lambda: "erin")
+    as_("erin")
     assert tool._clear(action, "mallory", REASON, True) == 1             # another person's name
     assert tool._clear(action, None, None, True) == 1                    # no reason
     assert tool._clear(action, None, "too short", True) == 1
     assert tool._clear("NotAClass", None, REASON, True) == 1
     assert live_suspension(action)
-    monkeypatch.setattr(tool, "login_identity", lambda: "root")
+    as_("root")
     assert tool._clear(action, None, REASON, True) == 1                  # a shared account
-    assert live_suspension(action)
-    monkeypatch.setattr(tool, "login_identity", lambda: "erin")
+    as_("root", "environment")
+    assert tool._clear(action, None, REASON, True) == 1                  # also on the weak path
+    assert live_suspension(action) and not _cleared_events(action)
+    as_("erin")
     assert tool._clear(action, "erin", REASON, True) == 0
     assert not live_suspension(action)
     with global_policy_admin_scope() as conn:
         row = conn.execute(text("SELECT cleared_by, cleared_reason FROM goal_fit_suspensions "
                                 "WHERE action = :a"), {"a": action}).one()
     assert tuple(row) == ("erin", REASON)
+    (event,) = _cleared_events(action)
+    assert event["identity_unverified"] is False and event["identity_source"] == "loginuid"
+    assert event["reason"] == REASON and event["action"] == action
     assert "refused" in capsys.readouterr().err
+
+
+def test_a_clearing_by_the_environments_name_is_audited_as_identity_unverified(
+        monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    monkeypatch.setattr(tool, "login_identity", lambda: tool.Identity("heidi", "environment"))
+    assert tool._clear(action, None, REASON, True) == 0
+    (event,) = _cleared_events(action)
+    assert event["identity_unverified"] is True and event["identity_source"] == "environment"
+    assert "identity_unverified" in capsys.readouterr().out
+
+
+def test_a_clearing_that_clears_nothing_leaves_no_audit_event(monkeypatch):
+    from scripts import manage_goal_fit_classes as tool
+
+    action = fresh_class()
+    monkeypatch.setattr(tool, "login_identity", lambda: tool.Identity("ivan", "loginuid"))
+    assert tool._clear(action, None, REASON, True) == 1                  # nothing to clear
+    assert _cleared_events(action) == []
 
 
 def test_the_tool_does_not_take_the_name_from_the_command_line_alone():

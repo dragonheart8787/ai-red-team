@@ -34,7 +34,7 @@ from dataclasses import dataclass
 #: admission: judgements on the real path, and the bound the failure rate must be under
 ADMIT_MIN = 40
 ADMIT_UPPER = 0.15
-#: ... judged over a fixed window, the class's most recent calls (the same size as the exit window,
+#: ... judged over a rolling window, the class's latest calls (the same size as the exit window,
 #: so that what lets a class in and what takes it out look at the same stretch of its history): a
 #: long run of good calls long ago cannot carry a class whose recent calls fail
 ADMIT_WINDOW = 50

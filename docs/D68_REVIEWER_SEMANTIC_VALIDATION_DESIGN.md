@@ -215,9 +215,58 @@ use it as a shortcut. If a person wants it wired, that is its own decision. [D]
 
 Q1 is asked only about the action classes an operator has let in, and a class that fails too often
 is taken out by the control plane and put back only by an operator (plan 7.3c, ACCEPTANCE 5.125).
-The threats of that mechanism are listed here; **one is written so far.**
+Two threats of that mechanism are written down here.
 
-1. **The operator role can put a failing class back, and it is the same role that publishes global
+1. **The automatic suspension can be used to switch Q1 off for a class.** [D: derived from the
+   rules below; no one has tried it]
+   * *Path.* The exit rule counts a call as failed whenever the validator does not answer -- a
+     safety-classifier stop, a timeout, a malformed reply, an outage. It suspends a class when
+     the last 50 calls of that class, at least 30, failed more than 30%. An attacker who controls
+     what is proposed (an agent, or anything that can make an agent propose) submits proposals
+     that make the validator fail: wording the service's classifier stops (Active-Directory and
+     reconnaissance wording failed 32 of 40 calls in S7's probe, `docs/D68_S7_CODE_SECRETS_FAILURE.md`), or anything else the validator
+     cannot answer. On an idle class that takes 30 calls with at least 10 failed; on a busy class
+     the failures must be more than 30% of the last 50 (16 of 50). The class is then suspended,
+     and later proposals of that class are `not_assessed / class_suspended`: not asked, and quiet
+     (no rule reads it), until an operator clears it.
+   * *What the attacker needs* [R: `_decide`, order of the steps]: a proposal that names a live
+     task of its engagement with the same action and target (`matches_task`) -- Q1 is asked only
+     then -- and nothing more. The validator is asked at step 4b, before the policy engine at
+     step 5, so a proposal that policy would deny or send to a person still counts as a call;
+     no earlier refusal was found, but every early return in `_decide` was not traced, and
+     whether a rate limit slows this down was not checked [N]. Who writes the goal the validator
+     reads decides how much of the wording the attacker controls: the goal is read from the task,
+     not from the proposal; where an agent also creates the task it names (the soak's worker
+     does), it writes the goal too; where a Supervisor writes the goals, the attacker has the
+     proposal's action and target and whatever the goals already say.
+   * *It is global.* The calls and the suspensions are not an engagement's (migration 0027: no
+     engagement column, by design -- the last 50 calls of a class are calls of every engagement).
+     Failures produced in one engagement therefore count toward the class everywhere, and the
+     suspension it causes removes Q1 for that class **in every engagement**, including ones whose
+     traffic is entirely legitimate.
+   * *The result is today's behaviour, and it is a failure of detection, not a new hole.* Q1 only
+     adds friction (section 0: monotone and absorbing): a suspended class is decided as if Q1 did
+     not exist, which is the platform as it was before D68. Nothing becomes allowed that was not.
+     What is lost is the check: proposals of that class whose goal does not fit the action would
+     have been sent to a person, and now are not. Worse than the loss is its silence: a suspended
+     class raises no `plan_check_failed` by design, so nobody is asked and nothing looks wrong.
+     On the way there it is loud: while the failures accumulate and the switch is on, each failed
+     call is a person asked (2.4, approval fatigue).
+   * *The mechanism cannot tell an attack from a class that really fails.* A real Active-Directory
+     engagement fails the same way, and so does an outage of the validator service (30 failed
+     calls in a row suspend every class that has traffic). The rule is right about those and wrong
+     about the attack, and has no way to see the difference.
+   * *Mitigation -- a human process, not a technical protection* [R: nothing pages anyone]: the
+     classes suspended in the period are printed at the end of `scripts/plan_fit_report.py` and of
+     `scripts/manage_goal_fit_classes.py report`, each with when, on how many failed of how many,
+     and how it ended. **Someone has to read that summary, on a schedule, and decide whether a
+     suspension is a class that really fails or an attack.** Nothing in the system raises an
+     alarm, sends a message, or blocks on an unread suspension; the audit event that records the
+     suspension (`plan_fit.class_suspended`) is written to the engagement that happened to make
+     the call that tipped it, so the engagement the attacker used is the one that holds it. If
+     the summary is not read, a suspension is as quiet as the attack that caused it.
+
+2. **The operator role can put a failing class back, and it is the same role that publishes global
    policy.** `global_policy_admin` may clear a suspension (`UPDATE (cleared_at, cleared_by,
    cleared_reason)` on `goal_fit_suspensions`, nothing else) *and* publish the layer that lists a
    class. Whoever holds that credential -- a person, a compromised operator host, a script run with
@@ -231,17 +280,25 @@ The threats of that mechanism are listed here; **one is written so far.**
      suspension's other columns, clear one twice, or edit a clearing afterwards (a guard trigger).
      The runtime role, which an agent's proposals run under, has no grant to clear at all.
    * *What a clearing now costs* [R: migration 0028, `scripts/manage_goal_fit_classes.py`]: a
-     reason of 10 to 500 characters, which the database requires; the name of the clearing is the
-     login that runs the tool (`SUDO_USER` or the OS user), not a flag, and `root` or a `--actor`
-     that differs is refused; a person at a terminal confirms (`--yes` is the caller's statement
-     that one already did). Every clearing is a row nobody can rewrite, and the report ends with
-     the classes suspended in the period, each with who cleared it and why.
-   * *What it does not stop* [N]: the login check is only as strong as the operator host's access
-     control; holding the `global_policy_admin` credential is enough to clear with SQL, with any
-     name, and the reason is text nobody verifies. And a class cleared without a fix is taken out
-     again only after the exit rule has seen 30 new calls: **up to 29 failed calls, so up to 29
-     `plan_check_failed` approvals, can come between a careless clearing and the next suspension.**
-     The tool does not hold a class back for a trial period; that is not built.
+     reason of 10 to 500 characters, which the database requires; the name of the clearing is
+     taken from the kernel's audit login uid (`/proc/self/loginuid`), not from a flag, and `root`
+     or a `--actor` that differs is refused; a person at a terminal confirms (`--yes` is the
+     caller's statement that one already did). Every clearing is a row nobody can rewrite plus a
+     global audit event (`plan_fit.class_cleared`), and the report ends with the classes suspended
+     in the period, each with who cleared it and why.
+   * *What the identity check is and is not* [R, E]: the login-uid path cannot be forged with an
+     environment variable (`SUDO_USER=somebody python ...` changes nothing when the kernel has a
+     login uid; tested). Where the kernel has none -- the file is unreadable, or holds the
+     "unset" value 4294967295, as in containers and some services; it is unset on the machine
+     this was built on -- the tool falls back to `SUDO_USER` or the OS user, **which can be
+     forged**, and the audit event says `identity_unverified: true`. In neither path does the
+     tool stop someone who holds the `global_policy_admin` credential from clearing with SQL
+     under any name; the row is write-once and records who it was told, when and why, not who it
+     was.
+   * *What it does not stop* [N]: the reason is text nobody verifies. And a class cleared without
+     a fix is taken out again only after the exit rule has seen 30 new calls: **up to 29 failed
+     calls, so up to 29 `plan_check_failed` approvals, can come between a careless clearing and the
+     next suspension.** The tool does not hold a class back for a trial period; that is not built.
 
 ## 3. Relation to D58-12 (the closed-directions ledger)
 

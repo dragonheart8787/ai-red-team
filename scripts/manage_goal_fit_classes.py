@@ -8,9 +8,11 @@
 **This tool recommends and never admits.** ``report`` prints, for each action class, the calls
 Q1 has made on the real ``propose_action`` path (since the class was last cleared), how many failed,
 the Wilson 95% upper bound of the failure rate, and whether the admission rule would recommend the
-class: at least 40 calls and an upper bound of at most 15% -- **judged over a fixed window, the
+class: at least 40 calls and an upper bound of at most 15% -- **judged over a rolling window, the
 class's last 50 calls** (the exit rule's window), so a long run of good calls long ago cannot
-carry a class whose recent calls fail. The total since clearing is shown beside it. ``report``
+carry a class whose recent calls fail. It is **not a pre-fixed sample**: the more often this report
+is read, the more likely a class is to be seen in a good stretch
+(``docs/D68_DP15_ADMISSION_LOOKS.md``). The total since clearing is shown beside it. ``report``
 ends with the **classes suspended this period** (``--since``; all time without it). A class is
 *admitted* only by a person publishing the layer that lists it
 (``scripts/manage_global_policy.py publish ... --document
@@ -26,14 +28,16 @@ that one already decided.
 
 **A clearing says why and who, and the tool checks who.** ``--reason`` is required (10 to 500
 printable characters on one line) and is stored with the clearing; the database refuses a clearing
-without one. The person is not taken from a flag: it is the login that runs the tool (``SUDO_USER``
-if there is one, else the OS user), and a ``--actor`` that differs is refused, as is a shared
-account (``root``) that names no one. What this checks is the operator host's login and nothing
-more: someone holding the ``global_policy_admin`` credential can still clear with SQL, which is
-why the row is write-once and records who, when and why.
-
-The list this reads is the **global** layers' ``goal_fit_actions``; a class listed only in a layer
-of one engagement shows as "not in the list" here.
+without one. The person is not taken from a flag. The tool reads the kernel's audit login uid
+(``/proc/self/loginuid``: set once at login, inherited through ``sudo`` and ``su``, and not
+changeable by an environment variable) and turns it into an account name; that path cannot be
+forged with ``SUDO_USER=somebody python ...``. Where the file cannot be read, or holds the "unset"
+value (4294967295 -- containers, some services), the tool falls back to ``SUDO_USER`` or the OS
+user, which **can** be forged, and the clearing's audit event (``plan_fit.class_cleared``) says
+``identity_unverified: true``. In both paths a shared account (``root``) and an ``--actor`` that
+differs from the identity found are refused. What is not stopped: whoever holds the
+``global_policy_admin`` credential can still clear with SQL under any name, which is why the row
+is write-once and records who, when and why.
 
 Exit status: 0 done, 1 refused or nothing to do, 2 not confirmed.
 """
@@ -44,7 +48,9 @@ import argparse
 import getpass
 import json
 import os
+import pwd
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +58,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from sqlalchemy import text  # noqa: E402
 
+from control_plane.audit.logger import record_audit  # noqa: E402
 from control_plane.config import load_dotenv  # noqa: E402
 from control_plane.plan_fit import class_store, classes  # noqa: E402
 from control_plane.policy.merge import goal_fit_actions_of  # noqa: E402
@@ -110,9 +117,52 @@ def _suspensions() -> int:
     return 0
 
 
-def login_identity() -> str:
-    """Who is running this: the login behind ``sudo`` if there is one, else the OS user."""
-    return os.environ.get("SUDO_USER") or getpass.getuser()
+LOGINUID_PATH = "/proc/self/loginuid"
+#: what the kernel holds when no login set the audit uid (``(uid_t)-1``)
+LOGINUID_UNSET = 4294967295
+
+
+@dataclass(frozen=True)
+class Identity:
+    """Who is running this tool, and how much that is worth."""
+
+    name: str
+    #: ``loginuid`` (the kernel's audit uid; an environment variable cannot change it) or
+    #: ``environment`` (``SUDO_USER`` / the OS user, which can be forged)
+    source: str
+
+    @property
+    def unverified(self) -> bool:
+        return self.source != "loginuid"
+
+
+def read_loginuid(path: str = LOGINUID_PATH) -> int | None:
+    """The audit login uid, or ``None`` if it cannot be read, is not a number, or is unset."""
+    try:
+        with open(path) as handle:
+            value = int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+    return None if value == LOGINUID_UNSET or value < 0 else value
+
+
+def resolve_identity(*, loginuid_path: str = LOGINUID_PATH,
+                     environ: dict[str, str] | None = None) -> Identity:
+    """The kernel's login uid as an account name when it is there; otherwise the environment's
+    answer, marked as the weaker thing it is. The environment is not consulted at all when the
+    kernel has an answer."""
+    uid = read_loginuid(loginuid_path)
+    if uid is not None:
+        try:
+            return Identity(pwd.getpwuid(uid).pw_name, "loginuid")
+        except KeyError:        # a login uid with no account entry is still the kernel's answer
+            return Identity(f"uid:{uid}", "loginuid")
+    env = os.environ if environ is None else environ
+    return Identity(env.get("SUDO_USER") or getpass.getuser(), "environment")
+
+
+def login_identity() -> Identity:
+    return resolve_identity()
 
 
 def identity_problem(actor: str | None, identity: str) -> str | None:
@@ -132,7 +182,8 @@ def _clear(action: str, actor: str | None, reason: str | None, assume_yes: bool)
     if not classes.valid_action_name(action):
         print(f"refused: {action!r} is not an action class name", file=sys.stderr)
         return 1
-    problem = identity_problem(actor, login_identity())
+    who = login_identity()
+    problem = identity_problem(actor, who.name)
     if problem:
         print(f"refused: {problem}", file=sys.stderr)
         return 1
@@ -141,15 +192,29 @@ def _clear(action: str, actor: str | None, reason: str | None, assume_yes: bool)
               "printable characters on one line: why is this class safe to ask again?",
               file=sys.stderr)
         return 1
-    who = login_identity()
-    summary = (f"RE-INCLUDE {action} as {who}\n  reason: {reason.strip()}\n  lifts its live "
+    weak = ("" if not who.unverified else
+            "\n  IDENTITY NOT VERIFIED: the kernel has no login uid here, so this name is the "
+            "environment's and can be forged; the audit event will say so")
+    summary = (f"RE-INCLUDE {action} as {who.name}\n  reason: {reason.strip()}\n  lifts its live "
                "suspension; the class is asked about again if the policy lists it, and its "
-               "rates start from nothing")
+               f"rates start from nothing{weak}")
     if not _confirm(summary, "CLEAR", assume_yes):
         return 2
     with global_policy_admin_scope() as conn:
-        done = class_store.clear_suspension(conn, action, who, reason)
+        done = class_store.clear_suspension(conn, action, who.name, reason)
+        if done:
+            # Inside the operator's transaction: an audit write that fails rolls the clearing back
+            # (a re-inclusion with no record is the failure to avoid).
+            record_audit(
+                engagement_id=None, scope="global", actor=who.name,
+                event_type="plan_fit.class_cleared", subject_type="goal_fit_class",
+                subject_id=action,
+                payload={"action": action, "reason": reason.strip(),
+                         "identity_source": who.source,
+                         "identity_unverified": who.unverified})
     print("cleared" if done else f"{action} has no live suspension")
+    if done and who.unverified:
+        print("note: identity_unverified (recorded in the audit event)")
     return 0 if done else 1
 
 
