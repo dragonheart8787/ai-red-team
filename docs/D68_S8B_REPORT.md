@@ -67,3 +67,27 @@ The login step passed (the secret is visible), the CLI was 2.1.307, and the **pr
 
 **The 4 h run was not requested**, against the plan that said to request it if the smoke was clean: it was mechanically clean and substantively not, and four hours would spend about $14 and 20 points of the usage window to measure a failure rate whose cause is unknown. Added instead, to read the cause: the stream records each validator call's failure reason and seconds, the report lists them by closed kind with samples, and the soak's workers keep a validator per thread and write `worker.q1_failure` events with the reason (printed in the job log). A third smoke (attempt 3) is requested to read them.
 
+## 9. Smoke attempt 3 (soak run 12, 2026-10-24 10:04-10:17 UTC): why the validator failed, and where it does not [E]
+
+CI `test` #273 for the commit that carries the diagnostics: success (normal and enforced jobs).
+
+**The cause, read from the failed calls' own records:** all 7 failures of the Q1 stream, and the failures of the soak's own workload (`worker.q1_failure` events), are **`stop_reason: "refusal"`** -- the service's safety classifier stopping the turn, as in S7; a failed call takes 2.7-3.9 s; no timeout, no rate limit, no login failure. The Q1 check's counts this run: 68 decided, 32 answered, 36 failed. The stream: `network.scan` 3 of 4 failed (`scan-host` goals 2 of 3), `network.recon` 2 of 2, `ad.collect`-wording 2 of 2, natural `code.secrets` 0 of 5, `code.scan` 0 of 3, `web.get`/`web.render` 0 of 1 each. The report's judgement: **not established** (6 secrets-wording and 2 AD-wording goals are too few; nothing contradicts S7).
+
+**Where the same failures do not occur** -- measured on the development machine, same validator, same model alias, same fallback switch, no S8b run (these are single-purpose probes of the validator, 156 calls):
+
+| probe | failed |
+|---|---|
+| the corpus's 60 matched items again, today (CLI 2.1.310; S7 was 2.1.307) | **11 of 60** (S7: 12 of 60); `network.scan` **0 of 16** (S7: 0 of 16); `network.recon` 5 of 8 (S7: 5 of 8); `ad.collect` 6 of 7 (S7: 7 of 7) |
+| the soak's own scan sentence on targets in the soak's ranges (`10.66.252.x`, `10.66.10-40.11-13`) | **0 of 32** |
+| the same sentence on random `10.x.y.z` targets | 0 of 16 |
+| five threads at once, 8 calls each (the soak's concurrency) | **0 of 40** |
+
+So the classifier's behaviour today is what it was on 2026-10-22; the target range does not matter; the concurrency does not matter; the CLI version does not matter. **What is left is the CI environment itself**: the runner's network egress, and the authentication path (the subscription login by `CLAUDE_CODE_OAUTH_TOKEN` there; the interactive login here). Neither can be varied from the development machine. [N] which of the two it is, or whether it is something else about the runner.
+
+**What this means for S8b [D]:** in the CI environment the validator answers about half of the soak's ordinary `network.scan` proposals and the rest become `plan_check_failed`, i.e. a person. Plan 8.1's observation criterion for Q1 -- no large unexpected `plan_check_failed` -- is **not met in that environment**, whatever the cause, and a 4 h run there would measure that rate for four hours (about $14 and 20 points of the usage window) without telling why. It is not a defect of the check, which reports the number and does not judge it (DP-14).
+
+**Options, for the owner to choose [not decided]:**
+1. A sequential pass of the corpus's matched group *inside CI* (60 calls, ~$0.5, ~3 min) added to the Q1 smoke: it separates "CI environment" (high there too) from "the soak's and the stream's own inputs or concurrency" (low there). It is the cheapest next step.
+2. Run the 4 h soak anyway, to see the rate over time and under faults.
+3. Do not enable Q1 where the validator runs from an environment that behaves like this one; treat the failure rate as a property of where the validator is called from, to be measured at the place before enabling.
+
