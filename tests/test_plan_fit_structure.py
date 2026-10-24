@@ -93,6 +93,19 @@ def test_only_the_tests_about_the_switch_itself_opt_out_of_the_enforced_run():
         "tests/test_plan_fit_replay.py",        # approved with it off, dispatched with it on
         "tests/test_plan_fit_goal_fit.py",      # the validator's wiring: switch off / on
         "tests/test_plan_fit_shadow.py",        # counts decisions made with the switches off
+        "tests/test_plan_fit_class_store.py",   # a class outside the list: switch on == switch off
+    }, users
+
+
+def test_only_the_tests_of_the_class_rules_use_the_real_class_store():
+    """``q1_class_store_live`` turns the record of each Q1 call and the exit rule on (DP-15). They
+    write global tables that nothing can empty, so the modules that may ask for them are listed."""
+    users = {p.relative_to(REPO).as_posix() for p in (REPO / "tests").rglob("*.py")
+             if "q1_class_store_live" in p.read_text()}
+    assert users == {
+        "tests/conftest.py",                    # the definition
+        "tests/test_plan_fit_structure.py",     # this test
+        "tests/test_plan_fit_class_store.py",   # the rules, on their own class names
     }, users
 
 

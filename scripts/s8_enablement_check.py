@@ -43,6 +43,9 @@ MEASURED_MODEL = "sonnet"
 FAKE = "fake"
 #: ``not_assessed`` with this cause is what a proposal records when no validator was passed
 DISABLED = "not_assessed/disabled"
+#: what a proposal records when its class is outside the operator's list, or was taken out of it
+#: (DP-15): not asked, by design
+CLASS_QUIET = ("not_assessed/class_not_enabled", "not_assessed/class_suspended")
 
 
 def verdict_p1(*, switches: dict[str, bool], decided: int, with_plan_fit: int) -> list[str]:
@@ -97,7 +100,20 @@ def verdict_q1(*, switches: dict[str, bool], backend: str | None, goal_fit: Coun
     if decided and not answered:
         problems.append(f"Q1: {decided} decided proposals and none with a goal_fit other than "
                         f"{DISABLED}: enabled and doing nothing")
+    # a decision of a class outside the list (DP-15) is a value other than ``disabled``: an empty
+    # list is not "doing nothing" by accident. ``notes_q1`` says it, so it is never silent either.
     return problems
+
+
+def notes_q1(*, goal_fit: Counter) -> list[str]:
+    """What is true and is not an anomaly: the validator was not asked about some proposals because
+    their class is not in the list. Printed with the verdict so that "no class is enabled" is read,
+    not discovered."""
+    unlisted = sum(n for key, n in goal_fit.items() if key in CLASS_QUIET)
+    if not unlisted:
+        return []
+    return [f"Q1: {unlisted} decided proposals were of a class outside the list (or a suspended "
+            "one) and the validator was not asked about them (DP-15)"]
 
 
 def read(engagements: list[str]) -> dict[str, Any]:
@@ -152,6 +168,9 @@ def main(argv: list[str] | None = None) -> int:
                               fallback_off=os.environ.get(NO_FALLBACK_ENV))
     if not seen["decided"]:
         print("no decided proposal yet: only the switch and the configuration were judged")
+    if args.switch == "q1":
+        for note in notes_q1(goal_fit=seen["goal_fit"]):
+            print(f"NOTE: {note}")
     for problem in problems:
         print(f"ANOMALY: {problem}", file=sys.stderr)
     print("OK: every condition holds" if not problems else f"{len(problems)} anomaly(ies)")

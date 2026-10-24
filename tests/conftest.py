@@ -135,6 +135,27 @@ def _task_relation_enforcement_when_asked():
 
 
 @pytest.fixture
+def q1_class_store_live():
+    """Ask for the real class store (D68 DP-15): the record of each Q1 call and the exit rule.
+
+    Without it, ``propose_action`` does not write them (the autouse fixture below). The tables are
+    global and the runtime role cannot delete from them, so a suite that ran the rule on its own
+    fixtures -- twenty validators made to fail, on ``network.scan`` -- would take that class out of
+    the list for every test after it, and for the next run on the same database. The tests of the
+    rule use their own class names, and ask for this."""
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _q1_class_record_is_off_unless_asked(request, monkeypatch):
+    if "q1_class_store_live" in request.fixturenames:
+        return
+    from control_plane.api import function_api
+
+    monkeypatch.setattr(function_api, "_review_class", lambda goal_fit, action: None)
+
+
+@pytest.fixture
 def switch_as_published(monkeypatch):
     """Opt a test out of the enforcement seam: the switch is exactly what its policy says.
 

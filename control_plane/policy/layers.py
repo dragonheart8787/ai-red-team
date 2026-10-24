@@ -54,6 +54,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from control_plane.audit.logger import record_audit
+from control_plane.plan_fit.classes import valid_action_name
 from control_plane.policy.merge import (
     ENFORCE_SWITCHES,
     INHERIT,
@@ -143,6 +144,16 @@ def publish_policy_layer(
             # A switch read as "is True": "false" or 1 would silently not enforce. Refuse it.
             raise PolicyLayerError(
                 f"{switch} must be a boolean (true or false), not {document[switch]!r}"
+            )
+
+    if "goal_fit_actions" in document:
+        # DP-15: the classes Q1 may be asked about. A list of well-formed class names, nothing
+        # else; it only ever adds classes (merged by union), so an overlay may carry it.
+        listed = document["goal_fit_actions"]
+        if not isinstance(listed, list) or not all(valid_action_name(a) for a in listed):
+            raise PolicyLayerError(
+                f"goal_fit_actions must be a list of action class names like 'network.scan', "
+                f"not {listed!r}"
             )
 
     if layer == EMERGENCY_OVERLAY:
@@ -293,6 +304,7 @@ def _combine(name: str, layers: list[PolicyLayer]) -> PolicyLayer:
         },
         task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
         goal_fit_enforce=any(layer.goal_fit_enforce for layer in layers),
+        goal_fit_actions=frozenset().union(*(layer.goal_fit_actions for layer in layers)),
     )
 
 

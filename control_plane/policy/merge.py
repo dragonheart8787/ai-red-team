@@ -87,6 +87,22 @@ class EmergencyOverlayError(ValueError):
     """The Emergency Overlay tried to relax something."""
 
 
+def goal_fit_actions_of(value: Any) -> frozenset[str]:
+    """The action classes a stored document lists for Q1, read strictly (DP-15).
+
+    Anything that is not a list of well-formed class names is read as *no class*: a damaged or
+    hand-written value can only mean "ask about nothing", never "ask about something". Publication
+    refuses such a document; this refuses to read one that got in another way.
+    """
+    from control_plane.plan_fit.classes import valid_action_name
+
+    if not isinstance(value, (list, tuple)):
+        return frozenset()
+    if not all(valid_action_name(item) for item in value):
+        return frozenset()
+    return frozenset(value)
+
+
 @dataclass(frozen=True)
 class PolicyLayer:
     """One layer of the policy pack.
@@ -103,6 +119,8 @@ class PolicyLayer:
     actions: Mapping[str, str] = field(default_factory=dict)
     task_relation_enforce: bool = False
     goal_fit_enforce: bool = False
+    #: DP-15: the action classes Q1 may be asked about. Union across layers; empty by default.
+    goal_fit_actions: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def from_document(cls, name: str, document: Mapping[str, Any] | None) -> PolicyLayer:
@@ -133,6 +151,7 @@ class PolicyLayer:
             # anything but a boolean, and this refuses to read one.)
             task_relation_enforce=doc.get("task_relation_enforce") is True,
             goal_fit_enforce=doc.get("goal_fit_enforce") is True,
+            goal_fit_actions=goal_fit_actions_of(doc.get("goal_fit_actions")),
         )
 
 
@@ -147,6 +166,7 @@ class EffectivePolicy:
     actions: Mapping[str, str]
     task_relation_enforce: bool = False
     goal_fit_enforce: bool = False
+    goal_fit_actions: frozenset[str] = field(default_factory=frozenset)
 
     def action_decision(self, action: str) -> str:
         """Resolve one action, including one never mentioned by any layer.
@@ -174,6 +194,7 @@ class EffectivePolicy:
             "actions": dict(self.actions),
             "task_relation_enforce": self.task_relation_enforce,
             "goal_fit_enforce": self.goal_fit_enforce,
+            "goal_fit_actions": sorted(self.goal_fit_actions),
         }
 
 
@@ -266,4 +287,5 @@ def merge_policy(
         },
         task_relation_enforce=any(layer.task_relation_enforce for layer in layers),
         goal_fit_enforce=any(layer.goal_fit_enforce for layer in layers),
+        goal_fit_actions=frozenset().union(*(layer.goal_fit_actions for layer in layers)),
     )

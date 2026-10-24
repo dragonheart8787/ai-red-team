@@ -161,7 +161,8 @@ ADAPTERS = {
 def test_the_model_has_three_values_and_the_system_alone_adds_a_fourth():
     assert GOAL_FIT_VALUES == ("plausible", "implausible", "insufficient_context")
     assert NOT_ASSESSED == "not_assessed"
-    assert NOT_ASSESSED_CAUSES == ("failed", "disabled", "not_applicable")
+    assert NOT_ASSESSED_CAUSES == (
+        "failed", "disabled", "not_applicable", "class_not_enabled", "class_suspended")
 
 
 def test_an_assessment_outside_the_vocabulary_cannot_be_built():

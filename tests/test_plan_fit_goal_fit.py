@@ -63,12 +63,15 @@ def world(engagement_id, registry):
     return {"engagement_id": engagement_id, "scope_id": scope_id}
 
 
-def policy(*, task=False, goal=False):
+def policy(*, task=False, goal=False, classes=frozenset({"network.scan"})):
+    """``classes``: the action classes Q1 may be asked about (DP-15). These tests are about what
+    happens when it is asked, so the class of the fixture's proposal is let in by default."""
     return merge_policy(
         PolicyLayer(name="baseline_global", data_deny=frozenset({"PII", "customer_database"}),
                     actions={"network.scan": ALLOW}),
         PolicyLayer(name="emergency_overlay"), PolicyLayer(name="customer"),
-        PolicyLayer(name="engagement", task_relation_enforce=task, goal_fit_enforce=goal),
+        PolicyLayer(name="engagement", task_relation_enforce=task, goal_fit_enforce=goal,
+                    goal_fit_actions=frozenset(classes)),
     )
 
 

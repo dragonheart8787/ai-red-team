@@ -31,7 +31,7 @@ UNVERIFIED = "plan_unverified"
 CHECK_FAILED = "plan_check_failed"
 ALL_REASONS = (WITHOUT_TASK, OUTSIDE_TASK, IMPLAUSIBLE, UNVERIFIED, CHECK_FAILED)
 
-_QUIET_NOT_ASSESSED = ("disabled", "not_applicable")
+_QUIET_NOT_ASSESSED = ("disabled", "not_applicable", "class_not_enabled", "class_suspended")
 
 
 def would_ask(stored: Any, *, task_enforce: bool, goal_enforce: bool) -> tuple[str, ...]:

@@ -44,6 +44,18 @@ class GoalFit:
 
     assessment: GoalFitAssessment
     detail: dict[str, Any] = field(default_factory=dict)
+    #: True only when the validator was actually asked (an answer, or a failure to give one). The
+    #: states that were decided without asking -- disabled, not applicable, class not enabled or
+    #: suspended -- are not calls and are not counted in a class's rates (DP-15).
+    asked: bool = False
+
+    @property
+    def outcome(self) -> str | None:
+        """What the exit rule counts: ``answered`` or ``failed`` for a call that was made, ``None``
+        for an assessment that was decided without asking."""
+        if not self.asked:
+            return None
+        return "answered" if self.assessment.goal_fit in GOAL_FIT_VALUES else "failed"
 
     @property
     def value(self) -> str:
@@ -88,14 +100,28 @@ def _valid(result: Any) -> bool:
 def assess_goal_fit(
     *, validator: Any, relation: r.TaskRelation, task_context: dict[str, Any] | None,
     proposal_action: str, proposal_target: str | None,
+    enabled_actions: frozenset[str] = frozenset(),
+    suspended_actions: frozenset[str] | None = frozenset(),
 ) -> GoalFit:
-    """The goal-fit assessment for one proposal. Never raises an ``Exception``."""
+    """The goal-fit assessment for one proposal. Never raises an ``Exception``.
+
+    **Which classes are asked (DP-15).** ``enabled_actions`` is the operator's list (policy, empty
+    by default); ``suspended_actions`` are the classes the control plane has taken out of it, or
+    ``None`` when that could not be read. A class outside the list is not asked and records
+    ``not_assessed`` / ``class_not_enabled``; a suspended one, ``class_suspended``; an unreadable
+    suspension state is read as suspended (the quiet side). The validator is not called in either
+    case, whatever the switch says.
+    """
     if validator is None:
         return _system("disabled")
     if relation.value != r.MATCHES_TASK:
         # Nothing to judge it by: a goal belongs to the task the proposal names, and this proposal
         # is not that task's. The relation already answers.
         return _system("not_applicable")
+    if proposal_action not in enabled_actions:
+        return _system("class_not_enabled")
+    if suspended_actions is None or proposal_action in suspended_actions:
+        return _system("class_suspended")
     if task_context is None:
         return _system("failed", error_type="task_unreadable")
 
@@ -114,8 +140,8 @@ def assess_goal_fit(
     except Exception as exc:  # noqa: BLE001 - a validator that raises did not answer
         detail["error_type"] = type(exc).__name__
         detail.update(_provenance(validator))
-        return GoalFit(GoalFitAssessment(SYSTEM, NOT_ASSESSED, "failed"), detail)
-    return GoalFit(result, detail)
+        return GoalFit(GoalFitAssessment(SYSTEM, NOT_ASSESSED, "failed"), detail, asked=True)
+    return GoalFit(result, detail, asked=True)
 
 
 def _ask(validator: Any, query: PlanFitQuery, detail: dict[str, Any]) -> GoalFitAssessment:

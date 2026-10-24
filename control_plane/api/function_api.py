@@ -84,13 +84,14 @@ from control_plane.orchestrator.dispatch import (
     dispatch_collection,
     dispatch_scan,
 )
+from control_plane.plan_fit import class_store as plan_classes
 from control_plane.plan_fit import goal_fit as plan_goal
 from control_plane.plan_fit import relation as plan_relation
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
 from control_plane.registry.scope_registry import list_scope_objects
-from control_plane.state.db import engagement_scope
+from control_plane.state.db import engagement_scope, get_engine
 from tool_gateway.adapters._http import AdapterError
 from tool_gateway.registry import adapter_for, side_effect_floor
 
@@ -709,6 +710,21 @@ def _common(run: _Run, proposal_id: str) -> dict[str, Any]:
     }
 
 
+def _review_class(goal_fit: Any, action: str):
+    """DP-15 exit rule, after a call the validator was actually asked: append it to the class's
+    record and run the rule over the class's last calls. Returns the verdict if this call took the
+    class out. Never raises: a store that cannot be written means the rule did not run this time,
+    and the proposal goes on."""
+    outcome = goal_fit.outcome
+    if outcome is None:
+        return None
+    try:
+        with get_engine().begin() as conn:
+            return plan_classes.record_and_review(conn, action, outcome)
+    except Exception:  # noqa: BLE001 - recording is not part of the decision
+        return None
+
+
 def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
     """Stage 1: resolve, review, decide -- then commit the decision and nothing else."""
     proposal, target, eid = run.proposal, run.target, run.engagement_id
@@ -741,6 +757,18 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
             plan_relation.read_task_for_goal_fit(conn, proposal.task_id)
             if run.plan_fit_validator is not None
             and run.plan_fit.value == plan_relation.MATCHES_TASK else None)
+        # --- 3d. Which classes Q1 may be asked about (DP-15): the operator's list is policy; the
+        # classes the control plane has taken out of it are read from the store, in a savepoint
+        # (an unreadable store must not abort the proposal's transaction) and as "suspended" when
+        # it cannot be read -- the quiet side.
+        suspended: frozenset[str] | None = frozenset()
+        if (run.plan_fit_validator is not None and proposal.action in run.policy.goal_fit_actions
+                and run.plan_fit.value == plan_relation.MATCHES_TASK):
+            try:
+                with conn.begin_nested():
+                    suspended = plan_classes.suspended_actions(conn)
+            except Exception:  # noqa: BLE001 - see above
+                suspended = None
     run.metadata = metadata
 
     # --- 4. Policy Reviewer --------------------------------------------------
@@ -774,7 +802,9 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
     # validator that fails to answer is ``not_assessed``, not an interrupted proposal.
     run.goal_fit = plan_goal.assess_goal_fit(
         validator=run.plan_fit_validator, relation=run.plan_fit, task_context=task_context,
-        proposal_action=proposal.action, proposal_target=canonical_target)
+        proposal_action=proposal.action, proposal_target=canonical_target,
+        enabled_actions=run.policy.goal_fit_actions, suspended_actions=suspended)
+    suspension = _review_class(run.goal_fit, proposal.action)
     plan_fit_stored = {**run.plan_fit.as_hint(), **run.goal_fit.as_hint()}
 
     # --- 5. OPA --------------------------------------------------------------
@@ -827,6 +857,15 @@ def _decide(run: _Run, proposal_id: str) -> ActionOutcome | object | None:
                 subject_type="action_proposal", subject_id=proposal_id,
                 payload={**run.plan_fit.audit_payload(), **run.goal_fit.audit_payload()},
             )
+            if suspension is not None:
+                # DP-15: this call took its class out of the list. Audited where it happened.
+                record_audit(
+                    engagement_id=eid, actor=run.actor, event_type="plan_fit.class_suspended",
+                    subject_type="action_proposal", subject_id=proposal_id,
+                    payload={"action": proposal.action, "window_calls": suspension.n,
+                             "window_failed": suspension.failed,
+                             "window_rate": round(suspension.rate, 4)},
+                )
             record_audit(
                 engagement_id=eid, actor=run.actor, event_type="policy.decided",
                 subject_type="action_proposal", subject_id=proposal_id,

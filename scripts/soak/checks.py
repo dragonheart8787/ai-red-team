@@ -207,11 +207,20 @@ def q1_verdict(switches: dict[str, bool], backend: str | None, decided: int,
                    if not key.startswith("not_assessed") and not key.startswith("absent"))
     failed = by_value.get("not_assessed/failed", 0)
     disabled = by_value.get("not_assessed/disabled", 0)
-    detail = (f"{decided} decided; answered {answered}, failed {failed}, disabled {disabled}; "
+    # DP-15: a class outside the operator's list (or taken out of it) is not asked, by design
+    unlisted = (by_value.get("not_assessed/class_not_enabled", 0)
+                + by_value.get("not_assessed/class_suspended", 0))
+    detail = (f"{decided} decided; answered {answered}, failed {failed}, disabled {disabled}, "
+              f"class not enabled or suspended {unlisted}; "
               f"{ {k: v for k, v in sorted(by_value.items())} }")
     if decided < Q1_MIN_DECIDED:
         return Result(Q1_CHECK, True, f"switch true, backend {name}; too few decided to judge "
                       f"({detail})", judged=False)
+    if answered == 0 and failed == 0 and unlisted:
+        # no class is listed (DP-15's default): nothing was asked, which is what the list says. It
+        # is stated, not judged: the check cannot show a validator working when none was asked.
+        return Result(Q1_CHECK, True, f"switch true, backend {name}; no proposal was of a class "
+                      f"in the list, so the validator was never asked ({detail})", judged=False)
     if answered == 0:
         return Result(Q1_CHECK, False, f"enabled and no validator ever answered ({detail})")
     return Result(Q1_CHECK, True, detail)

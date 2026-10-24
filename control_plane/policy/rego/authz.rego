@@ -354,7 +354,9 @@ approval_reasons contains "proposal_outside_task" if {
 #
 # No rule reads `plausible`: it is the same as the signal being absent. `not_assessed` with the cause
 # `disabled` (no validator configured) or `not_applicable` (the proposal is not its task, which the
-# relation above already answers) adds nothing. An absent `goal_fit` -- a decision from before the
+# relation above already answers) adds nothing, and neither does `class_not_enabled` / `class_suspended`
+# (DP-15: the validator was not asked, because the action's class is not in the operator's list or
+# has been taken out of it -- a check that was never made is not a check that failed). An absent `goal_fit` -- a decision from before the
 # validator existed -- fires nothing. `implausible` and `insufficient_context` each ask for a human
 # under their own name; anything else that is present (`not_assessed` / `failed`, a value outside the
 # vocabulary, a damaged object) is a check that did not succeed, and asks too.
@@ -364,7 +366,7 @@ goal_fit_is_quiet if input.plan_fit.goal_fit == "plausible"
 
 goal_fit_is_quiet if {
 	input.plan_fit.goal_fit == "not_assessed"
-	input.plan_fit.goal_fit_cause in {"disabled", "not_applicable"}
+	input.plan_fit.goal_fit_cause in {"disabled", "not_applicable", "class_not_enabled", "class_suspended"}
 }
 
 goal_fit_is_answered if input.plan_fit.goal_fit in {"implausible", "insufficient_context"}

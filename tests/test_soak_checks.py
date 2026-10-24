@@ -280,6 +280,17 @@ def test_q1_too_few_decided_is_an_execution_that_judged_nothing():
     assert got.ok and not got.judged
 
 
+def test_q1_with_no_class_in_the_list_nothing_is_asked_and_that_is_said_not_judged():
+    """DP-15: the default list is empty, so a soak with the switch on asks the validator nothing.
+    That is not 'enabled and no validator ever answered': it passes as an execution that judged
+    nothing and says why. A failure of a class that was asked still counts."""
+    quiet = {"not_assessed/class_not_enabled": 45, "not_assessed/class_suspended": 5}
+    got = checks.q1_verdict(Q1_ON, "claude_code", 50, quiet)
+    assert got.ok and not got.judged and "never asked" in got.detail
+    mixed = {**quiet, "not_assessed/failed": 5}
+    assert not checks.q1_verdict(Q1_ON, "claude_code", 55, mixed).ok
+
+
 def test_q1_decisions_from_before_the_validator_are_not_answers():
     got = checks.q1_verdict(Q1_ON, "claude_code", 40, {"absent": 40})
     assert not got.ok

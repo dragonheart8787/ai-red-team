@@ -940,10 +940,41 @@ test_a_check_that_failed_asks_for_a_human if {
 }
 
 test_a_check_that_was_never_asked_adds_nothing if {
-	every cause in ["disabled", "not_applicable"] {
+	every cause in ["disabled", "not_applicable", "class_not_enabled", "class_suspended"] {
 		r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", cause)})
 		r.decision == "ALLOW"
 		count(r.approval_reasons) == 0
+	}
+}
+
+# D68 DP-15. A class outside the operator's list is not asked; a class the control plane took out of
+# it is not asked either. Neither is a check that failed, so neither may raise `plan_check_failed`.
+# With the switch ON the decision for such a class is exactly the decision with the switch OFF.
+test_a_class_outside_the_list_with_the_switch_on_decides_as_with_the_switch_off if {
+	every cause in ["class_not_enabled", "class_suspended"] {
+		signal := {"plan_fit": fit("not_assessed", cause)}
+		on := authz.result with input as object.union(goal_enforced, signal)
+		off := authz.result with input as object.union(base, signal)
+
+		on == off
+		on.decision == "ALLOW"
+		not "plan_check_failed" in on.approval_reasons
+	}
+}
+
+test_a_failed_check_still_asks_when_a_class_is_in_the_list if {
+	# the contrast that gives the two tests above their meaning: the cause alone decides
+	failed := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", "failed")})
+	quiet := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", "class_not_enabled")})
+
+	failed.approval_reasons == ["plan_check_failed"]
+	count(quiet.approval_reasons) == 0
+}
+
+test_a_cause_the_policy_does_not_know_is_not_quiet if {
+	every cause in ["class_unknown", "", null, 7, "Class_Not_Enabled"] {
+		r := authz.result with input as object.union(goal_enforced, {"plan_fit": fit("not_assessed", cause)})
+		r.approval_reasons == ["plan_check_failed"]
 	}
 }
 

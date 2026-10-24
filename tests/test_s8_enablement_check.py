@@ -72,3 +72,10 @@ def test_q1_verdict_reports_an_unmeasured_configuration_beside_the_other_anomali
     got = c.verdict_q1(switches=ON, backend="claude_code", model="opus", fallback_off=None,
                        goal_fit=Counter({"plausible/-": 4}), decided=4)
     assert len(got) == 2 and any("opus" in p for p in got) and any("fallback" in p for p in got)
+
+
+def test_q1_an_empty_list_is_noted_and_is_not_an_anomaly():
+    quiet = Counter({"not_assessed/class_not_enabled": 30})
+    assert c.verdict_q1(switches=ON, backend="claude_code", goal_fit=quiet, decided=30) == []
+    assert "outside the list" in c.notes_q1(goal_fit=quiet)[0]
+    assert c.notes_q1(goal_fit=Counter({"plausible/-": 3})) == []

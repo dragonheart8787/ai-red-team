@@ -121,3 +121,7 @@ What the soak's workload has that none of the probes had [D, none tested]: **few
 
 **Next diagnostics, cheap, not run [for the owner]:** (a) record, for each failed call, the host and a hash of the prompt, to see whether specific sentences fail every time (the soak asks the same ones repeatedly); (b) in CI, ask the soak's twelve actual sentences five times each, sequentially, then the same with fresh hosts: it separates repetition from the call path; (c) the same twelve sentences on the development machine.
 
+
+## 12. DP-15 (owner, 2026-10-24): Q1 is asked per action class; no class is enabled [E]
+
+After the smoke attempts the owner asked for a per-class allowlist (plan 7.3c, ACCEPTANCE 5.125). It is a mechanism only: the list is empty by default, a class outside it is not asked (`not_assessed/class_not_enabled`), a class that fails above 30% of its last 50 calls (at least 30) is taken out automatically (`class_suspended`) and put back only by an operator, and admission is advice from `scripts/manage_goal_fit_classes.py report` (>= 40 calls on the real path, Wilson 95% upper bound <= 15%). It does not explain the soak's ~60% `network.scan` failures (section 11); it contains their effect on decisions, because Q1 is no longer asked for a class nobody admitted. The 4 h run remains not requested. A soak with `--q1-enforce` and an empty list now reports "the validator was never asked" (not judged) instead of "enabled and doing nothing"; it can show nothing about Q1 until a class is listed.

@@ -126,7 +126,10 @@ GOAL_FIT_VALUES = ("plausible", "implausible", "insufficient_context")
 #: refused or returned something outside the contract; ``disabled`` -- no validator is configured;
 #: ``not_applicable`` -- the proposal does not match its task, so there is no goal to judge it by.
 NOT_ASSESSED = "not_assessed"
-NOT_ASSESSED_CAUSES = ("failed", "disabled", "not_applicable")
+#: ``class_not_enabled`` / ``class_suspended`` (DP-15): the validator was not asked, because the
+#: action's class is not in the operator's list or has been taken out of it. Neither is a failure.
+NOT_ASSESSED_CAUSES = ("failed", "disabled", "not_applicable", "class_not_enabled",
+                       "class_suspended")
 
 
 @dataclass(frozen=True)

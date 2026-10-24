@@ -24,6 +24,14 @@ from control_plane.state.db import get_engine
 
 #: (table, constraint) -> why a NULL in a nullable column it mentions is acceptable.
 NULL_IS_A_STATE = {
+    ("goal_fit_suspensions", "goal_fit_suspensions_check1"):
+        "NULL is the live state: `(cleared_at IS NULL) = (cleared_by IS NULL)` ties the two "
+        "columns "
+        "so a clearing names who did it and a live row names no one (D68 DP-15, 0027); the guard "
+        "trigger lets them change once.",
+    ("goal_fit_suspensions", "goal_fit_suspensions_cleared_by_check"):
+        "`cleared_by <> ''` on a column that is NULL while the suspension is live; an empty name "
+        "is refused, NULL is the live state (D68 DP-15, 0027).",
     ("action_proposals", "action_proposals_decision_check"):
         "NULL until the decision stage: a `received` proposal has no decision yet. Every later "
         "stage is tied to a non-NULL decision by action_proposals_decision_past_received (0021).",

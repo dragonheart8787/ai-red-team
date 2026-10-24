@@ -199,7 +199,7 @@ def _policy():
     return merge_policy(
         PolicyLayer(name="baseline_global", actions={"network.scan": ALLOW}),
         PolicyLayer(name="emergency_overlay"), PolicyLayer(name="customer"),
-        PolicyLayer(name="engagement"))
+        PolicyLayer(name="engagement", goal_fit_actions=frozenset({"network.scan"})))
 
 
 def decide(world, validator, *, task="matching", host=HOST):
