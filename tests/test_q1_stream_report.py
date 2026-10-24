@@ -3,6 +3,7 @@ that was written down."""
 
 from __future__ import annotations
 
+import json
 import random
 from collections import Counter
 
@@ -123,3 +124,21 @@ def test_failure_reasons_are_counted_in_closed_words_and_unknown_ones_keep_their
                 "validator_failure": None}]
     text = rep.render_failures(records)
     assert "1 failed of 2 calls" in text and "| timeout | 1 |" in text
+
+
+def test_the_ci_matched_table_counts_only_matched_items_and_sets_s7_beside_them():
+    from scripts.soak import q1_ci_matched as ci
+    from tests.plan_fit_corpus import MATCHED, build_corpus
+
+    matched = [i for i in build_corpus() if i.group == MATCHED]
+    other = next(i for i in build_corpus() if i.group != MATCHED)
+    records = [{"item_id": m.item_id, "call_failed": m.query.proposal_action == "network.scan"}
+               for m in matched] + [{"item_id": other.item_id, "call_failed": True}]
+    here = ci.per_action(records)
+    assert sum(v[1] for v in here.values()) == len(matched)     # the non-matched one is not in
+    assert here["network.scan"][0] == here["network.scan"][1] == 16
+    assert here["web.get"][0] == 0
+    s7 = ci.per_action(json.loads(ci.S7_RECORD.read_text())["records"])
+    assert s7["network.scan"] == [0, 16] and sum(v[1] for v in s7.values()) == 60
+    text = ci.render(here, s7)
+    assert "| network.scan | 0/16" in text and "16/16" in text

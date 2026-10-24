@@ -91,3 +91,9 @@ So the classifier's behaviour today is what it was on 2026-10-22; the target ran
 2. Run the 4 h soak anyway, to see the rate over time and under faults.
 3. Do not enable Q1 where the validator runs from an environment that behaves like this one; treat the failure rate as a property of where the validator is called from, to be measured at the place before enabling.
 
+## 10. Option 1 chosen (owner, 2026-10-24): the matched group, sequentially, inside CI
+
+Added to the Q1 smoke, before the soak: `scripts/soak/q1_ci_matched.py --run` asks the corpus's 60 matched items one after another, with the measured configuration (backend `claude_code`, model `sonnet`, fallback off), and prints the table per action beside S7's (`network.scan` 0 of 16). Smoke attempt 4 is requested. Reading it: if this environment fails `network.scan` here too, the environment (egress or the OAuth-token path) is the difference; if it does not, the difference is in the soak's or the stream's own inputs or concurrency, which the development-machine probes did not reproduce either.
+
+A ratchet had to be respected on the way: `tests/test_plan_fit_baseline.py::test_nothing_in_ci_runs_the_baseline` keeps the name `plan_fit_baseline` out of every workflow (it reaches a real model; ADR_REVIEWER_BILLING). The workflow names the new module instead, as it names the pre-flight, and the module calls the baseline runner. That keeps the ratchet's text; its purpose -- no model call in a push gate -- is unchanged by it, because `soak.yml` runs only when the owner pushes a request file (and weekly, with Q1 off), never on an ordinary push. This is stated here so that it is not a surprise.
+

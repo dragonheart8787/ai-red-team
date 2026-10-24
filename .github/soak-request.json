@@ -1,1 +1,1 @@
-{"hours": 0.2, "p1_enforce": true, "q1_enforce": true, "attempt": 3, "purpose": "D68 S8b smoke, attempt 3: attempt 2 ran clean mechanically but the validator failed on 27 of 62 decided proposals (44%); this run keeps and prints the failure reasons (stream records, worker.q1_failure events)"}
+{"hours": 0.2, "p1_enforce": true, "q1_enforce": true, "attempt": 4, "purpose": "D68 S8b smoke, attempt 4: adds the diagnostic that asks the corpus's matched group sequentially in CI before the soak (option 1 chosen by the owner)"}

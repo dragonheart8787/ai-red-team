@@ -226,6 +226,22 @@ jobs:
           set -a; . ./.env; set +a
           .venv/bin/python -m scripts.soak.q1_preflight
 
+      - name: S8b diagnostic -- the corpus's matched group, one call after another, in this environment (Q1 run)
+        # The Q1 smokes failed on about half of the soak's `network.scan` proposals here, every one a
+        # safety-classifier stop, while the same validator on the development machine fails on
+        # `network.scan` 0 of 16 matched items (S7, and again on 2026-10-24). The same 60 items,
+        # sequentially, before the soak: this environment itself, or the soak's own inputs?
+        if: steps.plan.outputs.q1 != ''
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ''
+        run: |
+          set -a; . ./.env; set +a
+          PYTHONPATH=. .venv/bin/python -m scripts.soak.q1_ci_matched --run \
+            --record "$RUN_DIR/ci_matched.json" --out "$RUN_DIR/ci_matched.md" > "$RUN_DIR/ci_matched.log" 2>&1 || true
+          tail -12 "$RUN_DIR/ci_matched.log"
+          { echo '### S8b diagnostic: the matched group in CI, sequential'; cat "$RUN_DIR/ci_matched.md"; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: The soak (unprivileged; sudo only for the two restarts)
         env:
           Q1: ${{ steps.plan.outputs.q1 }}
