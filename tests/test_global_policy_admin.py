@@ -266,8 +266,10 @@ def test_global_policy_admin_can_neither_rewrite_nor_delete_a_layer(global_overl
 
 
 def test_global_policy_admin_holds_nothing_but_policy_layers():
-    """The catalogue: no table other than ``policy_layers`` is touched, and there only INSERT,
-    SELECT and ``UPDATE (active)``. A later blanket GRANT fails here."""
+    """The catalogue: ``policy_layers`` with INSERT, SELECT and ``UPDATE (active)``, and -- since
+    D68 DP-15 -- SELECT on the two Q1 class tables plus ``UPDATE (cleared_at, cleared_by)`` on
+    ``goal_fit_suspensions`` (re-including a class is this role's act, and nothing else). A later
+    blanket GRANT fails here."""
     with global_policy_admin_scope() as conn:
         tables = [r[0] for r in conn.execute(text(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))]
@@ -288,6 +290,14 @@ def test_global_policy_admin_holds_nothing_but_policy_layers():
                 "SELECT has_column_privilege(current_user, 'policy_layers', :c, 'UPDATE')"),
                 {"c": c}).scalar_one()
         }
+        suspension_columns = {
+            c for (c,) in conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'goal_fit_suspensions'"))
+            if conn.execute(text(
+                "SELECT has_column_privilege(current_user, 'goal_fit_suspensions', :c, 'UPDATE')"),
+                {"c": c}).scalar_one()
+        }
         sequences = {
             s for (s,) in conn.execute(text(
                 "SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'"))
@@ -297,8 +307,10 @@ def test_global_policy_admin_holds_nothing_but_policy_layers():
         attrs = conn.execute(text(
             "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles "
             "WHERE rolname = current_user")).one()
-    assert held == {"policy_layers": {"SELECT", "INSERT"}}, held
+    assert held == {"policy_layers": {"SELECT", "INSERT"},
+                    "goal_fit_calls": {"SELECT"}, "goal_fit_suspensions": {"SELECT"}}, held
     assert updatable == {"active"}
+    assert suspension_columns == {"cleared_at", "cleared_by"}
     assert sequences == {"policy_layers_id_seq"}
     assert tuple(attrs) == (False, False, False, False)
 
@@ -312,11 +324,12 @@ _CONNECTION = re.compile(
     r"|GLOBAL_POLICY_ADMIN_DATABASE_URL")
 
 #: The only files outside ``tests/`` allowed to name the connection: where it is defined, the
-#: operator's CLI, and the two live-run harnesses that stand up a baseline by hand (they are
+#: operator's CLIs, and the two live-run harnesses that stand up a baseline by hand (they are
 #: operator-run scripts, not services).
 ALLOWED_TO_OPEN_IT = {
     "control_plane/state/db.py",
     "scripts/manage_global_policy.py",
+    "scripts/manage_goal_fit_classes.py",       # D68 DP-15: re-including a class is this role's act
     "scripts/live_run/live_run.py",
     "scripts/live_run/d40_three_role.py",
 }
