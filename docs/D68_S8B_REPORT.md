@@ -97,3 +97,27 @@ Added to the Q1 smoke, before the soak: `scripts/soak/q1_ci_matched.py --run` as
 
 A ratchet had to be respected on the way: `tests/test_plan_fit_baseline.py::test_nothing_in_ci_runs_the_baseline` keeps the name `plan_fit_baseline` out of every workflow (it reaches a real model; ADR_REVIEWER_BILLING). The workflow names the new module instead, as it names the pre-flight, and the module calls the baseline runner. That keeps the ratchet's text; its purpose -- no model call in a push gate -- is unchanged by it, because `soak.yml` runs only when the owner pushes a request file (and weekly, with Q1 off), never on an ordinary push. This is stated here so that it is not a surprise.
 
+## 11. Smoke attempt 4 (soak run 13, 2026-10-24 10:55-11:11 UTC): the diagnostic did not find the environment [E]
+
+CI `test` #275 for the commit that carries the diagnostic: success. The job: login and pre-flight ok, the diagnostic ran 10:56-10:59 (60 sequential calls), the soak 13 minutes, no finding, 5 of 5 controls.
+
+**The corpus's matched group, sequentially, inside CI, beside S7:**
+
+| action | S7 (dev machine, 2026-10-22) | CI, sequential, 2026-10-24 |
+|---|---|---|
+| `network.scan` | 0/16 | **3/16** |
+| `network.recon` | 5/8 | 7/8 |
+| `ad.collect` | 7/7 | 7/7 |
+| `code.scan`, `code.secrets`, `web.get`, `web.render` | 0 of 7, 7, 8, 7 | 0 of 7, 7, 8, 7 |
+| **all matched** | 12/60 | **17/60** |
+
+By Fisher's exact test (two-sided) 17/60 against 12/60 is p = 0.39, and `network.scan` 3/16 against 0/16 is p = 0.23: **inside CI, asked one after another, the validator behaves like S7 within what chance gives.** The CI environment (runner egress, the OAuth-token path) is therefore **not** shown to be the cause; the diagnostic that was meant to find it did not.
+
+**What is still unexplained is the soak's own workload.** Its proposals are all `network.scan`; the validator failed on (Q1 check's decided minus the stream's): attempt 2 ~20 of 43, attempt 3 ~29 of 49, **attempt 4 32 of 53 (60%)** -- every failure a safety-classifier stop. Against the same environment's sequential `network.scan` 3/16: p = 0.07, 0.008 and 0.004; against everything measured elsewhere (S7 and three development-machine probes, 0 of 104 `network.scan` items) the soak's 81 of 145 is p < 1e-11. The Q1 stream in the same job, with the same validator and the same environment, failed `network.scan` 1 of 4 this time (3 of 4 before), `network.recon` 2 of 2.
+
+What the soak's workload has that none of the probes had [D, none tested]: **few distinct prompts** (nine hosts in the engagements plus three outside ones, so about twelve different sentences, each asked about five times in 13 minutes; the corpus's probes used a new host for each call); a **sustained rate** of roughly five calls a minute from one process for the whole run; calls made **from inside `propose_action`** in a worker with the soak's resource caps (the same code as production). The stream, with fresh hosts for each call, fails less on `network.scan` than the soak does.
+
+**What this changes:** the failure rate in the Q1 soak is not shown to be a property of the environment, and not shown to be a property of the validator on these inputs; it is a property of something in how the soak asks. Until that is known, a 4 h run would again measure the number without explaining it, and the number must not be read as the rate real traffic would see. **The 4 h run is not requested.**
+
+**Next diagnostics, cheap, not run [for the owner]:** (a) record, for each failed call, the host and a hash of the prompt, to see whether specific sentences fail every time (the soak asks the same ones repeatedly); (b) in CI, ask the soak's twelve actual sentences five times each, sequentially, then the same with fresh hosts: it separates repetition from the call path; (c) the same twelve sentences on the development machine.
+
