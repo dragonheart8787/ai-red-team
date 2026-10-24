@@ -45,6 +45,8 @@ EXPECTED = {
     ("0017_approval_stages.py", "downgrade"): {"action_proposals"},
     ("0020_scheduler_state_narrow.py", "upgrade"): {"scheduler_state"},
     ("0022_abandoned_stage.py", "downgrade"): {"action_proposals"},
+    # D68 DP-15: gives the reasons of suspensions cleared during development a value, FORCE off
+    ("0028_goal_fit_clear_reason.py", "upgrade"): {"goal_fit_suspensions"},
 }
 
 

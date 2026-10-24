@@ -211,6 +211,38 @@ for one. (b) If the goal were simply added to the *existing* call, `risk_hint`'s
 `recommended_escalation` is an unused boolean today [R]; this design does **not** wire it up and does not
 use it as a shortcut. If a person wants it wired, that is its own decision. [D]
 
+### 2.6 Threat model of the per-class list (DP-15, added 2026-10-24)
+
+Q1 is asked only about the action classes an operator has let in, and a class that fails too often
+is taken out by the control plane and put back only by an operator (plan 7.3c, ACCEPTANCE 5.125).
+The threats of that mechanism are listed here; **one is written so far.**
+
+1. **The operator role can put a failing class back, and it is the same role that publishes global
+   policy.** `global_policy_admin` may clear a suspension (`UPDATE (cleared_at, cleared_by,
+   cleared_reason)` on `goal_fit_suspensions`, nothing else) *and* publish the layer that lists a
+   class. Whoever holds that credential -- a person, a compromised operator host, a script run with
+   the wrong name -- can therefore make Q1 ask again about a class the control plane removed because
+   its calls failed. The effect is not a path that was closed being opened: Q1 only adds friction (section 0:
+   monotone and absorbing). It is the approval-fatigue attack of 2.4 at the point where the system
+   had stopped it: every failed call of the class is a `plan_check_failed`, a person is asked, and
+   rubber-stamping becomes the cheap answer. [D]
+   * *What the role cannot do* [R: grants, `tests/test_global_policy_admin.py`]: write a call (so it
+     cannot make a class look good), insert a suspension (so it cannot silence a class), change a
+     suspension's other columns, clear one twice, or edit a clearing afterwards (a guard trigger).
+     The runtime role, which an agent's proposals run under, has no grant to clear at all.
+   * *What a clearing now costs* [R: migration 0028, `scripts/manage_goal_fit_classes.py`]: a
+     reason of 10 to 500 characters, which the database requires; the name of the clearing is the
+     login that runs the tool (`SUDO_USER` or the OS user), not a flag, and `root` or a `--actor`
+     that differs is refused; a person at a terminal confirms (`--yes` is the caller's statement
+     that one already did). Every clearing is a row nobody can rewrite, and the report ends with
+     the classes suspended in the period, each with who cleared it and why.
+   * *What it does not stop* [N]: the login check is only as strong as the operator host's access
+     control; holding the `global_policy_admin` credential is enough to clear with SQL, with any
+     name, and the reason is text nobody verifies. And a class cleared without a fix is taken out
+     again only after the exit rule has seen 30 new calls: **up to 29 failed calls, so up to 29
+     `plan_check_failed` approvals, can come between a careless clearing and the next suspension.**
+     The tool does not hold a class back for a trial period; that is not built.
+
 ## 3. Relation to D58-12 (the closed-directions ledger)
 
 **D58-12 is not built.** Its design [R] `ADR_PRODUCTION_ORCHESTRATOR.md` 4.1 items 1 and 4: a durable set of

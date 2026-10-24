@@ -34,6 +34,10 @@ from dataclasses import dataclass
 #: admission: judgements on the real path, and the bound the failure rate must be under
 ADMIT_MIN = 40
 ADMIT_UPPER = 0.15
+#: ... judged over a fixed window, the class's most recent calls (the same size as the exit window,
+#: so that what lets a class in and what takes it out look at the same stretch of its history): a
+#: long run of good calls long ago cannot carry a class whose recent calls fail
+ADMIT_WINDOW = 50
 #: exit: the last EXIT_WINDOW calls, at least EXIT_MIN of them, failing above EXIT_RATE
 EXIT_WINDOW = 50
 EXIT_MIN = 30
@@ -87,6 +91,52 @@ def admission(action: str, n: int, failed: int) -> Admission:
                          f"failure rate upper bound {upper:.1%} is above {ADMIT_UPPER:.0%}")
     return Admission(action, n, failed, upper, True,
                      f"{n} judgements, upper bound {upper:.1%} <= {ADMIT_UPPER:.0%}")
+
+
+def admission_over_window(action: str, recent: Sequence[str]) -> Admission:
+    """The admission rule over a class's most recent calls, newest first as the store returns them.
+
+    Only the last :data:`ADMIT_WINDOW` are read; fewer than :data:`ADMIT_MIN` in the window is too
+    few. Calls older than the window are history and are neither credit nor blame here.
+    """
+    window = list(recent)[:ADMIT_WINDOW]
+    return admission(action, len(window), sum(1 for o in window if o == FAILED))
+
+
+#: what a clearing may say about itself: a sentence, not a ticket number or a word
+REASON_MIN = 10
+REASON_MAX = 500
+
+
+def valid_reason(value: object) -> bool:
+    """A reason for re-including a class: text of :data:`REASON_MIN` to :data:`REASON_MAX`
+    characters (after trimming) on one line, with no control characters."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return (REASON_MIN <= len(text) <= REASON_MAX
+            and all(ch.isprintable() for ch in text))
+
+
+def suspension_lines(rows: Sequence[dict], since: str | None = None) -> list[str]:
+    """The classes suspended in a period, as report lines (the same wording in every report).
+
+    ``rows`` are :func:`class_store.suspensions_in_period`'s. A class is listed by when it was
+    taken out, and each line says how it ended: still out, or let back in by whom and why.
+    """
+    period = f"since {since}" if since else "all time"
+    if not rows:
+        return [f"classes suspended this period ({period}): none"]
+    lines = [f"classes suspended this period ({period}): {len({r['action'] for r in rows})} "
+             f"class(es), {len(rows)} suspension(s)"]
+    for r in rows:
+        ended = ("STILL SUSPENDED" if r["live"] else
+                 f"cleared {r['cleared_at']:%Y-%m-%d %H:%M} by {r['cleared_by']}: "
+                 f"{r['cleared_reason']}")
+        lines.append(f"  #{r['suspension_id']} {r['action']}: taken out "
+                     f"{r['suspended_at']:%Y-%m-%d %H:%M} on {r['window_failed']} of "
+                     f"{r['window_n']} failed; {ended}")
+    return lines
 
 
 @dataclass(frozen=True)

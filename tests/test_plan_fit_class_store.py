@@ -61,9 +61,12 @@ def live_suspension(action: str) -> bool:
         return action in store.suspended_actions(conn)
 
 
-def admin_clear(action: str, who: str = "operator-test") -> bool:
+REASON = "wording of the goal template changed; 30 test calls answered"
+
+
+def admin_clear(action: str, who: str = "operator-test", reason: str = REASON) -> bool:
     with global_policy_admin_scope() as conn:
-        return store.clear_suspension(conn, action, who)
+        return store.clear_suspension(conn, action, who, reason)
 
 
 OK, BAD = c.ANSWERED, c.FAILED
@@ -474,3 +477,206 @@ def test_the_tool_has_no_way_to_write_the_list():
 
     source = Path("scripts/manage_goal_fit_classes.py").read_text()
     assert "publish_policy_layer" not in source and "INSERT INTO policy_layers" not in source
+
+
+# -- admission is judged over a fixed window ------------------------------------------------------
+
+def test_admission_reads_the_last_fifty_calls_and_not_the_whole_history():
+    """200 good calls long ago, then 8 failures in the most recent calls: over everything that is
+    8 in 218 (a Wilson bound near 7%, recommended); over the last 50 it is 8 in 50 (near 28%, not).
+    The failures stay under the exit rule's 30%, so the class is still in the table."""
+    action = fresh_class()
+    record(action, [OK] * 200 + [BAD] * 5 + [OK] * 5 + [BAD] * 3 + [OK] * 5)
+    row = table_row(action)
+    assert (row["n"], row["n_total"]) == (50, 218)
+    assert (row["failed"], row["failed_total"]) == (8, 8)
+    assert c.wilson_upper(8, 218) <= c.ADMIT_UPPER < c.wilson_upper(8, 50)
+    assert row["recommend_admission"] is False                  # the cumulative rate would say yes
+    assert row["upper95"] == pytest.approx(c.wilson_upper(8, 50), abs=1e-4)
+
+
+def test_old_failures_leave_the_window_and_the_class_can_be_recommended():
+    action = fresh_class()
+    record(action, [OK] * 40 + [BAD] * 4 + [OK] * 50)           # 4 failures, then 50 good
+    row = table_row(action)
+    assert (row["n"], row["failed"]) == (50, 0) and row["n_total"] == 94
+    assert row["recommend_admission"] is True
+
+
+def test_the_window_is_short_of_forty_calls_when_the_class_has_fewer():
+    action = fresh_class()
+    record(action, [OK] * 39)
+    assert table_row(action)["recommend_admission"] is False
+    record(action, [OK])
+    assert table_row(action)["recommend_admission"] is True
+
+
+# -- a clearing says why, and the database holds it to it -----------------------------------------
+
+@pytest.mark.parametrize("reason", ["", "   ", "short", "x" * 501, "two\nlines of reason", None, 7])
+def test_a_clearing_without_a_usable_reason_is_refused_in_the_code(reason):
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    with pytest.raises(ValueError):
+        with global_policy_admin_scope() as conn:
+            store.clear_suspension(conn, action, "operator-test", reason)
+    assert live_suspension(action)
+
+
+def test_the_database_refuses_a_clearing_without_a_reason_even_when_the_code_is_bypassed():
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    for statement in (
+            "UPDATE goal_fit_suspensions SET cleared_at = now(), cleared_by = 'someone' "
+            "WHERE action = :a AND cleared_at IS NULL",
+            "UPDATE goal_fit_suspensions SET cleared_at = now(), cleared_by = 'someone', "
+            "cleared_reason = '' WHERE action = :a AND cleared_at IS NULL"):
+        with pytest.raises(DBAPIError):
+            with global_policy_admin_scope() as conn:
+                conn.execute(text(statement), {"a": action})
+    assert live_suspension(action)
+
+
+def test_the_reason_is_stored_with_the_clearing_and_cannot_be_edited_afterwards():
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    assert admin_clear(action, "alice", "  the goal template no longer names AD collection  ")
+    with global_policy_admin_scope() as conn:
+        row = conn.execute(text(
+            "SELECT cleared_by, cleared_reason FROM goal_fit_suspensions WHERE action = :a"),
+            {"a": action}).one()
+    assert tuple(row) == ("alice", "the goal template no longer names AD collection")
+    with global_policy_admin_scope() as conn:                   # the row is frozen once cleared
+        try:
+            conn.execute(text("UPDATE goal_fit_suspensions SET cleared_reason = 'another story' "
+                              "WHERE action = :a"), {"a": action})
+        except DBAPIError:
+            pass
+    with global_policy_admin_scope() as conn:
+        assert conn.execute(text(
+            "SELECT cleared_reason FROM goal_fit_suspensions WHERE action = :a"),
+            {"a": action}).scalar_one() == "the goal template no longer names AD collection"
+
+
+def test_the_runtime_role_cannot_write_a_reason_either():
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    with pytest.raises(DBAPIError):
+        with get_engine().begin() as conn:
+            conn.execute(text("UPDATE goal_fit_suspensions SET cleared_reason = 'x' * 20 "
+                              "WHERE action = :a"), {"a": action})
+
+
+# -- the tool checks who is clearing --------------------------------------------------------------
+
+def test_the_tool_refuses_a_clearing_by_a_shared_account_or_under_another_name():
+    from scripts import manage_goal_fit_classes as tool
+
+    def problem(actor, identity):
+        return tool.identity_problem(actor, identity) or ""
+
+    assert tool.identity_problem(None, "alice") is None
+    assert tool.identity_problem("alice", "alice") is None
+    assert "shared account" in problem(None, "root")
+    assert "shared account" in problem("root", "root")
+    assert "not the login" in problem("bob", "alice")
+    assert tool.identity_problem(None, "") is not None
+
+
+def test_the_tool_takes_the_name_from_the_login_and_not_from_a_flag(monkeypatch):
+    from scripts import manage_goal_fit_classes as tool
+
+    monkeypatch.setenv("SUDO_USER", "carol")
+    assert tool.login_identity() == "carol"
+    monkeypatch.delenv("SUDO_USER")
+    monkeypatch.setattr(tool.getpass, "getuser", lambda: "dave")
+    assert tool.login_identity() == "dave"
+
+
+def test_the_tool_clears_as_the_login_with_the_reason_and_refuses_otherwise(monkeypatch, capsys):
+    from scripts import manage_goal_fit_classes as tool
+
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    monkeypatch.setattr(tool, "login_identity", lambda: "erin")
+    assert tool._clear(action, "mallory", REASON, True) == 1             # another person's name
+    assert tool._clear(action, None, None, True) == 1                    # no reason
+    assert tool._clear(action, None, "too short", True) == 1
+    assert tool._clear("NotAClass", None, REASON, True) == 1
+    assert live_suspension(action)
+    monkeypatch.setattr(tool, "login_identity", lambda: "root")
+    assert tool._clear(action, None, REASON, True) == 1                  # a shared account
+    assert live_suspension(action)
+    monkeypatch.setattr(tool, "login_identity", lambda: "erin")
+    assert tool._clear(action, "erin", REASON, True) == 0
+    assert not live_suspension(action)
+    with global_policy_admin_scope() as conn:
+        row = conn.execute(text("SELECT cleared_by, cleared_reason FROM goal_fit_suspensions "
+                                "WHERE action = :a"), {"a": action}).one()
+    assert tuple(row) == ("erin", REASON)
+    assert "refused" in capsys.readouterr().err
+
+
+def test_the_tool_does_not_take_the_name_from_the_command_line_alone():
+    import subprocess
+    import sys
+
+    got = subprocess.run(
+        [sys.executable, "scripts/manage_goal_fit_classes.py", "clear", "--action", "a.b"],
+        capture_output=True, text=True)
+    assert got.returncode != 0 or "refused" in got.stderr
+
+
+# -- the classes suspended in a period ------------------------------------------------------------
+
+def test_the_period_lists_the_classes_suspended_and_how_each_ended():
+    live, cleared = fresh_class(), fresh_class()
+    record(live, [BAD] * 30)
+    record(cleared, [BAD] * 30)
+    admin_clear(cleared, "frank", "wording fixed and checked on thirty calls")
+    with get_engine().begin() as conn:
+        rows = {r_["action"]: r_ for r_ in store.suspensions_in_period(conn)}
+    assert rows[live]["live"] is True and rows[cleared]["live"] is False
+    assert rows[cleared]["cleared_by"] == "frank"
+    lines = "\n".join(c.suspension_lines([rows[live], rows[cleared]], None))
+    assert "all time" in lines and f"{live}: taken out" in lines and "STILL SUSPENDED" in lines
+    assert "cleared" in lines and "by frank: wording fixed and checked on thirty calls" in lines
+    assert "30 of 30 failed" in lines
+
+
+def test_the_period_ends_at_since_and_an_empty_period_says_none():
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    with get_engine().begin() as conn:
+        assert not [r_ for r_ in store.suspensions_in_period(conn, "2999-01-01")
+                    if r_["action"] == action]
+        assert [r_ for r_ in store.suspensions_in_period(conn, "2000-01-01")
+                if r_["action"] == action]
+    assert c.suspension_lines([], "2999-01-01") == [
+        "classes suspended this period (since 2999-01-01): none"]
+
+
+def test_both_reports_end_with_the_classes_suspended_this_period():
+    from scripts import manage_goal_fit_classes as tool
+    from scripts import plan_fit_report as report
+
+    action = fresh_class()
+    record(action, [BAD] * 30)
+    with get_engine().begin() as conn:
+        rows = store.suspensions_in_period(conn)
+    text_ = tool.render([], rows, None)
+    assert "classes suspended this period" in text_ and action in text_
+    assert "window" in text_ and "total" in text_
+    empty_summary = {"proposals": 0, "decided": 0, "decisions": {}, "with_plan_fit": 0,
+                     "without_plan_fit": 0, "task_relation": {}, "task_relation_sub_cause": {},
+                     "goal_fit": {}, "dp13_inside_task_target": report.rate(0, 0),
+                     "dp13_rule_use": {"of_proposals": report.rate(0, 0),
+                                       "of_matches": report.rate(0, 0)},
+                     "dp13_proposals_on_network_tasks": {
+                         "single_host_inside": report.rate(0, 0), "by_relation": {}},
+                     "would_add": {}}
+    out = report.render({"engagements": {"A": empty_summary}, "total": empty_summary,
+                         "since": None, "class_suspensions": rows})
+    assert "classes suspended this period" in out and action in out
+    assert "classes suspended this period (all time): none" in report.render(
+        {"engagements": {}, "total": empty_summary, "since": None, "class_suspensions": []})

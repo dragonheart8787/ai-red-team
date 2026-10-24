@@ -31,6 +31,11 @@ How to read it, so that a number is not mistaken for more than it is:
   ``differs_from_task`` with ``same_action_target_inside_task_target``. Both are reported (a
   database can hold both), and the rule's own use -- how many matches it decided, and what share
   of all matches -- is a line of its own, so that its use can be watched.
+* **Classes suspended this period** (D68 DP-15): the action classes the control plane took out of
+  Q1's list because their recent calls failed too often (``--since`` bounds the period; all time
+  without it). They are global, not an engagement's, so they are listed once after the totals,
+  each with how it ended -- still out, or let back in by whom and why. A class that is out is
+  not asked and records ``class_suspended``; nothing else in this report counts it as a failure.
 * No real engagement traffic is implied by a run on a test or soak engagement.
 """
 
@@ -50,9 +55,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import text  # noqa: E402
 
 from control_plane.config import load_dotenv  # noqa: E402
+from control_plane.plan_fit import class_store, classes  # noqa: E402
 from control_plane.plan_fit import relation as r  # noqa: E402
 from control_plane.plan_fit.shadow import ALL_REASONS, fmt, rate, would_ask  # noqa: E402
-from control_plane.state.db import engagement_scope  # noqa: E402
+from control_plane.state.db import engagement_scope, get_engine  # noqa: E402
 
 #: (name, task switch, goal switch): the three ways S8 might enable
 SCENARIOS = (("p1_only", True, False), ("q1_only", False, True), ("both", True, True))
@@ -165,6 +171,13 @@ def collect(engagement_id: str, *, since: str | None = None) -> dict[str, Any]:
     return summarize(rows, events)
 
 
+def collect_class_suspensions(since: str | None = None) -> list[dict[str, Any]]:
+    """The classes taken out of Q1's list in the period (global tables: the runtime role reads
+    them without naming an engagement)."""
+    with get_engine().begin() as conn:
+        return class_store.suspensions_in_period(conn, since)
+
+
 def combine(per_engagement: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Totals across the named engagements (counters add; rates are recomputed, never averaged)."""
     total: dict[str, Any] = {"engagements": len(per_engagement)}
@@ -245,6 +258,8 @@ def render(report: dict[str, Any]) -> str:
                       f"{v['prompts']}, exceptions {v['errors']}, latency median "
                       f"{v['latency_median']}s p95 {v['latency_p95']}s, tokens {v['tokens']}"]
         lines.append("")
+    lines += [*classes.suspension_lines(report.get("class_suspensions", []),
+                                       report.get("since")), ""]
     lines += ["Nothing here is a decision. Enabling a switch is S8; the gate is S7's.", ""]
     return "\n".join(lines)
 
@@ -260,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
 
     load_dotenv()
     per = {eid: collect(eid, since=args.since) for eid in args.engagements}
-    report = {"engagements": per, "total": combine(per)}
+    report = {"engagements": per, "total": combine(per), "since": args.since,
+              "class_suspensions": collect_class_suspensions(args.since)}
     if args.as_json:
         print(json.dumps(report, indent=2, default=str))
     else:

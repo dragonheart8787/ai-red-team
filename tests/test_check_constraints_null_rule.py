@@ -24,6 +24,12 @@ from control_plane.state.db import get_engine
 
 #: (table, constraint) -> why a NULL in a nullable column it mentions is acceptable.
 NULL_IS_A_STATE = {
+    ("goal_fit_suspensions", "goal_fit_suspensions_reason_shape"):
+        "`cleared_reason IS NULL OR (<> '' AND length <= 500)`: NULL is the live state, written "
+        "out in the check itself (D68 DP-15, 0028).",
+    ("goal_fit_suspensions", "goal_fit_suspensions_reason_with_clearing"):
+        "`(cleared_at IS NULL) = (cleared_reason IS NULL)`: a clearing carries its reason and a "
+        "live suspension has none -- NULL on both sides is the live state (D68 DP-15, 0028).",
     ("goal_fit_suspensions", "goal_fit_suspensions_check1"):
         "NULL is the live state: `(cleared_at IS NULL) = (cleared_by IS NULL)` ties the two "
         "columns "

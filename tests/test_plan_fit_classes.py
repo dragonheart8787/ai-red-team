@@ -71,3 +71,44 @@ def test_action_names_are_family_dot_verb_and_nothing_else():
     for bad in ("", "scan", "Network.scan", "network.", ".scan", "a.b.c", "net work.scan", None,
                 7, ["network.scan"], "network.scan; DROP"):
         assert not c.valid_action_name(bad), bad
+
+
+def test_admission_over_a_window_reads_only_the_newest_fifty():
+    recent = ["failed"] * 8 + ["answered"] * 42 + ["answered"] * 200         # newest first
+    got = c.admission_over_window("a.b", recent)
+    assert (got.n, got.failed) == (50, 8) and not got.recommend
+    assert c.admission_over_window("a.b", ["answered"] * 39).recommend is False
+    assert c.admission_over_window("a.b", ["answered"] * 40).recommend is True
+    assert c.admission_over_window("a.b", ["answered"] * 300).n == c.ADMIT_WINDOW
+
+
+def test_admission_window_is_the_exit_window():
+    assert c.ADMIT_WINDOW == c.EXIT_WINDOW
+
+
+@pytest.mark.parametrize("reason,ok", [
+    ("the goal template was changed", True),
+    ("  padded with spaces around it  ", True),
+    ("x" * 10, True), ("x" * 9, False), ("x" * 500, True), ("x" * 501, False),
+    ("", False), ("          ", False), ("line one\nline two here", False),
+    ("tab\tseparated reason", False), (None, False), (7, False), (["a reason of text"], False)])
+def test_a_reason_is_a_printable_line_of_ten_to_five_hundred_characters(reason, ok):
+    assert c.valid_reason(reason) is ok
+
+
+def test_suspension_lines_say_how_each_ended():
+    import datetime as dt
+
+    at = dt.datetime(2026, 10, 24, 9, 30)
+    rows = [{"suspension_id": 1, "action": "a.b", "suspended_at": at, "window_n": 40,
+             "window_failed": 20, "cleared_at": at, "cleared_by": "ann",
+             "cleared_reason": "fixed it", "live": False},
+            {"suspension_id": 2, "action": "c.d", "suspended_at": at, "window_n": 30,
+             "window_failed": 30, "cleared_at": None, "cleared_by": None,
+             "cleared_reason": None, "live": True}]
+    lines = c.suspension_lines(rows, "2026-10-01")
+    assert lines[0] == ("classes suspended this period (since 2026-10-01): 2 class(es), "
+                        "2 suspension(s)")
+    assert "20 of 40 failed; cleared 2026-10-24 09:30 by ann: fixed it" in lines[1]
+    assert lines[2].endswith("30 of 30 failed; STILL SUSPENDED")
+    assert c.suspension_lines([], None) == ["classes suspended this period (all time): none"]
