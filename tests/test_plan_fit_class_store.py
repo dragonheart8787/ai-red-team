@@ -1093,7 +1093,7 @@ def test_each_run_of_the_report_is_a_look_and_the_count_accumulates(monkeypatch,
     assert tool._report(False, None) == 0
     first = _class_line(capsys.readouterr().out, action)
     looks_at = ["class", "window", "failed", "upper95", "total", "tot.fail", "refusal", "unclass",
-                "transp", "looks", "n@first"].index("looks")
+                "transp", "transp%", "looks", "n@first"].index("looks")
     assert first[looks_at] == "1" and first[looks_at + 1] == "15"       # first look: n was 15
     record(action, [OK] * 20)
     assert tool._report(False, None) == 0

@@ -311,15 +311,31 @@ def read_state_from_tables(classes: tuple[str, ...], start_call_id: int) -> Stat
                  suspended=suspended, kinds_newest_first=kinds)
 
 
+def check_effective_policy(policy, classes: tuple[str, ...] = CLASSES) -> list[str]:
+    """What is wrong with the policy this run would govern (empty: nothing). Read from the
+    effective policy of the run's own engagement, so what is checked is what the pipeline will
+    use, and not a guess from the layer table."""
+    problems = []
+    for c in classes:
+        if c not in policy.goal_fit_actions:
+            problems.append(f"{c} is not in the effective policy's goal_fit_actions: publish "
+                            "layer_record_mode.json first (this script publishes nothing)")
+    if policy.goal_fit_enforce:
+        problems.append("goal_fit_enforce is on in the effective policy: this is the record-mode "
+                        "measurement, with the switch off")
+    return problems
+
+
 def preflight(classes: tuple[str, ...]) -> tuple[list[str], dict]:
-    """Everything that must be true before a proposal is sent. ``(problems, facts)``."""
+    """What must be true before the run's engagement is made. ``(problems, facts)``. The policy is
+    checked after the engagement exists (:func:`check_effective_policy`); a missing baseline stops
+    the engagement's creation, and this script will not publish one."""
     import os
 
     from sqlalchemy import text
 
     from control_plane.plan_fit import class_store
-    from control_plane.policy.merge import goal_fit_actions_of
-    from control_plane.state.db import global_policy_admin_scope
+    from control_plane.state.db import get_engine
     from scripts.s8_enablement_check import (
         NO_FALLBACK_ENV,
         PLANFIT_BACKEND_ENV,
@@ -334,28 +350,13 @@ def preflight(classes: tuple[str, ...]) -> tuple[list[str], dict]:
     else:
         problems += config_problems(backend=backend, model=os.environ.get(PLANFIT_MODEL_ENV),
                                     fallback_off=os.environ.get(NO_FALLBACK_ENV))
-    with global_policy_admin_scope() as conn:
-        layers = [doc or {} for (doc,) in conn.execute(text(
-            "SELECT document FROM policy_layers WHERE active IS TRUE AND engagement_id IS NULL"))]
-        baseline = conn.execute(text(
-            "SELECT 1 FROM policy_layers WHERE layer = 'baseline_global' AND active IS TRUE "
-            "AND engagement_id IS NULL AND customer_id IS NULL LIMIT 1")).first()
+    with get_engine().begin() as conn:
         table = {r["action"]: r for r in class_store.class_table(conn, ())}
-    listed: set[str] = set()
-    for doc in layers:
-        listed |= goal_fit_actions_of(doc.get("goal_fit_actions"))
+        live = {a for (a,) in conn.execute(text(
+            "SELECT action FROM goal_fit_suspensions WHERE cleared_at IS NULL"))}
     for c in classes:
-        if c not in listed:
-            problems.append(f"{c} is not listed by any active global layer: publish "
-                            "layer_record_mode.json first (this script publishes nothing)")
-        if table.get(c, {}).get("state") == "suspended":
+        if c in live:
             problems.append(f"{c} is already suspended")
-    if any(doc.get("goal_fit_enforce") is True for doc in layers):
-        problems.append("goal_fit_enforce is on in an active global layer: this is the "
-                        "record-mode measurement, with the switch off")
-    if baseline is None:
-        problems.append("no baseline_global layer is in force: an engagement cannot be created, "
-                        "and this script will not publish one")
     facts = {"start_counts": {c: (table.get(c, {}).get("n_total", 0),
                                   table.get(c, {}).get("transport_total", 0)) for c in classes}}
     return problems, facts
@@ -363,6 +364,7 @@ def preflight(classes: tuple[str, ...]) -> tuple[list[str], dict]:
 
 def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
     import json
+    import os
     import subprocess
 
     from sqlalchemy import text
@@ -405,9 +407,11 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
                                       actions=CLASSES)
     with engagement_scope(eid) as conn:
         policy = load_effective_policy(conn, eid)
-    if not set(CLASSES) <= set(policy.goal_fit_actions) or policy.goal_fit_enforce:
-        print("the engagement's effective policy does not match the registered mode "
-              "(classes listed, goal_fit_enforce off); nothing was sent", file=sys.stderr)
+    wrong = check_effective_policy(policy)
+    if wrong:
+        for p in wrong:
+            print(f"precondition failed: {p}", file=sys.stderr)
+        print("nothing was sent (an empty engagement was made)", file=sys.stderr)
         return EXIT_PRECONDITION
     with get_engine().begin() as conn:
         start_call_id = int(conn.execute(text(
@@ -425,7 +429,7 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
             self.cost = 0.0
 
         def __call__(self, *a, **kw):
-            kw["env"] = {**__import__("os").environ, **kw.get("env", {}), NO_FALLBACK_ENV: "1"}
+            kw["env"] = {**os.environ, **kw.get("env", {}), NO_FALLBACK_ENV: "1"}
             done = subprocess.run(*a, **kw)
             try:
                 self.cost += float(json.loads(done.stdout or "{}").get("total_cost_usd") or 0.0)
@@ -498,9 +502,10 @@ def dry_run(plan: list[Planned], args: argparse.Namespace) -> int:
             print(f"PLAN PROBLEM: {problem}", file=sys.stderr)
         return EXIT_PRECONDITION
     print("plan checks: ok (no host repeated, 60 per class in order, sentences as registered)")
-    print("preflight (not run in a dry run): validator configured as DP-14 measured it; the "
-          "three classes listed by an active global layer; goal_fit_enforce off; no class "
-          "suspended; a baseline in force.")
+    print("preflight (not run in a dry run): validator configured as DP-14 measured it; no class "
+          "suspended; a baseline in force (the engagement cannot be made without one); and, in the "
+          "run's own engagement, the three classes in the effective policy's goal_fit_actions with "
+          "goal_fit_enforce off.")
     return EXIT_OK
 
 

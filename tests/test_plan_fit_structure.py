@@ -106,6 +106,7 @@ def test_only_the_tests_of_the_class_rules_use_the_real_class_store():
         "tests/conftest.py",                    # the definition
         "tests/test_plan_fit_structure.py",     # this test
         "tests/test_plan_fit_class_store.py",   # the rules, on their own class names
+        "tests/test_dp15_record_mode.py",       # the generator's state reader, on its own names
     }, users
 
 

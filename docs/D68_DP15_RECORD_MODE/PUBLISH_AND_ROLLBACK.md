@@ -72,8 +72,8 @@ The tool shows the layer and asks for `PUBLISH` on a terminal. It prints `publis
 (`policy_layers_identity`); a timestamp is. [R]
 
 After: `python scripts/manage_global_policy.py list` shows the layer, and the effective policy of
-any engagement lists the three classes. The measurement script's own preflight (plan, rule 12)
-checks that and refuses to start otherwise.
+any engagement lists the three classes. The measurement script checks that, in the effective policy of an engagement of its own (plan,
+rule 12), and refuses to send anything otherwise.
 
 ## 4. Roll back (not executed)
 

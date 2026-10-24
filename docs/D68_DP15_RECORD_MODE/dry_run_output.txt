@@ -11,4 +11,4 @@ goal sentences (fixed):
 targets: 180 distinct hosts for 180 proposals (60 addresses, 120 host names)
 order (first twelve): network.scan#0, code.scan#0, code.secrets#0, network.scan#1, code.scan#1, code.secrets#1, network.scan#2, code.scan#2, code.secrets#2, network.scan#3, code.scan#3, code.secrets#3
 plan checks: ok (no host repeated, 60 per class in order, sentences as registered)
-preflight (not run in a dry run): validator configured as DP-14 measured it; the three classes listed by an active global layer; goal_fit_enforce off; no class suspended; a baseline in force.
+preflight (not run in a dry run): validator configured as DP-14 measured it; no class suspended; a baseline in force (the engagement cannot be made without one); and, in the run's own engagement, the three classes in the effective policy's goal_fit_actions with goal_fit_enforce off.

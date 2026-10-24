@@ -344,12 +344,11 @@ def test_the_command_line_refuses_to_raise_a_cap(flags, capsys):
 
 @pytest.mark.usefixtures("db_available")
 def test_a_failed_precondition_sends_nothing(capsys, monkeypatch):
-    """The real preflight, on the development database: no real validator is configured here and
-    the classes are not listed by an active global layer, so it refuses -- and nothing was sent."""
+    """The real preflight, on the development database: no real validator is configured here, so it
+    refuses -- and nothing was sent."""
     monkeypatch.delenv("CYBERORCH_PLANFIT_BACKEND", raising=False)
     problems, facts = rm.preflight(rm.CLASSES)
-    text = "\n".join(problems)
-    assert "no real validator is configured" in text
+    assert any("no real validator is configured" in p for p in problems)
     assert set(facts["start_counts"]) == set(rm.CLASSES)
     issued = []
     monkeypatch.setattr(rm, "preflight", lambda classes: (["a thing is wrong"], {}))
@@ -359,6 +358,27 @@ def test_a_failed_precondition_sends_nothing(capsys, monkeypatch):
     assert mod.execute(args, rm.build_plan()) == rm.EXIT_PRECONDITION
     assert issued == []
     assert "precondition failed: a thing is wrong" in capsys.readouterr().err
+
+
+def test_the_effective_policy_must_list_the_three_classes_and_have_the_switch_off():
+    from control_plane.policy.merge import PolicyLayer, merge_policy
+
+    empty = PolicyLayer(name="x")
+
+    def policy(*layers):
+        return merge_policy(empty, empty, empty, *layers) if layers else merge_policy(
+            empty, empty, empty, empty)
+
+    listed = PolicyLayer(name="engagement", goal_fit_actions=frozenset(rm.CLASSES))
+    assert rm.check_effective_policy(policy(listed)) == []
+    none = rm.check_effective_policy(policy())
+    assert len(none) == 3 and all("not in the effective policy" in p for p in none)
+    two = PolicyLayer(name="engagement", goal_fit_actions=frozenset(rm.CLASSES[:2]))
+    assert len(rm.check_effective_policy(policy(two))) == 1
+    on = PolicyLayer(name="engagement", goal_fit_actions=frozenset(rm.CLASSES),
+                     goal_fit_enforce=True)
+    wrong = rm.check_effective_policy(policy(on))
+    assert len(wrong) == 1 and "goal_fit_enforce is on" in wrong[0]
 
 
 def test_the_script_publishes_no_global_policy_and_never_takes_the_one_look():

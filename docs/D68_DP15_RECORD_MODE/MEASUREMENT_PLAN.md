@@ -80,12 +80,14 @@ of this plan.
     development machine, with the cause not established
     (`docs/D68_S8B_REPORT.md` sections 8-11); a number from one environment is a number for that
     environment. [N]: nothing here says which environment the measurement runs in.
-12. **Starting state.** The script refuses to start if the effective policy does not list all three
-    classes, if `goal_fit_enforce` is on, if a class is already suspended, or if no real validator
-    is configured. It prints (as counts only) what the tables hold for each class at the start,
-    and the measurement reads the window, which after 50 new calls holds only new calls: older
-    calls (the development database holds 130 recorded `network.scan` calls from earlier tests)
-    do not enter it.
+12. **Starting state.** Before it sends anything the script refuses to start if no real validator is
+    configured as in rule 7, or if one of the classes is already suspended; it makes its own
+    engagement (which needs a baseline in force: it publishes none) and refuses, having sent
+    nothing, if that engagement's *effective policy* does not list all three classes in
+    `goal_fit_actions` or has `goal_fit_enforce` on. It prints (as counts only) what the tables
+    hold for each class at the start, and the measurement reads the window, which after 50 new
+    calls holds only new calls: older calls (the development database holds 130 recorded
+    `network.scan` calls from earlier tests) do not enter it.
 
 ## 3. What the script prints, and when
 
