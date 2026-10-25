@@ -18,8 +18,11 @@ effective ``goal_fit_enforce`` / ``task_relation_enforce`` (read only, the guard
 The rules a wording file must meet (ENABLE_DECISION_PLAN.md 3.2): exactly 60 wordings per class;
 each holds the target token ``{t}`` exactly once; none is within token-Jaccard 0.6 of another in any
 class, nor of a wording the validator has already been measured on (the S7 corpus templates and the
-DP-15 run-1 sentences). The hash of each file is printed so that the final lists can be registered
-before the first call.
+DP-15 run-1 sentences). The sha256 of each file is computed at startup and must equal the value the
+plan registers in its ``wording-hashes`` block (``--plan``); a file that differs, or one the plan
+does not register, is refused and both values are printed. Leg B writes through propose_action and
+so needs a database of its own: the connected one must be ``cyberorch_dp15b`` (``--leg-b-database``)
+with ``goal_fit_calls`` and ``goal_fit_suspensions`` empty, or the dry run refuses.
 
 Exit status: 0 the plan is sound, 1 a check or a guard refused (nothing was sent), 2 usage / not
 built.
@@ -55,6 +58,9 @@ COST_PER_CALL_USD = 0.0088      # list price per call, S7: US$4.23 for 480
 SECONDS_RUN1 = 246.0 / 150      # DP-15 run 1: 150 calls in 4.1 minutes, two in flight
 SECONDS_S7_SEQUENTIAL = 3.6     # S7: 480 calls in 29 minutes, one at a time
 DEFAULT_DIR = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "stage1_wordings"
+DEFAULT_PLAN = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "ENABLE_DECISION_PLAN.md"
+LEG_B_DATABASE = "cyberorch_dp15b"  # Leg B writes through propose_action: a database of its own
+HASH_BLOCK = "wording-hashes"       # the fenced block of the plan: one "<class> <sha256>" per line
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 
@@ -140,6 +146,87 @@ def check_wordings(per_class: dict[str, list[Wording]], *, expected: int = WORDI
             elif jaccard(ta, tb) >= JACCARD_LIMIT:
                 problems.append(f"{ca}#{ia} and {cb}#{ib} are near-duplicates (token-Jaccard "
                                 f">= {JACCARD_LIMIT})")
+    return problems
+
+
+# -- registered hashes -----------------------------------------------------------------------------
+
+_HASH_BLOCK_RE = re.compile(r"^```" + HASH_BLOCK + r"[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def registered_hashes(plan_text: str) -> tuple[dict[str, str], list[str]]:
+    """``(class -> sha256, problems)`` from the plan's ``wording-hashes`` block. The block is the
+    registration: exactly one block, one ``<class> <64 lowercase hex>`` line per class, no class
+    twice, no line that is not of that form. Anything else is a problem and nothing is trusted."""
+    blocks = _HASH_BLOCK_RE.findall(plan_text)
+    if len(blocks) != 1:
+        return {}, [f"the plan must hold exactly one ```{HASH_BLOCK} block, it holds {len(blocks)}"]
+    registered: dict[str, str] = {}
+    problems: list[str] = []
+    for line in blocks[0].splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2 or parts[0] not in CLASSES or not _SHA256_RE.fullmatch(parts[1]):
+            problems.append(f"malformed line in the {HASH_BLOCK} block: {line!r}")
+        elif parts[0] in registered:
+            problems.append(f"{parts[0]} is registered twice in the {HASH_BLOCK} block")
+        else:
+            registered[parts[0]] = parts[1]
+    return ({} if problems else registered), problems
+
+
+def hash_problems(registered: dict[str, str], actual: dict[str, str],
+                  classes: Sequence[str]) -> list[str]:
+    """Every wording file read must be the file the plan registered, byte for byte."""
+    problems = []
+    for cls in classes:
+        if cls not in actual:
+            continue
+        if cls not in registered:
+            problems.append(f"{cls}: the plan registers no sha256 for this wording file")
+        elif registered[cls] != actual[cls]:
+            problems.append(f"{cls}: the wording file is not the registered one -- the plan "
+                            f"registers sha256 {registered[cls]}, the file has {actual[cls]}")
+    return problems
+
+
+# -- the database of Leg B -------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LegBFacts:
+    database: str
+    calls: int                  # all rows of goal_fit_calls, whatever the class
+    suspensions: int            # all rows of goal_fit_suspensions, cleared or not
+
+
+def read_leg_b_facts() -> LegBFacts:
+    """The connected database and how much it already holds. A READ ONLY transaction."""
+    from sqlalchemy import text
+
+    from control_plane.state.db import get_engine
+
+    with get_engine().begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        database = conn.execute(text("SELECT current_database()")).scalar_one()
+        calls = conn.execute(text("SELECT count(*) FROM goal_fit_calls")).scalar_one()
+        suspensions = conn.execute(text("SELECT count(*) FROM goal_fit_suspensions")).scalar_one()
+    return LegBFacts(str(database), int(calls), int(suspensions))
+
+
+def leg_b_problems(facts: LegBFacts, expected: str = LEG_B_DATABASE) -> list[str]:
+    """Why Leg B may not start here: it runs in a database of its own, and that database is clean
+    -- nothing in goal_fit_calls, nothing in goal_fit_suspensions."""
+    problems = []
+    if facts.database != expected:
+        problems.append(f"Leg B runs in database {expected!r}, this one is {facts.database!r}")
+    if facts.calls:
+        problems.append(f"goal_fit_calls in database {facts.database!r} holds {facts.calls} "
+                        f"row(s): Leg B needs it empty")
+    if facts.suspensions:
+        problems.append(f"goal_fit_suspensions in database {facts.database!r} holds "
+                        f"{facts.suspensions} row(s): Leg B needs it empty")
     return problems
 
 
@@ -274,6 +361,12 @@ def dry_run(args: argparse.Namespace) -> int:
         print("\n".join(banner))
         refusals += guards
         print("startup guards: " + ("ok -- goal_fit_enforce is off" if not guards else "REFUSED"))
+        facts = read_leg_b_facts()
+        leg_b_wrong = leg_b_problems(facts, args.leg_b_database)
+        print(f"Leg B database: {facts.database} -- goal_fit_calls {facts.calls} row(s), "
+              f"goal_fit_suspensions {facts.suspensions} row(s); "
+              + ("clean, as Leg B needs" if not leg_b_wrong else "REFUSED"))
+        refusals += leg_b_wrong
     except Exception as exc:
         print(f"database: NOT READ ({type(exc).__name__}) -- the guards could not be checked")
         refusals.append("the database could not be read: goal_fit_enforce was not checked")
@@ -286,12 +379,21 @@ def dry_run(args: argparse.Namespace) -> int:
     per_class: dict[str, list[Wording]] = {}
     hashes: dict[str, str] = {}
     problems: list[str] = []
+    plan_path = Path(args.plan)
+    try:
+        registered, wrong = registered_hashes(plan_path.read_text())
+    except OSError as exc:
+        registered, wrong = {}, [f"the plan could not be read at {plan_path} "
+                                 f"({type(exc).__name__}): no hash is registered"]
+    problems += wrong
     for cls in classes:
         path = Path(args.wordings_dir) / f"{cls}.json"
         if not path.exists():
             problems.append(f"{cls}: no wording file at {path}")
             continue
         per_class[cls], hashes[cls] = read_wordings(path)
+    if not wrong:
+        problems += hash_problems(registered, hashes, classes)
     problems += check_wordings(per_class)
     calls = build_plan(per_class, args.seed) if per_class and not problems else []
     for line in render_plan(per_class, hashes, calls, problems):
@@ -309,6 +411,10 @@ def main(argv: list[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wordings-dir", default=str(DEFAULT_DIR),
                         help="directory with <class>.json wording files")
+    parser.add_argument("--plan", default=str(DEFAULT_PLAN),
+                        help="the plan whose wording-hashes block registers the wording files")
+    parser.add_argument("--leg-b-database", default=LEG_B_DATABASE,
+                        help="the clean database Leg B needs (default %(default)s)")
     parser.add_argument("--classes", default=",".join(CLASSES),
                         help="comma list; 'network.scan' alone is the case without code.*")
     parser.add_argument("--seed", type=int, default=SEED)
