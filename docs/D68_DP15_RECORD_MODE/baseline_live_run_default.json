@@ -1,0 +1,10 @@
+{
+  "actions": {
+    "network.recon": "ALLOW",
+    "network.scan": "ALLOW"
+  },
+  "data_deny": [
+    "PII",
+    "customer_database"
+  ]
+}

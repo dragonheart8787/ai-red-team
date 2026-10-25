@@ -1,0 +1,13 @@
+[db-guard] connected runtime database: cyberorch_dp15; url-configured databases: ['cyberorch_dp15']
+admission: at least 40 of the class's last 50 judgements on the real path and a Wilson 95% upper bound of at most 15% over that window; exit: last 50 judgements (at least 30) failing above 30%. A transport failure (timeout, connection, 5xx, authentication, usage) is shown and is neither a failure nor a success for either rule. This is advice: a class is admitted only by publishing the layer that lists it. Read it once, at a number of calls decided beforehand; every run is recorded and counted in 'looks'.
+
+this run is recorded as a look at each class below
+
+class            window  failed  upper95  total tot.fail refusal unclass transp transp%  looks n@first  state           advice
+code.scan            50       0     7.1%     50        0       0       0      0    0.0%      1      50  in the list     50 judgements, upper bound 7.1% <= 15%
+code.secrets         50       0     7.1%     50        0       0       0      0    0.0%      1      50  in the list     50 judgements, upper bound 7.1% <= 15%
+network.scan         50       0     7.1%     50        0       0       0      0    0.0%      1      50  in the list     50 judgements, upper bound 7.1% <= 15%
+
+classes suspended this period (all time): none
+
+validator outage suspected this period (all time): none
