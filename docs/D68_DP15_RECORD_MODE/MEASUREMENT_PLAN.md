@@ -81,13 +81,20 @@ of this plan.
     (`docs/D68_S8B_REPORT.md` sections 8-11); a number from one environment is a number for that
     environment. [N]: nothing here says which environment the measurement runs in.
 12. **Starting state.** Before it sends anything the script refuses to start if no real validator is
-    configured as in rule 7, or if one of the classes is already suspended; it makes its own
-    engagement (which needs a baseline in force: it publishes none) and refuses, having sent
-    nothing, if that engagement's *effective policy* does not list all three classes in
-    `goal_fit_actions` or has `goal_fit_enforce` on. It prints (as counts only) what the tables
-    hold for each class at the start, and the measurement reads the window, which after 50 new
-    calls holds only new calls: older calls (the development database holds 130 recorded
-    `network.scan` calls from earlier tests) do not enter it.
+    configured as in rule 7; if any class in the list (the layer file's, the three measured, any
+    other the effective policy lists) already has a row in `goal_fit_calls` or an uncleared
+    suspension in `goal_fit_suspensions`; or if `goal_fit_enforce` is not off in the effective
+    policy. It makes its own engagement (which needs a baseline in force: it publishes none) and
+    refuses, having sent nothing, if that engagement's *effective policy* does not list all three
+    classes in `goal_fit_actions`, and repeats the guards over that policy. It prints first, in a
+    dry run too, the database name, the migration revision (and this checkout's head), the calls
+    already recorded per class and the effective `goal_fit_enforce` / `task_relation_enforce`. The
+    measurement is run in a clean database made for it (`PUBLISH_AND_ROLLBACK.md`, section 0).
+    *Amended 2026-10-25, before any run:* this rule first said that older calls in the database
+    "do not enter the window" and let the run start on the development database; that is withdrawn.
+    A clean database makes "the first 50 of this measurement" true of the tables themselves and not
+    of an argument about a window. `--allow-nonempty` lifts the two data refusals for tests and for
+    nothing else; the switch refusal has no flag.
 
 ## 3. What the script prints, and when
 

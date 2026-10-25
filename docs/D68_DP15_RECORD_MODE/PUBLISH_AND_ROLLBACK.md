@@ -3,6 +3,62 @@
 **Nothing in this file has been run against a deployment, and no layer has been published.** The
 owner decides whether and when. Claims: [R] read, [E] executed, [D] derived, [N] not established.
 
+## 0. The database the measurement runs in: a clean one
+
+**The measurement is run in a database made for it, and in no other.** The generator
+(`scripts/dp15_record_mode.py`) reads the database it is connected to before it does anything, in
+a dry run too, and prints its name, its migration revision, the calls already recorded per class
+and the effective `goal_fit_enforce` / `task_relation_enforce`. It **refuses to start** (exit 1,
+reasons listed, nothing sent) when
+
+* any class in the list -- the layer file's, the three measured and any other the effective policy
+  lists -- already has a row in `goal_fit_calls`, or an uncleared row in `goal_fit_suspensions`
+  (`--allow-nonempty` lifts these two refusals, for tests only, and prints a warning; it lifts
+  nothing else);
+* `goal_fit_enforce` is not off in the effective policy -- no flag lifts this;
+* the database cannot be read (the guards could not be checked).
+
+Why a database of its own: the registered numbers are "the first 50 judgements per class" of this
+measurement, and the plan reads them from the tables. Rows left by anything else -- tests, an
+earlier try, a soak -- would be counted as part of the 50 or would hide that the class was already
+suspended. The development database of this session is such a database: the dry run there
+refuses (`network.scan already has 180 row(s) in goal_fit_calls`) [E]. A second measurement is a
+second clean database, not the same one again.
+
+Steps (the database name is the owner's choice; `cyberorch_dp15` is what was tried):
+
+1. **Create it, at head.** `DB_NAME=cyberorch_dp15 bash scripts/init_db.sh` creates the roles
+   (idempotent), the database owned by `migration_owner`, and runs `alembic upgrade head`; the head
+   is **0030**. **It also rewrites `.env`** so that every connection string names the new database:
+   keep the old file first (`cp -p .env .env.keep`), or run the script from a separate checkout.
+   The measurement is then run with the `.env` that names the new database -- the generator prints
+   that name first, and the owner reads it before typing `SEND`. [E: run on the development
+   cluster with the old `.env` kept and put back; the old database was not touched.]
+2. **Check it is empty**, as the database superuser (so that row-level security hides nothing):
+
+   ```sql
+   SELECT 'revision', version_num FROM alembic_version;
+   SELECT 'pending approvals', count(*) FROM action_proposals
+     WHERE pipeline_stage = 'awaiting_approval';
+   SELECT 'policy layers', count(*) FROM policy_layers;
+   SELECT 'goal_fit_calls', count(*) FROM goal_fit_calls;
+   SELECT 'goal_fit_suspensions', count(*) FROM goal_fit_suspensions;
+   SELECT 'engagements', count(*) FROM engagements;
+   ```
+
+   [E] on the database made for this document: revision `0030`, and `0` for each of the other
+   five. **Pending approvals must be 0** -- if it is not, stop: publishing a global layer voids
+   every approval waiting (section 5).
+3. **Put a global baseline in it** (not done here): `create_engagement` refuses to make an
+   engagement when no `baseline_global` layer is in force, and the measurement makes one of its
+   own. The platform owner publishes the baseline the deployment would run on; for a database that
+   exists only for this measurement a neutral one (`{}`, the document `tests/helpers.py` uses) adds
+   nothing to the merge. Publish it with `manage_global_policy.py publish --layer baseline_global`
+   as in section 3. [N: not executed; no layer was published in the database of step 2.]
+4. **Rehearse, then publish the layer of section 1 in that database**, then run the generator.
+   A dry run (`PYTHONPATH=. python scripts/dp15_record_mode.py`) exits 0 only when the guards would
+   let the run start; its output with this database is `dry_run_output.txt`.
+
 ## 1. The layer
 
 `layer_record_mode.json`:
@@ -100,6 +156,7 @@ code and tests]
 ## 5. Before publishing: waiting approvals
 
 Publishing a global layer moves the policy version, and **every approval waiting at that moment is
-void** (the dispatch refuses it with `policy_version_changed`). The count of proposals waiting
-for a person in the database reachable from this session is reported with the hand-over, not
-here; it was not zero (see the report). Nothing was touched.
+void** (the dispatch refuses it with `policy_version_changed`). In the clean database of section 0
+the count is 0 [E, step 2], so a publication there voids nothing. In the development database of
+this session it was 6,642 (`pending_approvals.md`; test and harness leftovers), which is one more
+reason the measurement does not run there. Nothing was processed in either.

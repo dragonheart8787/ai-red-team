@@ -1,4 +1,13 @@
-DRY RUN -- nothing was sent, no model was called, no database was opened.
+DRY RUN -- nothing was sent, no model was called; the database was only read.
+database: cyberorch_dp15 on 127.0.0.1:5432 (read in a READ ONLY transaction)
+migration revision: 0030 -- this checkout's head is 0030 (matches)
+calls already recorded (goal_fit_calls): code.scan 0, code.secrets 0, network.scan 0
+uncleared suspensions (goal_fit_suspensions): none
+effective policy now (0 layer(s) in force): goal_fit_actions: (none); goal_fit_enforce: off; task_relation_enforce: off
+effective policy AFTER publishing layer_record_mode.json (1 layer(s)): goal_fit_actions: code.scan, code.secrets, network.scan; goal_fit_enforce: off; task_relation_enforce: off
+  ^ computed by the policy code (load_effective_policy_with: the layers in force plus the draft as an emergency_overlay, through the same merge as a real load); not inferred from the keys the draft leaves out
+  control (not the draft): the same computation with a further overlay that turns the switch on reads goal_fit_enforce: ON
+startup guards: ok -- the run would be allowed to start
 classes: network.scan, code.scan, code.secrets   registered judgements per class: 50
 proposals planned: 180 (60 per class: 50 + 10 spare targets, used only to replace a transport loss)
 bounds: at most 2 in flight, 180 proposals, US$3.00, 60 minutes; stops (no retry, no resume) when transport failures are more than half of the last 30 calls
@@ -11,4 +20,4 @@ goal sentences (fixed):
 targets: 180 distinct hosts for 180 proposals (60 addresses, 120 host names)
 order (first twelve): network.scan#0, code.scan#0, code.secrets#0, network.scan#1, code.scan#1, code.secrets#1, network.scan#2, code.scan#2, code.secrets#2, network.scan#3, code.scan#3, code.secrets#3
 plan checks: ok (no host repeated, 60 per class in order, sentences as registered)
-preflight (not run in a dry run): validator configured as DP-14 measured it; no class suspended; a baseline in force (the engagement cannot be made without one); and, in the run's own engagement, the three classes in the effective policy's goal_fit_actions with goal_fit_enforce off.
+also checked, only in --execute: the validator is configured as DP-14 measured it; a baseline is in force (the engagement cannot be made without one); and, in the run's own engagement, the three classes are in the effective policy's goal_fit_actions with goal_fit_enforce off (the guards above are read again there).

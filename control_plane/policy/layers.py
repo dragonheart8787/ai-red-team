@@ -47,7 +47,7 @@ by a database CHECK constraint.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -654,15 +654,38 @@ def load_effective_policy(
     that ``intersect_allow`` exists to avoid, reached from the loading side.
     """
     rows = _select_applicable(conn, engagement_id, "id, layer, document")
+    return _merge_documents((row["layer"], row["document"]) for row in rows)
 
+
+def _merge_documents(documents: Iterable[tuple[str, Mapping[str, Any]]]) -> EffectivePolicy:
+    """The one place stored ``(layer, document)`` pairs become an :class:`EffectivePolicy`."""
     grouped: dict[str, list[PolicyLayer]] = {name: [] for name in LAYER_ORDER}
-    for row in rows:
-        if row["layer"] in grouped:
-            grouped[row["layer"]].append(
-                PolicyLayer.from_document(row["layer"], row["document"])
-            )
+    for layer, document in documents:
+        if layer in grouped:
+            grouped[layer].append(PolicyLayer.from_document(layer, document))
 
     return merge_policy(*(_combine(name, grouped[name]) for name in LAYER_ORDER))
+
+
+def load_effective_policy_with(
+    conn: Connection, engagement_id: str, extra: Iterable[tuple[str, Mapping[str, Any]]],
+) -> EffectivePolicy:
+    """What :func:`load_effective_policy` would return if these ``(layer, document)`` pairs were
+    also published and active. **Reads; writes nothing.**
+
+    For a rehearsal: a dry run that has to show the policy *after* a publication cannot infer it
+    from what the document leaves out. The rows in force now are selected by the same predicate
+    as the real load, the pairs are added to them, and the same merge runs -- so the answer is
+    produced by the code that will produce it for real, not restated beside it. An emergency
+    overlay is checked by the same tighten-only validation a publication applies (a document
+    that would be refused raises, rather than yielding a policy nobody could publish).
+    """
+    pairs = list(extra)
+    for layer, document in pairs:
+        if layer == EMERGENCY_OVERLAY:
+            validate_emergency_overlay(document)
+    rows = _select_applicable(conn, engagement_id, "id, layer, document")
+    return _merge_documents([(row["layer"], row["document"]) for row in rows] + pairs)
 
 
 __all__ = [
@@ -681,6 +704,7 @@ __all__ = [
     "list_effective_policy_layers",
     "list_frozen_out_baseline_changes",
     "load_effective_policy",
+    "load_effective_policy_with",
     "max_applicable_layer_id",
     "publish_policy_layer",
 ]

@@ -1,0 +1,23 @@
+DRY RUN -- nothing was sent, no model was called; the database was only read.
+database: cyberorch on 127.0.0.1:5432 (read in a READ ONLY transaction)
+migration revision: 0030 -- this checkout's head is 0030 (matches)
+calls already recorded (goal_fit_calls): code.scan 0, code.secrets 0, network.scan 180
+uncleared suspensions (goal_fit_suspensions): none
+effective policy now (57 layer(s) in force): goal_fit_actions: (none); goal_fit_enforce: off; task_relation_enforce: off
+effective policy AFTER publishing layer_record_mode.json (58 layer(s)): goal_fit_actions: code.scan, code.secrets, network.scan; goal_fit_enforce: off; task_relation_enforce: off
+  ^ computed by the policy code (load_effective_policy_with: the layers in force plus the draft as an emergency_overlay, through the same merge as a real load); not inferred from the keys the draft leaves out
+  control (not the draft): the same computation with a further overlay that turns the switch on reads goal_fit_enforce: ON
+startup guards: WOULD REFUSE TO START
+classes: network.scan, code.scan, code.secrets   registered judgements per class: 50
+proposals planned: 180 (60 per class: 50 + 10 spare targets, used only to replace a transport loss)
+bounds: at most 2 in flight, 180 proposals, US$3.00, 60 minutes; stops (no retry, no resume) when transport failures are more than half of the last 30 calls
+cost estimate: 150 calls x US$0.0088 = US$1.32 planned, US$1.58 worst case (180 calls), cap US$3.0
+time estimate: about 4.0 min planned, 8.6 min worst case at two in flight
+goal sentences (fixed):
+  network.scan Scan {host} for open ports and the services behind them   e.g. 10.77.1.1
+  code.scan    Scan the source at {host} for insecure patterns   e.g. www01.corp.example
+  code.secrets Scan the repository at {host} for committed secrets   e.g. www05.corp.example
+targets: 180 distinct hosts for 180 proposals (60 addresses, 120 host names)
+order (first twelve): network.scan#0, code.scan#0, code.secrets#0, network.scan#1, code.scan#1, code.secrets#1, network.scan#2, code.scan#2, code.secrets#2, network.scan#3, code.scan#3, code.secrets#3
+WOULD REFUSE: network.scan already has 180 row(s) in goal_fit_calls in database 'cyberorch': the measurement needs a clean database (docs/D68_DP15_RECORD_MODE/PUBLISH_AND_ROLLBACK.md, section 0)
+(exit status 1)

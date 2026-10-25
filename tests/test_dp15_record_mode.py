@@ -295,44 +295,85 @@ def test_the_state_read_from_the_tables_counts_judgements_apart_from_transport_l
 
 # -- the dry run, the guards, and what the script does not do ------------------
 
-def test_the_dry_run_prints_the_plan_and_touches_neither_the_database_nor_a_model(
+def clean_world(monkeypatch, *, guards=(), banner=("database: stub",)):
+    """Replace the reading of the database by a fixed answer, so what is tested is what the dry run
+    and the run do with it."""
+    seen = []
+
+    def check(**kw):
+        seen.append(kw)
+        return list(banner), list(guards)
+
+    monkeypatch.setattr(rm, "check_startup", check)
+    return seen
+
+
+def test_the_dry_run_prints_the_plan_and_calls_no_model_and_publishes_nothing(
         capsys, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("a dry run reached for something")
 
     import agents.llm.selection as selection
+    import control_plane.orchestrator.engagement as engagement
     import control_plane.state.db as db
 
-    monkeypatch.setattr(db, "get_engine", boom)
     monkeypatch.setattr(db, "global_policy_admin_scope", boom)
+    monkeypatch.setattr(db, "registry_admin_scope", boom)
+    monkeypatch.setattr(engagement, "create_engagement", boom)
     monkeypatch.setattr(selection, "build_plan_fit_validator", boom)
     monkeypatch.setattr(subprocess, "run", boom)
+    seen = clean_world(monkeypatch)
     assert rm.main([]) == 0
     out = capsys.readouterr().out
     assert out.startswith("DRY RUN -- nothing was sent, no model was called")
     for needle in ("180 distinct hosts", "US$1.32 planned", "US$1.58 worst case",
-                   "plan checks: ok", "network.scan", "code.scan", "code.secrets"):
+                   "plan checks: ok", "network.scan", "code.scan", "code.secrets",
+                   "database: stub", "startup guards: ok"):
         assert needle in out, needle
+    assert seen == [{"allow_nonempty": False, "rehearsal": True}]
 
 
-def test_the_dry_run_as_a_process_needs_no_credentials_and_exits_zero():
+def test_the_dry_run_as_a_process_with_no_reachable_database_prints_the_plan_and_exits_one():
+    """The guards cannot be checked, so the dry run does not say the run would be allowed."""
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(REPO),
+           "DATABASE_URL": "postgresql+psycopg://nobody:nothing@127.0.0.1:1/none"}
     done = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True,
-                          cwd=REPO, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(REPO)},
-                          timeout=60)
-    assert done.returncode == 0, done.stderr
+                          cwd=REPO, env=env, timeout=120)
+    assert done.returncode == rm.EXIT_PRECONDITION, done.stderr
     assert "DRY RUN" in done.stdout and "no model was called" in done.stdout
+    assert "database: NOT READ" in done.stdout and "180 distinct hosts" in done.stdout
+    assert "WOULD REFUSE: the database could not be read" in done.stderr
+    assert "plan checks: ok" not in done.stdout
 
 
-def test_without_the_flag_nothing_is_sent_and_the_flag_alone_asks_first(capsys, monkeypatch):
+def test_a_dry_run_the_guards_would_refuse_lists_the_reasons_and_exits_one(capsys, monkeypatch):
+    clean_world(monkeypatch, guards=["code.scan already has 3 row(s)", "goal_fit_enforce is on"],
+                banner=("database: d",))
+    assert rm.main([]) == rm.EXIT_PRECONDITION
+    captured = capsys.readouterr()
+    assert "startup guards: WOULD REFUSE TO START" in captured.out
+    assert "180 distinct hosts" in captured.out                  # the plan is still shown
+    assert "plan checks: ok" not in captured.out
+    assert "WOULD REFUSE: code.scan already has 3 row(s)" in captured.err
+    assert "WOULD REFUSE: goal_fit_enforce is on" in captured.err
+
+
+def test_the_flag_reaches_the_guards_with_a_warning_and_is_off_by_default(capsys, monkeypatch):
+    seen = clean_world(monkeypatch)
+    assert rm.main([]) == 0 and rm.main(["--allow-nonempty"]) == 0
+    assert [kw["allow_nonempty"] for kw in seen] == [False, True]
+    out = capsys.readouterr().out
+    assert out.count("WARNING: --allow-nonempty is set") == 1
+    assert "For tests only" in out
+
+
+def test_without_the_flag_nothing_is_sent_and_the_flag_hands_over_to_execute(monkeypatch):
     sent = []
-    monkeypatch.setattr(rm, "execute", lambda *a, **k: sent.append(1) or 0)
+    clean_world(monkeypatch)
+    monkeypatch.setattr(rm, "execute", lambda args, plan: sent.append(args) or 0)
     assert rm.main([]) == 0 and sent == []
-    from scripts import manage_global_policy
-
-    monkeypatch.setattr(manage_global_policy, "_confirm", lambda *a, **k: False)
-    assert rm.main(["--execute"]) == rm.EXIT_USAGE and sent == []        # declined: still nothing
-    monkeypatch.setattr(manage_global_policy, "_confirm", lambda *a, **k: True)
-    assert rm.main(["--execute"]) == 0 and sent == [1]
+    assert rm.main(["--execute"]) == 0 and len(sent) == 1
+    assert sent[0].allow_nonempty is False and sent[0].yes is False
 
 
 @pytest.mark.parametrize("flags", [["--concurrency", "3"], ["--concurrency", "0"],
@@ -342,22 +383,432 @@ def test_the_command_line_refuses_to_raise_a_cap(flags, capsys):
     assert "refused" in capsys.readouterr().err
 
 
+# -- the startup guards ---------------------------------------------------------
+
+def facts(*, calls=None, suspended=None, database="clean_db", revision="0030", head="0030"):
+    return rm.DbFacts(host="127.0.0.1", port=5432, database=database, revision=revision,
+                      code_head=head, calls=dict(calls or {}), transport={},
+                      live_suspensions=dict(suspended or {}))
+
+
+def policy(*, enforce=False, relation=False, listed=()):
+    return rm.PolicyFacts(frozenset(listed), enforce, relation, 0)
+
+
+def guards(db=None, pol=None, classes=rm.CLASSES, **kw):
+    return rm.guard_problems(db or facts(), pol or policy(), classes, **kw)
+
+
+def test_a_clean_database_with_the_switch_off_passes_every_guard():
+    assert guards() == []
+    assert guards(allow_nonempty=True) == []
+
+
+@pytest.mark.parametrize("cls", rm.CLASSES)
+def test_rows_in_goal_fit_calls_for_any_one_class_refuse_the_start_and_name_it(cls):
+    problems = guards(facts(calls={cls: 7}, database="somewhere"))
+    assert len(problems) == 1
+    assert cls in problems[0] and "7 row(s) in goal_fit_calls" in problems[0]
+    assert "'somewhere'" in problems[0] and "clean database" in problems[0]
+
+
+@pytest.mark.parametrize("cls", rm.CLASSES)
+def test_an_uncleared_suspension_for_any_one_class_refuses_the_start_and_names_it(cls):
+    problems = guards(facts(suspended={cls: 1}))
+    assert len(problems) == 1
+    assert cls in problems[0] and "uncleared suspension" in problems[0]
+    assert "goal_fit_suspensions" in problems[0]
+
+
+def test_every_reason_is_listed_not_only_the_first():
+    dirty = facts(calls={"network.scan": 2, "code.scan": 3}, suspended={"code.secrets": 1})
+    problems = guards(dirty, policy(enforce=True))
+    assert len(problems) == 4
+    text = "\n".join(problems)
+    for needle in ("network.scan already has 2", "code.scan already has 3", "code.secrets has 1",
+                   "goal_fit_enforce is not off"):
+        assert needle in text, needle
+
+
+def test_a_class_outside_the_three_that_the_database_has_rows_for_also_refuses():
+    problems = guards(facts(calls={"code.extra": 4}), classes=rm.CLASSES + ("code.extra",))
+    assert len(problems) == 1 and "code.extra" in problems[0]
+    # and rows for a class nobody is looking at do not
+    assert guards(facts(calls={"code.unlisted": 4})) == []
+
+
+@pytest.mark.parametrize("value", [True, None, "false", 0, 1, "off"])
+def test_the_switch_must_be_exactly_off_anything_else_refuses(value):
+    problems = guards(pol=policy(enforce=value))
+    assert len(problems) == 1 and "goal_fit_enforce is not off" in problems[0]
+    assert repr(value) in problems[0]
+
+
+def test_the_allow_flag_lifts_the_two_data_refusals_and_nothing_else():
+    dirty = facts(calls={"network.scan": 5}, suspended={"code.scan": 1})
+    assert len(guards(dirty)) == 2
+    assert guards(dirty, allow_nonempty=True) == []
+    # the switch refusal is not lifted by it, alone or beside the data refusals
+    only = guards(pol=policy(enforce=True), allow_nonempty=True)
+    assert len(only) == 1 and "goal_fit_enforce is not off" in only[0]
+    both = guards(dirty, policy(enforce=True), allow_nonempty=True)
+    assert both == only
+    assert len(guards(dirty, policy(enforce=True))) == 3
+
+
+def test_task_relation_enforce_is_shown_but_does_not_refuse():
+    assert guards(pol=policy(relation=True)) == []
+
+
+def test_the_classes_looked_at_are_the_layer_files_the_three_and_the_policys(monkeypatch):
+    assert set(rm.guard_classes(policy())) == set(rm.CLASSES)
+    assert set(rm.guard_classes(policy(listed=["code.extra"]))) == set(rm.CLASSES) | {"code.extra"}
+    monkeypatch.setattr(rm, "layer_document", lambda: {"goal_fit_actions": ["code.layer"]})
+    assert set(rm.guard_classes(policy())) == set(rm.CLASSES) | {"code.layer"}
+    assert rm.guard_classes(policy()) == tuple(sorted(rm.guard_classes(policy())))
+
+
+def test_the_layer_file_lists_the_three_measured_classes():
+    assert set(rm.layer_document()["goal_fit_actions"]) == set(rm.CLASSES)
+    assert "goal_fit_enforce" not in rm.layer_document()
+
+
+# -- what is printed first ------------------------------------------------------
+
+def banner(db=None, now=None, after=None, control=None, classes=rm.CLASSES):
+    return "\n".join(rm.render_banner(db or facts(), now or policy(), after, classes, control))
+
+
+def test_the_banner_names_the_database_the_revision_the_counts_and_both_switches():
+    text = banner(facts(calls={"network.scan": 12}, suspended={"code.scan": 2},
+                        database="dp15_clean"),
+                  now=policy(enforce=False, relation=True))
+    assert "database: dp15_clean on 127.0.0.1:5432" in text
+    assert "migration revision: 0030 -- this checkout's head is 0030 (matches)" in text
+    assert "network.scan 12, code.scan 0, code.secrets 0" in text
+    assert "uncleared suspensions (goal_fit_suspensions): code.scan 2" in text
+    assert "goal_fit_enforce: off; task_relation_enforce: ON" in text
+
+
+def test_the_banner_says_when_the_revision_is_not_the_head_or_unknown():
+    assert "DOES NOT MATCH" in banner(facts(revision="0029"))
+    assert "migration revision: None" in banner(facts(revision=None))
+    assert "UNKNOWN (None)" in banner(now=policy(enforce=None))
+
+
+def test_the_banner_of_a_rehearsal_shows_the_policy_after_publication_and_the_control():
+    after = policy(listed=rm.CLASSES)
+    text = banner(now=policy(), after=after, control=policy(enforce=True, listed=rm.CLASSES))
+    assert "effective policy now (0 layer(s) in force): goal_fit_actions: (none); " in text
+    assert ("effective policy AFTER publishing layer_record_mode.json (0 layer(s)): "
+            "goal_fit_actions: code.scan, code.secrets, network.scan; "
+            "goal_fit_enforce: off") in text
+    assert "computed by the policy code" in text and "not inferred" in text
+    assert "turns the switch on reads goal_fit_enforce: ON" in text
+    live = banner(now=policy(listed=rm.CLASSES))                  # the layer is live: no "after"
+    assert "AFTER" not in live and "control" not in live
+    assert "what a new engagement is given" in live
+
+
+# -- reading the database (READ ONLY, class names of its own) -------------------
+
+@pytest.fixture
+def statements():
+    from sqlalchemy import event
+
+    from control_plane.state.db import get_engine
+
+    engine, seen = get_engine(), []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        seen.append(" ".join(statement.split()))
+
+    event.listen(engine, "before_cursor_execute", record)
+    yield seen
+    event.remove(engine, "before_cursor_execute", record)
+
+
+@pytest.mark.usefixtures("q1_class_store_live", "db_available")
+def test_the_facts_read_from_the_database_count_rows_and_only_uncleared_suspensions(statements):
+    from sqlalchemy import text
+
+    from control_plane.plan_fit import class_store as store
+    from control_plane.state.db import get_engine
+
+    mine = tuple(f"dp15x.c{uuid.uuid4().hex[:10]}" for _ in range(3))
+
+    def put(action, outcome, kind=None):
+        with get_engine().begin() as conn:
+            store.record_and_review(conn, action, outcome, kind)
+
+    for _ in range(3):
+        put(mine[0], "answered")
+    put(mine[0], "failed", "transport")
+    for _ in range(30):
+        put(mine[1], "failed", "refusal")                          # suspended by the exit rule
+    statements.clear()
+    got = rm.read_db_facts(mine)
+    assert got.calls == {mine[0]: 4, mine[1]: 30} and mine[2] not in got.calls
+    assert got.transport == {mine[0]: 1, mine[1]: 0}
+    assert got.live_suspensions == {mine[1]: 1}
+    with get_engine().begin() as conn:
+        assert got.database == conn.execute(text("SELECT current_database()")).scalar_one()
+    assert got.revision == got.code_head and got.code_head
+    assert statements[0] == "SET TRANSACTION READ ONLY"
+    assert not [st for st in statements
+                if st.split()[0].upper() in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP")]
+    # an operator clears the suspension: the class has no live one any more, its rows remain
+    from control_plane.state.db import global_policy_admin_scope
+    with global_policy_admin_scope() as conn:
+        assert store.clear_suspension(conn, mine[1], "operator-test",
+                                      "wording of the goal template changed; 30 test calls")
+    after = rm.read_db_facts(mine)
+    assert after.live_suspensions == {} and after.calls[mine[1]] == 30
+
+
+@pytest.mark.usefixtures("q1_class_store_live", "db_available")
+def test_check_startup_refuses_on_rows_and_on_a_suspension_and_the_flag_lifts_only_those(
+        monkeypatch):
+    from control_plane.plan_fit import class_store as store
+    from control_plane.state.db import get_engine
+
+    mine = tuple(f"dp15x.c{uuid.uuid4().hex[:10]}" for _ in range(3))
+    monkeypatch.setattr(rm, "layer_document", lambda: {"goal_fit_actions": [mine[0], mine[1]]})
+    monkeypatch.setattr(rm, "CLASSES", (mine[2],))
+
+    def put(action, outcome, kind=None):
+        with get_engine().begin() as conn:
+            store.record_and_review(conn, action, outcome, kind)
+
+    lines, problems = rm.check_startup(allow_nonempty=False, rehearsal=True)
+    assert [p for p in problems if "dp15x." in p] == []                   # clean for these classes
+    assert any(f"{mine[0]} 0" in line for line in lines)
+    put(mine[0], "answered")
+    for _ in range(30):
+        put(mine[1], "failed", "refusal")
+    lines, problems = rm.check_startup(allow_nonempty=False, rehearsal=True)
+    mine_problems = [p for p in problems if "dp15x." in p]
+    assert any(mine[0] in p and "1 row(s)" in p for p in mine_problems)
+    assert any(mine[1] in p and "30 row(s)" in p for p in mine_problems)
+    assert any(mine[1] in p and "uncleared suspension" in p for p in mine_problems)
+    assert not any(mine[2] in p for p in mine_problems)
+    assert any(f"{mine[0]} 1" in line for line in lines)
+    _, lifted = rm.check_startup(allow_nonempty=True, rehearsal=True)
+    assert [p for p in lifted if "dp15x." in p] == []
+    # the same in a live (not rehearsed) start
+    _, live = rm.check_startup(allow_nonempty=False, rehearsal=False)
+    assert any(mine[0] in p for p in live)
+
+
 @pytest.mark.usefixtures("db_available")
-def test_a_failed_precondition_sends_nothing(capsys, monkeypatch):
-    """The real preflight, on the development database: no real validator is configured here, so it
-    refuses -- and nothing was sent."""
-    monkeypatch.delenv("CYBERORCH_PLANFIT_BACKEND", raising=False)
-    problems, facts = rm.preflight(rm.CLASSES)
-    assert any("no real validator is configured" in p for p in problems)
-    assert set(facts["start_counts"]) == set(rm.CLASSES)
-    issued = []
-    monkeypatch.setattr(rm, "preflight", lambda classes: (["a thing is wrong"], {}))
-    import scripts.dp15_record_mode as mod
-    monkeypatch.setattr(mod.Measurement, "run", lambda self: issued.append(1))
-    args = mod.argparse.Namespace(concurrency=2, max_proposals=180, max_cost=3.0)
-    assert mod.execute(args, rm.build_plan()) == rm.EXIT_PRECONDITION
-    assert issued == []
-    assert "precondition failed: a thing is wrong" in capsys.readouterr().err
+def test_check_startup_refuses_a_switch_that_is_on_whatever_the_flag_says(monkeypatch):
+    on = rm.PolicyFacts(frozenset(), True, False, 3)
+    monkeypatch.setattr(rm, "read_policy", lambda extra=(): on)
+    for allow in (False, True):
+        for rehearsal in (False, True):
+            _, problems = rm.check_startup(allow_nonempty=allow, rehearsal=rehearsal)
+            assert any("goal_fit_enforce is not off" in p for p in problems), (allow, rehearsal)
+
+
+@pytest.mark.usefixtures("db_available")
+def test_a_rehearsal_reads_the_policy_with_the_draft_added_and_a_live_start_does_not(monkeypatch):
+    reads = []
+
+    def read(extra=()):
+        reads.append(list(extra))
+        draft_in = any("goal_fit_actions" in doc for _, doc in extra)
+        return rm.PolicyFacts(frozenset(rm.CLASSES) if draft_in else frozenset(),
+                              draft_in and len(extra) == 1, False, len(extra))
+
+    monkeypatch.setattr(rm, "read_policy", read)
+    monkeypatch.setattr(rm, "read_db_facts", lambda classes: facts())
+    lines, problems = rm.check_startup(allow_nonempty=False, rehearsal=True)
+    draft = ("emergency_overlay", rm.layer_document())
+    assert reads == [[], [draft], [draft, ("emergency_overlay", {"goal_fit_enforce": True})]]
+    # the verdict is over the policy AFTER publication: here the draft would turn the switch on
+    assert any("goal_fit_enforce is not off" in p for p in problems)
+    assert any(line.startswith("effective policy AFTER") for line in lines)
+    reads.clear()
+    lines, problems = rm.check_startup(allow_nonempty=False, rehearsal=False)
+    assert reads == [[]] and problems == []
+    assert not any("AFTER" in line or "control" in line for line in lines)
+
+
+@pytest.mark.usefixtures("db_available")
+def test_the_policy_read_is_read_only_and_leaves_the_layers_as_they_were(statements):
+    from sqlalchemy import text
+
+    from control_plane.state.db import get_engine
+
+    def layers():
+        with get_engine().begin() as conn:
+            return conn.execute(text(
+                "SELECT count(*), coalesce(max(id), 0) FROM policy_layers "
+                "WHERE engagement_id IS NULL")).one()
+
+    before = layers()
+    rm.read_policy()
+    rm.read_policy(extra=[("emergency_overlay", {"goal_fit_actions": ["dp15x.nothing"]})])
+    statements.clear()
+    rm.read_policy(extra=[("emergency_overlay", {"goal_fit_enforce": True})])
+    assert layers() == before
+    assert statements[1] == "SET TRANSACTION READ ONLY"             # after the scope's set_config
+    assert not [st for st in statements
+                if st.split()[0].upper() in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "DROP")]
+
+
+@pytest.mark.usefixtures("db_available")
+def test_the_policy_after_publication_is_what_a_real_publication_then_gives():
+    """The evidence is computed, so it is compared with the real thing: publish a layer of the
+    same kind (a class name of its own), read the policy a new engagement gets, take it back."""
+    from tests.helpers import deactivate_global_layer, publish_global_layer
+
+    doc = {"goal_fit_actions": [f"dp15x.c{uuid.uuid4().hex[:10]}"]}
+    before = rm.read_policy()
+    rehearsed = rm.read_policy(extra=[("emergency_overlay", doc)])
+    assert rehearsed.goal_fit_actions == before.goal_fit_actions | set(doc["goal_fit_actions"])
+    layer_id = publish_global_layer(layer="emergency_overlay", version=uuid.uuid4().int % 10**9,
+                                    document=doc, actor="dp15-parity-test")
+    try:
+        real = rm.read_policy()
+    finally:
+        deactivate_global_layer(layer_id, actor="dp15-parity-test")
+    assert real == rehearsed
+    assert rm.read_policy() == before
+
+
+@pytest.mark.usefixtures("db_available")
+def test_the_rehearsal_can_see_a_switch_that_is_on_and_refuses_what_a_publication_would():
+    from control_plane.policy.layers import load_effective_policy_with
+    from control_plane.policy.merge import EmergencyOverlayError
+    from control_plane.state.db import engagement_scope
+
+    assert rm.read_policy(extra=[("emergency_overlay", {"goal_fit_enforce": True})]
+                          ).goal_fit_enforce is True
+    assert rm.read_policy(extra=[("emergency_overlay", {"task_relation_enforce": True})]
+                          ).task_relation_enforce is True
+    with engagement_scope("ENG-DP15-PROBE") as conn:
+        with pytest.raises(EmergencyOverlayError):                  # an overlay may only tighten
+            load_effective_policy_with(conn, "ENG-DP15-PROBE",
+                                       [("emergency_overlay", {"goal_fit_enforce": False})])
+
+
+# -- execute: what it does with a refusal ---------------------------------------
+
+def run_args(**kw):
+    values = dict(concurrency=2, max_proposals=180, max_cost=3.0, yes=False, allow_nonempty=False)
+    values.update(kw)
+    return rm.argparse.Namespace(**values)
+
+
+@pytest.fixture
+def nothing_may_be_made(monkeypatch):
+    """execute must stop before it makes an engagement, asks to send, or runs the measurement."""
+    import control_plane.orchestrator.engagement as engagement
+    from scripts import manage_global_policy
+
+    called = []
+
+    def boom(*a, **k):
+        called.append("made")
+        raise AssertionError("execute went on past a refusal")
+
+    monkeypatch.setattr(engagement, "create_engagement", boom)
+    monkeypatch.setattr(manage_global_policy, "_confirm",
+                        lambda *a, **k: called.append("asked") or True)
+    monkeypatch.setattr(rm.Measurement, "run", lambda self: called.append("ran"))
+    monkeypatch.setattr(rm, "preflight", lambda classes: [])
+    return called
+
+
+def test_execute_refuses_on_a_guard_prints_the_banner_first_and_goes_no_further(
+        capsys, monkeypatch, nothing_may_be_made):
+    clean_world(monkeypatch, guards=["network.scan already has 9 row(s)"],
+                banner=("database: the_database", "migration revision: 0030"))
+    assert rm.execute(run_args(), rm.build_plan()) == rm.EXIT_PRECONDITION
+    captured = capsys.readouterr()
+    assert "database: the_database" in captured.out
+    assert "precondition failed: network.scan already has 9 row(s)" in captured.err
+    assert nothing_may_be_made == []                                       # not even asked
+
+
+def test_execute_lists_the_validator_problem_and_the_guards_together(
+        capsys, monkeypatch, nothing_may_be_made):
+    monkeypatch.setattr(rm, "preflight", lambda classes: ["a thing is wrong"])
+    clean_world(monkeypatch, guards=["a guard said no"])
+    assert rm.execute(run_args(), rm.build_plan()) == rm.EXIT_PRECONDITION
+    err = capsys.readouterr().err
+    assert "precondition failed: a thing is wrong" in err and "a guard said no" in err
+    # and the flag does not reach the validator check
+    clean_world(monkeypatch)
+    assert rm.execute(run_args(allow_nonempty=True), rm.build_plan()) == rm.EXIT_PRECONDITION
+    assert nothing_may_be_made == []
+
+
+def test_execute_does_not_start_when_the_database_cannot_be_read(
+        capsys, monkeypatch, nothing_may_be_made):
+    def unreadable(**kw):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(rm, "check_startup", unreadable)
+    assert rm.execute(run_args(), rm.build_plan()) == rm.EXIT_PRECONDITION
+    err = capsys.readouterr().err
+    assert "database could not be read (OSError)" in err and "guards cannot be checked" in err
+    assert nothing_may_be_made == []
+
+
+@pytest.mark.parametrize("allow", [False, True])
+def test_execute_refuses_a_switch_that_is_on_with_or_without_the_flag(
+        allow, capsys, monkeypatch, nothing_may_be_made):
+    """The real guards, over a stubbed read: the policy has the switch on and the database is clean
+    (the flag has nothing to lift) or dirty (it lifts the data refusals, not this one)."""
+    monkeypatch.setattr(rm, "read_policy", lambda extra=(): rm.PolicyFacts(
+        frozenset(rm.CLASSES), True, False, 1))
+    monkeypatch.setattr(rm, "read_db_facts", lambda classes: facts(calls={"code.scan": 4}))
+    assert rm.execute(run_args(allow_nonempty=allow), rm.build_plan()) == rm.EXIT_PRECONDITION
+    err = capsys.readouterr().err
+    assert "goal_fit_enforce is not off" in err
+    assert ("already has 4 row(s)" in err) is (not allow)
+    assert nothing_may_be_made == []
+
+
+def test_execute_with_the_flag_prints_the_warning_before_anything_else(
+        capsys, monkeypatch, nothing_may_be_made):
+    clean_world(monkeypatch, guards=["x"])
+    rm.execute(run_args(allow_nonempty=True), rm.build_plan())
+    assert capsys.readouterr().out.startswith("WARNING: --allow-nonempty is set")
+
+
+def test_execute_asks_after_showing_the_banner_and_stops_on_a_no(
+        capsys, monkeypatch, nothing_may_be_made):
+    from scripts import manage_global_policy
+
+    asked = []
+    monkeypatch.setattr(manage_global_policy, "_confirm",
+                        lambda prompt, word, default: asked.append(prompt) or False)
+    clean_world(monkeypatch, banner=("database: the_database",))
+    assert rm.execute(run_args(), rm.build_plan()) == rm.EXIT_USAGE
+    assert "database: the_database" in capsys.readouterr().out
+    assert len(asked) == 1 and "into the database above" in asked[0]
+    assert nothing_may_be_made == []
+
+
+def test_the_guards_are_read_again_over_the_engagements_own_policy(monkeypatch):
+    effective = type("P", (), {"goal_fit_actions": frozenset(rm.CLASSES),
+                               "goal_fit_enforce": False, "task_relation_enforce": False})()
+    monkeypatch.setattr(rm, "read_db_facts", lambda classes: facts())
+    assert rm.engagement_guards(effective, allow_nonempty=False) == []
+    monkeypatch.setattr(rm, "read_db_facts", lambda classes: facts(calls={"code.secrets": 2}))
+    again = rm.engagement_guards(effective, allow_nonempty=False)
+    assert len(again) == 1 and "code.secrets already has 2" in again[0]
+    assert rm.engagement_guards(effective, allow_nonempty=True) == []
+    effective.goal_fit_enforce = True
+    assert "goal_fit_enforce is not off" in "\n".join(
+        rm.engagement_guards(effective, allow_nonempty=True))
+    effective.goal_fit_enforce = False
+    effective.goal_fit_actions = frozenset(rm.CLASSES[:2])
+    assert "is not in the effective policy's goal_fit_actions" in "\n".join(
+        rm.engagement_guards(effective, allow_nonempty=True))
 
 
 def test_the_effective_policy_must_list_the_three_classes_and_have_the_switch_off():
@@ -378,7 +829,7 @@ def test_the_effective_policy_must_list_the_three_classes_and_have_the_switch_of
     on = PolicyLayer(name="engagement", goal_fit_actions=frozenset(rm.CLASSES),
                      goal_fit_enforce=True)
     wrong = rm.check_effective_policy(policy(on))
-    assert len(wrong) == 1 and "goal_fit_enforce is on" in wrong[0]
+    assert len(wrong) == 1 and "goal_fit_enforce is not off" in wrong[0]
 
 
 def test_the_script_publishes_no_global_policy_and_never_takes_the_one_look():
@@ -397,6 +848,56 @@ def test_the_script_publishes_no_global_policy_and_never_takes_the_one_look():
     # it reads the global layers (to refuse to start without the list); it writes none
     for write in ("INSERT INTO policy_layers", "UPDATE policy_layers", "DELETE FROM policy_layers"):
         assert write not in source, write
-    assert "goal_fit_enforce=" not in source and "task_relation_enforce=" not in source
+    # it turns no switch on: no keyword or assignment gives either one a constant. The one place
+    # that names a switch with a value is the control of a dry run (a further overlay added to a
+    # read-only rehearsal, never published), and it is exactly one literal.
+    switches = ("goal_fit_enforce", "task_relation_enforce")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg in switches:
+            assert not isinstance(node.value, ast.Constant), ast.dump(node)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                assert not (isinstance(target, ast.Attribute) and target.attr in switches)
+    literals = [n for n in ast.walk(tree) if isinstance(n, ast.Dict)
+                and any(isinstance(k, ast.Constant) and k.value in switches for k in n.keys)]
+    assert len(literals) == 1
+    assert source.count('("emergency_overlay", {"goal_fit_enforce": True})') == 1
     # the one engagement-scoped layer it writes is its own engagement's, through the helper
     assert source.count("publish_engagement_policy(") == 1
+
+
+# -- the documents that go with the guards ---------------------------------------
+
+DOCS = REPO / "docs" / "D68_DP15_RECORD_MODE"
+
+
+def test_the_publish_document_says_how_to_make_the_clean_database_and_that_it_is_where_to_run():
+    text = (DOCS / "PUBLISH_AND_ROLLBACK.md").read_text()
+    section = text[text.index("## 0."):text.index("## 1.")]
+    for needle in ("DB_NAME=cyberorch_dp15 bash scripts/init_db.sh", "alembic upgrade head",
+                   f"**{rm.code_head()}**", "rewrites `.env`", "Pending approvals must be 0",
+                   "SELECT 'pending approvals', count(*) FROM action_proposals",
+                   "pipeline_stage = 'awaiting_approval'", "--allow-nonempty",
+                   "refuses to start", "baseline_global"):
+        assert needle in section, needle
+    assert "run in a database made for it" in section
+    assert text.count("## ") >= 6 and "## 0." in text.split("## 1.")[0]
+
+
+def test_the_committed_dry_run_shows_the_policy_after_publication_with_the_switch_off():
+    out = (DOCS / "dry_run_output.txt").read_text()
+    lines = out.splitlines()
+    assert lines[0].startswith("DRY RUN -- nothing was sent, no model was called")
+    after = next(line for line in lines if line.startswith("effective policy AFTER publishing"))
+    assert "goal_fit_actions: code.scan, code.secrets, network.scan" in after
+    assert "goal_fit_enforce: off" in after
+    assert any("computed by the policy code" in line for line in lines)
+    assert any("turns the switch on reads goal_fit_enforce: ON" in line for line in lines)
+    head = rm.code_head()
+    assert f"migration revision: {head} -- this checkout's head is {head}" in out
+    assert ("calls already recorded (goal_fit_calls): "
+            "code.scan 0, code.secrets 0, network.scan 0") in out
+    assert "startup guards: ok" in out
+    refused = (DOCS / "dry_run_refused_on_dev_db.txt").read_text()
+    assert "WOULD REFUSE: network.scan already has" in refused
+    assert refused.rstrip().endswith("(exit status 1)")

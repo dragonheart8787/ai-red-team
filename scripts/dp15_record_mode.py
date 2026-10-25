@@ -27,13 +27,23 @@ validator calls made, judgements counted, suspended or not -- and no failure cou
 never runs ``manage_goal_fit_classes.py report``: the one look at the result is the operator's,
 after the run (plan, rule 5).
 
-Exit status: 0 the run completed, 1 a precondition failed (nothing was sent), 2 usage,
+**Guards (they run first, in a dry run too).** The target database must be a clean one for the
+measurement: it refuses to start, and says why, when any class in the list (the layer file's, the
+three measured, and whatever the effective policy lists) already has a row in ``goal_fit_calls``
+or an uncleared suspension in ``goal_fit_suspensions`` (``--allow-nonempty`` lifts those two, for
+tests only), and, with no flag to lift it, when ``goal_fit_enforce`` is not off in the effective
+policy. It prints first the database it is connected to, the migration revision (and the code's
+head), the calls already recorded per class and the effective ``goal_fit_enforce`` /
+``task_relation_enforce``. All of that is read in a READ ONLY transaction.
+
+Exit status: 0 the run completed, 1 a precondition or a guard refused (nothing was sent), 2 usage,
 3 stopped early (outage, a cap, or the pipeline raising) with what it had.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import threading
 import time
@@ -72,6 +82,9 @@ ZONES = ("corp", "eu", "us", "lab", "ops", "dmz")
 LAYER_FILE = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "layer_record_mode.json"
 
 EXIT_OK, EXIT_PRECONDITION, EXIT_USAGE, EXIT_STOPPED = 0, 1, 2, 3
+ALLOW_NONEMPTY_WARNING = ("WARNING: --allow-nonempty is set: the clean-database refusals (rows in "
+                          "goal_fit_calls, uncleared suspensions) are lifted. For tests only; a "
+                          "measurement on such a database is not the registered one.")
 
 
 # -- the plan: pure, no database, no model ---------------------------------------------------------
@@ -311,6 +324,16 @@ def read_state_from_tables(classes: tuple[str, ...], start_call_id: int) -> Stat
                  suspended=suspended, kinds_newest_first=kinds)
 
 
+def enforce_problem(value) -> str | None:
+    """Why this value of ``goal_fit_enforce`` cannot start a record-mode run (``None``: it can).
+    Only ``False`` passes: a missing, ``None`` or any other value is not "off". There is no flag
+    that lifts this."""
+    if value is False:
+        return None
+    return (f"goal_fit_enforce is not off in the effective policy (it reads {value!r}): this is "
+            "the record-mode measurement, with the switch off, and nothing lifts that")
+
+
 def check_effective_policy(policy, classes: tuple[str, ...] = CLASSES) -> list[str]:
     """What is wrong with the policy this run would govern (empty: nothing). Read from the
     effective policy of the run's own engagement, so what is checked is what the pipeline will
@@ -320,22 +343,215 @@ def check_effective_policy(policy, classes: tuple[str, ...] = CLASSES) -> list[s
         if c not in policy.goal_fit_actions:
             problems.append(f"{c} is not in the effective policy's goal_fit_actions: publish "
                             "layer_record_mode.json first (this script publishes nothing)")
-    if policy.goal_fit_enforce:
-        problems.append("goal_fit_enforce is on in the effective policy: this is the record-mode "
-                        "measurement, with the switch off")
+    wrong = enforce_problem(policy.goal_fit_enforce)
+    if wrong:
+        problems.append(wrong)
     return problems
 
 
-def preflight(classes: tuple[str, ...]) -> tuple[list[str], dict]:
-    """What must be true before the run's engagement is made. ``(problems, facts)``. The policy is
-    checked after the engagement exists (:func:`check_effective_policy`); a missing baseline stops
-    the engagement's creation, and this script will not publish one."""
-    import os
+# -- the guards: what the target database must look like before anything is sent ----------------
 
+#: names no engagement. The global layers answer for it, which is what a new engagement is given.
+PROBE_ENGAGEMENT = "ENG-DP15-PROBE"
+CLEAN_DB_DOC = "docs/D68_DP15_RECORD_MODE/PUBLISH_AND_ROLLBACK.md, section 0"
+
+
+@dataclass(frozen=True)
+class DbFacts:
+    """What the connected database says about itself and about the listed classes."""
+
+    host: str
+    port: int | None
+    database: str
+    revision: str | None            # alembic_version in the database
+    code_head: str                  # the head of db/migrations in this checkout
+    calls: dict                     # class -> rows in goal_fit_calls
+    transport: dict                 # class -> of those, transport failures
+    live_suspensions: dict          # class -> uncleared rows in goal_fit_suspensions
+
+
+@dataclass(frozen=True)
+class PolicyFacts:
+    goal_fit_actions: frozenset
+    goal_fit_enforce: object        # a bool when it is known; anything else fails the guard
+    task_relation_enforce: object
+    layers_in_force: int
+
+
+def layer_document() -> dict:
+    """The draft layer, as the owner would publish it."""
+    return json.loads(LAYER_FILE.read_text())
+
+
+def guard_classes(policy: PolicyFacts) -> tuple[str, ...]:
+    """Every class the guards look at: the layer file's, the three measured, and any other the
+    effective policy lists."""
+    listed = set(layer_document().get("goal_fit_actions", ())) | set(CLASSES)
+    return tuple(sorted(listed | set(policy.goal_fit_actions)))
+
+
+def code_head() -> str:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "db" / "migrations"))
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
+def read_policy(extra=()) -> PolicyFacts:
+    """The effective policy a new engagement is given -- with ``extra`` ``(layer, document)``
+    pairs added to the layers in force, computed by the policy code (a rehearsal of a
+    publication). A READ ONLY transaction over the runtime role; nothing is written."""
     from sqlalchemy import text
 
-    from control_plane.plan_fit import class_store
+    from control_plane.policy.layers import (
+        list_effective_policy_layers,
+        load_effective_policy,
+        load_effective_policy_with,
+    )
+    from control_plane.state.db import engagement_scope
+
+    with engagement_scope(PROBE_ENGAGEMENT) as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        if extra:
+            policy = load_effective_policy_with(conn, PROBE_ENGAGEMENT, extra)
+        else:
+            policy = load_effective_policy(conn, PROBE_ENGAGEMENT)
+        in_force = len(list_effective_policy_layers(conn, PROBE_ENGAGEMENT))
+    return PolicyFacts(goal_fit_actions=frozenset(policy.goal_fit_actions),
+                       goal_fit_enforce=policy.goal_fit_enforce,
+                       task_relation_enforce=policy.task_relation_enforce,
+                       layers_in_force=in_force + (len(list(extra)) if extra else 0))
+
+
+def read_db_facts(classes: tuple[str, ...]) -> DbFacts:
+    """The database name, its migration revision and what the listed classes already have. A
+    READ ONLY transaction over the runtime role."""
+    from sqlalchemy import text
+
     from control_plane.state.db import get_engine
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        database = conn.execute(text("SELECT current_database()")).scalar_one()
+        revisions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+        calls = conn.execute(text(
+            "SELECT action, count(*), count(*) FILTER (WHERE failure_kind = 'transport') "
+            "FROM goal_fit_calls WHERE action = ANY(:c) GROUP BY action"),
+            {"c": list(classes)}).all()
+        live = conn.execute(text(
+            "SELECT action, count(*) FROM goal_fit_suspensions "
+            "WHERE cleared_at IS NULL AND action = ANY(:c) GROUP BY action"),
+            {"c": list(classes)}).all()
+    return DbFacts(
+        host=engine.url.host or "(local socket)", port=engine.url.port, database=database,
+        revision=",".join(sorted(revisions)) if revisions else None, code_head=code_head(),
+        calls={a: int(n) for a, n, _ in calls}, transport={a: int(t) for a, _, t in calls},
+        live_suspensions={a: int(n) for a, n in live})
+
+
+def guard_problems(db: DbFacts, policy: PolicyFacts, classes: tuple[str, ...], *,
+                   allow_nonempty: bool = False) -> list[str]:
+    """Why this run must not start (empty: it may). ``allow_nonempty`` lifts the two "the database
+    is not clean" refusals, for tests; it lifts nothing else."""
+    problems = []
+    wrong = enforce_problem(policy.goal_fit_enforce)
+    if wrong:
+        problems.append(wrong)
+    if not allow_nonempty:
+        for c in classes:
+            if db.calls.get(c, 0):
+                problems.append(
+                    f"{c} already has {db.calls[c]} row(s) in goal_fit_calls in database "
+                    f"{db.database!r}: the measurement needs a clean database ({CLEAN_DB_DOC})")
+            if db.live_suspensions.get(c, 0):
+                problems.append(
+                    f"{c} has {db.live_suspensions[c]} uncleared suspension(s) in "
+                    f"goal_fit_suspensions in database {db.database!r}: the measurement needs a "
+                    f"clean database ({CLEAN_DB_DOC})")
+    return problems
+
+
+def _on_off(value) -> str:
+    return {True: "ON", False: "off"}.get(value, f"UNKNOWN ({value!r})")
+
+
+def _policy_line(policy: PolicyFacts) -> str:
+    listed = ", ".join(sorted(policy.goal_fit_actions)) or "(none)"
+    return (f"goal_fit_actions: {listed}; goal_fit_enforce: {_on_off(policy.goal_fit_enforce)}; "
+            f"task_relation_enforce: {_on_off(policy.task_relation_enforce)}")
+
+
+def render_banner(db: DbFacts, now: PolicyFacts, after: PolicyFacts | None,
+                  classes: tuple[str, ...], control: PolicyFacts | None = None) -> list[str]:
+    """What the run prints before anything else, in a dry run too. ``after`` is the policy a
+    publication of the draft would produce (a dry run); ``None`` when the layer is live.
+    ``control`` is the same computation with an overlay that turns the switch on, to show that the
+    computation can see the switch it reports as off."""
+    lines = [f"database: {db.database} on {db.host}:{db.port} (read in a READ ONLY transaction)"]
+    match = "matches" if db.revision == db.code_head else "DOES NOT MATCH"
+    lines.append(f"migration revision: {db.revision} -- this checkout's head is {db.code_head} "
+                 f"({match})")
+    lines.append("calls already recorded (goal_fit_calls): " + ", ".join(
+        f"{c} {db.calls.get(c, 0)}" for c in classes))
+    live = {c: n for c, n in db.live_suspensions.items() if n}
+    lines.append("uncleared suspensions (goal_fit_suspensions): " + (
+        ", ".join(f"{c} {n}" for c, n in sorted(live.items())) or "none"))
+    if after is None:
+        lines.append(f"effective policy (what a new engagement is given; {now.layers_in_force} "
+                     f"layer(s) in force): {_policy_line(now)}")
+    else:
+        lines.append(f"effective policy now ({now.layers_in_force} layer(s) in force): "
+                     f"{_policy_line(now)}")
+        lines.append(f"effective policy AFTER publishing layer_record_mode.json "
+                     f"({after.layers_in_force} layer(s)): {_policy_line(after)}")
+        lines.append("  ^ computed by the policy code (load_effective_policy_with: the layers in "
+                     "force plus the draft as an emergency_overlay, through the same merge as a "
+                     "real load); not inferred from the keys the draft leaves out")
+        if control is not None:
+            lines.append("  control (not the draft): the same computation with a further overlay "
+                         f"that turns the switch on reads goal_fit_enforce: "
+                         f"{_on_off(control.goal_fit_enforce)}")
+    return lines
+
+
+def check_startup(*, allow_nonempty: bool, rehearsal: bool) -> tuple[list[str], list[str]]:
+    """``(banner lines, reasons to refuse)``. Raises when the database cannot be read -- the
+    caller refuses to start then, for the guards could not be checked."""
+    now = read_policy()
+    draft = ("emergency_overlay", layer_document())
+    after = read_policy(extra=[draft]) if rehearsal else None
+    control = read_policy(extra=[draft, ("emergency_overlay", {"goal_fit_enforce": True})]) \
+        if rehearsal else None
+    governing = after if rehearsal else now
+    classes = guard_classes(governing)
+    db = read_db_facts(classes)
+    return (render_banner(db, now, after, classes, control),
+            guard_problems(db, governing, classes, allow_nonempty=allow_nonempty))
+
+
+def engagement_guards(policy, *, allow_nonempty: bool) -> list[str]:
+    """The checks over the run's own engagement, once it exists: its effective policy lists the
+    classes and has the switch off, and the guards hold again over that policy and a fresh read
+    of the database (a layer published, or a call recorded, since the first look)."""
+    wrong = check_effective_policy(policy)
+    if wrong:
+        return wrong
+    again = PolicyFacts(frozenset(policy.goal_fit_actions), policy.goal_fit_enforce,
+                        policy.task_relation_enforce, 0)
+    classes = guard_classes(again)
+    return guard_problems(read_db_facts(classes), again, classes, allow_nonempty=allow_nonempty)
+
+
+def preflight(classes: tuple[str, ...]) -> list[str]:
+    """What must be true before the run's engagement is made, other than the guards: the
+    validator is the one DP-14 measured. The policy is checked after the engagement exists
+    (:func:`check_effective_policy`); a missing baseline stops the engagement's creation, and this
+    script will not publish one."""
+    import os
+
     from scripts.s8_enablement_check import (
         NO_FALLBACK_ENV,
         PLANFIT_BACKEND_ENV,
@@ -343,27 +559,20 @@ def preflight(classes: tuple[str, ...]) -> tuple[list[str], dict]:
         config_problems,
     )
 
-    problems: list[str] = []
     backend = os.environ.get(PLANFIT_BACKEND_ENV)
     if not (backend or "").strip() or backend.strip().lower() == "fake":
-        problems.append(f"no real validator is configured ({PLANFIT_BACKEND_ENV}={backend!r})")
-    else:
-        problems += config_problems(backend=backend, model=os.environ.get(PLANFIT_MODEL_ENV),
-                                    fallback_off=os.environ.get(NO_FALLBACK_ENV))
-    with get_engine().begin() as conn:
-        table = {r["action"]: r for r in class_store.class_table(conn, ())}
-        live = {a for (a,) in conn.execute(text(
-            "SELECT action FROM goal_fit_suspensions WHERE cleared_at IS NULL"))}
-    for c in classes:
-        if c in live:
-            problems.append(f"{c} is already suspended")
-    facts = {"start_counts": {c: (table.get(c, {}).get("n_total", 0),
-                                  table.get(c, {}).get("transport_total", 0)) for c in classes}}
-    return problems, facts
+        return [f"no real validator is configured ({PLANFIT_BACKEND_ENV}={backend!r})"]
+    return config_problems(backend=backend, model=os.environ.get(PLANFIT_MODEL_ENV),
+                           fallback_off=os.environ.get(NO_FALLBACK_ENV))
+
+
+def refuse(problems: list[str]) -> int:
+    for p in problems:
+        print(f"precondition failed: {p}", file=sys.stderr)
+    return EXIT_PRECONDITION
 
 
 def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
-    import json
     import os
     import subprocess
 
@@ -383,14 +592,25 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
     from tool_gateway.sandbox import SandboxResult
 
     load_dotenv()
-    problems, facts = preflight(CLASSES)
-    if problems:
-        for p in problems:
-            print(f"precondition failed: {p}", file=sys.stderr)
-        return EXIT_PRECONDITION
-    print("starting state (counts only): " + ", ".join(
-        f"{c}: {a} calls recorded, {b} of them transport" for c, (a, b) in
-        facts["start_counts"].items()))
+    allow = args.allow_nonempty
+    if allow:
+        print(ALLOW_NONEMPTY_WARNING)
+    problems = preflight(CLASSES)
+    try:
+        banner, guards = check_startup(allow_nonempty=allow, rehearsal=False)
+    except Exception as exc:                      # the guards cannot be checked: do not start
+        return refuse(problems + [f"the database could not be read ({type(exc).__name__}): the "
+                                  "startup guards cannot be checked"])
+    print("\n".join(banner))
+    if problems or guards:
+        return refuse(problems + guards)
+    if not args.yes:
+        from scripts.manage_global_policy import _confirm
+
+        if not _confirm("SEND the DP-15 record-mode measurement into the database above: up to "
+                        f"{args.max_proposals} proposals, US${args.max_cost:.2f}, real model "
+                        "calls.", "SEND", False):
+            return EXIT_USAGE
 
     from control_plane.state.db import registry_admin_scope
 
@@ -407,12 +627,10 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
                                       actions=CLASSES)
     with engagement_scope(eid) as conn:
         policy = load_effective_policy(conn, eid)
-    wrong = check_effective_policy(policy)
+    wrong = engagement_guards(policy, allow_nonempty=allow)
     if wrong:
-        for p in wrong:
-            print(f"precondition failed: {p}", file=sys.stderr)
         print("nothing was sent (an empty engagement was made)", file=sys.stderr)
-        return EXIT_PRECONDITION
+        return refuse(wrong)
     with get_engine().begin() as conn:
         start_call_id = int(conn.execute(text(
             "SELECT coalesce(max(call_id), 0) FROM goal_fit_calls")).scalar_one())
@@ -473,10 +691,24 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
 
 
 def dry_run(plan: list[Planned], args: argparse.Namespace) -> int:
-    """The plan and its checks. No database, no model, no network, no file written."""
+    """The plan, its checks and the startup guards. No model, no network, no file written; the
+    database is only read, in a READ ONLY transaction. Exit 1 when the run would be refused."""
     problems = check_plan(plan)
+    refusals: list[str] = []
     est = estimate()
-    print("DRY RUN -- nothing was sent, no model was called, no database was opened.")
+    print("DRY RUN -- nothing was sent, no model was called; the database was only read.")
+    if args.allow_nonempty:
+        print(ALLOW_NONEMPTY_WARNING)
+    try:
+        banner, guards = check_startup(allow_nonempty=args.allow_nonempty, rehearsal=True)
+        print("\n".join(banner))
+        print("startup guards: " + ("ok -- the run would be allowed to start" if not guards
+                                    else "WOULD REFUSE TO START"))
+        refusals = guards
+    except Exception as exc:
+        print(f"database: NOT READ ({type(exc).__name__}) -- the startup guards could not be "
+              "checked")
+        refusals = ["the database could not be read: the startup guards were not checked"]
     print(f"classes: {', '.join(CLASSES)}   registered judgements per class: {N}")
     print(f"proposals planned: {len(plan)} ({PER_CLASS_MAX} per class: {N} + {PER_CLASS_MAX - N} "
           f"spare targets, used only to replace a transport loss)")
@@ -497,15 +729,17 @@ def dry_run(plan: list[Planned], args: argparse.Namespace) -> int:
           f"({sum(p.target_type == 'ip' for p in plan)} addresses, "
           f"{sum(p.target_type == 'fqdn' for p in plan)} host names)")
     print("order (first twelve): " + ", ".join(f"{p.action}#{p.index}" for p in plan[:12]))
-    if problems:
-        for problem in problems:
-            print(f"PLAN PROBLEM: {problem}", file=sys.stderr)
+    for problem in problems:
+        print(f"PLAN PROBLEM: {problem}", file=sys.stderr)
+    for refusal in refusals:
+        print(f"WOULD REFUSE: {refusal}", file=sys.stderr)
+    if problems or refusals:
         return EXIT_PRECONDITION
     print("plan checks: ok (no host repeated, 60 per class in order, sentences as registered)")
-    print("preflight (not run in a dry run): validator configured as DP-14 measured it; no class "
-          "suspended; a baseline in force (the engagement cannot be made without one); and, in the "
-          "run's own engagement, the three classes in the effective policy's goal_fit_actions with "
-          "goal_fit_enforce off.")
+    print("also checked, only in --execute: the validator is configured as DP-14 measured it; a "
+          "baseline is in force (the engagement cannot be made without one); and, in the run's own "
+          "engagement, the three classes are in the effective policy's goal_fit_actions with "
+          "goal_fit_enforce off (the guards above are read again there).")
     return EXIT_OK
 
 
@@ -518,6 +752,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-proposals", type=int, default=MAX_PROPOSALS)
     parser.add_argument("--max-cost", type=float, default=MAX_COST_USD)
     parser.add_argument("--yes", action="store_true", help="do not ask before --execute")
+    parser.add_argument("--allow-nonempty", action="store_true",
+                        help="TEST ONLY: start although a listed class already has rows in "
+                             "goal_fit_calls or an uncleared suspension. Lifts those two refusals "
+                             "and nothing else")
     args = parser.parse_args(argv)
     if not 1 <= args.concurrency <= MAX_CONCURRENCY:
         print(f"refused: concurrency is 1 to {MAX_CONCURRENCY}", file=sys.stderr)
@@ -525,6 +763,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_proposals > MAX_PROPOSALS or args.max_cost > MAX_COST_USD:
         print("refused: a cap may be lowered, never raised", file=sys.stderr)
         return EXIT_USAGE
+    from control_plane.config import load_dotenv
+
+    load_dotenv()
     plan = build_plan()
     if not args.execute:
         return dry_run(plan, args)
@@ -533,13 +774,6 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"PLAN PROBLEM: {problem}", file=sys.stderr)
         return EXIT_PRECONDITION
-    if not args.yes:
-        from scripts.manage_global_policy import _confirm
-
-        if not _confirm("SEND the DP-15 record-mode measurement: up to "
-                        f"{args.max_proposals} proposals, US${args.max_cost:.2f}, real model "
-                        "calls.", "SEND", False):
-            return EXIT_USAGE
     return execute(args, plan)
 
 
