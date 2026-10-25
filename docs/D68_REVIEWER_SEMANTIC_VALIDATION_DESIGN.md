@@ -774,3 +774,85 @@ valuable to probe is `capabilities.credential_id -> credentials` (a credential o
 its reads go through `credential_admin_scope` under the same policy, and `_load_material` selects by
 `credential_id` alone, so it relies entirely on row-level security [R]. That is the design, not a defect,
 but it was not exercised here. Listed in 5.119 as the first thing to check if the question is taken further.
+
+## 14. DP-16 candidate: ask Q1 only after the deterministic DENY (added 2026-10-25) -- **undecided, not implemented**
+
+*A candidate for the owner, written so that it can be decided or dropped. Nothing in the code
+changes. [R] read, [E] executed, [D] derived, [N] not established.*
+
+### 14.1 The order today, and what it costs
+
+`_decide` (`control_plane/api/function_api.py`) runs: authorization and metadata resolvers -> P1 (the
+task relation, deterministic) -> the Reviewer (a model call) -> **Q1 (a model call)** -> OPA, which
+makes the decision, including the deterministic `DENY`s (`target_out_of_scope`,
+`unknown_classification_for_action_class`, the authorization and ceiling rules). So Q1 is paid for,
+and recorded, on proposals OPA then refuses outright. [R]
+
+* **Cost.** A refused proposal costs a model call it did not need. In DP-15 run 1, 100 of 150 proposals
+  (every `code.scan` and `code.secrets` one) were `DENY`, `closed`, for those two reasons -- an artefact
+  of the run's scope and asset setup, not of Q1 -- and each still made its Q1 call [E:
+  `cyberorch_dp15`].
+* **Attack surface (design 2.6, point 1).** The automatic suspension is driven by the failure rate of
+  the last 50 judgements of a class. Today *any* caller of `propose_action` can feed that window,
+  including with proposals that name targets outside every scope: they will be refused anyway, so
+  sending them costs the sender nothing and needs no authorization, yet each one makes Q1 call (and
+  spends the usage window). A caller with a way to make the service's classifier stop a call (S7: wording
+  of one kind is stopped almost every time) can push a class over the 30% line and switch Q1 off for it,
+  globally. [D]
+
+### 14.2 The candidate
+
+Evaluate OPA a first time **without** the Q1 signal (the *base* decision). If it is `DENY`, do not call
+Q1: store `goal_fit = not_assessed` with a new system cause (working name `denied_before_assessment`),
+and decide `DENY`. Otherwise call Q1 and evaluate again with the signal, as today. Reasoning that makes
+it safe: the policy is monotone (design 0, "the decision with the signal present is the same as, or
+stricter than, the decision with the signal absent"), and `DENY` is the strictest value, so no Q1
+answer can change a base `DENY`. What is skipped is a record, not a decision. [D]
+
+Two ways to get the base decision, with the cost of each:
+
+* *Evaluate OPA twice* for the proposals that are not refused: one more subprocess call (milliseconds),
+  no second copy of the rules. Preferred if taken.
+* *A deterministic pre-check in Python* that mirrors the `DENY` rules: no extra call, but a second list
+  of rules to keep equal to the Rego -- the defect this code base has refused before (D30, D33).
+
+What it buys: no Q1 call on a refused proposal (cost, and the usage window), and the window that drives
+the exit rule is fed only by proposals that passed the deterministic gates (a caller needs an in-scope,
+classified target to feed it). It does **not** close the surface: a caller with in-scope targets can still
+feed the window.
+
+### 14.3 What it costs, and what has to be solved first
+
+1. **The stored signal and its replay.** The decision is re-derived at dispatch from the signal stored with
+   the proposal (`reviewer_hints['plan_fit']`, section 11). A `DENY` is closed at the decision and is never
+   dispatched, so no replay reads its signal -- but every consumer of the stored value must know the new
+   cause: the Rego's list of quiet causes (`disabled`, `not_applicable`, `class_not_enabled`,
+   `class_suspended`) would have to include it, or a stored `DENY` re-derived by a test or a tool would
+   read it as an unreadable check; the structure tests that enumerate causes, the report scripts and the
+   audit vocabulary change with it. [R]
+2. **What the audit loses.** `plan_fit.assessed` for a refused proposal would say `not_assessed /
+   denied_before_assessment` instead of what the validator thought. Out-of-scope proposals are exactly the
+   probing traffic where "this was also implausible" is a stronger signal than either fact alone, and
+   they were the only traffic that had no cost to produce. Whether that loss matters is a judgement; the
+   alternative is to keep Q1 for them, which is today. [N]
+3. **Measurements change.** `goal_fit_calls` and the admission/exit windows would count only proposals
+   that passed the gates -- a more honest population for the numbers, but not comparable with windows
+   recorded before. Any harness that produces refused proposals (run 1's `code.*`) would produce no Q1
+   calls for them and would have to be given a scope and asset classification that pass.
+4. **The order with P1.** P1 is computed first and is deterministic; Q1 is already asked only when the
+   relation is `matches_task`. A P1 escalation (`differs_from_task`, `task_not_live`) is a
+   `HUMAN_APPROVAL`, not a `DENY`, so this candidate does not skip Q1 for it; it would still be asked
+   when P1 matches. Whether to skip Q1 as well when the base decision is already `HUMAN_APPROVAL` (the
+   approver would see one reason fewer) is a separate question, **not** part of this candidate.
+5. **One decision function.** Today one function builds the decision for the proposal and for its
+   re-derivation. Two evaluations in `_decide` must not make the replay a different computation; a test
+   that runs both paths over the stored rows of refused and non-refused proposals would be required.
+6. **The Reviewer.** The Reviewer's model call also precedes OPA and is also paid on refused proposals;
+   the same argument applies to it and it is outside this candidate.
+
+### 14.4 Status
+
+**Undecided.** Needs the owner's choice on (a) whether the audit loss in 14.3.2 is acceptable, (b) the
+two-evaluation form, (c) whether it is worth doing before the first class is enabled or after. No
+estimate of its saving is made here beyond run 1's 100 of 150 [E], which is a harness artefact; the real
+share of refused proposals in production is [N].

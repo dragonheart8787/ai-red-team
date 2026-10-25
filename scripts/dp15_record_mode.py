@@ -170,6 +170,95 @@ def estimate(classes: tuple[str, ...] = CLASSES, n: int = N,
 
 # -- the run: the controller takes its world as arguments, so it is tested without one -------------
 
+@dataclass
+class Usage:
+    """What the run used, read from the CLI's own result envelopes. Totals only: nothing here says
+    whether a call was answered, refused or lost, so printing it breaks no rule of the plan.
+
+    **Field names, and how far they are verified.** ``total_cost_usd``, ``usage.input_tokens``
+    and ``usage.cache_creation_input_tokens`` appear verbatim in the text of real CLI result
+    envelopes stored in the S7 records (``docs/D68_S7_BASELINE/``; pinned by a test). The stored
+    text is cut at 200 characters, so ``usage.cache_read_input_tokens``, ``usage.output_tokens`` and
+    ``modelUsage`` are **not** visible as stored text; they are the names
+    ``scripts/plan_fit_baseline.py`` read to produce S7's non-zero ``cache_read_tokens``,
+    ``output_tokens`` and ``models`` from real envelopes (verified by use, not by text). A name that
+    differs would show as 0 / no model, not as an error.
+    """
+
+    cli_runs: int = 0
+    cost_usd: float = 0.0              # the sum of total_cost_usd (API list price of the tokens)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    models: set = field(default_factory=set)
+
+    def add_envelope(self, stdout: str | None) -> None:
+        """Count what one finished CLI run reported. A reply that is not an envelope adds nothing
+        (and never raises: metering must not hide the run it measures)."""
+        try:
+            envelope = json.loads(stdout or "")
+        except (ValueError, TypeError):
+            return
+        if not isinstance(envelope, dict):
+            return
+        try:
+            self.cost_usd += float(envelope.get("total_cost_usd") or 0.0)
+        except (ValueError, TypeError):
+            pass
+        block = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+        for name, key in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                          ("cache_read_tokens", "cache_read_input_tokens"),
+                          ("cache_creation_tokens", "cache_creation_input_tokens")):
+            try:
+                setattr(self, name, getattr(self, name) + int(block.get(key) or 0))
+            except (ValueError, TypeError):
+                pass
+        by_model = envelope.get("modelUsage")
+        if isinstance(by_model, dict):
+            self.models.update(str(m) for m in by_model)
+
+    @staticmethod
+    def total(parts) -> Usage:
+        out = Usage()
+        for u in parts:
+            out.cli_runs += u.cli_runs
+            out.cost_usd += u.cost_usd
+            out.input_tokens += u.input_tokens
+            out.output_tokens += u.output_tokens
+            out.cache_read_tokens += u.cache_read_tokens
+            out.cache_creation_tokens += u.cache_creation_tokens
+            out.models |= u.models
+        return out
+
+
+class MeteredRunner:
+    """``subprocess.run``, with the refusal fallback off (the DP-14 configuration), counting each
+    CLI run and what its envelope reports. One per validator thread; read through :class:`Usage`.
+    A run is counted when it starts, so one that times out is a run and adds no cost."""
+
+    def __init__(self, run: Callable | None = None, environ: dict | None = None,
+                 no_fallback_env: str = "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"):
+        import os
+        import subprocess
+
+        self.usage = Usage()
+        self._run = run or subprocess.run
+        self._environ = dict(os.environ) if environ is None else environ
+        self._no_fallback_env = no_fallback_env
+
+    @property
+    def cost(self) -> float:
+        return self.usage.cost_usd
+
+    def __call__(self, *a, **kw):
+        self.usage.cli_runs += 1
+        kw["env"] = {**self._environ, **kw.get("env", {}), self._no_fallback_env: "1"}
+        done = self._run(*a, **kw)
+        self.usage.add_envelope(getattr(done, "stdout", None))
+        return done
+
+
 @dataclass(frozen=True)
 class State:
     """What the tables say, read between calls. Counts and kinds only; nothing here is printed
@@ -188,6 +277,7 @@ class Result:
     stopped: str | None = None             # None: completed; else why it stopped early
     escaped_errors: int = 0
     seconds: float = 0.0
+    usage: Usage | None = None
 
     @property
     def exit_code(self) -> int:
@@ -281,6 +371,32 @@ class Measurement:
         return result
 
 
+BILLING_NOTE = (
+    "billing: a subscription login is not invoiced per call. The figure above is the API list "
+    "price of the tokens the CLI reports it used (the same figure the S7 baseline gave, US$4.23 "
+    "for 480 calls); it is not an invoice. What a subscription actually spends is its usage "
+    "window, which the CLI does not report in this output, so that amount is not known here.")
+
+
+def render_usage(usage: Usage, *, recorded_calls: int, estimate_: dict | None = None,
+                 cap: float = MAX_COST_USD) -> list[str]:
+    """The usage lines of the end-of-run summary. Totals; no outcome."""
+    est = estimate_ if estimate_ is not None else estimate()
+    return [
+        f"usage: {usage.cli_runs} CLI runs (validator calls recorded in the tables: "
+        f"{recorded_calls})",
+        f"  list-price-equivalent cost: US${usage.cost_usd:.2f} "
+        f"(cap US${cap:.2f}; planned estimate before the run US${est['cost_planned_usd']} for "
+        f"{est['planned_calls']} calls)",
+        f"  tokens: input {usage.input_tokens}, output {usage.output_tokens}, cache read "
+        f"{usage.cache_read_tokens}, cache creation {usage.cache_creation_tokens}",
+        f"  models named in the envelopes: {', '.join(sorted(usage.models)) or '(none)'}",
+        "  " + BILLING_NOTE,
+        "  cost counts only runs that returned an envelope; a run that timed out is a run and "
+        "adds none.",
+    ]
+
+
 def render_result(result: Result, classes: tuple[str, ...] = CLASSES, n: int = N) -> str:
     """The end-of-run summary: calls made and suspension status. No failure count, no rate."""
     state = result.state
@@ -292,6 +408,9 @@ def render_result(result: Result, classes: tuple[str, ...] = CLASSES, n: int = N
         judged = state.judged.get(c, 0) if state else 0
         lines.append(f"{c:<14}{result.issued.get(c, 0):>10}{asked:>17}{judged:>12}  {suspended}")
     lines.append(f"registered judgements per class: {n}; run time {result.seconds / 60:.1f} min")
+    if result.usage is not None:
+        lines += render_usage(result.usage,
+                              recorded_calls=sum(state.asked.values()) if state else 0)
     if result.stopped:
         lines.append(f"STOPPED EARLY: {result.stopped}. Nothing was retried and nothing resumes.")
     else:
@@ -574,7 +693,6 @@ def refuse(problems: list[str]) -> int:
 
 def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
     import os
-    import subprocess
 
     from sqlalchemy import text
 
@@ -639,25 +757,9 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
     meters: list = []
     lock = threading.Lock()
 
-    class Metered:
-        """subprocess.run, with the refusal fallback off (the DP-14 configuration) and the cost
-        of each call read from the CLI's own envelope."""
-
-        def __init__(self):
-            self.cost = 0.0
-
-        def __call__(self, *a, **kw):
-            kw["env"] = {**os.environ, **kw.get("env", {}), NO_FALLBACK_ENV: "1"}
-            done = subprocess.run(*a, **kw)
-            try:
-                self.cost += float(json.loads(done.stdout or "{}").get("total_cost_usd") or 0.0)
-            except (ValueError, TypeError, AttributeError):
-                pass
-            return done
-
     def validator():
         if not hasattr(local, "v"):
-            local.meter = Metered()
+            local.meter = MeteredRunner(environ=dict(os.environ), no_fallback_env=NO_FALLBACK_ENV)
             with lock:
                 meters.append(local.meter)
             local.v = build_plan_fit_validator(runner=local.meter)
@@ -686,6 +788,7 @@ def execute(args: argparse.Namespace, plan: list[Planned]) -> int:
         max_proposals=min(args.max_proposals, MAX_PROPOSALS),
         max_cost=min(args.max_cost, MAX_COST_USD), progress=progress)
     result = run.run()
+    result.usage = Usage.total(m.usage for m in list(meters))
     print(render_result(result))
     return result.exit_code
 

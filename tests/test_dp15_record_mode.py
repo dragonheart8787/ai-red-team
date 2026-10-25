@@ -383,6 +383,141 @@ def test_the_command_line_refuses_to_raise_a_cap(flags, capsys):
     assert "refused" in capsys.readouterr().err
 
 
+# -- usage: what the run used, as totals --------------------------------------
+
+ENVELOPE = ('{"total_cost_usd": 0.0125, "usage": {"input_tokens": 3, "output_tokens": 60, '
+            '"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200}, '
+            '"modelUsage": {"claude-haiku-5-5": {}, "claude-sonnet-5-5": {}}}')
+
+
+class FakeDone:
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+def test_an_envelope_adds_its_cost_tokens_and_models():
+    usage = rm.Usage()
+    usage.add_envelope(ENVELOPE)
+    usage.add_envelope(ENVELOPE)
+    assert round(usage.cost_usd, 4) == 0.025
+    assert (usage.input_tokens, usage.output_tokens) == (6, 120)
+    assert (usage.cache_read_tokens, usage.cache_creation_tokens) == (2000, 400)
+    assert usage.models == {"claude-haiku-5-5", "claude-sonnet-5-5"}
+
+
+@pytest.mark.parametrize("stdout", [None, "", "not json", "[1, 2]", "3", 5,
+                                    '{"total_cost_usd": "free", "usage": 5, "modelUsage": []}',
+                                    '{"total_cost_usd": "x", "usage": {"input_tokens": "many"}}',
+                                    '{"total_cost_usd": [1]}',
+                                    '{"usage": {"output_tokens": [1]}}'])
+def test_a_reply_that_is_not_an_envelope_adds_nothing_and_never_raises(stdout):
+    usage = rm.Usage()
+    try:
+        usage.add_envelope(stdout)
+    except Exception as exc:                       # noqa: BLE001 - the point is that none escapes
+        pytest.fail(f"metering raised {exc!r}")
+    assert usage == rm.Usage()
+
+
+STORED = REPO / "docs" / "D68_S7_BASELINE"
+
+
+def test_the_envelope_keys_are_the_ones_in_responses_of_the_real_cli_that_are_stored():
+    """The field names are not guessed: three of them appear verbatim in the text of real CLI result
+    envelopes kept in the S7 records (the stored text is cut at 200 characters, so it ends inside
+    the usage block). ``cache_read_input_tokens``, ``output_tokens`` and ``modelUsage`` are cut off
+    in what is stored; they are the names ``scripts/plan_fit_baseline.py`` read to produce S7's
+    non-zero ``cache_read_tokens``, ``output_tokens`` and ``models`` (verified by use, not text)."""
+    creation = (STORED / "p1_scale" / "sonnet" / "run_26.json").read_text()
+    assert '\\"cache_creation_input_tokens\\":' in creation
+    assert '\\"usage\\":{\\"input_tokens\\":' in creation
+    cost = (STORED / "goal_class_probe" / "probe.json").read_text()
+    assert '\\"total_cost_usd\\":' in cost
+    source = SCRIPT.read_text()
+    for key in ("total_cost_usd", "cache_creation_input_tokens", "cache_read_input_tokens",
+                "modelUsage"):
+        assert f'"{key}"' in source, key
+    baseline = (REPO / "scripts" / "plan_fit_baseline.py").read_text()
+    for key in ("cache_read_input_tokens", "modelUsage", "total_cost_usd"):
+        assert f'"{key}"' in baseline, key               # the runner that produced S7's records
+
+
+def test_the_runner_counts_every_run_and_what_the_envelope_reports(monkeypatch):
+    seen = []
+
+    def run(*args, **kwargs):
+        seen.append(kwargs)
+        return FakeDone(ENVELOPE)
+
+    runner = rm.MeteredRunner(
+        run=run, environ={"HOME": "/h", "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK": "0"})
+    first = runner(["claude"], env={"X": "1"}, timeout=5)
+    runner(["claude"])
+    assert isinstance(first, FakeDone)
+    assert runner.usage.cli_runs == 2 and round(runner.cost, 4) == 0.025
+    # the DP-14 configuration is forced over what the environment said; nothing else is lost
+    assert seen[0]["env"].get("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK") == "1"
+    assert seen[0]["env"].get("HOME") == "/h" and seen[0]["env"].get("X") == "1"
+    assert seen[0]["timeout"] == 5
+
+
+def test_a_run_that_raises_is_a_run_and_adds_no_cost():
+    def run(*args, **kwargs):
+        raise TimeoutError("30 s")
+
+    runner = rm.MeteredRunner(run=run, environ={})
+    with pytest.raises(TimeoutError):
+        runner(["claude"])
+    assert runner.usage.cli_runs == 1 and runner.usage.cost_usd == 0.0
+
+
+def test_the_totals_of_the_validator_threads_add_up():
+    a = rm.Usage(cli_runs=3, cost_usd=0.5, input_tokens=1, output_tokens=2, cache_read_tokens=3,
+                 cache_creation_tokens=4, models={"m1"})
+    b = rm.Usage(cli_runs=4, cost_usd=0.25, input_tokens=9, output_tokens=8, cache_read_tokens=7,
+                 cache_creation_tokens=6, models={"m2"})
+    total = rm.Usage.total([a, b])
+    assert (total.cli_runs, total.cost_usd) == (7, 0.75)
+    assert (total.input_tokens, total.output_tokens) == (10, 10)
+    assert (total.cache_read_tokens, total.cache_creation_tokens) == (10, 10)
+    assert total.models == {"m1", "m2"}
+    assert rm.Usage.total([]) == rm.Usage()
+
+
+def test_the_end_of_run_summary_ends_with_the_usage_and_how_it_is_to_be_read():
+    usage = rm.Usage(cli_runs=150, cost_usd=1.3151, input_tokens=450, output_tokens=9000,
+                     cache_read_tokens=150000, cache_creation_tokens=30000,
+                     models={"claude-sonnet-5-5"})
+    state = rm.State(judged={c: 50 for c in rm.CLASSES}, asked={c: 51 for c in rm.CLASSES},
+                     suspended={}, kinds_newest_first=[])
+    out = rm.render_result(rm.Result(issued={c: 51 for c in rm.CLASSES}, state=state, seconds=246,
+                                     usage=usage))
+    lines = out.splitlines()
+    assert any(line.startswith("usage:") for line in lines), out
+    block = "\n".join(lines[next(i for i, line in enumerate(lines) if line.startswith("usage:")):])
+    assert "usage: 150 CLI runs (validator calls recorded in the tables: 153)" in block
+    assert "list-price-equivalent cost: US$1.32 (cap US$3.00; planned estimate" in block
+    assert "tokens: input 450, output 9000, cache read 150000, cache creation 30000" in block
+    assert "models named in the envelopes: claude-sonnet-5-5" in block
+    assert "not invoiced per call" in block and "it is not an invoice" in block
+    assert "usage window, which the CLI does not report" in block
+    assert "adds none" in block
+    # totals only: nothing about outcomes, in the usage block or beside it
+    import re
+    assert not re.search(r"fail|refus|transport|safety|suspend|rate\b", block, re.IGNORECASE)
+
+
+def test_without_usage_the_summary_is_what_it_was():
+    out = rm.render_result(rm.Result(issued={}, state=None, seconds=60))
+    assert "usage:" not in out
+
+
+def test_the_run_attaches_the_totals_of_its_validators_to_the_result():
+    source = SCRIPT.read_text()
+    assert "result.usage = Usage.total(m.usage for m in list(meters))" in source
+    assert "MeteredRunner(environ=dict(os.environ), no_fallback_env=NO_FALLBACK_ENV)" in source
+
+
 # -- the startup guards ---------------------------------------------------------
 
 def facts(*, calls=None, suspended=None, database="clean_db", revision="0030", head="0030"):
