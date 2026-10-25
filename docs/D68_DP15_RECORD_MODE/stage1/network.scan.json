@@ -1,0 +1,491 @@
+{
+ "class": "network.scan",
+ "sources": {
+  "real": "28 wordings: goals of tasks created by the model Supervisor (claude-code-headless-supervisor, D40 lab runs), network.scan, normalised (IPv4/CIDR/dotted host names -> {t}, digits -> {n}, lower case, whitespace squashed), exactly one {t} and no {n}, not within token-Jaccard 0.6 of an S7 template or a run-1 sentence, greedy near-duplicate removal at Jaccard 0.6 (most used first, ties alphabetical, no randomness)",
+  "hand": "32 wordings: written by the model at the owner's instruction in one pass on 2026-10-25, without sight of any validator result; none reuses an S7, run-1 or real wording; token-Jaccard below 0.6 to every other wording of the list"
+ },
+ "wordings": [
+  {
+   "text": "discover live hosts and open services in {t}",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 68,
+   "engagements": 17
+  },
+  {
+   "text": "enumerate open ports and services on {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 56,
+   "engagements": 5
+  },
+  {
+   "text": "service/port scan of {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 55,
+   "engagements": 5
+  },
+  {
+   "text": "enumerate services and versions on live host {t} to characterize its exposure.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 11,
+   "engagements": 1
+  },
+  {
+   "text": "port scan {t} to identify exposed services",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 11,
+   "engagements": 1
+  },
+  {
+   "text": "scan {t} for open services",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 11,
+   "engagements": 1
+  },
+  {
+   "text": "full tcp port scan of {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 6,
+   "engagements": 1
+  },
+  {
+   "text": "enumerate open ports and services on live hosts in the {t} block.",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 4,
+   "engagements": 1
+  },
+  {
+   "text": "port- and service-scan the live hosts in {t} to enumerate exposed services and spot misconfigurations.",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 4,
+   "engagements": 1
+  },
+  {
+   "text": "run a full tcp port scan against live hosts in {t} to enumerate open services",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 4,
+   "engagements": 1
+  },
+  {
+   "text": "run a full tcp port/service scan against {t} to identify exposed services",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 4,
+   "engagements": 1
+  },
+  {
+   "text": "enumerate exposed services and ports on live host {t} to characterize what it exposes.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "per-host service scan of {t} to confirm its true exposed-service posture.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "port-scan live host {t} to enumerate open services, since it was discovered in recon but never scanned.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "port/service scan of {t}, a host confirmed live by recon that has not yet had a port scan",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "scan live host {t} for open ports and running services to characterize its exposure.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "scan the authorized live host {t} for open ports and service banners.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "scan the live host {t} for open ports and exposed services to establish what it presents on the authorized network.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 2,
+   "engagements": 1
+  },
+  {
+   "text": "enumerate services and banners on the authorized web host {t}.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "per-host service scan of {t} to characterize its exposure.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "perform a detailed service and version scan of the authorized web host {t}.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "perform a focused service scan of the specifically called-out host {t}.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "perform a full tcp port scan of the authorized web host {t} to establish its complete exposed service footprint beyond the standard web ports already checked.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "port and service scan of {t} to identify exposed services on live hosts",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "port/service scan of {t} to confirm filtered ports and find open services",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "run a full tcp port sweep of the authorized web host {t} to confirm whether anything beyond the two known http services is exposed.",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "scan ports and services across the authorized engagement network {t}.",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "service scan of {t} (http/smtp-proxy seen open)",
+   "kinds": [
+    "ip"
+   ],
+   "source": "real",
+   "tasks": 1,
+   "engagements": 1
+  },
+  {
+   "text": "Fingerprint the operating system and listening services on {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Probe {t} for exposed management interfaces and remote-access daemons",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Check what {t} is listening on, and which software versions answer",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Sweep the full TCP range of {t} for services nobody documented",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Identify the web, database and mail daemons reachable on {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Run a connect scan against {t} and record every open port with its banner",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Find out whether {t} exposes anything beyond the services already inventoried",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Baseline scan of the authorized host {t} before the vulnerability assessment starts",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Verify that the firewall in front of {t} filters everything except the intended ports",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Look for forgotten test listeners on {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Discover what runs on {t} so the assessment can be scoped",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Re-scan {t} to see whether the earlier finding about an open admin port still holds",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Enumerate reachable UDP and TCP services on the single host {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Quiet service discovery against {t}, keeping the probe rate low",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Inventory the externally visible services of {t} for the exposure report",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Check whether legacy protocols such as telnet and ftp are reachable on {t}",
+   "kinds": [
+    "ip"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Find which addresses in {t} are alive and what each one serves",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Map reachable hosts and their open services across {t}",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Sweep the subnet {t} for live machines, then list their listening ports",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Take stock of everything answering inside {t}",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Survey the range {t} for exposed services to size the attack surface",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Locate hosts in {t} that expose remote administration",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Run a host and service discovery over the authorized network segment {t}",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Identify unexpected listeners within {t} compared with the asset list",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Discover servers inside {t} and note the ports they accept connections on",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Check the segment {t} for hosts running services outside the standard set",
+   "kinds": [
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Scan {t} for reachable network services",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Find open ports and the software behind them at {t}",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Determine the network exposure of {t}",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Survey {t} to learn which services are reachable from the engagement vantage point",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "Reachability and service check of {t} ahead of the exploitation phase",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  },
+  {
+   "text": "List what is listening at {t}",
+   "kinds": [
+    "ip",
+    "cidr"
+   ],
+   "source": "hand"
+  }
+ ]
+}

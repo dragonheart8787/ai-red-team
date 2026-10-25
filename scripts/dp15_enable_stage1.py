@@ -1,31 +1,35 @@
 #!/usr/bin/env python
-"""D68 DP-15 enable-decision, stage 1 (registration 1, C1): the plan of the run, as a dry run.
+"""D68 DP-15 enable-decision, stage 1 (registration 1, C1): the plan of the run, as a dry run, and
+the way into the run itself.
 
-    PYTHONPATH=. python scripts/dp15_enable_stage1.py --wordings-dir DIR
-    PYTHONPATH=. python scripts/dp15_enable_stage1.py --wordings-dir DIR --classes network.scan
+    PYTHONPATH=. python scripts/dp15_enable_stage1.py                 # the dry run
+    PYTHONPATH=. python scripts/dp15_enable_stage1.py --execute       # the run (needs the owner)
 
-**Read ``docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md`` first; it is a DRAFT** (the owner has
-not said 定稿) and so is this. Only the dry run exists. ``--execute`` is refused: the run itself is
-not built, and nothing here calls a model, publishes a policy or writes to a database.
+**Read ``docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md`` first.** Stage 1 measures
+``network.scan`` only (60 wordings: 28 written by a model Supervisor, 32 by hand; 3 repeats each,
+a different target each time; Leg B 10 more through propose_action); ``code.scan`` and
+``code.secrets`` are out of the plan (its section 3.5). The dry run calls no model, publishes no
+policy and writes nothing; ``--execute`` hands over to ``dp15_stage1_run.py``, which is built and
+has been exercised only with fake validators -- it is run only on the owner's separate say-so.
 
-What the dry run does: it reads the wording files (one JSON per class, ``DIR/<class>.json``), checks
-them against the plan's rules, allocates the targets (three different ones per wording), picks the
-Leg B subset, and prints the calls, the cost and time estimates and the hard caps. Before that, and
-whatever else is true, it prints the database it is connected to, the migration revision, and the
-effective ``goal_fit_enforce`` / ``task_relation_enforce`` (read only, the guards of
-``dp15_record_mode.py``), and it refuses when ``goal_fit_enforce`` is not off.
+What the dry run does: it reads the wording file (``DIR/network.scan.json``), checks it against the
+plan's rules, allocates the targets (three different ones per wording), picks the Leg B subset, and
+prints the calls, the cost and time estimates and the hard caps. Before that, and whatever else is
+true, it prints the database it is connected to, the migration revision, and the effective
+``goal_fit_enforce`` / ``task_relation_enforce`` (read only, the guards of ``dp15_record_mode.py``),
+and it refuses when ``goal_fit_enforce`` is not off.
 
-The rules a wording file must meet (ENABLE_DECISION_PLAN.md 3.2): exactly 60 wordings per class;
-each holds the target token ``{t}`` exactly once; none is within token-Jaccard 0.6 of another in any
-class, nor of a wording the validator has already been measured on (the S7 corpus templates and the
-DP-15 run-1 sentences). The sha256 of each file is computed at startup and must equal the value the
-plan registers in its ``wording-hashes`` block (``--plan``); a file that differs, or one the plan
-does not register, is refused and both values are printed. Leg B writes through propose_action and
-so needs a database of its own: the connected one must be ``cyberorch_dp15b`` (``--leg-b-database``)
-with ``goal_fit_calls`` and ``goal_fit_suspensions`` empty, or the dry run refuses.
+The rules the wording file must meet (ENABLE_DECISION_PLAN.md 3.2): exactly 60 wordings; each holds
+the target token ``{t}`` exactly once; none is within token-Jaccard 0.6 of another, nor of a wording
+the validator has already been measured on (the S7 corpus templates and the DP-15 run-1 sentences).
+The sha256 of the file is computed at startup and must equal the value the plan registers in its
+``wording-hashes`` block (``--plan``); a file that differs, or one the plan does not register, is
+refused and both values are printed. Leg B writes through propose_action and so needs a database of
+its own: the connected one must be ``cyberorch_dp15b`` (``--leg-b-database``) with
+``goal_fit_calls`` and ``goal_fit_suspensions`` empty, or the dry run refuses.
 
-Exit status: 0 the plan is sound, 1 a check or a guard refused (nothing was sent), 2 usage / not
-built.
+Exit status: 0 the plan is sound, 1 a check or a guard refused (nothing was sent), 2 usage; with
+``--execute``: 0 the run completed, 3 it stopped early (a cap, an outage).
 """
 
 from __future__ import annotations
@@ -45,19 +49,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-# -- the registered numbers (ENABLE_DECISION_PLAN.md, stage 1; DRAFT) ------------------------------
-CLASSES = ("network.scan", "code.scan", "code.secrets")
+# -- the registered numbers (ENABLE_DECISION_PLAN.md, stage 1) ------------------------------------
+CLASSES = ("network.scan",)     # code.scan and code.secrets are out of the plan (section 3.5)
 WORDINGS_PER_CLASS = 60
 REPEATS = 3                     # each wording asked three times, each time with a different target
 LEG_B_PER_CLASS = 10            # wordings (first repeat) also sent through propose_action
 JACCARD_LIMIT = 0.6             # two wordings at or above this are one wording
 TARGET_TOKEN = "{t}"
-KINDS = ("ip", "cidr", "fqdn")
+KINDS = ("ip", "cidr")
 SEED = 20261025                 # written down before any draw
 COST_PER_CALL_USD = 0.0088      # list price per call, S7: US$4.23 for 480
 SECONDS_RUN1 = 246.0 / 150      # DP-15 run 1: 150 calls in 4.1 minutes, two in flight
 SECONDS_S7_SEQUENTIAL = 3.6     # S7: 480 calls in 29 minutes, one at a time
-DEFAULT_DIR = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "stage1_wordings"
+DEFAULT_DIR = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "stage1"
 DEFAULT_PLAN = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "ENABLE_DECISION_PLAN.md"
 LEG_B_DATABASE = "cyberorch_dp15b"  # Leg B writes through propose_action: a database of its own
 HASH_BLOCK = "wording-hashes"       # the fenced block of the plan: one "<class> <sha256>" per line
@@ -199,6 +203,8 @@ class LegBFacts:
     database: str
     calls: int                  # all rows of goal_fit_calls, whatever the class
     suspensions: int            # all rows of goal_fit_suspensions, cleared or not
+    revision: str | None = None     # alembic_version in the database
+    code_head: str | None = None    # the head of db/migrations in this checkout
 
 
 def read_leg_b_facts() -> LegBFacts:
@@ -206,21 +212,28 @@ def read_leg_b_facts() -> LegBFacts:
     from sqlalchemy import text
 
     from control_plane.state.db import get_engine
+    from scripts import dp15_record_mode as rm
 
     with get_engine().begin() as conn:
         conn.execute(text("SET TRANSACTION READ ONLY"))
         database = conn.execute(text("SELECT current_database()")).scalar_one()
+        revisions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         calls = conn.execute(text("SELECT count(*) FROM goal_fit_calls")).scalar_one()
         suspensions = conn.execute(text("SELECT count(*) FROM goal_fit_suspensions")).scalar_one()
-    return LegBFacts(str(database), int(calls), int(suspensions))
+    return LegBFacts(str(database), int(calls), int(suspensions),
+                     ",".join(sorted(revisions)) if revisions else None, rm.code_head())
 
 
 def leg_b_problems(facts: LegBFacts, expected: str = LEG_B_DATABASE) -> list[str]:
-    """Why Leg B may not start here: it runs in a database of its own, and that database is clean
-    -- nothing in goal_fit_calls, nothing in goal_fit_suspensions."""
+    """Why Leg B may not start here: it runs in a database of its own, at the code's migration
+    head, and that database is clean -- nothing in goal_fit_calls, nothing in
+    goal_fit_suspensions."""
     problems = []
     if facts.database != expected:
         problems.append(f"Leg B runs in database {expected!r}, this one is {facts.database!r}")
+    if facts.code_head is not None and facts.revision != facts.code_head:
+        problems.append(f"the migration revision of {facts.database!r} is {facts.revision!r}, "
+                        f"this checkout's head is {facts.code_head!r}")
     if facts.calls:
         problems.append(f"goal_fit_calls in database {facts.database!r} holds {facts.calls} "
                         f"row(s): Leg B needs it empty")
@@ -232,20 +245,10 @@ def leg_b_problems(facts: LegBFacts, expected: str = LEG_B_DATABASE) -> list[str
 
 # -- targets and the plan --------------------------------------------------------------------------
 
-def _hostname_pools() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    from tests.plan_fit_corpus import _ROLES_PLAIN, _ROLES_SENSITIVE, _ZONES
-
-    return _ROLES_PLAIN, _ROLES_SENSITIVE, _ZONES
-
-
 def make_target(kind: str, rng: random.Random) -> str:
     if kind == "ip":
         return f"10.{rng.randint(1, 250)}.{rng.randint(0, 250)}.{rng.randint(2, 250)}"
-    if kind == "cidr":
-        return f"10.{rng.randint(1, 250)}.{rng.randint(0, 250)}.0/24"
-    plain, sensitive, zones = _hostname_pools()
-    role = rng.choice(plain + sensitive)
-    return f"{role}{rng.randint(1, 19):02d}.{rng.choice(zones)}.example"
+    return f"10.{rng.randint(1, 250)}.{rng.randint(0, 250)}.0/24"
 
 
 def allocate_targets(per_class: dict[str, list[Wording]], seed: int = SEED,
@@ -323,8 +326,7 @@ def render_plan(per_class: dict[str, list[Wording]], hashes: dict[str, str],
     leg_b = sum(c.leg == "B" for c in calls)
     lines.append(f"calls: Leg A {leg_a} (the validator directly; writes nothing), Leg B {leg_b} "
                  f"(through propose_action; needs a clean database), total {len(calls)}")
-    by_kind = Counter("cidr" if "/" in c.target else ("fqdn" if re.search(r"[a-z]", c.target)
-                                                      else "ip") for c in calls if c.leg == "A")
+    by_kind = Counter("cidr" if "/" in c.target else "ip" for c in calls if c.leg == "A")
     lines.append(f"targets: {len({c.target for c in calls if c.leg == 'A'})} distinct for the "
                  f"{leg_a} calls of Leg A (Leg B reuses the first target of its wordings, so that "
                  f"the two paths are compared on the same query); Leg A by kind "
@@ -350,8 +352,8 @@ def render_plan(per_class: dict[str, list[Wording]], hashes: dict[str, str],
 def dry_run(args: argparse.Namespace) -> int:
     from scripts import dp15_record_mode as rm
 
-    print("DRY RUN (stage 1, registration 1: DRAFT, not pre-registered) -- no model is called, "
-          "nothing is written; the database is only read.")
+    print("DRY RUN (stage 1, registration 1) -- no model is called, nothing is written; the "
+          "database is only read.")
     refusals: list[str] = []
     try:
         from control_plane.config import load_dotenv
@@ -402,7 +404,8 @@ def dry_run(args: argparse.Namespace) -> int:
         print(f"PLAN PROBLEM: {problem}", file=sys.stderr)
     for refusal in refusals:
         print(f"REFUSED: {refusal}", file=sys.stderr)
-    print("execution: not built. The run itself is written only after the owner says 定稿.")
+    print("execution: not started. --execute is built and is run only on the owner's separate "
+          "authorization.")
     return EXIT_REFUSED if problems or refusals else EXIT_OK
 
 
@@ -416,14 +419,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--leg-b-database", default=LEG_B_DATABASE,
                         help="the clean database Leg B needs (default %(default)s)")
     parser.add_argument("--classes", default=",".join(CLASSES),
-                        help="comma list; 'network.scan' alone is the case without code.*")
+                        help="the classes of the plan; only network.scan is in stage 1")
     parser.add_argument("--seed", type=int, default=SEED)
-    parser.add_argument("--execute", action="store_true", help="refused: the run is not built")
+    parser.add_argument("--execute", action="store_true",
+                        help="send the measurement (the owner's separate authorization)")
+    parser.add_argument("--record", default=None,
+                        help="--execute: the new record file (default stage1/record.jsonl)")
+    parser.add_argument("--yes", action="store_true", help="--execute: do not ask before sending")
+    parser.add_argument("--concurrency", type=int, default=2, help="--execute: in flight in Leg A")
+    parser.add_argument("--max-runs", type=int, default=None,
+                        help="--execute: lower the CLI-runs cap (never raise it)")
+    parser.add_argument("--max-usd", type=float, default=None,
+                        help="--execute: lower the list-price cap (never raise it)")
+    parser.add_argument("--max-minutes", type=float, default=None,
+                        help="--execute: lower the time cap (never raise it)")
     args = parser.parse_args(argv)
     if args.execute:
-        print("refused: the stage-1 run is not built; this tool plans and checks only, and the "
-              "plan is a DRAFT until the owner says 定稿", file=sys.stderr)
-        return EXIT_USAGE
+        if args.seed != SEED:
+            print(f"refused: the seed of stage 1 is {SEED}, written down before any draw",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        from scripts import dp15_stage1_run as run
+
+        args.record = args.record or str(run.DEFAULT_RECORD)
+        return run.execute_cli(args)
     return dry_run(args)
 
 

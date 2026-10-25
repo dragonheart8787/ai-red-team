@@ -27,7 +27,7 @@ SCRIPT = REPO / "scripts" / "dp15_enable_stage1.py"
 VOCAB = ["".join(p) for p in itertools.product("abcdefghjkmnpqrstuvwxyz", repeat=4)]
 
 
-def wordings(cls_index: int, n: int = st.WORDINGS_PER_CLASS, kinds=("fqdn",)):
+def wordings(cls_index: int, n: int = st.WORDINGS_PER_CLASS, kinds=("ip",)):
     out = []
     for i in range(n):
         base = (cls_index * 100 + i) * 5
@@ -37,8 +37,7 @@ def wordings(cls_index: int, n: int = st.WORDINGS_PER_CLASS, kinds=("fqdn",)):
 
 
 def lists(classes=st.CLASSES):
-    kinds = {"network.scan": ("ip", "cidr"), "code.scan": ("fqdn",), "code.secrets": ("fqdn",)}
-    return {c: wordings(i, kinds=kinds[c]) for i, c in enumerate(classes)}
+    return {c: wordings(i, kinds=("ip", "cidr")) for i, c in enumerate(classes)}
 
 
 def plan_text(hashes):
@@ -81,7 +80,8 @@ def clean_world(monkeypatch, *, guards=(), banner=("database: stub",),
 # -- the registered numbers -----------------------------------------------------
 
 def test_the_registered_numbers():
-    assert st.CLASSES == ("network.scan", "code.scan", "code.secrets")
+    assert st.CLASSES == ("network.scan",)                  # code.* are out of the plan
+    assert st.KINDS == ("ip", "cidr")
     assert (st.WORDINGS_PER_CLASS, st.REPEATS, st.LEG_B_PER_CLASS) == (60, 3, 10)
     assert st.JACCARD_LIMIT == 0.6 and st.SEED == 20261025
 
@@ -102,21 +102,16 @@ def test_the_estimates():
 
 # -- the plan -------------------------------------------------------------------
 
-def test_with_code_classes_the_plan_is_540_calls_and_30_for_leg_b():
+def test_the_plan_is_180_calls_and_10_for_leg_b():
     calls = st.build_plan(lists())
-    assert sum(c.leg == "A" for c in calls) == 3 * 60 * 3 == 540
-    assert sum(c.leg == "B" for c in calls) == 30 and len(calls) == 570
-
-
-def test_with_network_scan_alone_the_plan_is_180_calls_and_10_for_leg_b():
-    calls = st.build_plan(lists(("network.scan",)))
-    assert sum(c.leg == "A" for c in calls) == 180 and sum(c.leg == "B" for c in calls) == 10
+    assert sum(c.leg == "A" for c in calls) == 60 * 3 == 180
+    assert sum(c.leg == "B" for c in calls) == 10 and len(calls) == 190
     assert {c.cls for c in calls} == {"network.scan"}
 
 
 def test_every_wording_meets_three_different_targets_and_no_target_is_used_twice():
     calls = [c for c in st.build_plan(lists()) if c.leg == "A"]
-    assert len({c.target for c in calls}) == len(calls) == 540
+    assert len({c.target for c in calls}) == len(calls) == 180
     for cls in st.CLASSES:
         for i in range(60):
             mine = [c for c in calls if c.cls == cls and c.wording == i]
@@ -127,17 +122,14 @@ def test_every_wording_meets_three_different_targets_and_no_target_is_used_twice
 def test_a_wording_meets_only_the_kinds_of_target_it_allows():
     per_class = {"network.scan": [st.Wording("a b {t}", ("ip",), "real"),
                                   st.Wording("c d {t}", ("cidr",), "real"),
-                                  st.Wording("e f {t}", ("ip", "cidr"), "real")],
-                 "code.scan": [st.Wording("g h {t}", ("fqdn",), "hand")]}
+                                  st.Wording("e f {t}", ("ip", "cidr"), "real")]}
     calls = [c for c in st.build_plan(per_class) if c.leg == "A"]
     for c in calls:
-        if c.cls == "code.scan":
-            assert c.target.endswith(".example") and re.search(r"[a-z]", c.target)
-        elif c.wording == 0:
+        if c.wording == 0:
             assert re.fullmatch(r"10\.\d+\.\d+\.\d+", c.target)
         elif c.wording == 1:
             assert re.fullmatch(r"10\.\d+\.\d+\.0/24", c.target)
-    both = {("/" in c.target) for c in calls if c.cls == "network.scan" and c.wording == 2}
+    both = {("/" in c.target) for c in calls if c.wording == 2}
     assert both == {True, False}                     # the third wording meets both kinds
 
 
@@ -164,11 +156,11 @@ def test_leg_b_is_the_first_repeat_of_ten_wordings_per_class_on_the_same_target_
 
 def test_the_order_is_repeat_by_repeat_and_class_by_class_with_leg_b_last():
     calls = st.build_plan(lists())
-    first = [(c.cls, c.wording, c.repeat) for c in calls[:6]]
-    assert first == [("network.scan", 0, 0), ("code.scan", 0, 0), ("code.secrets", 0, 0),
-                     ("network.scan", 1, 0), ("code.scan", 1, 0), ("code.secrets", 1, 0)]
-    assert [c.leg for c in calls] == ["A"] * 540 + ["B"] * 30
-    assert all(c.repeat == 0 for c in calls[:180]) and all(c.repeat == 1 for c in calls[180:360])
+    first = [(c.cls, c.wording, c.repeat) for c in calls[:3]]
+    assert first == [("network.scan", 0, 0), ("network.scan", 1, 0), ("network.scan", 2, 0)]
+    assert [c.leg for c in calls] == ["A"] * 180 + ["B"] * 10
+    assert all(c.repeat == 0 for c in calls[:60]) and all(c.repeat == 1 for c in calls[60:120])
+    assert all(c.repeat == 2 for c in calls[120:180])
 
 
 # -- the wording rules ----------------------------------------------------------
@@ -179,61 +171,62 @@ def test_sound_lists_pass_every_check():
 
 def test_a_list_of_the_wrong_length_is_refused():
     per_class = lists()
-    per_class["code.scan"] = per_class["code.scan"][:59]
+    per_class["network.scan"] = per_class["network.scan"][:59]
     problems = st.check_wordings(per_class, seen=[])
-    assert len(problems) == 1 and "code.scan: 59 wordings" in problems[0]
+    assert len(problems) == 1 and "network.scan: 59 wordings" in problems[0]
 
 
 @pytest.mark.parametrize("text, n", [("no token here", 0), ("two {t} and {t}", 2)])
 def test_a_wording_needs_the_target_token_exactly_once(text, n):
-    per_class = lists(("code.scan",))
-    per_class["code.scan"][5] = st.Wording(text, ("fqdn",), "hand")
+    per_class = lists()
+    per_class["network.scan"][5] = st.Wording(text, ("ip",), "hand")
     problems = st.check_wordings(per_class, seen=[])
     assert len(problems) == 1 and f"it occurs {n} times" in problems[0]
 
 
-@pytest.mark.parametrize("kinds", [(), ("url",), ("fqdn", "url")])
+@pytest.mark.parametrize("kinds", [(), ("url",), ("ip", "url")])
 def test_a_wording_needs_a_non_empty_set_of_known_target_kinds(kinds):
-    per_class = lists(("code.scan",))
-    per_class["code.scan"][0] = st.Wording(per_class["code.scan"][0].text, kinds, "hand")
+    per_class = lists()
+    per_class["network.scan"][0] = st.Wording(per_class["network.scan"][0].text, kinds, "hand")
     problems = st.check_wordings(per_class, seen=[])
     assert len(problems) == 1 and "target kinds" in problems[0]
 
 
 def test_the_same_wording_twice_is_refused_in_a_class_and_across_classes():
     per_class = lists()
-    shouted = per_class["code.scan"][0].text.upper()
-    per_class["code.scan"][1] = st.Wording(shouted, ("fqdn",), "hand")
+    shouted = per_class["network.scan"][0].text.upper()
+    per_class["network.scan"][1] = st.Wording(shouted, ("ip",), "hand")
     problems = st.check_wordings(per_class, seen=[])
     assert any("are the same wording" in p for p in problems)
     per_class = lists()
-    per_class["code.secrets"][3] = per_class["network.scan"][2]
+    per_class["web.get"] = wordings(7)                       # any other list of the same length
+    per_class["web.get"][3] = per_class["network.scan"][2]
     assert any("are the same wording" in p and "network.scan#2" in p
                for p in st.check_wordings(per_class, seen=[]))
 
 
 def test_near_duplicates_are_refused_at_the_limit_and_not_below_it():
-    per_class = lists(("code.scan",))
-    base = per_class["code.scan"][0].text                    # five words and {t}
+    per_class = lists()
+    base = per_class["network.scan"][0].text                    # five words and {t}
     close = " ".join(base.split()[:4]) + " zzzz on {t}"       # 5 shared of 7 tokens: 0.71
-    per_class["code.scan"][1] = st.Wording(close, ("fqdn",), "hand")
+    per_class["network.scan"][1] = st.Wording(close, ("ip",), "hand")
     assert any("near-duplicates" in p for p in st.check_wordings(per_class, seen=[]))
     assert st.jaccard("a b c d e f", "a b c d e g") == pytest.approx(5 / 7)
     assert st.jaccard("a b c d {t}", "a b x y {t}") == pytest.approx(3 / 7)   # below the limit
     third = " ".join(base.split()[:2]) + " yyyy xxxx on {t}"  # 3 shared of 7 tokens: 0.43
-    per_class = lists(("code.scan",))
-    per_class["code.scan"][1] = st.Wording(third, ("fqdn",), "hand")
+    per_class = lists()
+    per_class["network.scan"][1] = st.Wording(third, ("ip",), "hand")
     assert not any("near-duplicates" in p for p in st.check_wordings(per_class, seen=[]))
 
 
 def test_exactly_at_the_limit_two_wordings_are_one_wording():
     """3 shared tokens of 5 is exactly 0.6, which is "at or above"."""
     assert st.jaccard("a b {t}", "a b {t} c d") == 0.6
-    per_class = {"code.scan": [st.Wording("a b {t}", ("fqdn",), "hand"),
-                               st.Wording("a b {t} c d", ("fqdn",), "hand")]}
+    per_class = {"network.scan": [st.Wording("a b {t}", ("ip",), "hand"),
+                                  st.Wording("a b {t} c d", ("ip",), "hand")]}
     problems = st.check_wordings(per_class, expected=2, seen=[])
     assert len(problems) == 1 and "near-duplicates" in problems[0]
-    per_class["code.scan"][1] = st.Wording("a b {t} c d e", ("fqdn",), "hand")        # 3 of 6
+    per_class["network.scan"][1] = st.Wording("a b {t} c d e", ("ip",), "hand")        # 3 of 6
     assert st.check_wordings(per_class, expected=2, seen=[]) == []
 
 
@@ -254,19 +247,19 @@ def test_a_wording_close_to_one_the_validator_was_already_measured_on_is_refused
     assert "Find which TCP services {t} exposes and what versions they report" in seen    # S7 only
     assert "Scan the source at {t} for insecure patterns" in seen               # run 1
     assert "Scan the repository at {t} for committed secrets" in seen
-    per_class = lists(("code.scan",))
-    per_class["code.scan"][0] = st.Wording("Scan the source at {t} for insecure patterns, please",
-                                           ("fqdn",), "hand")
+    per_class = lists()
+    per_class["network.scan"][0] = st.Wording(
+        "Scan the source at {t} for insecure patterns, please", ("ip",), "hand")
     problems = st.check_wordings(per_class)
     assert len(problems) == 1 and "already measured on" in problems[0]
-    assert st.check_wordings(lists(("code.scan",))) == []                        # synthetic: far
+    assert st.check_wordings(lists()) == []                        # synthetic: far
 
 
 def test_the_file_hash_is_the_sha256_of_its_bytes(tmp_path):
-    write_dir(tmp_path, lists(("code.scan",)))
-    ws, digest = st.read_wordings(tmp_path / "code.scan.json")
-    assert digest == hashlib.sha256((tmp_path / "code.scan.json").read_bytes()).hexdigest()
-    assert len(ws) == 60 and ws[0].kinds == ("fqdn",) and ws[0].source == "hand"
+    write_dir(tmp_path, lists())
+    ws, digest = st.read_wordings(tmp_path / "network.scan.json")
+    assert digest == hashlib.sha256((tmp_path / "network.scan.json").read_bytes()).hexdigest()
+    assert len(ws) == 60 and ws[0].kinds == ("ip", "cidr") and ws[0].source == "hand"
 
 
 # -- the dry run ----------------------------------------------------------------
@@ -278,27 +271,17 @@ def test_the_dry_run_prints_the_plan_the_hashes_the_caps_and_exits_zero(
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_OK
     out = capsys.readouterr().out
-    assert out.startswith("DRY RUN (stage 1, registration 1: DRAFT, not pre-registered)")
+    assert out.startswith("DRY RUN (stage 1, registration 1) -- no model is called")
     for needle in ("no model is called", "database: stub_db", "migration revision: 0030",
                    "startup guards: ok -- goal_fit_enforce is off",
-                   "calls: Leg A 540", "Leg B 30", "total 570",
-                   "hard caps: 630 CLI runs, US$7.50, 45 minutes", "estimate: US$5.02",
-                   "plan checks: ok", "execution: not built"):
+                   "calls: Leg A 180", "Leg B 10", "total 190",
+                   "hard caps: 210 CLI runs, US$2.50, 15 minutes", "estimate: US$1.67",
+                   "plan checks: ok", "execution: not started"):
         assert needle in out, needle
     for cls in st.CLASSES:
         digest = hashlib.sha256((tmp_path / f"{cls}.json").read_bytes()).hexdigest()
         assert digest in out
     assert seen == [{"allow_nonempty": True, "rehearsal": False}]
-
-
-def test_the_case_without_the_code_classes_is_190_calls(tmp_path, capsys, monkeypatch):
-    write_dir(tmp_path, lists(("network.scan",)))
-    clean_world(monkeypatch)
-    monkeypatch.setattr(st, "seen_wordings", lambda: [])
-    assert run(tmp_path, "--classes", "network.scan") == st.EXIT_OK
-    out = capsys.readouterr().out
-    assert "calls: Leg A 180" in out and "Leg B 10" in out and "total 190" in out
-    assert "hard caps: 210 CLI runs, US$2.50, 15 minutes" in out and "estimate: US$1.67" in out
 
 
 def test_a_guard_that_refuses_makes_the_dry_run_exit_one(tmp_path, capsys, monkeypatch):
@@ -325,18 +308,17 @@ def test_a_database_that_cannot_be_read_makes_the_dry_run_exit_one(tmp_path, cap
     captured = capsys.readouterr()
     assert "database: NOT READ (OSError)" in captured.out
     assert "REFUSED: the database could not be read" in captured.err
-    assert "calls: Leg A 540" in captured.out                  # the plan is still shown
+    assert "calls: Leg A 180" in captured.out                  # the plan is still shown
 
 
 def test_a_missing_or_unsound_wording_file_is_a_plan_problem(tmp_path, capsys, monkeypatch):
-    per_class = lists()
-    del per_class["code.secrets"]
-    write_dir(tmp_path, per_class)
+    write_dir(tmp_path, lists())
+    (tmp_path / "network.scan.json").unlink()
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_REFUSED
     captured = capsys.readouterr()
-    assert "PLAN PROBLEM: code.secrets: no wording file at" in captured.err
+    assert "PLAN PROBLEM: network.scan: no wording file at" in captured.err
     assert "calls: Leg A 0" in captured.out and "total 0" in captured.out       # no plan is built
     assert "plan checks: 1 problem(s)" in captured.out
 
@@ -344,27 +326,28 @@ def test_a_missing_or_unsound_wording_file_is_a_plan_problem(tmp_path, capsys, m
 def test_an_unsound_wording_file_is_a_plan_problem_and_no_plan_is_built(
         tmp_path, capsys, monkeypatch):
     per_class = lists()
-    per_class["code.scan"] = per_class["code.scan"][:59]
+    per_class["network.scan"] = per_class["network.scan"][:59]
     write_dir(tmp_path, per_class)
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_REFUSED
     captured = capsys.readouterr()
-    assert "PLAN PROBLEM: code.scan: 59 wordings, the plan needs exactly 60" in captured.err
+    assert "PLAN PROBLEM: network.scan: 59 wordings, the plan needs exactly 60" in captured.err
     assert "total 0" in captured.out
 
 
-def test_an_unknown_class_is_a_usage_error(tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize("cls", ["web.get", "code.scan", "code.secrets"])
+def test_an_unknown_class_is_a_usage_error_and_the_code_classes_are_out(
+        cls, tmp_path, capsys, monkeypatch):
     clean_world(monkeypatch)
-    assert st.main(["--wordings-dir", str(tmp_path), "--classes", "web.get"]) == st.EXIT_USAGE
+    assert st.main(["--wordings-dir", str(tmp_path), "--classes", cls]) == st.EXIT_USAGE
     assert "unknown class" in capsys.readouterr().err
 
 
-def test_execute_is_refused_and_nothing_else_happens(tmp_path, capsys, monkeypatch):
+def test_another_seed_is_refused_for_the_run(tmp_path, capsys, monkeypatch):
     called = clean_world(monkeypatch)
-    assert st.main(["--wordings-dir", str(tmp_path), "--execute"]) == st.EXIT_USAGE
-    captured = capsys.readouterr()
-    assert "the stage-1 run is not built" in captured.err and captured.out == ""
+    assert st.main(["--wordings-dir", str(tmp_path), "--execute", "--seed", "1"]) == st.EXIT_USAGE
+    assert "the seed of stage 1 is 20261025" in capsys.readouterr().err
     assert called == []                                        # not even the database was read
 
 
@@ -383,6 +366,14 @@ def test_the_dry_run_calls_no_model_and_starts_no_process(tmp_path, capsys, monk
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_OK
+
+
+def test_the_dry_run_does_not_reach_the_run_module():
+    import inspect
+
+    assert "dp15_stage1_run" not in inspect.getsource(st.dry_run)
+    main_source = inspect.getsource(st.main)
+    assert main_source.count("dp15_stage1_run") == 1 and "if args.execute:" in main_source
 
 
 def test_the_script_names_no_validator_no_process_and_no_write():
@@ -435,13 +426,13 @@ OTHER = "b" * 64
 
 
 def test_the_registration_is_read_from_exactly_one_block():
-    text = plan_text({"network.scan": GOOD, "code.scan": OTHER})
-    assert st.registered_hashes(text) == ({"network.scan": GOOD, "code.scan": OTHER}, [])
+    text = plan_text({"network.scan": GOOD})
+    assert st.registered_hashes(text) == ({"network.scan": GOOD}, [])
 
 
 @pytest.mark.parametrize("text", [
     "no block at all",
-    plan_text({"code.scan": GOOD}) + plan_text({"code.scan": GOOD}),                # two blocks
+    plan_text({"network.scan": GOOD}) * 2,                                         # two blocks
 ])
 def test_a_plan_without_exactly_one_block_registers_nothing(text):
     registered, problems = st.registered_hashes(text)
@@ -449,13 +440,15 @@ def test_a_plan_without_exactly_one_block_registers_nothing(text):
 
 
 @pytest.mark.parametrize("line", [
-    "code.scan " + "A" * 64,                       # upper case
-    "code.scan " + "a" * 63,                       # short
-    "code.scan " + "a" * 65,                       # long
-    "code.scan " + "g" * 64,                       # not hex
+    "network.scan " + "A" * 64,                    # upper case
+    "network.scan " + "a" * 63,                    # short
+    "network.scan " + "a" * 65,                    # long
+    "network.scan " + "g" * 64,                    # not hex
     "web.get " + GOOD,                             # a class the plan does not have
-    "code.scan",                                   # no hash
-    "code.scan " + GOOD + " extra",                # a third column
+    "code.scan " + GOOD,                           # a class the plan has retired
+    "code.secrets " + GOOD,                        # likewise
+    "network.scan",                                # no hash
+    "network.scan " + GOOD + " extra",             # a third column
 ])
 def test_a_malformed_line_makes_the_whole_registration_void(line):
     registered, problems = st.registered_hashes(
@@ -466,72 +459,54 @@ def test_a_malformed_line_makes_the_whole_registration_void(line):
 
 def test_a_class_registered_twice_makes_the_whole_registration_void():
     registered, problems = st.registered_hashes(
-        f"```{st.HASH_BLOCK}\ncode.scan {GOOD}\ncode.scan {OTHER}\n```\n")
+        f"```{st.HASH_BLOCK}\nnetwork.scan {GOOD}\nnetwork.scan {OTHER}\n```\n")
     assert registered == {} and problems == [
-        f"code.scan is registered twice in the {st.HASH_BLOCK} block"]
+        f"network.scan is registered twice in the {st.HASH_BLOCK} block"]
 
 
 def test_blank_and_comment_lines_in_the_block_are_ignored():
-    text = f"```{st.HASH_BLOCK}\n\n# a comment\ncode.scan {GOOD}\n   \n```\n"
-    assert st.registered_hashes(text) == ({"code.scan": GOOD}, [])
+    text = f"```{st.HASH_BLOCK}\n\n# a comment\nnetwork.scan {GOOD}\n   \n```\n"
+    assert st.registered_hashes(text) == ({"network.scan": GOOD}, [])
 
 
 def test_a_file_that_is_not_the_registered_one_is_named_with_both_hashes():
-    problems = st.hash_problems({"code.scan": GOOD}, {"code.scan": OTHER}, ("code.scan",))
+    problems = st.hash_problems({"network.scan": GOOD}, {"network.scan": OTHER}, ("network.scan",))
     assert len(problems) == 1
     assert GOOD in problems[0] and OTHER in problems[0] and "not the registered one" in problems[0]
-    assert st.hash_problems({"code.scan": GOOD}, {"code.scan": GOOD}, ("code.scan",)) == []
+    assert st.hash_problems({"network.scan": GOOD}, {"network.scan": GOOD},
+                            ("network.scan",)) == []
 
 
 def test_a_file_the_plan_does_not_register_is_refused_and_an_unread_class_is_not_judged():
-    problems = st.hash_problems({}, {"code.scan": GOOD}, ("code.scan",))
+    problems = st.hash_problems({}, {"network.scan": GOOD}, ("network.scan",))
     assert len(problems) == 1 and "registers no sha256" in problems[0]
-    assert st.hash_problems({}, {}, ("code.scan",)) == []        # a missing file is reported apart
+    assert st.hash_problems({}, {}, ("network.scan",)) == []     # a missing file is reported apart
 
 
 def test_the_dry_run_refuses_a_wording_file_changed_after_registration(
         tmp_path, capsys, monkeypatch):
     write_dir(tmp_path, lists())
-    registered = hashlib.sha256((tmp_path / "code.scan.json").read_bytes()).hexdigest()
-    path = tmp_path / "code.scan.json"
+    registered = hashlib.sha256((tmp_path / "network.scan.json").read_bytes()).hexdigest()
+    path = tmp_path / "network.scan.json"
     path.write_bytes(path.read_bytes() + b"\n")                  # one byte; the JSON is still sound
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_REFUSED
     captured = capsys.readouterr()
-    assert "PLAN PROBLEM: code.scan: the wording file is not the registered one" in captured.err
+    assert "PLAN PROBLEM: network.scan: the wording file is not the registered one" in captured.err
     assert registered in captured.err and actual in captured.err
     assert "total 0" in captured.out                              # no plan is built
-    assert "network.scan: the wording file" not in captured.err   # the other files are fine
-
-
-def test_the_dry_run_compares_each_file_with_its_own_class_registration(
-        tmp_path, capsys, monkeypatch):
-    write_dir(tmp_path, lists())
-    hashes = {c: hashlib.sha256((tmp_path / f"{c}.json").read_bytes()).hexdigest()
-              for c in st.CLASSES}
-    swapped = dict(hashes, **{"code.scan": hashes["code.secrets"],
-                              "code.secrets": hashes["code.scan"]})
-    (tmp_path / "plan.md").write_text(plan_text(swapped))
-    clean_world(monkeypatch)
-    monkeypatch.setattr(st, "seen_wordings", lambda: [])
-    assert run(tmp_path) == st.EXIT_REFUSED
-    err = capsys.readouterr().err
-    assert "code.scan: the wording file is not the registered one" in err
-    assert "code.secrets: the wording file is not the registered one" in err
 
 
 def test_the_dry_run_refuses_a_class_the_plan_does_not_register(tmp_path, capsys, monkeypatch):
     write_dir(tmp_path, lists())
-    hashes = {c: hashlib.sha256((tmp_path / f"{c}.json").read_bytes()).hexdigest()
-              for c in st.CLASSES if c != "code.secrets"}
-    (tmp_path / "plan.md").write_text(plan_text(hashes))
+    (tmp_path / "plan.md").write_text(plan_text({}))          # a block that registers nothing
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_REFUSED
     captured = capsys.readouterr()
-    assert "code.secrets: the plan registers no sha256" in captured.err
+    assert "network.scan: the plan registers no sha256" in captured.err
     assert "total 0" in captured.out
 
 
@@ -544,7 +519,7 @@ def test_the_dry_run_refuses_when_the_registration_cannot_be_trusted(
     elif plan == "no block":
         (tmp_path / "plan.md").write_text("nothing registered here")
     else:
-        (tmp_path / "plan.md").write_text(f"```{st.HASH_BLOCK}\ncode.scan nothex\n```\n")
+        (tmp_path / "plan.md").write_text(f"```{st.HASH_BLOCK}\nnetwork.scan nothex\n```\n")
     clean_world(monkeypatch)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     assert run(tmp_path) == st.EXIT_REFUSED
@@ -577,6 +552,7 @@ def test_a_sound_registered_set_passes_and_the_hash_is_of_the_bytes_as_they_are(
 def test_leg_b_wants_its_own_clean_database():
     assert st.LEG_B_DATABASE == "cyberorch_dp15b"
     assert st.leg_b_problems(st.LegBFacts("cyberorch_dp15b", 0, 0)) == []
+    assert st.leg_b_problems(st.LegBFacts("cyberorch_dp15b", 0, 0, "0030", "0030")) == []
 
 
 @pytest.mark.parametrize("facts, needle", [
@@ -585,6 +561,9 @@ def test_leg_b_wants_its_own_clean_database():
     (("cyberorch", 0, 0), "this one is 'cyberorch'"),
     (("cyberorch_dp15b", 1, 0), "goal_fit_calls in database 'cyberorch_dp15b' holds 1 row(s)"),
     (("cyberorch_dp15b", 0, 2), "goal_fit_suspensions in database 'cyberorch_dp15b' holds 2"),
+    (("cyberorch_dp15b", 0, 0, "0029", "0030"),
+     "the migration revision of 'cyberorch_dp15b' is '0029', this checkout's head is '0030'"),
+    (("cyberorch_dp15b", 0, 0, None, "0030"), "is None"),
 ])
 def test_leg_b_refuses_another_database_and_a_database_that_is_not_empty(facts, needle):
     problems = st.leg_b_problems(st.LegBFacts(*facts))
