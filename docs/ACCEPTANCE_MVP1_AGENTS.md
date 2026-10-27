@@ -860,6 +860,8 @@ at a time and plans nothing).
 
 [2026-10-27 review note] On row 5.124 above (a separate line, so that the table stays intact): review-layer suggestion: the first enabling of `task_relation_enforce` in a deployment should go through the emergency overlay, because it is the only form that can be rolled back for every engagement; the cost is carrying a standing setting in an emergency layer. This is a suggestion, not a decision; the form remains the operator's decision. The status of 5.124 stays Open, Class B.
 
+[2026-10-27 superseded] On row 5.118 above (a separate line, so that the table stays intact): the status sentence at the head of that row ("S1 to S6 of eight are done; S7's measurements are taken and the gate is undecided") and its closing "*Next:* DP-13 from the owner, then S8" describe the state of 2026-10-21. They are superseded by the text later in the same row: DP-14 and DP-13 were decided on 2026-10-22, S8a was done on 2026-10-22, and the owner update of 2026-10-27 records that Q1 is not enabled, S8b's 4-hour soak was not run and S8b is closed. Statements inside the per-stage paragraphs about what was "not done" or still open are as of the stage they describe. This note does not change the status of 5.118 (Open, Class B); whether to close it is the owner's decision.
+
 ### Found at D31 (CI cycle) — raised as a candidate, closed at D33
 
 | # | Item | Status |

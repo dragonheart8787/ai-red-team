@@ -276,6 +276,8 @@ Proposed gate, to be set by you:
 | Latency and tokens | within 1.5x the Reviewer baseline | ADR_REVIEWER_BILLING |
 | P1 shadow: `differs_from_task` split by sub-cause | reported; **`same_action_target_inside_task_target` must be decided** (DP-13) before S8a | the one place P1 could escalate ordinary work |
 
+[2026-10-27 superseded] On the row "P1 shadow: `differs_from_task` split by sub-cause" above (line 277, "must be decided before S8a"): the condition was met on 2026-10-22 by DP-13 (section 7.3b and the DP-13 row of the decisions table). `same_action_target_inside_task_target` is no longer produced and stays in the vocabulary only for decisions stored before the rule (7.3b, item 3).
+
 ### 7.3a DP-14 as decided (2026-10-22, by the owner, from the fixed-model numbers)
 
 Measured with `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`, so every answer is the primary model's (`docs/D68_S7_FIXED_MODEL_REPORT.md`). The measured values below are the ones from that report; the first baseline's are superseded.
@@ -404,6 +406,7 @@ Recorded at S5 on the owner's instruction, so that it is not thought of for the 
    baseline only applies to engagements created afterwards, D54) is the equivalent silent no-op.
 3. Waiting approvals are voided by the policy-version bump (DP-10): announced before, counted after.
 4. Rollback tried once: publish the layer without the flag and show the decisions return to unchanged.
+   [2026-10-27 superseded] The wording "publish the layer without the flag" cannot work: the switches are OR-merged and boolean-only, so no layer turns off what another turned on. It was corrected in the rollback bullet of this section (line 341, commit 7c67401) but not here. What S8a executed for this check: retiring an emergency overlay returned every engagement; retiring a baseline returned only engagements made afterwards (`docs/D68_S8A_REPORT.md` sections 4 and 5; ACCEPTANCE 5.124).
 
 ## 9. Risks and unknowns
 
