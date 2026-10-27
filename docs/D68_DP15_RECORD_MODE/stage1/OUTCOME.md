@@ -80,6 +80,11 @@ outcome of any call.
 
 ## Databases
 
+**Databases with an active record layer (read 2026-10-27): `cyberorch_dp15`, `cyberorch_dp15b` and
+`cyberorch_smoke`. In all three `goal_fit_enforce` is off (no active layer in them mentions it); the
+development database `cyberorch` has no active record layer. No record layer is revoked by this
+document.**
+
 * The record-mode layer (`layer_record_mode.json`) was published, as a global `emergency_overlay`
   and still active, in three databases: `cyberorch_dp15` (DP-15 run 1, 2026-10-25), `cyberorch_dp15b`
   (this run) and `cyberorch_smoke` (the smoke test). Its baseline (`baseline_live_run_default.json`)
