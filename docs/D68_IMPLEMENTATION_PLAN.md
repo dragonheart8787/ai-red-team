@@ -367,6 +367,14 @@ change, never a silent edit of the prompt; design 5.3).
 
 8. *Record-mode preparation* -- `docs/D68_DP15_RECORD_MODE/`: the layer draft, its dry-run validation, the publish and roll-back commands (not executed), the pre-registered measurement plan and the generator script (dry run only). Nothing is published and nothing measured.
 9. *Pre-run guardrails (2026-10-25)* -- the generator refuses to start on a database where a listed class already has calls or an uncleared suspension, and on any `goal_fit_enforce` that is not exactly off; it prints the database, revision, per-class counts and both switches first (a dry run too, read only), shows the effective policy after publishing the draft as computed by the policy code, and the measurement runs in a clean database made for it (`PUBLISH_AND_ROLLBACK.md` section 0). The measurement plan's rule 12 is amended accordingly.
+10. *Status, 2026-10-27 (owner): Q1 is not enabled; S8b's 4-hour soak was not run; S8b is closed.* DP-15
+    stage 1 (`docs/D68_DP15_RECORD_MODE/stage1/`, registered at `0747cbe`) did not meet C1 (8 of 60
+    wordings marked; upper bounds 24.2% and 24.6% against 15%; `stage1/OUTCOME.md`). Stage 2 and C3 are
+    not carried out, `goal_fit_enforce` stays off, stage 1 is not re-run, and any further measurement
+    is a new pre-registration on new data that attaches this result. The registered plan
+    (`ENABLE_DECISION_PLAN.md`) is not changed; its status is kept here. *Run 1:* its 0 failures in
+    150 calls used three fixed goal sentences and is not evidence of how Q1 behaves; it must not be cited
+    as such.
 
 **Verified:** see ACCEPTANCE 5.125.
 

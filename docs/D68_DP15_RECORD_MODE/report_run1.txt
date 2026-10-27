@@ -11,3 +11,8 @@ network.scan         50       0     7.1%     50        0       0       0      0 
 classes suspended this period (all time): none
 
 validator outage suspected this period (all time): none
+
+==== note added 2026-10-27 (not part of the run's output; the text above is unchanged) ====
+These 0 failures in 150 calls (0 of 50 in each class) used three fixed goal sentences, one per class,
+that differed only in the target host. They are not evidence of how Q1 behaves and must not be cited as such. See
+docs/D68_DP15_RECORD_MODE/stage1/OUTCOME.md and ACCEPTANCE 5.125.

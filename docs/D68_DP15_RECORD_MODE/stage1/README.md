@@ -46,6 +46,7 @@ analysis. It interprets nothing: what C1 says is in `analysis_output.txt`, and w
 | file | what it is |
 |---|---|
 | `network.scan.json` | the registered wording file (60 wordings: 28 real, 32 hand-written) |
+| `OUTCOME.md` | the outcome as facts: commits, the analysis output quoted unchanged, the owner's decision, the environment of the run, the databases (added after the run) |
 | `dry_run_output.txt` | the dry run at the registering commit |
 | `dry_run_output_before_run.txt` | the dry run immediately before the run, against `cyberorch_dp15b` with the layers published |
 | `run_log.txt` | everything the run printed: progress counts, the summary, the analysis |

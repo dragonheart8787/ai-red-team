@@ -1,7 +1,7 @@
 # D68 S8b -- Q1 (`goal_fit_enforce`): preparation, and what is waiting
 
 Claims are tagged [R] read, [E] executed, [D] derived, [N] not established.
-**Status: prepared, not run.** The CI job needs the owner's `claude` login, which the owner adds to the repository settings by hand; until its name is given and the workflow reading it has been checked, no S8b run exists and nothing here has called a model. The 4 h run is not tried on the development machine (owner's instruction; that route was shown unreliable).
+**Status (2026-10-27, owner): closed -- Q1 was not enabled and the 4 h soak was not run (section 13).** Earlier status, kept: prepared, not run. The CI job needs the owner's `claude` login, which the owner adds to the repository settings by hand; until its name is given and the workflow reading it has been checked, no S8b run exists and nothing here has called a model. The 4 h run is not tried on the development machine (owner's instruction; that route was shown unreliable).
 
 ## 1. Decisions taken
 
@@ -125,3 +125,19 @@ What the soak's workload has that none of the probes had [D, none tested]: **few
 ## 12. DP-15 (owner, 2026-10-24): Q1 is asked per action class; no class is enabled [E]
 
 After the smoke attempts the owner asked for a per-class allowlist (plan 7.3c, ACCEPTANCE 5.125). It is a mechanism only: the list is empty by default, a class outside it is not asked (`not_assessed/class_not_enabled`), a class that fails above 30% of its last 50 calls (at least 30) is taken out automatically (`class_suspended`) and put back only by an operator, and admission is advice from `scripts/manage_goal_fit_classes.py report` (>= 40 calls on the real path, Wilson 95% upper bound <= 15%). It does not explain the soak's ~60% `network.scan` failures (section 11); it contains their effect on decisions, because Q1 is no longer asked for a class nobody admitted. The 4 h run remains not requested. A soak with `--q1-enforce` and an empty list now reports "the validator was never asked" (not judged) instead of "enabled and doing nothing"; it can show nothing about Q1 until a class is listed.
+
+## 13. Closed (owner, 2026-10-27): Q1 was not enabled, the 4 h soak was not run, S8b is closed [E]
+
+* **Status: Q1 is not enabled.** No layer in force in the development database lists a class; the
+  record-mode layer exists only in the three databases that were made for measuring (`cyberorch_dp15`,
+  `cyberorch_dp15b`, `cyberorch_smoke`), where `goal_fit_enforce` was and is off.
+* **S8b's 4-hour soak was not run.** Nothing in this report is a result of it.
+* **Why S8b closes here:** DP-15 stage 1 (`docs/D68_DP15_RECORD_MODE/stage1/`; registered at `0747cbe`,
+  run from `9df70aa`, results at `ccc6b05`) did not meet C1: 8 of 60 decided `network.scan` wordings
+  marked, Wilson and exact 95% upper bounds 24.2% and 24.6% against the registered 15%. The numbers, the
+  environment of the run and the owner's decision are in `docs/D68_DP15_RECORD_MODE/stage1/OUTCOME.md`.
+  Stage 2 and C3 are not carried out, `goal_fit_enforce` stays off, stage 1 is not re-run, and any
+  further measurement is a new pre-registration on new data that attaches this result.
+* **A caveat on DP-15 run 1** (`docs/D68_DP15_RECORD_MODE/report_run1.txt`): its 0 failures in 150
+  calls used three fixed goal sentences, one per class. It is not evidence of how Q1 behaves and
+  must not be cited as such.
