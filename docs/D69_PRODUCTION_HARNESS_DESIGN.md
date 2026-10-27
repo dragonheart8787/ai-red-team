@@ -99,7 +99,7 @@ Q1 measurement (closed by the owner on 2026-10-27, section 8). [D]
 
 | Option | What | Cost |
 |---|---|---|
-| (A) A separate process with its own advisory lock key and its own CLI | The proposer and the dispatcher cannot corrupt each other's invariants; the scheduler's narrow role and import fence stay as they are | Two resident processes to operate; both may start containers, so two engagements on one address range can meet `NetworkInUse` (D59: the dispatcher must treat it as "retry later") [D]; the start order is a convention (as the reconciler/scheduler order is, `run_reconciler.py` docstring) [R] |
+| (A) A separate process with its own advisory lock key and its own CLI | The proposer and the dispatcher cannot corrupt each other's invariants [D]; the scheduler's narrow role and import fence stay as they are | Two resident processes to operate; both may start containers, so two engagements on one address range can meet `NetworkInUse` (D59: the dispatcher must treat it as "retry later") [D]; the start order is a convention (as the reconciler/scheduler order is, `run_reconciler.py` docstring) [R] |
 | (B) The same process as the scheduler | One process, one lock | Breaks the scheduler's design: model calls and content reading inside the metadata-only service, and the fence rule above [D]; a model hang blocks dispatch [D] |
 | (C) No resident loop: an operator-run, bounded command per engagement (as `d40` is today) | Smallest change; nothing resident | It is the thing that already exists; ACCEPTANCE 5.28 and 5.51 name "a production harness" as not existing, and a hand-run script is not one by the wording used there [D] |
 
@@ -271,13 +271,21 @@ loaded per proposal, not cached, as the scheduler does [R: D62 design].
 bounded number of times, every attempt counted. (b) changes what a "failure rate" means (a retry is a
 resample, and DP-15's lesson is that sampling rules must be fixed before looking) [D]. *Lean [D]:* (a).
 
-**Decision D69-5b: a proposal stranded at `received`.** Options: (1) stop the service and let a person
+**Decision D69-5d: a bound on failed rounds.** *Pending the owner.* 5a's table says "continue" on a failed
+Supervisor or Worker call with no bound; a run of consecutive total failures would loop silently [D].
+Options: (a) a hard cap on rounds and on model calls per run, the values registered before the first run;
+(b) in addition to (a), stop when N consecutive rounds each produced zero tasks and every model call in
+them failed, N registered before the first run and not adjusted from data; (c) no cap, rely on the report.
+*Lean [D]:* (a)+(b). Whether to stop does not depend on the kind of failure: a classifier stop counts as a
+failure like any other and is not re-asked.
+
+**Decision D69-5b: a proposal stranded at `received`.** *Pending the owner.* Options: (1) stop the service and let a person
 decide (the fault may be deterministic; the scheduler's reasoning for "do not restart blindly" applies,
 [D]); (2) retry once under the same idempotency key, then stop; (3) leave it to the reconciler. *Lean [D]:*
 (1) in v0. Note the key must be derived from the task and the attempt, so a restart does not make a second
 proposal for the same task [R: ADR D60 addendum].
 
-**Decision D69-5c: a task claimed and never completed (0c).** The loop completes every task it claims on
+**Decision D69-5c: a task claimed and never completed (0c).** *Pending the owner.* The loop completes every task it claims on
 every path it controls; a crash between claim and complete strands the task in `claimed` and nothing
 requeues it [R]. Options: accept and report (a restart does not pick it up); a manual operator query
 (`query_tasks` shows `lease_expires_at`) [R]; build the sweeper (outside this deliverable). *Lean [D]:*
@@ -293,8 +301,9 @@ its own initiative" (`function_api.py:565-568`). The scheduler dispatches only t
 `code.*` on private repositories has 5.57's limit [R].
 
 **Decision D69-6: how does v0 exclude credentialed actions, fail-closed?** *Pending the owner.* Options
-for the set of actions v0 may propose: (A) the scheduler's four, so that anything a human approves can be
-dispatched [D]; (B) the four plus the `web.*` actions that `propose_action` can dispatch inline on `ALLOW`
+for the set of actions v0 may propose: (A) the scheduler's four -- `SUPPORTED_ACTIONS = ("network.scan", "network.recon", "code.scan",
+"code.secrets")`, `control_plane/scheduler/vocab.py:58` [R] -- so that anything a human approves can be
+dispatched [D]; D69-3a's HTTP/browser rules cannot be verified in v0 if the action set excludes `web.*` [D]; (B) the four plus the `web.*` actions that `propose_action` can dispatch inline on `ALLOW`
 (they need an egress proxy and CA; an approved `web.*` proposal would be skipped by the scheduler and wait
 forever [D]); (C) everything except `ad.collect`. Mechanism, whichever set: a closed allowlist in the
 harness applied at three points -- the scope candidates offered to the Supervisor and the Worker (their
@@ -302,8 +311,17 @@ schema enums are built from them, so the model is not offered the action), a ref
 is outside the list before `create_task`, and a refusal of a proposal whose action is outside the list
 before `propose_action` -- and the harness never passes `credential_id`. A violation at the second or third
 point is a counted refusal, not a retry. *Lean [D]:* (A), `ad.collect` excluded by construction, with the
-private-repository limit of `code.*` stated in the operator documentation. Excluding the action in the
-enums only is not fail-closed on its own (the schema's enum is a request to the model, not a check) [D].
+private-repository limit of `code.*` stated in the operator documentation. The offered candidates are also
+checked in-process, not only requested through the schema's enum: `BaseWorker._to_proposal` raises `WorkerRefusal`
+for a `scope_object_id` not among the offered candidates (`agents/llm/worker_base.py:677-683`) and for an
+`action` not in the *selected* candidate's `allowed_actions` (`worker_base.py:694-700`); `BaseSupervisor._to_tasks`
+does the same per task and refuses the whole reply (`agents/llm/supervisor_base.py:518-523`, `529-536`); a
+refusal makes the call fail with no proposal and no tasks (`worker_base.py:761-779`, `_refuse`;
+`claude_code_headless_worker.py:108`; `claude_code_headless_supervisor.py:105`) [R]. So an action left out of the
+candidates' `allowed_actions` is refused in-process by these two classes [R]. Not read: whether every
+Worker or Supervisor implementation (the fakes in `agents/fake/`) makes the same check **[N]**; and these checks
+are no substitute for the harness's own refusals at `create_task` and `propose_action` (points 2 and 3), which
+remain a defence-in-depth choice [D].
 
 ## 7. Concurrency and quotas
 
@@ -318,7 +336,7 @@ together fail 9, cleanly" [R: ADR D60 addendum]. The shared LLM backend has no r
 system (ADR section 4.2) [R].
 
 **Decision D69-7: concurrency in v0.** *Pending the owner.* (A) Serial, one task at a time across all
-engagements -- predictable, easy to reason about; slow. (B) One task at a time per engagement, engagements
+engagements -- predictable, easy to reason about; slow [D]. (B) One task at a time per engagement, engagements
 in parallel -- needs a cap, the pool ceiling, and the `NetworkInUse` handling. (C) Wire `max_concurrency`
 -- outside this deliverable. *Lean [D]:* (A). *Stance on `max_concurrency`:* v0 documents that the field
 is unread and does not rely on it; a run's concurrency is a property of the harness, stated in its
@@ -394,9 +412,9 @@ is a design choice of the owner's].
   kill switch does not stop a running container)". Docker containers are labelled with their `run_id` and
   `container.kill()` is already used for the timeout, so killing on revoke is "scoped, known work", not
   built [R]. A run is bounded only by its `max_duration_seconds` (global ceiling 1,800 s, built, 5.76) [R].
-* Nothing interrupts a model call in flight; the headless adapters run the `claude` CLI as a subprocess
-  (`agents/llm/headless.py:175`) [R], and I found no code that checks the kill switch between a model call's
-  start and its end [D: absence in a search is not shown].
+* The headless adapters run the `claude` CLI as a subprocess (`agents/llm/headless.py:175`) [R]; I found no
+  code that checks the kill switch between a model call's start and its end, so a model call in flight is not
+  interrupted [D: absence in a search is not shown].
 * The web console runs as `app` with two writes (approve, deny); how it is started is not in the repository
   (0b) [R/N].
 
@@ -406,7 +424,7 @@ set, the engagements, the role models); SIGINT/SIGTERM finish the current task a
 advisory lock under its own key; before each round and each task, read the engagement's pause/kill state and
 stop proposing for it; no attempt to stop an in-flight container (the harness does not own it). The
 harness's own behaviour on a kill is stated plainly: **after a kill, a container that is already running
-continues until its budget ends, and a model call that has already started finishes.**
+continues until its budget ends [R: 5.24], and a model call that has already started finishes [D].**
 
 **Decision D69-9: what is claimed about kill in the operator document?** *Pending the owner.* Options: (A)
 state exactly the above and nothing more; (B) build the active kill (D58-16 / 5.24 option B) before the
@@ -468,8 +486,8 @@ because it adds no code.
 
 ## 12. To register (待登記) -- listed only; nothing is written to any existing file
 
-1. **ACCEPTANCE 5.28** -- update when built: its trigger (a harness constructing `Observation`) is met by this
-   deliverable; the row's "re-verify end to end" becomes an acceptance item (11.3).
+1. **ACCEPTANCE 5.28** -- update when built: the trigger of 5.28 is met only when a real harness exists; this design is its
+   precondition [D]. The row's "re-verify end to end" would become an acceptance item (11.3) [D].
 2. **ACCEPTANCE 5.51** -- update when built: the "re-verify when a production harness is written" clause
    becomes acceptance item 11.2.
 3. **A new row (number to be assigned by the owner's process), Class B, Open:** *no code requeues a `claimed`
@@ -483,10 +501,10 @@ because it adds no code.
    and being run in shadow first" needs the definition chosen in D69-8a.
 7. **ADR_PRODUCTION_ORCHESTRATOR.md index** -- a row for the proposing side, which the ADR's decision list does
    not contain as a separate item (D58-12 "planning" is the nearest) [R/N].
-8. **ACCEPTANCE 5.24 / D58-16** -- unchanged; the operator document of D69-9 must repeat that the kill does
+8. **ACCEPTANCE 5.24 / D58-16** -- unchanged; the operator document of D69-9 would repeat, if D69-9 (A) is chosen [D], that the kill does
    not stop a running container.
 9. **Pre-registration for the shadow (D69-8a)** -- a new document with the fields of section 8, registered by
    a commit before the first run, with guards as in DP-15.
-10. **Open questions for the owner**, in order of what blocks what: D69-1 (where it runs) -> D69-6 (action
-    set) -> D69-3a (identities per tool; needs the `code.*` views read) -> D69-2a/2b -> D69-5a/5b -> D69-4 ->
+10. **Open questions for the owner**, in order of what blocks what [D]: D69-1 (where it runs) -> D69-6 (action
+    set) -> D69-3a (identities per tool; needs the `code.*` views read) -> D69-2a/2b -> D69-5a/5b -> D69-5d -> D69-4 ->
     D69-7 -> D69-8a -> D69-9 -> the language (section 10).
