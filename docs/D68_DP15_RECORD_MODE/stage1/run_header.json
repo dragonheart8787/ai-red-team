@@ -1,0 +1,283 @@
+{
+ "type": "header",
+ "registration": "stage 1",
+ "started_at": "2026-10-27T01:41:00Z",
+ "wordings_sha256": "932cd7135258caac11df7ba4bccae12a514ea42127e4c5c41e6320d199a456ca",
+ "plan_commit": "9df70aad26a5a2671a3670f4a28a30fe1a98c2e6",
+ "seed": 20261025,
+ "head": "9df70aad26a5a2671a3670f4a28a30fe1a98c2e6",
+ "registered_commit": "0747cbe30efb49c5eaf64ccfe8c46800269a217a",
+ "tree_clean": true,
+ "registered_sha256": {
+  "docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md": "1e929fe51d3dbb4beaa976a128c5457da001d37653e1e990bc2056cf0af5e7ae",
+  "docs/D68_DP15_RECORD_MODE/stage1/network.scan.json": "932cd7135258caac11df7ba4bccae12a514ea42127e4c5c41e6320d199a456ca",
+  "scripts/dp15_stage1_analysis.py": "dceb55eb67339c94a80d6a42aafe6ec2a3412acce2069ed44b69ddd801dcf8f1"
+ },
+ "current_sha256": {
+  "docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md": "1e929fe51d3dbb4beaa976a128c5457da001d37653e1e990bc2056cf0af5e7ae",
+  "docs/D68_DP15_RECORD_MODE/stage1/network.scan.json": "932cd7135258caac11df7ba4bccae12a514ea42127e4c5c41e6320d199a456ca",
+  "scripts/dp15_stage1_analysis.py": "dceb55eb67339c94a80d6a42aafe6ec2a3412acce2069ed44b69ddd801dcf8f1"
+ },
+ "code_sha256": {
+  "scripts/dp15_enable_stage1.py": "66a82571665719eed9c9aa672aa2386793b0873168cf296a8f447f261d32bd33",
+  "scripts/dp15_stage1_run.py": "0266e1748eec0d56d92f272e72ecdf860de525e8ea68abbdb54ea167f461365d"
+ },
+ "database": "cyberorch_dp15b",
+ "migration": "0030",
+ "backend": "claude_code",
+ "model_alias": "sonnet",
+ "fallback": "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1",
+ "cli_version": "2.1.311 (Claude Code)",
+ "prompt_digest": "5e2357979fb3",
+ "planned": {
+  "leg_a": 180,
+  "leg_b": 10
+ },
+ "caps": {
+  "runs": 210,
+  "usd": 2.5,
+  "minutes": 15
+ },
+ "wordings": [
+  {
+   "i": 0,
+   "source": "real"
+  },
+  {
+   "i": 1,
+   "source": "real"
+  },
+  {
+   "i": 2,
+   "source": "real"
+  },
+  {
+   "i": 3,
+   "source": "real"
+  },
+  {
+   "i": 4,
+   "source": "real"
+  },
+  {
+   "i": 5,
+   "source": "real"
+  },
+  {
+   "i": 6,
+   "source": "real"
+  },
+  {
+   "i": 7,
+   "source": "real"
+  },
+  {
+   "i": 8,
+   "source": "real"
+  },
+  {
+   "i": 9,
+   "source": "real"
+  },
+  {
+   "i": 10,
+   "source": "real"
+  },
+  {
+   "i": 11,
+   "source": "real"
+  },
+  {
+   "i": 12,
+   "source": "real"
+  },
+  {
+   "i": 13,
+   "source": "real"
+  },
+  {
+   "i": 14,
+   "source": "real"
+  },
+  {
+   "i": 15,
+   "source": "real"
+  },
+  {
+   "i": 16,
+   "source": "real"
+  },
+  {
+   "i": 17,
+   "source": "real"
+  },
+  {
+   "i": 18,
+   "source": "real"
+  },
+  {
+   "i": 19,
+   "source": "real"
+  },
+  {
+   "i": 20,
+   "source": "real"
+  },
+  {
+   "i": 21,
+   "source": "real"
+  },
+  {
+   "i": 22,
+   "source": "real"
+  },
+  {
+   "i": 23,
+   "source": "real"
+  },
+  {
+   "i": 24,
+   "source": "real"
+  },
+  {
+   "i": 25,
+   "source": "real"
+  },
+  {
+   "i": 26,
+   "source": "real"
+  },
+  {
+   "i": 27,
+   "source": "real"
+  },
+  {
+   "i": 28,
+   "source": "hand"
+  },
+  {
+   "i": 29,
+   "source": "hand"
+  },
+  {
+   "i": 30,
+   "source": "hand"
+  },
+  {
+   "i": 31,
+   "source": "hand"
+  },
+  {
+   "i": 32,
+   "source": "hand"
+  },
+  {
+   "i": 33,
+   "source": "hand"
+  },
+  {
+   "i": 34,
+   "source": "hand"
+  },
+  {
+   "i": 35,
+   "source": "hand"
+  },
+  {
+   "i": 36,
+   "source": "hand"
+  },
+  {
+   "i": 37,
+   "source": "hand"
+  },
+  {
+   "i": 38,
+   "source": "hand"
+  },
+  {
+   "i": 39,
+   "source": "hand"
+  },
+  {
+   "i": 40,
+   "source": "hand"
+  },
+  {
+   "i": 41,
+   "source": "hand"
+  },
+  {
+   "i": 42,
+   "source": "hand"
+  },
+  {
+   "i": 43,
+   "source": "hand"
+  },
+  {
+   "i": 44,
+   "source": "hand"
+  },
+  {
+   "i": 45,
+   "source": "hand"
+  },
+  {
+   "i": 46,
+   "source": "hand"
+  },
+  {
+   "i": 47,
+   "source": "hand"
+  },
+  {
+   "i": 48,
+   "source": "hand"
+  },
+  {
+   "i": 49,
+   "source": "hand"
+  },
+  {
+   "i": 50,
+   "source": "hand"
+  },
+  {
+   "i": 51,
+   "source": "hand"
+  },
+  {
+   "i": 52,
+   "source": "hand"
+  },
+  {
+   "i": 53,
+   "source": "hand"
+  },
+  {
+   "i": 54,
+   "source": "hand"
+  },
+  {
+   "i": 55,
+   "source": "hand"
+  },
+  {
+   "i": 56,
+   "source": "hand"
+  },
+  {
+   "i": 57,
+   "source": "hand"
+  },
+  {
+   "i": 58,
+   "source": "hand"
+  },
+  {
+   "i": 59,
+   "source": "hand"
+  }
+ ]
+}

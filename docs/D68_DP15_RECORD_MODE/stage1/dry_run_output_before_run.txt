@@ -1,0 +1,22 @@
+[db-guard] expected cyberorch_dp15b; runtime connection is to cyberorch_dp15b; URL-configured databases: ['cyberorch_dp15b']
+DRY RUN (stage 1, registration 1) -- no model is called, nothing is written; the database is only read.
+database: cyberorch_dp15b on 127.0.0.1:5432 (read in a READ ONLY transaction)
+migration revision: 0030 -- this checkout's head is 0030 (matches)
+calls already recorded (goal_fit_calls): code.scan 0, code.secrets 0, network.scan 0
+uncleared suspensions (goal_fit_suspensions): none
+effective policy (what a new engagement is given; 2 layer(s) in force): goal_fit_actions: code.scan, code.secrets, network.scan; goal_fit_enforce: off; task_relation_enforce: off
+startup guards: ok -- goal_fit_enforce is off
+Leg B database: cyberorch_dp15b -- goal_fit_calls 0 row(s), goal_fit_suspensions 0 row(s); clean, as Leg B needs
+classes: network.scan; 60 wordings per class x 3 repeats (a different target each time); Leg B: 10 per class
+  network.scan  60 wordings  sha256 932cd7135258caac11df7ba4bccae12a514ea42127e4c5c41e6320d199a456ca  sources {'hand': 32, 'real': 28}  allowed kinds {'cidr': 23, 'ip': 43}
+calls: Leg A 180 (the validator directly; writes nothing), Leg B 10 (through propose_action; needs a clean database), total 190
+targets: 180 distinct for the 180 calls of Leg A (Leg B reuses the first target of its wordings, so that the two paths are compared on the same query); Leg A by kind {'cidr': 60, 'ip': 120}
+  e.g. network.scan wording #0: 'discover live hosts and open services in {t}' -> ['10.2.221.0/24', '10.196.44.0/24', '10.142.195.0/24']
+  e.g. network.scan wording #1: 'enumerate open ports and services on {t}' -> ['10.95.147.218', '10.219.112.91', '10.2.50.97']
+estimate: US$1.67 list price, 5.2 to 5.7 minutes at two in flight
+hard caps: 210 CLI runs, US$2.50, 15 minutes (a cap may be lowered, never raised)
+order: repeat by repeat, class by class (first six: network.scan#0.0, network.scan#1.0, network.scan#2.0, network.scan#3.0, network.scan#4.0, network.scan#5.0)
+a stop is final: no retry, no resume; nothing is printed while a stage runs but a progress count
+plan checks: ok
+execution: not started. --execute is built and is run only on the owner's separate authorization.
+exit 0
