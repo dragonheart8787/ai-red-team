@@ -15,6 +15,7 @@ import hashlib
 import inspect
 import itertools
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -45,6 +46,12 @@ def answer(value: str = P, kind: str | None = None) -> dict:
     if value == "failed":
         return {"goal_fit": "failed", "cause": "failed", "failure_kind": kind or "unclassified"}
     return {"goal_fit": value, "cause": None, "failure_kind": None}
+
+
+def fake_integrity(problems=()):
+    return run.Integrity(
+        head="a" * 40, registered_sha256={"plan": "p" * 64}, current_sha256={"plan": "p" * 64},
+        code_sha256={"scripts/dp15_stage1_run.py": "r" * 64}, problems=list(problems))
 
 
 class Collector:
@@ -251,6 +258,7 @@ def drive(tmp_path, *, ask_a=None, ask_b=None, world=None, caps=None, cost=lambd
         seed=20261025, ask_a=ask_a or (lambda c: answer()), ask_b=ask_b or (lambda c: answer()),
         cost=cost, cli_runs=lambda: 0,
         usage=usage or (lambda: rm.Usage(cli_runs=190, cost_usd=1.6)),
+        integrity=fake_integrity().header_fields(),
         banner=["database: cyberorch_dp15b on 127.0.0.1:5432 (read in a READ ONLY transaction)",
                 "migration revision: 0030 -- this checkout's head is 0030 (matches)"],
         provenance={"backend": "claude_code", "model_alias": "sonnet", "fallback": "1",
@@ -388,6 +396,8 @@ def cli(tmp_path, monkeypatch):
     FakeRealWorld.built, FakeRealWorld.problems = [], []
     monkeypatch.setattr(run, "RealWorld", FakeRealWorld)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
+    monkeypatch.setattr(run, "integrity", lambda: fake_integrity())
+    monkeypatch.setattr(run, "pinned_input_problems", lambda args: [])
     captured = {}
 
     def fake_run(**kw):
@@ -495,6 +505,8 @@ def test_execute_end_to_end_with_a_fake_world_writes_the_record_and_looks_once(
     monkeypatch.setattr(run, "RealWorld", FakeRealWorld)
     monkeypatch.setattr(st, "seen_wordings", lambda: [])
     monkeypatch.setattr(run, "git_head", lambda: "c" * 40)
+    monkeypatch.setattr(run, "integrity", lambda: fake_integrity())
+    monkeypatch.setattr(run, "pinned_input_problems", lambda args: [])
     monkeypatch.setattr("control_plane.config.load_dotenv", lambda *a, **k: None)
     record = tmp_path / "record.jsonl"
     code = st.main(["--execute", "--yes", "--wordings-dir", str(tmp_path), "--plan",
@@ -503,6 +515,9 @@ def test_execute_end_to_end_with_a_fake_world_writes_the_record_and_looks_once(
     assert code == run.EXIT_OK
     head, calls, end, _ = an.read_record(record)
     assert len(calls) == 190 and end["stopped"] is None and head["plan_commit"] == "c" * 40
+    assert head["head"] == "a" * 40 and head["registered_commit"] == run.REGISTERED_COMMIT
+    assert head["registered_sha256"] == {"plan": "p" * 64} and head["tree_clean"] is True
+    assert head["code_sha256"] == {"scripts/dp15_stage1_run.py": "r" * 64}
     assert head["wordings_sha256"] == hashlib.sha256(
         (tmp_path / "network.scan.json").read_bytes()).hexdigest()
     assert "C1: MET" in out and "real (model Supervisor)" in out and "hand-written" in out
@@ -515,6 +530,187 @@ def test_the_record_goes_to_the_stage_directory_by_default():
     assert run.STAGE_DIR.parts[-2:] == ("D68_DP15_RECORD_MODE", "stage1")
     assert run.CLASS == "network.scan" and run.MAX_CONCURRENCY == 2
     assert run.LEG_B_SCOPE == "10.0.0.0/8" and run.MAX_ESCAPED_ERRORS == 3
+
+
+# -- the pre-registration guard: only the registered tree may send --------------
+
+def test_the_registered_commit_and_files_are_pinned():
+    assert run.REGISTERED_COMMIT == "0747cbe30efb49c5eaf64ccfe8c46800269a217a"
+    assert run.REGISTERED_FILES == (
+        "docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md",
+        "docs/D68_DP15_RECORD_MODE/stage1/network.scan.json",
+        "scripts/dp15_stage1_analysis.py")
+    assert run.CODE_FILES == ("scripts/dp15_enable_stage1.py", "scripts/dp15_stage1_run.py")
+
+
+GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c",
+       "commit.gpgsign=false"]
+FILES = ("plan.md", "wordings.json", "analysis.py")
+
+
+def sh(repo, *args):
+    done = subprocess.run([*GIT, *args], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.strip()
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A repository with a registered commit, then a later commit that changes only the code."""
+    root = tmp_path / "r"
+    root.mkdir()
+    sh(root, "init", "-q", "-b", "main")
+    for name in FILES:
+        (root / name).write_text(f"{name} as registered\n")
+    (root / "run.py").write_text("run v1\n")
+    sh(root, "add", "-A")
+    sh(root, "commit", "-q", "-m", "registered")
+    return root
+
+
+def guard(repo, **kw):
+    registered = sh(repo, "rev-list", "--max-parents=0", "HEAD")
+    return run.integrity(repo=repo, registered=registered, files=FILES, code=("run.py",), **kw)
+
+
+def commit_all(repo, message="later"):
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-q", "-m", message)
+
+
+def test_the_registered_tree_passes_and_the_header_records_head_and_hashes(repo):
+    got = guard(repo)
+    assert got.problems == [] and got.head == sh(repo, "rev-parse", "HEAD")
+    assert got.registered_sha256 == got.current_sha256 and len(got.current_sha256) == 3
+    for name, digest in got.current_sha256.items():
+        assert digest == hashlib.sha256((repo / name).read_bytes()).hexdigest()
+    assert got.code_sha256 == {"run.py": hashlib.sha256(b"run v1\n").hexdigest()}
+    fields = got.header_fields()
+    assert fields["head"] == got.head and fields["tree_clean"] is True
+    assert fields["registered_commit"] == run.REGISTERED_COMMIT
+    assert fields["registered_sha256"] == got.registered_sha256 and "code_sha256" in fields
+
+
+def test_a_later_commit_that_changes_only_code_still_passes(repo):
+    (repo / "run.py").write_text("run v2, with a guard\n")
+    commit_all(repo)
+    got = guard(repo)
+    assert got.problems == []
+    assert got.code_sha256 == {"run.py": hashlib.sha256(b"run v2, with a guard\n").hexdigest()}
+
+
+def test_an_uncommitted_change_to_a_tracked_file_is_refused(repo):
+    (repo / "run.py").write_text("run v1, edited\n")
+    problems = guard(repo).problems
+    assert len(problems) == 1 and "uncommitted or untracked path(s)" in problems[0]
+    assert "run.py" in problems[0]
+
+
+def test_an_untracked_file_is_refused_too_even_in_a_new_directory(repo):
+    (repo / "scratch").mkdir()
+    (repo / "scratch" / "notes.txt").write_text("x\n")
+    problems = guard(repo).problems
+    assert len(problems) == 1 and "scratch/notes.txt" in problems[0]
+
+
+def test_an_ignored_file_is_not_a_change(repo):
+    (repo / ".gitignore").write_text("*.cache\n")
+    commit_all(repo)
+    (repo / "x.cache").write_text("ignored\n")
+    assert guard(repo).problems == []
+
+
+@pytest.mark.parametrize("name", FILES)
+def test_a_registered_file_changed_and_committed_since_is_refused_with_both_hashes(repo, name):
+    before = hashlib.sha256((repo / name).read_bytes()).hexdigest()
+    (repo / name).write_text("changed after the registration\n")
+    commit_all(repo)
+    after = hashlib.sha256((repo / name).read_bytes()).hexdigest()
+    problems = guard(repo).problems
+    assert len(problems) == 1 and f"{name} is not the registered file" in problems[0]
+    assert before in problems[0] and after in problems[0]
+
+
+def test_a_head_that_does_not_contain_the_registered_commit_is_refused(repo):
+    registered = sh(repo, "rev-parse", "HEAD")
+    sh(repo, "checkout", "-q", "--orphan", "other")
+    for name in (*FILES, "run.py"):
+        (repo / name).write_text(f"{name} as registered\n")         # the same bytes, another root
+    commit_all(repo, "another history")
+    got = run.integrity(repo=repo, registered=registered, files=FILES, code=("run.py",))
+    assert any("does not contain the registered commit" in p for p in got.problems)
+
+
+def test_a_registered_commit_git_does_not_know_is_refused(repo):
+    got = run.integrity(repo=repo, registered="0" * 40, files=FILES, code=("run.py",))
+    assert any("could not check that HEAD contains" in p for p in got.problems)
+    assert any("is not in the registered commit" in p for p in got.problems)
+
+
+def test_a_file_missing_from_disk_is_refused(repo):
+    (repo / "analysis.py").unlink()
+    commit_all(repo)
+    problems = guard(repo).problems
+    assert any("analysis.py cannot be read" in p for p in problems)
+
+
+def test_a_git_that_cannot_be_run_is_a_refusal_not_a_pass(repo):
+    def broken(repo_, *args):
+        raise FileNotFoundError("git")
+
+    got = guard(repo, git=broken)
+    assert got.problems and all("git could not be run" in p for p in got.problems[:4])
+    assert got.head is None
+
+
+def test_a_git_that_answers_with_an_error_is_a_refusal_too(repo):
+    def failing(repo_, *args):
+        return subprocess.CompletedProcess(args, 128, b"", b"fatal: not a git repository")
+
+    problems = guard(repo, git=failing).problems
+    assert "git cannot name HEAD" in problems
+    assert "git cannot read the working tree's status" in problems
+
+
+def test_only_the_registered_plan_and_wording_directory_may_be_read():
+    class Args:
+        plan = str(st.DEFAULT_PLAN)
+        wordings_dir = str(st.DEFAULT_DIR)
+
+    assert run.pinned_input_problems(Args) == []
+
+    class Other:
+        plan = "/tmp/other_plan.md"
+        wordings_dir = "/tmp/other_dir"
+
+    problems = run.pinned_input_problems(Other)
+    assert len(problems) == 2 and "--plan" in problems[0] and "--wordings-dir" in problems[1]
+
+
+def test_execute_refuses_before_anything_is_read_or_built_when_the_tree_is_not_registered(
+        cli, capsys, monkeypatch):
+    monkeypatch.setattr(run, "integrity", lambda: fake_integrity(
+        ["the working tree has 2 uncommitted or untracked path(s)"]))
+    assert cli("--yes") == run.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert "the working tree has 2 uncommitted or untracked path(s)" in err
+    assert FakeRealWorld.built == [] and cli.captured == {}
+
+
+def test_execute_refuses_when_the_inputs_are_not_the_registered_ones(cli, capsys, monkeypatch):
+    monkeypatch.setattr(run, "pinned_input_problems",
+                        lambda args: ["--plan x is not the registered plan"])
+    assert cli("--yes") == run.EXIT_REFUSED
+    assert "not the registered plan" in capsys.readouterr().err
+    assert FakeRealWorld.built == [] and cli.captured == {}
+
+
+def test_the_record_header_carries_the_integrity_fields(tmp_path):
+    _, _, record = drive(tmp_path)
+    head = an.read_record(record)[0]
+    assert head.get("head") == "a" * 40 and head.get("tree_clean") is True
+    assert head.get("registered_commit") == run.REGISTERED_COMMIT
+    assert head.get("registered_sha256") == {"plan": "p" * 64}
 
 
 # -- the real world, with its edges faked --------------------------------------

@@ -11,7 +11,15 @@ is written to a database. Then 10 more (Leg B: the first repeat of 10 wordings, 
 go through ``propose_action`` in the clean database ``cyberorch_dp15b``. At most two are in flight
 in Leg A and one in Leg B.
 
-**Startup checks (they run first; any one refuses and nothing is sent).**
+**The pre-registration guard (``integrity``; first of all, in ``--execute`` only).** The run refuses
+to start unless this checkout is the registered one: the working tree has no uncommitted change and
+no untracked file; HEAD contains the registering commit ``REGISTERED_COMMIT``; and the plan, the
+wording file and the analysis script have, byte for byte, the sha256 they have in that commit. It
+reads only the registered plan and the registered wording directory (``pinned_input_problems``).
+The record's header carries HEAD, those hashes (registered and on disk) and the hashes of the two
+run scripts, which may have been mended since and are recorded, not compared.
+
+**Startup checks (they run next; any one refuses and nothing is sent).**
 the wording file's sha256 equals the one the plan registers; the wording rules hold; the database is
 ``cyberorch_dp15b``, at the code's migration head, with ``goal_fit_calls`` and
 ``goal_fit_suspensions`` empty and ``goal_fit_enforce`` off in the effective policy (and
@@ -32,6 +40,7 @@ footer) is complete, the summary of calls and usage is printed, and the one anal
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import threading
@@ -50,6 +59,16 @@ from scripts import dp15_record_mode as rm  # noqa: E402
 from scripts import dp15_stage1_analysis as an  # noqa: E402
 
 CLASS = "network.scan"
+#: The commit that registered stage 1 (plan, wording file and analysis script as they were then).
+REGISTERED_COMMIT = "0747cbe30efb49c5eaf64ccfe8c46800269a217a"
+#: Files whose bytes must be the registered ones, whatever else has changed since.
+REGISTERED_FILES = (
+    "docs/D68_DP15_RECORD_MODE/ENABLE_DECISION_PLAN.md",
+    "docs/D68_DP15_RECORD_MODE/stage1/network.scan.json",
+    "scripts/dp15_stage1_analysis.py",
+)
+#: Files the run records the hash of but does not compare (the run itself may have been mended).
+CODE_FILES = ("scripts/dp15_enable_stage1.py", "scripts/dp15_stage1_run.py")
 PROMPT_DIGEST = "5e2357979fb3"   # the prompt DP-14 and S7 measured (12 hex of its sha256)
 STAGE_DIR = REPO_ROOT / "docs" / "D68_DP15_RECORD_MODE" / "stage1"
 DEFAULT_RECORD = STAGE_DIR / "record.jsonl"
@@ -166,6 +185,100 @@ class Stage1Run:
                     out.stopped = self.stop_reason(out, started)
                 if not pending:
                     break
+
+
+# -- the pre-registration: nothing is sent from a tree that is not the registered one ------------
+
+@dataclass(frozen=True)
+class Integrity:
+    head: str | None
+    registered_sha256: dict         # file -> sha256 of its bytes in the registered commit
+    current_sha256: dict            # file -> sha256 of its bytes on disk
+    code_sha256: dict               # recorded, not compared
+    problems: list
+
+    def header_fields(self) -> dict:
+        return {"head": self.head, "registered_commit": REGISTERED_COMMIT,
+                "tree_clean": not self.problems, "registered_sha256": self.registered_sha256,
+                "current_sha256": self.current_sha256, "code_sha256": self.code_sha256}
+
+
+def _git(repo: Path, *args: str):
+    import subprocess
+
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, timeout=30)
+
+
+def integrity(*, repo: Path = REPO_ROOT, registered: str = REGISTERED_COMMIT,
+              files: tuple = REGISTERED_FILES, code: tuple = CODE_FILES, git=_git) -> Integrity:
+    """Whether this checkout is the one that was registered. Refuses (``problems``) when the working
+    tree has any uncommitted change, untracked files included; when HEAD does not contain the
+    registered commit; or when a registered file's bytes differ from its bytes in that commit.
+    Anything git cannot answer is a problem, never a pass."""
+    problems: list[str] = []
+
+    def ask(*args: str):
+        try:
+            return git(repo, *args)
+        except Exception as exc:  # noqa: BLE001 - not being able to ask is a refusal
+            problems.append(f"git could not be run ({type(exc).__name__}): {' '.join(args[:2])}")
+            return None
+
+    head = None
+    done = ask("rev-parse", "HEAD")
+    if done is not None:
+        if done.returncode == 0:
+            head = done.stdout.decode().strip()
+        else:
+            problems.append("git cannot name HEAD")
+    done = ask("status", "--porcelain", "--untracked-files=all")
+    if done is not None:
+        if done.returncode != 0:
+            problems.append("git cannot read the working tree's status")
+        elif done.stdout.strip():
+            lines = [x for x in done.stdout.decode().splitlines() if x.strip()]
+            problems.append(f"the working tree has {len(lines)} uncommitted or untracked "
+                            f"path(s), e.g. {lines[0][3:]!r}: commit or remove them")
+    done = ask("merge-base", "--is-ancestor", registered, "HEAD")
+    if done is not None and done.returncode != 0:
+        problems.append(
+            f"HEAD {head} does not contain the registered commit {registered[:7]}" if
+            done.returncode == 1 else f"git could not check that HEAD contains {registered[:7]} "
+            f"({done.stderr.decode().strip()[:120]})")
+    registered_sha, current_sha = {}, {}
+    for name in files:
+        blob = ask("show", f"{registered}:{name}")
+        if blob is not None and blob.returncode == 0:
+            registered_sha[name] = hashlib.sha256(blob.stdout).hexdigest()
+        elif blob is not None:
+            problems.append(f"{name} is not in the registered commit {registered[:7]}")
+        try:
+            current_sha[name] = hashlib.sha256((repo / name).read_bytes()).hexdigest()
+        except OSError as exc:
+            problems.append(f"{name} cannot be read ({type(exc).__name__})")
+        both = name in registered_sha and name in current_sha
+        if both and registered_sha[name] != current_sha[name]:
+            problems.append(f"{name} is not the registered file: registered sha256 "
+                            f"{registered_sha[name]}, on disk {current_sha[name]}")
+    code_sha = {}
+    for name in code:
+        try:
+            code_sha[name] = hashlib.sha256((repo / name).read_bytes()).hexdigest()
+        except OSError:
+            code_sha[name] = None
+    return Integrity(head, registered_sha, current_sha, code_sha, problems)
+
+
+def pinned_input_problems(args) -> list[str]:
+    """Stage 1 reads the registered plan and the registered wording file and no other."""
+    problems = []
+    if Path(args.plan).resolve() != st.DEFAULT_PLAN.resolve():
+        problems.append(f"--plan {args.plan} is not the registered plan: stage 1 reads the "
+                        "registered files only")
+    if Path(args.wordings_dir).resolve() != st.DEFAULT_DIR.resolve():
+        problems.append(f"--wordings-dir {args.wordings_dir} is not the registered directory: "
+                        "stage 1 reads the registered files only")
+    return problems
 
 
 # -- the world -------------------------------------------------------------------------------------
@@ -385,7 +498,7 @@ def stored_fields(value: str | None, cause: str | None, kind: str | None, *,
 
 def record_header(wordings: list[st.Wording], *, wordings_sha: str, plan_commit: str,
                   banner: list[str], provenance: dict, calls: list[st.Call], caps: dict,
-                  seed: int) -> dict:
+                  seed: int, integrity: dict) -> dict:
     database = next((line.split(" on ")[0].removeprefix("database: ") for line in banner
                      if line.startswith("database: ")), None)
     migration = next((line.split(" -- ")[0].removeprefix("migration revision: ")
@@ -393,6 +506,7 @@ def record_header(wordings: list[st.Wording], *, wordings_sha: str, plan_commit:
     return {"type": "header", "registration": "stage 1",
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "wordings_sha256": wordings_sha, "plan_commit": plan_commit, "seed": seed,
+            **integrity,
             "database": database, "migration": migration, **provenance,
             "planned": {"leg_a": sum(c.leg == "A" for c in calls),
                         "leg_b": sum(c.leg == "B" for c in calls)},
@@ -429,7 +543,7 @@ def run_stage1(*, world, wordings: list[st.Wording], wordings_sha: str, calls: l
                caps: dict, record: Path, plan_commit: str, seed: int, ask_a: Callable,
                ask_b: Callable, cost: Callable[[], float], cli_runs: Callable[[], int],
                usage: Callable[[], rm.Usage], banner: list[str], provenance: dict,
-               out=print) -> int:
+               integrity: dict, out=print) -> int:
     """The run, with a world passed in. Writes the record, prints the summary and then the one
     analysis. The record file is created here and must not exist."""
     handle = record.open("x")                       # an existing record is never appended to
@@ -440,7 +554,7 @@ def run_stage1(*, world, wordings: list[st.Wording], wordings_sha: str, calls: l
 
         write(record_header(wordings, wordings_sha=wordings_sha, plan_commit=plan_commit,
                             banner=banner, provenance=provenance, calls=calls, caps=caps,
-                            seed=seed))
+                            seed=seed, integrity=integrity))
         controller = Stage1Run(
             calls, ask=lambda c: ask_a(c) if c.leg == "A" else ask_b(c), write=write,
             sources={i: w.source for i, w in enumerate(wordings)}, caps=caps,
@@ -469,6 +583,10 @@ def execute_cli(args) -> int:
     """``dp15_enable_stage1.py --execute``: every refusal comes before any call."""
     problems: list[str] = []
     classes = (CLASS,)
+    checked = integrity()
+    problems += checked.problems + pinned_input_problems(args)
+    if problems:
+        return refuse(problems)
     wordings_path = Path(args.wordings_dir) / f"{CLASS}.json"
     if not wordings_path.exists():
         problems.append(f"no wording file at {wordings_path}")
@@ -521,7 +639,8 @@ def execute_cli(args) -> int:
         world=world, wordings=wordings, wordings_sha=sha, calls=calls, caps=caps,
         record=Path(args.record), plan_commit=git_head(), seed=args.seed,
         ask_a=world.ask_leg_a, ask_b=world.ask_leg_b, cost=world.cost, cli_runs=world.cli_runs,
-        usage=world.usage, banner=banner, provenance=world.provenance())
+        usage=world.usage, banner=banner, provenance=world.provenance(),
+        integrity=checked.header_fields())
 
 
 def refuse(problems: list[str]) -> int:
