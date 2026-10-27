@@ -505,6 +505,8 @@ Not asked, because it is fixed by the brief: that the signal never allows and on
 | `0/N` bounds a rate only to about `3/N` | [D] | rule of three |
 | Detection rate, false-positive rate, `insufficient_context` rate, second-backend cost, origin of task-less proposals | [N] | none exists; DP-4, DP-7 |
 
+[2026-10-27 superseded] In the last row above, "origin of task-less proposals" is answered by the survey in section 9, and DP-4 is decided as option (a) (sections 9 and 10). Whether the other items in that row are still [N] is as the row's original text says; this note does not restate it.
+
 ## 9. DP-4 survey: who calls `propose_action` without a task
 
 *Done after the direction was approved, before any implementation. Method: an AST scan of every `.py` file for

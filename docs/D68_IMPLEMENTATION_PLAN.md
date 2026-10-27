@@ -408,6 +408,7 @@ Recorded at S5 on the owner's instruction, so that it is not thought of for the 
 ## 9. Risks and unknowns
 
 1. **P1 may escalate ordinary decomposition** (DP-13). The numbers do not exist; S2 makes them cheap to get.
+   [2026-10-27 superseded] DP-13 was decided on 2026-10-22 by the owner (section 7.3b), on the figures of `docs/D68_S7_P1_SCALE.md` section 7 (after the Supervisor fix: 9 of 52 network-task proposals narrowed to a host, 17.3%, 95% upper bound 29.7%; one planner model, one scenario, 10 runs). The rule is `subset_of_task_range`, commit 964a475.
 2. **No real traffic** (7.1). The gate is on a corpus and hand-run harnesses; the plan says so rather than
    implying more.
 3. **The soak's load changes** in S1 (task rows). Its counted checks and `residue_check` are re-read, the smoke is
