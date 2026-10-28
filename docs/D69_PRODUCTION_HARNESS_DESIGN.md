@@ -250,6 +250,32 @@ which is why the identity a task is stored under decides what P1 later calls a m
   `stdout_excerpt` (the first 4,000 characters) and `stdout_truncated` (`nmap.py:250-276`), not the whole stdout.
   So "Host is up" lines are in the raw artifact, and in `stdout_excerpt` only while the output is under 4,000
   characters. Whether the harness's database role may read `raw_artifact_path` **[N]** (grants not read).
+* Checked 2026-10-28 (check F), where a builder can learn the scan type of an nmap run [R]. (1) `action_proposals` has
+  no `constraints` column (`db/migrations/versions/0001_core_schema.py:161-187`; later columns are
+  `decided_policy_version`, `reviewer_hints`); its `target` JSONB holds the Worker's target dict merged with the
+  canonical one (`function_api.py:1522-1524`), and that dict carries `scan_type` and `ports` when the Worker gave them
+  (`worker_base.py:729-735`) -- the requested value, from the model. (2) `tasks` has no constraints column
+  (`0001_core_schema.py:134-149`); `create_task` stores `goal`, `action`, `canonical_target`, `identity_key` only
+  (`function_api.py:197-215`), so a task carries no scan type. (3) `capabilities.constraints` JSONB
+  (`0001_core_schema.py:237`) is what `build_plan` reads `scan_type` from (`nmap.py:196`); `tool_runs.normalized_params`
+  JSONB (`0001_core_schema.py:268`) is written at dispatch from `NmapPlan.as_params()`, which is
+  `{"target", "ports", "scan_type"}` (`nmap.py:125-131`; `dispatch.py:715`) -- the scan type that was actually run;
+  `evidence.run_id` points to the `tool_runs` row but is nullable (`0001_core_schema.py:293`). `tool_runs` has no
+  command column; the command is in the audit payload (`dispatch.py:785`) and in the raw artifact. (4) The raw
+  artifact's first line is `$ ` plus the command (`dispatch.py:509-512`), and the command is built as
+  `/usr/bin/nmap`, then the scan-type flags (`-sT`; `-sn`; `-sT -sV`, `nmap.py:86-88, 202`), then `-n` (`nmap.py:202-203`):
+  the flags follow the binary at fixed positions.
+* Checked 2026-10-28 (check G), read access to those fields [R]. `cyberorch_app` is granted SELECT on all tables of
+  the public schema (`0001_core_schema.py:410-413`); `evidence`, `audit_log` and `provenance_edges` are INSERT and
+  SELECT only (`0001_core_schema.py:415-417`); no later migration revokes SELECT on `action_proposals`, `tasks`,
+  `capabilities`, `tool_runs` or `evidence` from it (`grep REVOKE` over `db/`). All thirteen engagement-scoped tables,
+  these included, have row-level security with `FORCE` and the `engagement_isolation` policy
+  (`0001_core_schema.py:18-32, 382-394`), so reads are limited to the engagement set in the session. Which database
+  role the harness would use is not decided **[N]** (`d40` uses `engagement_scope`, the runtime connection). Whether
+  that process may read the evidence store's files on disk **[N]** (the store's directory permissions were not read).
+  [D] So `tool_runs.normalized_params->>'scan_type'`, reached through `evidence.run_id`, is a stored field the
+  builder can read; when `run_id` is NULL or the row is missing the scan type is unknown, and the FINAL rule above
+  adds no host identity.
 * **[N]** How an observed string carrying a port is handled under the `url` type (not executed).
 
 **This design satisfies that trigger** [D]: the harness would be the first production code to construct
@@ -288,6 +314,19 @@ answered: `-Pn` is added for scan types other than ping [R: nmap.py:222], and if
 every address of the target whether or not it responded [D, not run], `hosts` would hold the whole scanned range
 and the rule would count unresponsive addresses as structurally observed (fail open). The rule may need to read the
 raw stdout for 'Host is up' instead of `hosts` [D, depends on E].
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] FINAL for v0, supersedes the IP-literal
+chosen line and the PROVISIONAL note above (both kept): the nmap builder puts an IP literal from the view's `hosts`
+into `observed_identities` only when the run was a ping scan (-sn); for connect and version scans, which add -Pn
+[R: nmap.py:218-222], it adds no host identity from `hosts`. If the builder cannot establish the scan type from a
+stored field, it adds none (fail closed). Evidence: the recorded /24 connect scan reports 256 hosts scanned and
+'Nmap done: 256 IP addresses (256 hosts up)' [R: docs/LIVE_RUN_REPORT.md:237-240], the recorded /24 ping recon three
+up [R: docs/D40_THREE_ROLE_INTEGRATION_REPORT.md:233-239]; the full stdout of neither was stored [N]. Reason [D]:
+under -Pn `hosts` is the scanned range, not the responders; the ping case lists responders only [D, not run]. Not
+adopted: parsing the raw stdout per host (a new parser over target-influenced text, and a read grant not shown to
+exist [N]); revisit if the approval cost below is high. Cost: after a connect or version scan, a follow-up proposal
+for one host in that range is named only in untrusted content, so it goes to a person (fail closed); shadow
+measurement 5 is reported separately by scan type.
 
 **Decision D69-3b: how is the end-to-end re-verification done?** *Pending the owner.* The candidate shape,
 per tool, in the style of D13/D15 and D45-D48 (real entry points, no hand-built `Observation`):
@@ -525,6 +564,7 @@ the owner opens a new registration (it would need its own sampling rules; DP-15 
    latency -- recorded, not tuned.
 5. Observation-side: how many proposals were escalated on `introduced_by_untrusted`, per tool (the 5.28
    mechanism in use).
+   [2026-10-28] For nmap, report this separately by scan type (`connect`, `version`, `ping`).
 6. Stranded states: tasks left `claimed`, proposals left at `received`.
 
 **Candidate fields of a pre-registration** (fields, not values): unit of analysis (proposal, task,
@@ -660,3 +700,6 @@ because it adds no code.
     builder puts a hostname into `observed_identities`; (b) the builder puts `(task target,)` there; (c) the
     content given to the Worker and the content compared are not the same string. Each must make some property
     test fail.
+12. **More mutation candidates for the nmap builder** (same condition: written when code is written): (d) the
+    builder takes `hosts` for a connect or version scan; (e) the builder takes `hosts` when the scan type is
+    unknown. Each must make some property test fail.
