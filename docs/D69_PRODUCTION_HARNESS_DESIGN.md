@@ -4,7 +4,7 @@
 No decision is taken here. Every decision point lists its options, what each costs, and a
 recommendation, and is marked **pending the owner** (待負責人). A recommendation is a lean, not a decision.
 
-[2026-10-28] Where a decision point below carries a line "chosen: ...", that choice was made by the review layer under the owner's standing delegation and the owner may veto it; the options and the Lean above it are unchanged. D69-3a, D69-3b and section 10 have no such line and remain pending the owner.
+[2026-10-28] Where a decision point below carries a line "chosen: ...", that choice was made by the review layer under the owner's standing delegation and the owner may veto it; the options and the Lean above it are unchanged. D69-3b and section 10 carry a chosen line; D69-3a carries a provisional one (see its note); all remain subject to the owner's veto.
 
 Tags: **[R]** read (a file, a document or a search result, with the place named); **[E]** executed (run
 by me); **[D]** derived (reasoned from [R] facts, not observed); **[N]** not established. This note ran
@@ -221,9 +221,35 @@ which is why the identity a task is stored under decides what P1 later calls a m
   `Observation(` is constructed only in `scripts/live_run/` (`d13_worker.py`, `d15_lookalike.py`,
   `d40_three_role.py`) and in tests; none of them takes `observed_identities` from a view's `hosts`, `ports` or
   endpoint (d40 uses the task's target).
-* **[N]** Whether `network.scan` accepts an fqdn-type target (not read).
-* **[N]** Whether, under `-Pn`, nmap prints a scan report for every target; if it does, `hosts` means "was
-  scanned" and not "responded", which must be settled before the D69-3a rule is final.
+* Checked 2026-10-28 (check D), whether `network.scan` accepts an fqdn-type target [R]. Registration restricts
+  only `ad_domain` scope objects to `ad.collect` (`control_plane/registry/scope_registry.py:138-149`); nothing there
+  limits `network.scan` to ip or cidr scopes. Authorization is type-aware: "an `fqdn` scope never covers an IP
+  target, and a `cidr` scope never covers an fqdn target" (`control_plane/canonicalizer/authorization.py:94-98`), so
+  a `network.scan` of an fqdn target would need an fqdn scope object whose `allowed_actions` include it, which
+  registration permits [R]. `nmap.build_plan` takes `target: str` and appends it to the command without a type
+  check (`nmap.py:171, 226`) [R]. The scheduler, for approved proposals only, skips any scope that is not a `cidr`
+  (`control_plane/scheduler/allowlist.py`, `SCOPE_TYPE_NO_RANGE`) [R]. That an fqdn-target scan reaches nmap through
+  `propose_action` was not run **[N]**.
+* Checked 2026-10-28 (checks A, B, C), whether `hosts` means "responded" [R]/[N]. `-Pn` is added for every scan type
+  except `ping`, under `if scan_type != "ping":` (`nmap.py:218-222`); `-sn` (ping) runs without it. Stored records:
+  `docs/LIVE_RUN_REPORT.md:237-240` records a `network.scan` command line
+  `/usr/bin/nmap -sT -n --unprivileged -Pn -p 8080 --host-timeout 115s 10.79.0.0/24` with
+  "hosts nmap reported scanned: 256" and nmap's own summary "Nmap done: 256 IP addresses (256 hosts up) scanned in
+  1.83 seconds"; `docs/D40_THREE_ROLE_INTEGRATION_REPORT.md:233-239` records a `network.recon` of the same /24 that
+  found three hosts "up" (three "Nmap scan report for" lines, each with "Host is up"). [D] So under `-Pn` the
+  "hosts up" count covers addresses that did not respond; `hosts` would then not mean "responded". What is not
+  stored: the full stdout of a CIDR scan under `-Pn`, so whether each of the 256 addresses has its own "Nmap scan
+  report for" line is not shown by a sample **[N]**; and the nmap manual page is not installed on this machine
+  (`man -w nmap` prints the minimized-system notice; no `nmap` page under `/usr/share/man/man1`), so its text on
+  `-Pn` was not read **[N]**. nmap was not run.
+* Checked 2026-10-28 (check E), what an evidence row stores [R]. `evidence` has `raw_artifact_path`, `raw_sha256`,
+  `derived_view` and the tool fields (`db/migrations/versions/0001_core_schema.py:290-305`). The raw artifact is the
+  command line plus the full stdout and stderr: `"$ <command>\n--- stdout ---\n<stdout>\n--- stderr ---\n<stderr>\n"`
+  (`control_plane/orchestrator/dispatch.py:509-512`), written by `write_raw_artifact`
+  (`control_plane/evidence/store.py:39-57`). The nmap `derived_view` carries `hosts`, `ports`, `open_ports`,
+  `stdout_excerpt` (the first 4,000 characters) and `stdout_truncated` (`nmap.py:250-276`), not the whole stdout.
+  So "Host is up" lines are in the raw artifact, and in `stdout_excerpt` only while the output is under 4,000
+  characters. Whether the harness's database role may read `raw_artifact_path` **[N]** (grants not read).
 * **[N]** How an observed string carrying a port is handled under the `url` type (not executed).
 
 **This design satisfies that trigger** [D]: the harness would be the first production code to construct
@@ -256,6 +282,12 @@ flaw of d40's `observed_identities=(task target,)` (the request counted as an ob
 target is a name leaves its follow-up proposals un-established, which go to a person (fail closed); shadow
 measurement 5 counts them. Rules for `code.*` and `web.*` stay pending; they are outside the v0 action set
 (D69-6).
+
+[2026-10-28 review layer: PROVISIONAL, not final] The IP-literal rule above is withdrawn as final until [N](b) is
+answered: `-Pn` is added for scan types other than ping [R: nmap.py:222], and if nmap then prints a scan report for
+every address of the target whether or not it responded [D, not run], `hosts` would hold the whole scanned range
+and the rule would count unresponsive addresses as structurally observed (fail open). The rule may need to read the
+raw stdout for 'Host is up' instead of `hosts` [D, depends on E].
 
 **Decision D69-3b: how is the end-to-end re-verification done?** *Pending the owner.* The candidate shape,
 per tool, in the style of D13/D15 and D45-D48 (real entry points, no hand-built `Observation`):
