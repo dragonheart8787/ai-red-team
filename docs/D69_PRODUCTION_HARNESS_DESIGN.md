@@ -208,6 +208,24 @@ which is why the identity a task is stored under decides what P1 later calls a m
   string is read as a repository location if it contains `://` (`_untyped_repo_keys`, `worker_base.py:378-381`).
   What a `code.*` run structurally observes about the repository is therefore not a field of its view **[N]**.
 
+* Read 2026-10-28 (check A), nmap's actual arguments [R]. `build_plan` builds the command as the scan-type
+  flags, then `command.append("-n")` unconditionally (`tool_gateway/adapters/nmap.py:202-203`), then
+  `--unprivileged`, `-Pn` (unless `ping`), `-p <ports>`, `--host-timeout`, and the target
+  (`nmap.py:217-226`). There is no `-R`, no `--dns-servers` and no `--system-dns` anywhere in the file. The
+  `constraints` read are `ports` and `scan_type` only (`nmap.py:194, 196`), so they cannot remove `-n` or add a
+  DNS option. With `-n` nmap does no reverse DNS.
+* Read 2026-10-28 (check B) [R]. `_scope_keys` (`agents/llm/worker_base.py:446-463`) returns the raw key and the
+  canonical `(type, value)` key (and a location key for `repo`); it does no network containment. A scope object
+  matches a target only by set intersection with the target's keys (`worker_base.py:557`).
+* No program builds an `Observation` from an evidence row (check F, 2026-10-28) [R]. The Worker-side
+  `Observation(` is constructed only in `scripts/live_run/` (`d13_worker.py`, `d15_lookalike.py`,
+  `d40_three_role.py`) and in tests; none of them takes `observed_identities` from a view's `hosts`, `ports` or
+  endpoint (d40 uses the task's target).
+* **[N]** Whether `network.scan` accepts an fqdn-type target (not read).
+* **[N]** Whether, under `-Pn`, nmap prints a scan report for every target; if it does, `hosts` means "was
+  scanned" and not "responded", which must be settled before the D69-3a rule is final.
+* **[N]** How an observed string carrying a port is handled under the `url` type (not executed).
+
 **This design satisfies that trigger** [D]: the harness would be the first production code to construct
 `Observation` objects.
 
@@ -222,6 +240,23 @@ Cost of each rule: too wide a set turns a lure into an "observed" identity and s
 [D]:* the narrowest rule each row of the table supports, stated per tool in code and pinned by a test per
 tool; and `observed_identities=(task target,)` as `d40` does is not carried over.
 
+**Requirement (basis: check C) [R]/[D].** The Worker sees an observation's content in the `json.dumps`-escaped
+form [R: `worker_base.py:645-653`]; `_discovery_provenance` compares the raw `o.content` [R:
+`worker_base.py:573-576`]; the two are not bit-for-bit the same. The builder and its tests must pin this
+correspondence: every identity in the raw string is still recognisable in the form the Worker sees, and the
+comparison does not miss one because of the escaping; otherwise the difference fails open [D].
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen for v0 (`network.scan` and `network.recon` only): `observed_identities` = the
+IP-literal entries of the view's `hosts`, in the pipeline's canonical form. Hostnames, ports and host:port forms
+are not included, and `observed_identities=(task target,)` as `d40` does is not carried over. Reason [D]:
+`build_plan` always passes `-n` [R: nmap.py:203], so nmap does no reverse DNS; for an ip or cidr target `hosts`
+holds IP literals, and a name can appear only when the target string given to nmap is itself a name, in which
+case it is the request echoed back, not an independent observation. Admitting names would repeat, per entry, the
+flaw of d40's `observed_identities=(task target,)` (the request counted as an observation). Cost: a scan whose
+target is a name leaves its follow-up proposals un-established, which go to a person (fail closed); shadow
+measurement 5 counts them. Rules for `code.*` and `web.*` stay pending; they are outside the v0 action set
+(D69-6).
+
 **Decision D69-3b: how is the end-to-end re-verification done?** *Pending the owner.* The candidate shape,
 per tool, in the style of D13/D15 and D45-D48 (real entry points, no hand-built `Observation`):
 a real run of the tool in a lab engagement -> the evidence row -> the **real builder** -> an observation set
@@ -232,6 +267,11 @@ mirror case (an identity the tool did observe) must not escalate on discovery gr
 that fails when the builder puts the lure's identity into `observed_identities` (a mutation to write when
 code exists). A scripted Worker avoids a model call in the check, [D]. *Lean [D]:* scripted Worker for
 the property tests, plus one recorded run with the real Worker as an observation, not as the test.
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: a scripted Worker for the property tests, through the real builder and the real
+`_discovery_provenance`, with stored `derived_view` samples as input, at least three: IP literals only; the
+"name (address)" form; a hostname lure appearing in `hosts`. The real Worker is used for one recorded run only,
+as an observation, not as a test.
 
 ## 4. Loading the policy for the decision stage (ACCEPTANCE 5.51)
 
@@ -520,6 +560,11 @@ harness exists, so performance claims are **[N]**.
 *Lean [D]:* Python for v0, on reuse and existing guards; revisit only if a measured need appears (for
 example a concurrency requirement, D69-7 (B)). *Pending the owner.*
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: Python. Reason [D]: the harness calls Python's `create_task`, `propose_action` and
+`load_effective_policy` directly, and the AST tests that pin it are Python, so another language only adds a
+cross-language interface; Rust remains a candidate for the tool gateway and the capability broker, as a separate
+matter.
+
 ## 11. Falsifiable acceptance for v0 (candidates; no threshold)
 
 Each states what observation would refute it. Written for a harness that does not exist; none was run.
@@ -579,3 +624,7 @@ because it adds no code.
 10. **Open questions for the owner**, in order of what blocks what [D]: D69-1 (where it runs) -> D69-6 (action
     set) -> D69-3a (identities per tool; the `code.*` views are read, section 3, rule (4) still open) -> D69-2a/2b -> D69-5a/5b -> D69-5c -> D69-5d -> D69-4 ->
     D69-7 -> D69-8a -> D69-9 -> the language (section 10).
+11. **Mutation candidates for the Observation builder** (to be written when code is written, not now): (a) the
+    builder puts a hostname into `observed_identities`; (b) the builder puts `(task target,)` there; (c) the
+    content given to the Worker and the content compared are not the same string. Each must make some property
+    test fail.
