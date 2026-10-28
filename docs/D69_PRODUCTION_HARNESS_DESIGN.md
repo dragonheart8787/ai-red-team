@@ -4,7 +4,7 @@
 No decision is taken here. Every decision point lists its options, what each costs, and a
 recommendation, and is marked **pending the owner** (待負責人). A recommendation is a lean, not a decision.
 
-[2026-10-28] Where a decision point below carries a line "chosen: ...", that choice was made by the review layer under the owner's standing delegation and the owner may veto it; the options and the Lean above it are unchanged. D69-3b and section 10 carry a chosen line; D69-3a carries a provisional one (see its note); all remain subject to the owner's veto.
+[2026-10-28] Where a decision point below carries a line "chosen: ...", that choice was made by the review layer under the owner's standing delegation and the owner may veto it; the options and the Lean above it are unchanged. D69-3b, section 10 and D69-3a carry chosen lines (D69-3a's is FINAL for v0 and supersedes its earlier chosen and provisional lines, which are kept); all remain subject to the owner's veto.
 
 Tags: **[R]** read (a file, a document or a search result, with the place named); **[E]** executed (run
 by me); **[D]** derived (reasoned from [R] facts, not observed); **[N]** not established. This note ran
@@ -328,6 +328,13 @@ exist [N]); revisit if the approval cost below is high. Cost: after a connect or
 for one host in that range is named only in untrusted content, so it goes to a person (fail closed); shadow
 measurement 5 is reported separately by scan type.
 
+**Requirement (basis: check F) [R]/[D].** The builder must take the scan type from
+`tool_runs.normalized_params->>'scan_type'`, reached through `evidence.run_id` [R: `nmap.py:125-131`,
+`dispatch.py:715`], and never from the `scan_type` in `action_proposals.target`, which is the value the Worker
+requested and may differ from the one that was run [R: `worker_base.py:729-735`]. When `run_id` is NULL or the row
+is not found, the scan type is unknown [D]. A test must pin this, with a case in which the proposal asked for a
+ping scan and the run was a connect scan.
+
 **Decision D69-3b: how is the end-to-end re-verification done?** *Pending the owner.* The candidate shape,
 per tool, in the style of D13/D15 and D45-D48 (real entry points, no hand-built `Observation`):
 a real run of the tool in a lab engagement -> the evidence row -> the **real builder** -> an observation set
@@ -566,6 +573,9 @@ the owner opens a new registration (it would need its own sampling rules; DP-15 
    mechanism in use).
    [2026-10-28] For nmap, report this separately by scan type (`connect`, `version`, `ping`).
 6. Stranded states: tasks left `claimed`, proposals left at `received`.
+7. For ping scans, the number of entries in `hosts` against the number of "Host is up" lines in the raw artifact's
+   stdout, per run: a check of the [D] that a ping scan's `hosts` holds only responders. It presupposes that the
+   harness's role can read the raw artifact, which is **[N]** (section 3, check G). Fields only; no threshold.
 
 **Candidate fields of a pre-registration** (fields, not values): unit of analysis (proposal, task,
 engagement); the population and how engagements are chosen; number of engagements, rounds and tasks, fixed
@@ -703,3 +713,5 @@ because it adds no code.
 12. **More mutation candidates for the nmap builder** (same condition: written when code is written): (d) the
     builder takes `hosts` for a connect or version scan; (e) the builder takes `hosts` when the scan type is
     unknown. Each must make some property test fail.
+13. **One more mutation candidate for the nmap builder** (same condition): (f) the builder reads the scan type from
+    the proposal's target. It must make some property test fail.
