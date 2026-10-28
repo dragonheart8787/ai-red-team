@@ -4,6 +4,8 @@
 No decision is taken here. Every decision point lists its options, what each costs, and a
 recommendation, and is marked **pending the owner** (待負責人). A recommendation is a lean, not a decision.
 
+[2026-10-28] Where a decision point below carries a line "chosen: ...", that choice was made by the review layer under the owner's standing delegation and the owner may veto it; the options and the Lean above it are unchanged. D69-3a, D69-3b and section 10 have no such line and remain pending the owner.
+
 Tags: **[R]** read (a file, a document or a search result, with the place named); **[E]** executed (run
 by me); **[D]** derived (reasoned from [R] facts, not observed); **[N]** not established. This note ran
 nothing against a database, a daemon or a model, so it has no [E] about the system: everything about
@@ -109,6 +111,8 @@ only by `scheduler_admin`; read access for another role is a grant I did not che
 means a second operator act per engagement. *Lean:* an own list, so that enrolling an engagement for
 dispatch never silently starts proposals in it [D].
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-1 (A), a separate process; D69-1b, the harness's own enrolment list.
+
 ## 2. Where tasks come from
 
 **Facts.**
@@ -137,6 +141,8 @@ the loop and makes P1's population operator-shaped, not planner-shaped [D]. (C) 
 recorded. *Lean [D]:* (A) for the shadow that matters (section 8), because the question P1 answers is about
 what a planner and a Worker do together; (B) is a legitimate first smoke of the loop's plumbing.
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: (A), the Supervisor.
+
 **Decision D69-2b: how is 5.122 not repeated?** *Pending the owner.* The lesson is that the schema text is
 the producer's contract and a vague sentence in it became 58 wrong tasks. Options:
 (1) a deterministic check in the harness before `create_task`: a `cidr` target without a prefix length is
@@ -148,6 +154,8 @@ separate rule for every future change to a prompt or schema description of a rol
 is a numbered change with a pinned test and a re-run of the P1 shadow, never a silent edit (the rule the
 plan already states for the validator, `D68_IMPLEMENTATION_PLAN.md` 7.3). *Lean [D]:* (1) now, (2) as a
 separate decision of the owner's.
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: (1), the harness checks a prefix-less `cidr` itself before `create_task`; (2) stays a separate question.
 
 **What the task carries.** `goal`, `action`, `canonical_target`, `identity_key`, `scope_object_id`,
 `created_by` (= the Supervisor's `agent_id`) and the audit event [R]. P1 compares a proposal's action and
@@ -175,7 +183,7 @@ which is why the identity a task is stored under decides what P1 later calls a m
 | nmap (`network.scan`, `network.recon`) | `hosts` (list), `ports`, `open_ports` (`nmap.py:252-258`) | banners, service strings (`untrusted_content: True`) |
 | HTTP (`web.get`, `web.post`) / browser (`web.render`) | `status_code`, `headers`, `body_excerpt`, `location_header`; the endpoint actually reached is described in `worker_base` as the structural identity | `candidate_targets` (extracted from the body: "Discovery input, not authorization", `_http.py:315`) |
 | AD collector (`ad.collect`) | graph `nodes` of `{identity_type, identity_value, kind}` (`ad_collector.py:499`) | -- |
-| semgrep / gitleaks (`code.scan`, `code.secrets`) | **[N]** I did not read their derived views | scanned source is untrusted |
+| semgrep / gitleaks (`code.scan`, `code.secrets`) | see the bullet "Read 2026-10-28 (check C)" below [R]: no field names the repository | scanned source is untrusted |
 
 * ACCEPTANCE 5.27 (decided at D54): a Security Graph node "is evidence that a directory contains a record; it
   is not evidence that the host or identity it names is alive or reachable, and it is never by itself
@@ -186,6 +194,20 @@ which is why the identity a task is stored under decides what P1 later calls a m
   harness, this must be re-verified end to end -- an evidence row through the real builder, a lure in an
   in-range spelling in its untrusted content, through `propose_action`, ending in `HUMAN_APPROVAL`" [R].
 
+* Read 2026-10-28 (check C), the evidence views of `code.scan` and `code.secrets` [R]. Semgrep
+  (`tool_gateway/adapters/semgrep.py:277-338`): `untrusted_content`, `first_party_source_content`, `finding_count`,
+  `findings_by_severity`, `notable_findings` (each `check_id`, `path`, `start_line`, `end_line`, `severity`,
+  `message`, `snippet`), `stderr_excerpt`. Gitleaks (`tool_gateway/adapters/gitleaks.py:303-363`):
+  `untrusted_content`, `first_party_source_content`, `scan_complete`, `incomplete_reason`, `commits_scanned`,
+  `history_complete`, `finding_count`, `findings_by_rule`, `notable_findings` (each `rule_id`, `path`,
+  `start_line`, `commit`, `entropy`), `omitted_findings`. Neither view holds a host, an address or the repository's
+  location or branch. The target is a `repo`: a scope object's value is `<location>#<branch>`
+  (`control_plane/orchestrator/git_fetch.py:23-30`), split on the last `#` (`parse_repo_scope_value`, `git_fetch.py:53-62`);
+  `repo` is one of `TARGET_TYPES` (`worker_base.py:88`). For a `repo` target, `_discovery_provenance` judges
+  "established" by the location without the branch (`worker_base.py:537-` docstring), and an observed-identity
+  string is read as a repository location if it contains `://` (`_untyped_repo_keys`, `worker_base.py:378-381`).
+  What a `code.*` run structurally observes about the repository is therefore not a field of its view **[N]**.
+
 **This design satisfies that trigger** [D]: the harness would be the first production code to construct
 `Observation` objects.
 
@@ -194,7 +216,7 @@ rule from a row of the table above:
 (1) nmap: each address in `hosts` (canonical form) and, if the policy compares ports, host:port forms [N: which
 form the comparison uses was not read]. (2) HTTP / browser: the host (and URL) the transaction actually
 reached; never a `candidate_targets` entry. (3) AD graph: per 5.27, a node's identity only when a structural
-observation of the same identity exists in this engagement. (4) `code.*`: **[N]** needs the views read first.
+observation of the same identity exists in this engagement. (4) `code.*`: **[N]** the views have been read (bullet "check C" above) and name no repository; the rule is still open.
 Cost of each rule: too wide a set turns a lure into an "observed" identity and silences the escalation
 (fails open); too narrow a set escalates ordinary work to a person (fails closed, costs approvals). *Lean
 [D]:* the narrowest rule each row of the table supports, stated per tool in code and pinned by a test per
@@ -231,6 +253,8 @@ The ADR records a read-then-use gap between loading and deciding (X15), read, no
 than this deliverable. Costs: (A) is a static guarantee only; (B) adds a field to a value object; (C) is a
 change to the pipeline. *Lean [D]:* (A), with (B) only if the owner wants a runtime guarantee. A policy
 loaded per proposal, not cached, as the scheduler does [R: D62 design].
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: (A), one loader function pinned by an AST test; (B) not taken.
 
 ## 5. Failure behaviour
 
@@ -271,6 +295,8 @@ loaded per proposal, not cached, as the scheduler does [R: D62 design].
 bounded number of times, every attempt counted. (b) changes what a "failure rate" means (a retry is a
 resample, and DP-15's lesson is that sampling rules must be fixed before looking) [D]. *Lean [D]:* (a).
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-5a, the closed list as tabled, and never re-ask a stopped model call (option (a)).
+
 **Decision D69-5d: a bound on failed rounds.** *Pending the owner.* 5a's table says "continue" on a failed
 Supervisor or Worker call with no bound; a run of consecutive total failures would loop silently [D].
 Options: (a) a hard cap on rounds and on model calls per run, the values registered before the first run;
@@ -279,17 +305,23 @@ them failed, N registered before the first run and not adjusted from data; (c) n
 *Lean [D]:* (a)+(b). Whether to stop does not depend on the kind of failure: a classifier stop counts as a
 failure like any other and is not re-asked.
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-5d (a)+(b); the caps and N are registered before the first run and are not adjusted from data.
+
 **Decision D69-5b: a proposal stranded at `received`.** *Pending the owner.* Options: (1) stop the service and let a person
 decide (the fault may be deterministic; the scheduler's reasoning for "do not restart blindly" applies,
 [D]); (2) retry once under the same idempotency key, then stop; (3) leave it to the reconciler. *Lean [D]:*
 (1) in v0. Note the key must be derived from the task and the attempt, so a restart does not make a second
 proposal for the same task [R: ADR D60 addendum].
 
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-5b (1), stop the service and let a person decide.
+
 **Decision D69-5c: a task claimed and never completed (0c).** *Pending the owner.* The loop completes every task it claims on
 every path it controls; a crash between claim and complete strands the task in `claimed` and nothing
 requeues it [R]. Options: accept and report (a restart does not pick it up); a manual operator query
 (`query_tasks` shows `lease_expires_at`) [R]; build the sweeper (outside this deliverable). *Lean [D]:*
 accept in v0 and register the gap (section 12).
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-5c, accept and register the gap (section 12).
 
 ## 6. Credentials (D58-15 is NOT built)
 
@@ -299,6 +331,29 @@ accept in v0 and register the gap (section 12).
 its own initiative" (`function_api.py:565-568`). The scheduler dispatches only the four actions in
 `SUPPORTED_ACTIONS`, and skips anything else with `action_not_supported_v0` [R]. ACCEPTANCE 5.59 notes that
 `code.*` on private repositories has 5.57's limit [R].
+
+**Facts added 2026-10-28 (read-only checks A and B).**
+* Where the candidates come from [R]. A `ScopeCandidate` is `scope_object_id`, `type`, `value`, `allowed_actions`,
+  "passed in by whoever assembles the run, read from the Scope Registry" (`agents/llm/worker_base.py:113-135`).
+  Every harness script that builds them does it the same way: `candidates_for` in `scripts/live_run/d40_three_role.py:270-278`
+  (and `d17_supervisor.py:184-192`; inline in `d13_worker.py:386-392` and `d15_lookalike.py:324-330`) copies
+  `allowed_actions=tuple(s.allowed_actions)` unchanged from `list_scope_objects(conn)`
+  (`control_plane/registry/scope_registry.py:80-87`), which returns every live scope object of the engagement.
+  The registry's `allowed_actions` are written at registration (`register_scope_object`, `scope_registry.py:90-179`,
+  as `d40`'s `setup_engagement` does) and are what the Authorization Resolver and OPA compare an action with
+  (`control_plane/canonicalizer/authorization.py:193`; `authz.rego:57`).
+* Consequence for where to filter [D]. The in-process checks of `_to_proposal` (`worker_base.py:694-700`) and
+  `_to_tasks` (`supervisor_base.py:529-536`) compare only against the candidate's `allowed_actions`; so an action
+  is refused there only if it is absent from the candidate the harness built. A candidate copied unfiltered
+  from the registry lets an excluded action through both checks, and the registry still authorizes it. The
+  filter therefore belongs at the harness's own candidate-building step, before the candidates reach
+  `supervisor.plan` and `worker.propose`; it restricts what the roles may choose, not what the registry authorizes.
+* The fakes do not check [R]. `agents/fake/fake_worker.py:39` `propose(self, *, task, task_id=None)` takes no
+  candidates and writes `authorization` from `task.scope_object_id`; `agents/fake/fake_planner.py:23-34` `plan`
+  takes `candidates` and "return[s] the script, ignoring everything it was told". Neither compares a scope
+  object or an action with any list. [D] A test that uses the fakes does not exercise the filter; the filter is
+  testable with the real classes without a model, because `_to_proposal(payload, candidates=...)` and
+  `_to_tasks(payload, candidates=...)` take a payload dict.
 
 **Decision D69-6: how does v0 exclude credentialed actions, fail-closed?** *Pending the owner.* Options
 for the set of actions v0 may propose: (A) the scheduler's four -- `SUPPORTED_ACTIONS = ("network.scan", "network.recon", "code.scan",
@@ -323,6 +378,16 @@ Worker or Supervisor implementation (the fakes in `agents/fake/`) makes the same
 are no substitute for the harness's own refusals at `create_task` and `propose_action` (points 2 and 3), which
 remain a defence-in-depth choice [D].
 
+**Requirement (basis: the facts added above) [R]/[D].** The candidate list must be filtered by the action
+allowlist on `allowed_actions` when it is built, and a test must pin that; otherwise the in-process checks of
+`_to_proposal` and `_to_tasks` let an excluded action through.
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-6 (A'), v0 proposes only `network.scan` and `network.recon`; `code.scan` and `code.secrets` are
+left for a later decision after D69-3a (4) is settled. Reason: the Observation rule for `code.*` is **[N]**
+(section 3: the two views carry no field naming the repository), so its end-to-end check (D69-3b) cannot
+be written yet. `web.*` and `ad.collect` stay out (D69-3a's HTTP/browser rules are then not exercised in v0,
+as noted above).
+
 ## 7. Concurrency and quotas
 
 **Facts.** The scheduler is serial (concurrency 1) [R]. `Budget.max_concurrency` is carried and recorded and
@@ -342,6 +407,8 @@ in parallel -- needs a cap, the pool ceiling, and the `NetworkInUse` handling. (
 is unread and does not rely on it; a run's concurrency is a property of the harness, stated in its
 start-up banner, not of the capability. Because the dispatcher is another process that also starts
 containers (D69-1 option A), "serial" holds for the proposer, not for the system [D].
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-7 (A), serial.
 
 ## 8. Relation to P1 and Q1
 
@@ -373,6 +440,8 @@ measurement; no person sees any P1 reason; (B) the same, plus a registered compa
 scale runs (`D68_S7_P1_SCALE.md`); (C) shadow = the 4-hour CI soak with the harness inside it. *Lean [D]:*
 (A) with the population and look rules registered before the first run. Q1 stays out of the shadow unless
 the owner opens a new registration (it would need its own sampling rules; DP-15 stage 1 is the precedent).
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-8a (A), both switches off.
 
 **Candidate measurements for the shadow (no threshold set, none proposed).**
 1. Relation share: of proposals, how many `matches_task` (and with sub-cause `subset_of_task_range`),
@@ -430,6 +499,8 @@ continues until its budget ends [R: 5.24], and a model call that has already sta
 state exactly the above and nothing more; (B) build the active kill (D58-16 / 5.24 option B) before the
 harness is used on a real engagement -- outside this deliverable; (C) do not run the harness unattended
 until (B). *Lean [D]:* (A) now, with (C) as the owner's call for real engagements.
+
+[2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-9 (A), describe the kill's limits as they are.
 
 ## 10. Language fit (no conclusion assumed)
 
@@ -506,5 +577,5 @@ because it adds no code.
 9. **Pre-registration for the shadow (D69-8a)** -- a new document with the fields of section 8, registered by
    a commit before the first run, with guards as in DP-15.
 10. **Open questions for the owner**, in order of what blocks what [D]: D69-1 (where it runs) -> D69-6 (action
-    set) -> D69-3a (identities per tool; needs the `code.*` views read) -> D69-2a/2b -> D69-5a/5b -> D69-5d -> D69-4 ->
+    set) -> D69-3a (identities per tool; the `code.*` views are read, section 3, rule (4) still open) -> D69-2a/2b -> D69-5a/5b -> D69-5c -> D69-5d -> D69-4 ->
     D69-7 -> D69-8a -> D69-9 -> the language (section 10).
