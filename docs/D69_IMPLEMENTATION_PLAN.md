@@ -76,6 +76,82 @@ line]. These are what the design did not settle and a stage cannot start without
 | **P-5** | Where do mutation entries live and how are they named | H2 | follow D68: `scripts/mutations_d69.py`, ids `D69-H<stage>-<n>` | a name only; provisional [D] |
 | **P-6** | Source of the nmap view fixtures for H3's tests | H3 | (a) hand-written stdout strings fed to the real `nmap.derive_view` (a pure function); (b) a recorded run | no CIDR `-Pn` stdout is stored anywhere in the repository [R: design section 3, check B], so (a) means the fixtures are constructed, not recorded, and must say so in the tests; (b) needs a run of nmap, which this plan does not authorize |
 | **P-7** | Does H7 include a soak run with the harness inside (design acceptance 11.10)? | H7 | yes, a separate stage H7b that changes the soak driver; or no, left to a later plan | H7b touches `scripts/soak/` and a 4-hour runner [D]; not included below |
+| **P-8** | Which evidence rows, and how much of their content, become a task's `Observation`, and the character ceiling applied to that content | H3, H5 | not chosen; see "P-8" below for the read-only facts | not part of H1-H8's chosen lines; a value, if any, is registered before the first non-test run and not adjusted from data [D] |
+
+### Chosen by the review layer
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] The P-1..P-7 table above and
+its "All are pending the owner" sentence are unchanged by this subsection. Where an item below names a check it
+depends on, the choice holds only as long as that check continues to say what it says now; if a later stage's own
+reading disagrees, the item reverts to pending the owner rather than being argued around.
+
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-1 (a):** keep
+  `cyberorch_app`. Verification D (read-only, this round) found that `create_task`, `claim_task`, `complete_task`,
+  `propose_action` and `load_effective_policy` each take a `Connection` and choose no role themselves
+  [R: `control_plane/api/function_api.py:167-169, 235, 268-270, 510-529`; `control_plane/policy/layers.py:638-640`];
+  every production call site binds them through `engagement_scope`, which opens as `cyberorch_app`
+  [R: `control_plane/state/db.py:356-361`]. `cyberorch_app` holds INSERT/SELECT (and, on most tables,
+  UPDATE/DELETE) on all public tables by grant [R: `db/migrations/versions/0001_core_schema.py:410-417`], while
+  `scheduler_reader` is described as "the scheduling decision's inputs, SELECT only"
+  [R: `control_plane/state/db.py:99-100, 203-204`] -- too narrow for the three writers among these five functions.
+  This choice holds only as long as H1's own reading (item 1, P-1) confirms the same at build time; if H1 finds a
+  write path that needs more than `cyberorch_app`'s grants, this reverts to pending the owner.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-2:** a new top-level
+  package `harness/`, with its own import-direction test in the style of the existing one
+  [R: `tests/test_scheduler_structure.py:129-135`,
+  `test_nothing_the_agents_or_tools_run_can_import_the_scheduler`]: `harness/` may import `agents.*` and
+  `control_plane`'s function API; no module under `agents/` or `control_plane/` may import `harness`.
+  Verification E (read-only, this round) found no existing fence between `agents/` and `control_plane/` as wholes
+  -- `control_plane` imports `agents.base_agent` in five non-test files
+  [R: `control_plane/api/approved_dispatch.py:53`, `control_plane/api/function_api.py:68`,
+  `control_plane/plan_fit/goal_fit.py:29`, `control_plane/plan_fit/relation.py:51`,
+  `control_plane/plan_fit/shadow.py:24`] and `agents` imports `control_plane.config`,
+  `control_plane.plan_fit.*`, `control_plane.canonicalizer.*` and `control_plane.orchestrator.git_fetch` in five
+  non-test files [R: `agents/fake/fake_plan_fit.py:18`, `agents/llm/plan_fit_base.py:48`,
+  `agents/llm/plan_fit_validators.py:32-33`, `agents/llm/policy_reviewer.py:56`,
+  `agents/llm/worker_base.py:68-74`] -- so this is a new, harness-specific rule, not a generalization of one
+  already enforced, and it does not ask the existing agents/tool_gateway -> `control_plane.scheduler` fence to
+  change. If H2's own import-direction test cannot be written without touching an existing import, this reverts to
+  pending the owner.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-3 (a):** the enrolment
+  table with its own operator CLI. H5 is written against a read interface for the enrolment list, with an
+  in-memory fake used by every H5 test that is not H5b itself; H5b (the table, its migration, round-trip test and
+  grant test) is completed before the loop is run outside a test.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-5:** keep the plan's own
+  provisional naming (`scripts/mutations_d69.py`, ids `D69-H<stage>-<n>`), unchanged.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-6 (a):** hand-written
+  stdout fed to the real `nmap.derive_view`; every such fixture is labelled in its test as constructed, not
+  recorded.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-7:** no H7b. The soak
+  driver is not touched by this plan; a harness-inside-soak run is left to a later plan.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-4** is not chosen here
+  and stays exactly as the table above states it: pending the owner, outside H1-H8.
+
+### P-8 (new; pending the owner -- not chosen)
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Which evidence rows become a
+task's `Observation`, and the character ceiling on the content handed to the Worker, are not decided here; P-8 in
+the table above records only that the question exists. Facts from verification B (read-only, this round): the
+production `query_evidence(conn, *, evidence_id)` takes a single `evidence_id` and returns `derived_view` only,
+never the raw artifact [R: `control_plane/api/function_api.py:1181-1192`]; it has no notion of "an engagement's
+evidence" or "evidence for a target" -- no production function that lists evidence by engagement or by target was
+found [N: none found in this reading]. The `evidence_by_target` dict H3/H5 would need something like exists only
+in the `d40` script, keyed by the target's identity value from that single run's own in-memory bookkeeping, not
+read back from the database [R: `scripts/live_run/d40_three_role.py:444-449`]. `max_observation_chars` is a
+script-only CLI flag, not a production setting, and defaults to `None` -- no truncation -- when not passed
+[R: `scripts/live_run/d40_three_role.py:354, 368-369, 789`].
+
+Options (none chosen): (a) one evidence row per task, by the `run_id` recorded on the task's own tool run -- no
+column linking `tasks` to `tool_runs` was found in this reading [N], so this needs new state, not only new code;
+(b) every evidence row for the engagement whose target matches the task's target, read fresh each round -- needs
+the engagement-listing function verification B found missing, and its selection rule would need the same care
+D69-3a already gives the nmap builder; (c) no truncation, as the `d40` script defaults to -- fail-open by size, an
+uncapped derived view reaching the Worker; (d) a fixed character ceiling applied identically on both sides of the
+Worker boundary (the content given to the Worker and the content `_discovery_provenance` compares) -- fail-closed
+by size, but a ceiling applied to only one side (as the `d40` script's own slice is, which trims only the copy
+placed in `Observation.content` and not any comparison copy) risks exactly the kind of mismatch H3-c already tests
+for. If a ceiling is chosen, its value is left blank here and is registered, the same way as the caps in H5
+(D69-5d), before the first non-test run -- not adjusted from data afterward.
 
 ## 2. H1 -- pre-checks
 
@@ -130,6 +206,13 @@ against the filtered candidates and passes against the unfiltered ones (the cont
 matters); (2) a payload naming an allowed action passes; (3) a candidate whose only actions are excluded is not
 offered; (4) the two harness-side refusals count and do not retry. The fakes (`agents/fake/`) do not check candidates
 [R: design check B], so no test relies on them for this property.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Test (4) above is written as
+two tests, not one: (4a) a Supervisor task naming an excluded action is refused before `create_task` and counted,
+exercising only H2-2; (4b) a Worker proposal naming an excluded action is refused before `propose_action` and
+counted, exercising only H2-3. Removing either refusal then fails only its own test, not both, so the mutation
+catalogue's claim that H2-2 and H2-3 each "make test (4) fail" is read as (4a) and (4b) respectively, not as one
+shared test.
 
 **Does not.** Add a loop, read a database, change the registry, or change what the registry authorizes (the filter
 restricts what the roles may choose, not what is authorized [R: design D69-6 facts]).
@@ -296,6 +379,23 @@ harness dispatch to the same range [D: design D69-1 (A) cost]; whether `propose_
 and what the loop's cap then means **[N]**; the stranded `claimed` task residue. **How it stops.** Any mutation that
 no test catches, or a test of the loop that needs a model, stops the stage.
 
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Verification A (read-only,
+this round) found: for an ALLOW, `propose_action` dispatches inline, in the same call -- `_decide` moves an ALLOW
+to `DECIDED` [R: `control_plane/api/function_api.py:844-850`], and `_drive`'s loop continues in the same call
+through `_issue` and `_dispatch` [R: `control_plane/api/function_api.py:674-698`]; `_dispatch` calls
+`_dispatch_for_action`, which runs the container and commits the evidence before returning
+[R: `control_plane/api/function_api.py:1050-1080`]. So **the loop's call to `propose_action` for an ALLOW blocks
+until that tool run's evidence is committed or the call fails**; it does not return early to let the loop start a
+second task while the first's container is running -- the mechanism behind the design's already-chosen D69-7 (A),
+serial. This narrows, without editing, the "whether `propose_action` blocks on a long dispatch" question in the
+Risks paragraph above: it does block, for an ALLOW; the worst-case duration of that block remains **[N]**. For a
+`DENY` or `HUMAN_APPROVAL`, `_decide` returns an `ActionOutcome` immediately
+[R: `control_plane/api/function_api.py:901-907`] -- the call does not wait for a person, and **no evidence exists
+yet** for that proposal; evidence for a `HUMAN_APPROVAL` proposal is produced later only if a person approves and
+the scheduler calls `dispatch_approved` through `control_plane/scheduler/execute.py`
+[R: `control_plane/scheduler/execute.py:59-67`] -- the harness does not drive that step itself, and H3's builder
+has nothing to build from until it happens.
+
 ## 7. H6 -- the operating description
 
 **Goal.** Write down, in an operator document (`docs/D69_OPERATIONS.md`, name provisional), how to start, stop and
@@ -316,6 +416,15 @@ equals design section 9; `tests/test_acceptance_numbering.py` and `tests/test_ru
 **Mutations.** None (no code). **ACCEPTANCE.** 5.24 and D58-16 unchanged; the document is cited from them only if the
 owner asks. **Risks / [N].** The document can drift from the code; H5's banner and exit codes are the things to
 re-read. **How it stops.** If H5 changes after H6, the document is re-read before the next stage closes.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Line-number correction
+(verification C): the design document's reference to `headless.py:175` for where the Claude subprocess is started
+points, in this tree, at `stdin=subprocess.DEVNULL,`, not the call itself. The call statement is
+`completed = runner(` at line 165, and its keyword arguments run through line 177
+[R: `agents/llm/headless.py:165-177`]. This plan's own earlier citation at section 11, `headless.py:176` for
+`timeout=timeout_seconds`, is unaffected -- line 176 does read `timeout=timeout_seconds, check=False,` in this
+tree [R: same lines] -- so only the design document's line number needs correcting, and this plan does not edit
+that document.
 
 ## 8. H7 -- laboratory end to end, and the re-verification of ACCEPTANCE 5.28
 
@@ -346,6 +455,12 @@ is the owner's to change** (this plan does not say Closed). **Risks / [N].** It 
 local machine lacks some images); a lab nmap scan's real stdout is not stored today, and H7 does not store one by
 itself (recording it is a separate act needing authorization to run nmap). **How it stops.** A lure reaching `ALLOW`
 stops everything after it and is reported as a defect of H3 or H5.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] H7's own authorization
+(section 12) must name both nmap and the lab's Docker sandbox explicitly, not only the harness's code: per
+verification A (see the note at the end of H5), the lab's real tool run that produces the evidence row H3's
+builder reads happens synchronously inside the ALLOW path of a prior `propose_action` call, so H7 cannot get an
+evidence row to test the builder against without that authorization already covering a real dispatched run.
 
 ## 9. Acceptance conventions (from D68, applied to every stage)
 
@@ -456,3 +571,10 @@ the shadow run].
 10. **The shadow runner and its integrity guard** -- a separate plan after H8, with its own mutations; named here so it
     is not forgotten (section 10).
 11. **The owner's answers P-1 to P-7**, recorded where the owner prefers, before the stages they gate start.
+12. [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-8**: which evidence
+    rows, and how much of their content, become a task's `Observation`, and the character ceiling applied
+    identically on both sides of the Worker boundary; no value is proposed here.
+13. [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **A new row, Class C:**
+    the harness cannot produce evidence for a `HUMAN_APPROVAL` proposal by itself -- evidence after a human
+    approval depends on the scheduler calling `dispatch_approved` (verification A); the harness's own loop
+    produces evidence only for proposals it dispatches inline (ALLOW).
