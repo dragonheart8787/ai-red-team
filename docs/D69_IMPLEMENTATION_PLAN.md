@@ -96,6 +96,13 @@ reading disagrees, the item reverts to pending the owner rather than being argue
   [R: `control_plane/state/db.py:99-100, 203-204`] -- too narrow for the three writers among these five functions.
   This choice holds only as long as H1's own reading (item 1, P-1) confirms the same at build time; if H1 finds a
   write path that needs more than `cyberorch_app`'s grants, this reverts to pending the owner.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-1, a note on cost:**
+  verification D (the prior round) is what showed all five functions take a bare `Connection` and every
+  production call site is `cyberorch_app`; that is a fact about today's code, not a cost of the choice. The cost
+  is this: the proposing side (this harness) and the dispatching side (already-approved execution, through
+  `dispatch_approved`) would then share one database role with no role-level separation between them -- a defect
+  in either side's queries reaches the same grants as the other's. P-1 (a) still stands on verification D; the
+  separation, if wanted, is a P-1 (b) the owner can still choose.
 * [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-2:** a new top-level
   package `harness/`, with its own import-direction test in the style of the existing one
   [R: `tests/test_scheduler_structure.py:129-135`,
@@ -113,6 +120,19 @@ reading disagrees, the item reverts to pending the owner rather than being argue
   already enforced, and it does not ask the existing agents/tool_gateway -> `control_plane.scheduler` fence to
   change. If H2's own import-direction test cannot be written without touching an existing import, this reverts to
   pending the owner.
+* [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-2, a correction:** the
+  P-2 row's own premise -- "D62's fence says no module under `agents/` or `tool_gateway/` imports
+  `control_plane.scheduler`" -- was read above as implying a one-directional relationship between `agents` and
+  `control_plane` as wholes. Verification E (this round) found that premise does not hold: `control_plane` imports
+  `agents.base_agent` in five non-test files and `agents` imports several `control_plane` submodules in five
+  non-test files (both lists cited above), each direction already present today. Read strictly, this is exactly
+  the condition this subsection itself names -- "if a later stage's own reading disagrees, the item reverts to
+  pending the owner" -- so P-2's choice does not stand on that premise as first written. It is kept here only on a
+  narrower ground: no existing module imports a package named `harness`, and the existing fence names only
+  `control_plane.scheduler`, not `control_plane` as a whole, so a harness-specific import-direction test (`harness`
+  may import `agents`/`control_plane`; neither may import `harness`) does not contradict anything verification E
+  read. **This narrower ground is offered, not decided: the owner's explicit confirmation or veto is needed before
+  H2 relies on it.**
 * [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-3 (a):** the enrolment
   table with its own operator CLI. H5 is written against a read interface for the enrolment list, with an
   in-memory fake used by every H5 test that is not H5b itself; H5b (the table, its migration, round-trip test and
@@ -152,6 +172,15 @@ by size, but a ceiling applied to only one side (as the `d40` script's own slice
 placed in `Observation.content` and not any comparison copy) risks exactly the kind of mismatch H3-c already tests
 for. If a ceiling is chosen, its value is left blank here and is registered, the same way as the caps in H5
 (D69-5d), before the first non-test run -- not adjusted from data afterward.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] chosen principle: (i) the
+observation set handed to provenance covers every evidence row that any role saw in producing the proposal; (ii)
+the Supervisor and the Worker draw on one shared, bounded evidence window, and the Supervisor sees no more than the
+provenance set; (iii) rows are all of the engagement's evidence, newest first, up to a cap, not only same-target
+rows; (iv) the row count and the per-row character cap are [N], pending the owner, registered before the first run
+and not adjusted from data. Reason [D]: provenance escalates only on a target named in the content of an
+observation it is given, so a smaller set escalates less (fail open); the cost of the larger set is more untrusted
+text in the prompt and more approvals (fail closed).
 
 ## 2. H1 -- pre-checks
 
@@ -283,6 +312,33 @@ measurement 7 is meant to check and H3 cannot (no run) **[N]**; whether the harn
 (not needed by the rule). **How it stops.** If the chosen role cannot read `tool_runs`, the builder cannot establish
 the scan type and the FINAL rule makes it add nothing: stop and report to the owner rather than widen the rule.
 
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Given verification F and G
+(see the note at the end of H4): if the harness's own Supervisor input gives evidence content the same way `d17`'s
+`build_state` does, H3's builder and H4's state-assembly read the same evidence, and H3's observation set for a
+task must be built from the same evidence window the Supervisor saw for that task, not filtered down to the task's
+own target alone -- a same-target filter would let through exactly the Supervisor-side exposure verification F and
+G found. Two mutation candidates follow from this (names provisional, not yet in a catalogue): **H4-4** the
+evidence given to the Supervisor is allowed to exceed what the Worker's observation set (and so
+`_discovery_provenance`) covers for the resulting task -- a test asserting containment (every evidence row the
+Supervisor saw for a task is in that task's observation set) must fail; **H3-g** the builder's row selection
+filters evidence to the task's own target rather than the engagement's shared window -- a test built on
+verification F/G's scenario (a lure named only in an evidence row for a *different* target the Supervisor was also
+shown) must fail. Both are additions to H3's and H4's own mutation lists above, not replacements.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Verification B and I
+(read-only, this round) found that getting from a task to the right evidence rows and their scan type needs new
+reading code, not a reuse of what exists: `query_evidence` returns `derived_view` but not
+`tool_runs.normalized_params`, so the scan type still needs a second, new read of `tool_runs` by `run_id`
+[R: `control_plane/api/function_api.py:1181-1192`]; no non-test production code anywhere reads `normalized_params`
+back out of `tool_runs` for this purpose -- the only production readers of `evidence`/`tool_runs` found are
+single-row, by-id lookups inside `function_api.py`, `control_plane/audit/query.py` and
+`control_plane/evidence/store.py`, none of which exposes `normalized_params` [R: see verification I].
+**The harness must not rely only on the in-process `ActionOutcome.evidence_id` of the call that produced it**:
+that value lives only in the caller's memory for that one call and is lost on a restart, and it is never populated
+at all for a proposal whose evidence came from a `HUMAN_APPROVAL` the scheduler later dispatched (verification A,
+H5's note) -- the harness was not the caller of that `dispatch_approved` call and holds no `ActionOutcome` for it.
+H3 and H4 therefore need their own read, by task or by engagement, not a reuse of a call-scoped value.
+
 ## 5. H4 -- the task source
 
 **Goal.** The Supervisor's plan becomes tasks through the product's `create_task`, with the harness's own check for a
@@ -315,6 +371,26 @@ count assertion must fail.
 canonicalizer question stays open. **Risks / [N].** `build_state` is a script function whose production equivalent
 is new code over `query_*`; `overlaps_with` and `status_assessment` instability (design D69-2a) are not addressed.
 **How it stops.** A classifier stop on the Supervisor is one recorded failure; the round makes no tasks.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Verification F (read-only,
+this round) found that the input H4 reads for the Supervisor is not evidence-free: `StateSummary.evidence` carries
+`EvidenceRecord(evidence_id, tool, derived_view)` -- the full `derived_view` content, not only an id
+[R: `agents/llm/supervisor_base.py:203-219`]; `build_state` fills it from `query_evidence` for a caller-given list
+of `evidence_ids` [R: `scripts/live_run/d17_supervisor.py:222-238`]; `BaseSupervisor.build_prompt` places
+`state.evidence` inside the same `wrap_untrusted(...)` block as the findings, i.e. the Supervisor is shown evidence
+content as untrusted text, exactly as the Worker is [R: `agents/llm/supervisor_base.py:438-474`]. Verification G
+(read-only, this round) found that nothing at the task layer checks for this the way the Worker's path does:
+`_discovery_provenance` has exactly one production call site, inside the Worker's own proposal path
+[R: `agents/llm/worker_base.py:746`]; neither `create_task` nor `BaseSupervisor._to_tasks` performs any check of
+whether a task's `target_value` was introduced by untrusted content -- `create_task`'s body validates only overlap
+and writes the row [R: `control_plane/api/function_api.py:167-227`], and `_to_tasks`'s checks are schema checks
+(`scope_object_id`, `action`, `target_type`, `target_value` non-empty, `goal` non-empty, `priority`) with no
+provenance step [R: `agents/llm/supervisor_base.py:481-560`]. **So a lure can enter through a Supervisor-created
+task with no provenance check at the task layer; the only place introduced-by-untrusted is judged is the Worker's
+observation set, which therefore must cover at least what the Supervisor was shown when it wrote the task's
+target.** If H4's own evidence input is ever a strict superset of, or disjoint from, H3's observation set for the
+same task, this exposure is not covered by H3's test suite; see the mutation candidates H4-4 and H3-g at the end
+of H3 above.
 
 ## 6. H5 -- the proposing loop skeleton
 
@@ -396,6 +472,28 @@ the scheduler calls `dispatch_approved` through `control_plane/scheduler/execute
 [R: `control_plane/scheduler/execute.py:59-67`] -- the harness does not drive that step itself, and H3's builder
 has nothing to build from until it happens.
 
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] To restate plainly: the Risks
+paragraph's own question above, "whether `propose_action` blocks on a long dispatch", is now **[R]**, not [N] --
+it does block, for an ALLOW; only the worst-case duration of that block stays **[N]**. Verification H (read-only,
+this round) found two further facts about the same blocking call. First, when `propose_action`'s ALLOW path
+reaches `_dispatch_for_action` with the caller's own `sandbox=None` (its default), the dispatch functions it
+routes to construct a **real** `DockerSandbox` themselves -- `sandbox = sandbox or (DockerSandbox(image=adapter_image)
+if adapter_image else DockerSandbox())` [R: `control_plane/orchestrator/dispatch.py:844-845`, the same pattern
+repeated at `1203-1204` and, by `adapter.IMAGE`, at `1532`] -- so **the harness process itself, not only the
+scheduler's, needs a reachable Docker daemon and the sandbox's default image set**; it cannot assume a scripted or
+injected sandbox unless it explicitly passes one, which H5's own tests do and a non-test run must also choose to
+do or not do. Second, the existing scheduler's own SIGTERM handling (the nearest built model for this) sets a
+`threading.Event` that is checked only at the top of its tick loop, before `self.tick()` runs
+[R: `control_plane/scheduler/service.py:125-141`]; a tick already dispatching is not interrupted -- the module's
+own docstring says a decision that cannot be audited stops the service, and a proposal is "dispatched at most once
+per tick" [R: `control_plane/scheduler/service.py:1-13`]. If H5's loop follows the same shape, "finish the current
+task" under SIGTERM can take as long as one dispatch's own duration -- bounded, as H6 already states, by the
+recorded budget ceiling (ACCEPTANCE 5.24, 1,800 s) [R: H6's own citation; the scheduler's signal handling itself
+sets no timer of its own, so the bound is [D], not a new reading of SIGTERM behaviour]. Design D69-9's sentence
+that the harness "does not own a running container", if read as meaning no harness process ever starts or waits on
+one, does not hold for the ALLOW path: `propose_action`'s own process starts the container and blocks on it, per
+this note and the one above.
+
 ## 7. H6 -- the operating description
 
 **Goal.** Write down, in an operator document (`docs/D69_OPERATIONS.md`, name provisional), how to start, stop and
@@ -425,6 +523,14 @@ points, in this tree, at `stdin=subprocess.DEVNULL,`, not the call itself. The c
 `timeout=timeout_seconds`, is unaffected -- line 176 does read `timeout=timeout_seconds, check=False,` in this
 tree [R: same lines] -- so only the design document's line number needs correcting, and this plan does not edit
 that document.
+
+[2026-10-29 review layer, under the owner's standing delegation; the owner may veto] Operator-text consequence of
+the H5 note above: "the harness does not own a running container" is true of the kill switch's own reach (it still
+cannot stop one already started, as this section already says), but it is not true that the harness process never
+starts or waits on one -- for an ALLOW, it does both, inside the same `propose_action` call. H6's document should
+say so plainly rather than imply, by silence, that the harness is a thin requester that only ever waits on a
+result handed to it; for the duration of an ALLOW's dispatch it is also whatever process the container runs
+inside, up to the recorded ceiling.
 
 ## 8. H7 -- laboratory end to end, and the re-verification of ACCEPTANCE 5.28
 
@@ -578,3 +684,17 @@ the shadow run].
     the harness cannot produce evidence for a `HUMAN_APPROVAL` proposal by itself -- evidence after a human
     approval depends on the scheduler calling `dispatch_approved` (verification A); the harness's own loop
     produces evidence only for proposals it dispatches inline (ALLOW).
+14. [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **Design document
+    `docs/D69_PRODUCTION_HARNESS_DESIGN.md` needs a superseded note**: its "the harness does not own a running
+    container" sentence (design section 9) does not hold for the ALLOW path, per verification A and H above --
+    this is a separate, single authorization on that document itself; this plan does not make that edit.
+15. [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **A new row, Class C:**
+    the harness's own rounds and the evidence a round can act on are not synchronous with each other for a
+    `HUMAN_APPROVAL` proposal -- that proposal's evidence exists only after a person approves it and the scheduler
+    calls `dispatch_approved`, outside the harness's own tick (verification A); a later harness round that wants
+    to build on that evidence must read it back, not assume it is available the round after the proposal was made.
+16. [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **Shadow measurement 2's
+    denominator ([N]):** design section 8's measurement 2 is counted over `ALLOW` decisions; if most of a lab
+    engagement's proposals are `HUMAN_APPROVAL` under the effective policy in force there, that denominator is
+    small, and a rate computed on it is correspondingly uncertain -- how small is **[N]**, not measured by this
+    plan.
