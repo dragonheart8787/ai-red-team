@@ -214,6 +214,44 @@ restart does not resume a task created before it -- that task is counted and rep
 does not persist the snapshot; persisting it is a later decision that needs a new schema (section 14). (v) v0's
 Supervisor input carries no `findings` at all.
 
+[2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Correction to (iv):
+"never claimed again" is not implementable as written.** `claim_task` takes no `task_id` and no creator filter --
+it claims whichever queued task the engagement has, by `priority DESC, created_at ASC`
+[R: `control_plane/api/function_api.py:235-263`] -- so a restarted harness on an engagement it has used before
+is **handed** the oldest queued task, including one its own previous run left behind; it cannot decline it at the
+claim, and there is no function anywhere that returns a claimed task to `queued` (H1 report item 6: the only
+`'queued'` occurrence in non-test code is the selection inside `claim_task` itself) [R]. Worse, `complete_task`
+has no precondition at all -- no `status` check, no `owner_agent_id` check, `WHERE task_id = :tid` alone -- so a
+process can close and overwrite the `result_summary` of a task it never claimed
+[R: `control_plane/api/function_api.py:268-279`; H1 report item 6]. The sentence stands as the intent; the
+mechanism for it is the chosen line immediately below.
+
+[2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Chosen: the engagement is
+the harness's alone, and a foreign task stops the service.** (i) In v0 the harness runs on an engagement with no
+other task creator -- no other Supervisor, no operator-seeded task, no second harness. (ii) When the loop claims a
+task whose id is not in this process's own in-memory set, it **stops immediately**, with its own exit code
+distinct from the others (H5's code list): it does not propose for that task, does not complete it, does not try
+to release it (nothing can), and reports it for a person. (iii) **Cost, stated plainly:** restarting on an
+engagement that has already been used will always stop this way as long as one queued task is left over; recovery
+is a new engagement or a person clearing the old one by hand, and **H6 must say so** in the operator text rather
+than leave an operator to discover it. Reason [D]: fail closed. The alternative -- carrying on with a task whose
+provenance snapshot this process never held -- would propose against evidence it cannot show the Worker, which is
+the one thing P-8's chosen line exists to prevent; stopping instead of guessing is the same choice D69-5b already
+made for a fault outside the closed list.
+
+[2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Chosen: `result_summary`
+carries closed-vocabulary text only.** What the harness writes through `complete_task` is assembled from a fixed
+set of tokens (the decision, kernel-generated reason codes, and ids such as `proposal_id`, `run_id`,
+`evidence_id`) and never from tool output, a model's words, or `ActionOutcome`'s free-text fields (`failure`,
+anything carrying an adapter's or an exception's message). The reason this is a decision and not a detail: the
+field returns to a model inside a region marked trustworthy -- `TaskRecord.result_summary` is exported by
+`as_dict` and `build_prompt` places the whole task ledger in the **trusted** header, not inside `wrap_untrusted`
+[R: `agents/llm/supervisor_base.py:128`, `:138`, `:445-449`; H1 report item 8]. Today's four non-test callers
+already stay within that rule except `d17`'s hand-written ledger prose, and none copies tool or model text
+[R: H1 report item 8]. **New mutation candidate H5-11** (name provisional, not yet in a catalogue):
+`result_summary` is built with a free-text field of `ActionOutcome` folded in -> a test asserting every
+`result_summary` the harness writes matches the closed vocabulary must fail.
+
 On `tasks` and `decisions` (verification L, read-only, this round): `DecisionRecord`'s own docstring says its
 fields are "canonical... or a kernel-generated constant" -- no free-text field exists on it
 [R: `agents/llm/supervisor_base.py:144-155`]. `TaskRecord.goal` **is** free text
@@ -268,6 +306,17 @@ line; `tests/test_acceptance_numbering.py` and `tests/test_rule_5_27_docs.py` pa
 
 **Risks / [N].** P-1 may stay open; then H3 and H5 cannot start. **How it stops.** If the owner does not choose P-1,
 the stage ends with the report and nothing else moves.
+
+[2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Items 6 to 10 were added
+to H1 after the list above was written**, and H1's report is `docs/D69_H1_REPORT.md` (the name this section
+already provisionally gave it). The five additions are: 6, `complete_task`'s preconditions and whether anything
+requeues a claimed task; 7, where the Worker's prompt renders `task.goal` and whether the Worker sees any other
+task's text; 8, what today's `complete_task` callers write as `result_summary` and where that field surfaces; 9,
+the existing "new engagement per run" patterns and the steps and roles creating one takes; 10, `DockerSandbox()`'s
+default image and where it is set. Their source is the corrections and chosen lines dated 2026-10-31 in section 1
+(the "never claimed again" correction, the harness-only-engagement stop rule, the `result_summary` vocabulary) and
+the laundering-path risk in section 11 -- each needed a fact H1's original five items did not cover. **H1 ending
+does not start H2**: P-2 is still the owner's (section 1).
 
 ## 3. H2 -- the action allowlist
 
@@ -708,6 +757,19 @@ is a numbered change with a pinned test and a re-run of the shadow (design D69-2
    for the dispatcher (D59) [R]; how the harness treats it in v0 is H5's open point.
 7. **Stranded `claimed` tasks** after a crash are not requeued (design 0a/0c) [R]; v0 reports them.
 8. **The `Observation` correspondence** (escaped form vs raw) is a new place for a fail-open mistake; H3-c exists for it.
+10. [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **The laundering path
+    (pending the owner; nothing is chosen here).** A Supervisor whose own prompt carried untrusted evidence writes
+    a task `goal`. That text is then shown back to the Supervisor in later rounds inside the **trusted** header --
+    the task ledger is in `header`, not in `wrap_untrusted`
+    [R: `agents/llm/supervisor_base.py:445-449`] -- and is shown to the Worker in the Worker's **trusted** half
+    too: `header = {"task": {"goal": task.goal, ...}}`, with only observations wrapped
+    [R: `agents/llm/worker_base.py:631-638`, and the module's own "Only the second goes inside the block" at
+    `:621-624`; H1 report item 7]. So target-influenced wording can re-enter both roles' trusted regions one round
+    later, laundered through a field the platform treats as its own record. **This plan does not address it**:
+    changing either prompt, or the trust split inside it, is a numbered change with its own pinned test and a
+    re-run of anything measured against the old wording, and `goal` is not a field the harness can sanitize
+    without deciding what a goal may say -- an owner's call, not a build detail. Registered in section 14 so it is
+    not carried as a silent assumption.
 9. **Non-determinism** is confined to the later recorded run with the real Worker and to the shadow; CI uses scripted
    roles only, as for the Reviewer [D].
 
@@ -783,3 +845,22 @@ the shadow run].
     from the current process** -- exactly what the P-8 chosen line already relies on, and exactly what a restart
     loses. This is a precondition H5 must build to, not something H5 can read its way around; recorded here so it
     is not left implicit.
+19. [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Correction to item 18
+    above:** its "never claimed again" is not implementable as written, for the reason recorded in section 1 --
+    `claim_task` accepts no `task_id` and no creator filter [R: `control_plane/api/function_api.py:235-263`],
+    nothing returns a claimed task to `queued`, and `complete_task` has no `status` or owner precondition
+    [R: `control_plane/api/function_api.py:268-279`; `docs/D69_H1_REPORT.md` item 6]. What is registered is the
+    replacement: v0's engagement has no other task creator, and a task outside this process's own set stops the
+    service with its own exit code (section 1, the 2026-10-31 chosen line), with the restart cost stated in H6.
+20. [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **A new row, Class B,
+    pending the owner: the laundering path** -- a Supervisor-written `goal`, possibly shaped by untrusted evidence,
+    returns to both the Supervisor's and the Worker's **trusted** prompt halves in later rounds
+    [R: `agents/llm/supervisor_base.py:445-449`, `agents/llm/worker_base.py:631-638`;
+    `docs/D69_H1_REPORT.md` item 7]. Section 11 risk 10 holds the detail; no mitigation is chosen, and changing a
+    prompt is a numbered change this plan does not make.
+21. [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **`result_summary` is a
+    writable text field that reaches a trusted prompt region** [R: `agents/llm/supervisor_base.py:128`, `:138`,
+    `:445-449`], and `complete_task` constrains it in no way
+    [R: `control_plane/api/function_api.py:268-279`]. The closed-vocabulary rule chosen in section 1 applies to
+    the harness only; whether the product should constrain the field itself is the owner's, and is not decided
+    here.
