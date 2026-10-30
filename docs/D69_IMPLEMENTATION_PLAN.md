@@ -133,6 +133,10 @@ reading disagrees, the item reverts to pending the owner rather than being argue
   may import `agents`/`control_plane`; neither may import `harness`) does not contradict anything verification E
   read. **This narrower ground is offered, not decided: the owner's explicit confirmation or veto is needed before
   H2 relies on it.**
+* [2026-10-30 review layer, under the owner's standing delegation; the owner may veto] **P-2 remains
+  unconfirmed.** The owner has not yet confirmed or vetoed the narrower ground above. **H1 does not depend on
+  it** -- P-2 is needed only by H2 (see the table), not by anything H1 does. **H2 does not start until the owner
+  confirms or vetoes it.**
 * [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-3 (a):** the enrolment
   table with its own operator CLI. H5 is written against a read interface for the enrolment list, with an
   in-memory fake used by every H5 test that is not H5b itself; H5b (the table, its migration, round-trip test and
@@ -163,6 +167,12 @@ script-only CLI flag, not a production setting, and defaults to `None` -- no tru
 
 Options (none chosen): (a) one evidence row per task, by the `run_id` recorded on the task's own tool run -- no
 column linking `tasks` to `tool_runs` was found in this reading [N], so this needs new state, not only new code;
+[2026-10-30 review layer, under the owner's standing delegation; the owner may veto] correction (verification M,
+read-only, this round): that "no column" finding holds only for a task's *input* evidence (what the Supervisor was
+shown before the task existed). The evidence a task's own execution *produces* has a real path -- `action_proposals.task_id`
+then `tool_runs.proposal_id` [R: `control_plane/state/models.py:115-135` (`task_id` at line 119),
+`control_plane/state/models.py:205-222` (`proposal_id` at line 209)] -- a two-hop join, not a column on `tasks`
+itself, but a path that exists, unlike the input side.
 (b) every evidence row for the engagement whose target matches the task's target, read fresh each round -- needs
 the engagement-listing function verification B found missing, and its selection rule would need the same care
 D69-3a already gives the nmap builder; (c) no truncation, as the `d40` script defaults to -- fail-open by size, an
@@ -173,6 +183,15 @@ placed in `Observation.content` and not any comparison copy) risks exactly the k
 for. If a ceiling is chosen, its value is left blank here and is registered, the same way as the caps in H5
 (D69-5d), before the first non-test run -- not adjusted from data afterward.
 
+[2026-10-30 review layer, under the owner's standing delegation; the owner may veto] Terminology correction: in
+this plan, "fail open" means a lure escapes the discovery escalation, not that something is merely large. The
+decisive invariant is that the Supervisor, the Worker and `_discovery_provenance` use **the same string**, not the
+size of that string on its own. Read in that sense, options (c) and (d) above are relabelled: no truncation at all
+costs prompt length and approval volume, not safety by itself; it is a **one-sided** truncation -- the Supervisor,
+a Worker's `Observation.content`, or the provenance comparison each getting its own cut of the same underlying
+view -- that is the actual fail-open direction, because that is what can make the three disagree about what a row
+said.
+
 [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] chosen principle: (i) the
 observation set handed to provenance covers every evidence row that any role saw in producing the proposal; (ii)
 the Supervisor and the Worker draw on one shared, bounded evidence window, and the Supervisor sees no more than the
@@ -181,6 +200,43 @@ rows; (iv) the row count and the per-row character cap are [N], pending the owne
 and not adjusted from data. Reason [D]: provenance escalates only on a target named in the content of an
 observation it is given, so a smaller set escalates less (fail open); the cost of the larger set is more untrusted
 text in the prompt and more approvals (fail closed).
+
+[2026-10-30 review layer, under the owner's standing delegation; the owner may veto] A further chosen line,
+making the principle above concrete: (i) each round reads the evidence window **once**: all of the engagement's
+evidence, newest first, up to a cap (the cap is **[N]**, registered before the first non-test run, not adjusted
+from data). (ii) If a ceiling truncates that reading, truncation happens once, and the one resulting string is
+used for all three of: the Supervisor's prompt, every Worker `Observation.content` built in that round, and the
+`_discovery_provenance` comparison -- one string, three uses, not three cuts of the same view. (iii) A task's
+Worker observation set must include the snapshot the Supervisor was shown when it created that task (the H3-g and
+H4-4 mutation candidates above, restated here as a build rule, not only a test). (iv) The harness proposes only
+for tasks it itself created in the current run; the snapshot it read to create them is kept in memory only. A
+restart does not resume a task created before it -- that task is counted and reported, never claimed again. v0
+does not persist the snapshot; persisting it is a later decision that needs a new schema (section 14). (v) v0's
+Supervisor input carries no `findings` at all.
+
+On `tasks` and `decisions` (verification L, read-only, this round): `DecisionRecord`'s own docstring says its
+fields are "canonical... or a kernel-generated constant" -- no free-text field exists on it
+[R: `agents/llm/supervisor_base.py:144-155`]. `TaskRecord.goal` **is** free text
+[R: `agents/llm/supervisor_base.py:113-129`, `goal` at line 124], but it is the platform's own ledger of a goal
+someone wrote when calling `create_task`, not tool-derived content, and `build_prompt` places the whole task
+ledger inside the trusted header, never inside `wrap_untrusted`
+[R: `agents/llm/supervisor_base.py:445-449`, `task_ledger` at line 448] -- so `goal` does not reopen this
+exposure on its own; a Supervisor that has already been steered by untrusted evidence into writing a misleading
+`goal` is a separate risk this plan does not cover. Leaving `findings` out of v0's Supervisor input is this
+round's actual choice, not a fact already true of the code: `FindingRecord.claim` is explicitly "tool-derived"
+text placed inside the untrusted block [R: `agents/llm/supervisor_base.py:167-176`, the docstring at line 169],
+and if the harness ever did carry findings, there is today no production writer of one at all -- `query_findings`
+is the only production function that touches the table, and the only code that ever inserts a row is raw SQL in
+two scripts, one of which says so outright: "There is no finding-writing component yet -- nothing in the control
+plane creates one" [R: `scripts/live_run/d17_supervisor.py:195-215`, the sentence at lines 199-200], and the other
+builds `claim` from a `derived_view` excerpt plus the Reviewer's own flagged words [R: `scripts/live_run/d40_three_role.py:314-342`,
+the `claim` assembly at lines 327-330].
+
+**Reason [D].** The window is sliding and capped; a row the Supervisor saw that the Worker's own window has since
+dropped can carry a lure `_discovery_provenance` no longer has to compare against, silencing the discovery
+escalation -- fail open in the sense corrected above. **Cost.** A restart discards tasks already created and not
+yet claimed (wasted work, not a security cost); a shared, larger window and one string used three ways over it
+cost more approvals and a longer prompt -- the fail-closed direction.
 
 ## 2. H1 -- pre-checks
 
@@ -391,6 +447,18 @@ observation set, which therefore must cover at least what the Supervisor was sho
 target.** If H4's own evidence input is ever a strict superset of, or disjoint from, H3's observation set for the
 same task, this exposure is not covered by H3's test suite; see the mutation candidates H4-4 and H3-g at the end
 of H3 above.
+
+[2026-10-30 review layer, under the owner's standing delegation; the owner may veto] Three more mutation
+candidates, following from the P-8 chosen line above (names provisional, not yet in a catalogue): **H4-5** the
+string truncated for the Supervisor's prompt and the string truncated for a Worker's `Observation.content`/
+`_discovery_provenance` comparison are produced separately -- each side cutting its own copy, rather than one
+string used three ways -- a test with a lure that falls inside one party's cut and outside another's must fail;
+**H4-6** the harness's own Supervisor input is built with a non-empty `findings` list -- a test asserting
+`StateSummary.findings == ()` for every call the harness makes must fail (this entry follows only because v0
+chooses to omit `findings`, per the chosen line above; if that choice ever changes, this entry is retired, not
+kept as a fossil); **H4-7** after a restart, the harness proposes again for a task it finds already created by an
+earlier run -- a test that creates a task, restarts the in-memory snapshot as a fresh process, and asserts no
+second proposal for that `task_id` must fail.
 
 ## 6. H5 -- the proposing loop skeleton
 
@@ -698,3 +766,20 @@ the shadow run].
     engagement's proposals are `HUMAN_APPROVAL` under the effective policy in force there, that denominator is
     small, and a rate computed on it is correspondingly uncertain -- how small is **[N]**, not measured by this
     plan.
+17. [2026-10-30 review layer, under the owner's standing delegation; the owner may veto] **Persisting the
+    evidence/task snapshot across a restart is a later decision, needing a new schema** -- v0 keeps it in memory
+    only, per the P-8 chosen line above; this plan does not propose that schema.
+18. [2026-10-30 review layer, under the owner's standing delegation; the owner may veto] **Restart behaviour:** a
+    task the harness created in a run that then restarted is not continued -- only counted and reported, never
+    claimed again. Verification N (read-only, this round) found no schema support for telling such a task apart
+    from any other queued one: `claim_task` takes no `task_id` and no creator filter at all, claiming whichever
+    queued task in the engagement has the highest priority, oldest first
+    [R: `control_plane/api/function_api.py:235-263`]; `create_task` does write `created_by`
+    [R: `control_plane/api/function_api.py:199-208`; the column at `control_plane/state/models.py:101`], but every
+    production caller found passes a fixed agent-identity string, not one scoped to a run
+    [R: `scripts/live_run/d17_supervisor.py:471, 628, 828, 850`]; `tasks` carries no run-scoping column at all
+    [R: `control_plane/state/models.py:93-113`]. **So the only thing that can tell "created by this run" apart
+    from "created by an earlier run of the same agent identity" is the harness's own in-memory set of task ids
+    from the current process** -- exactly what the P-8 chosen line already relies on, and exactly what a restart
+    loses. This is a precondition H5 must build to, not something H5 can read its way around; recorded here so it
+    is not left implicit.
