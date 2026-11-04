@@ -624,6 +624,8 @@ until (B). *Lean [D]:* (A) now, with (C) as the owner's call for real engagement
 
 [2026-10-28 decided by the review layer under the owner's standing delegation; the owner may veto] chosen: D69-9 (A), describe the kill's limits as they are.
 
+[2026-11-04 superseded by the plan's notes of 2026-10-29 and 2026-10-30 (verifications A and H)] The sentence that the harness does not own a running container does not hold for the ALLOW path: propose_action dispatches inline and blocks until the tool run's evidence is committed, so the harness process starts and waits on the container. What the kill switch can reach is unchanged: it does not stop a container already running or a model call already started.
+
 ## 10. Language fit (no conclusion assumed)
 
 The component is orchestration glue: it waits on a subprocess (the model CLI), the database and the

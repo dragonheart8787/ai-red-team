@@ -137,6 +137,10 @@ reading disagrees, the item reverts to pending the owner rather than being argue
   unconfirmed.** The owner has not yet confirmed or vetoed the narrower ground above. **H1 does not depend on
   it** -- P-2 is needed only by H2 (see the table), not by anything H1 does. **H2 does not start until the owner
   confirms or vetoes it.**
+* [2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **P-2: still no answer as
+  of today.** The owner has not replied to the narrower ground offered on 2026-10-30, so **H2 does not start**.
+  Nothing in this round depends on it: the chosen lines dated 2026-11-04 are about H5's start-up order, and H1's
+  report is already written.
 * [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-3 (a):** the enrolment
   table with its own operator CLI. H5 is written against a read interface for the enrolment list, with an
   in-memory fake used by every H5 test that is not H5b itself; H5b (the table, its migration, round-trip test and
@@ -238,6 +242,50 @@ than leave an operator to discover it. Reason [D]: fail closed. The alternative 
 provenance snapshot this process never held -- would propose against evidence it cannot show the Worker, which is
 the one thing P-8's chosen line exists to prevent; stopping instead of guessing is the same choice D69-5b already
 made for a fault outside the closed list.
+
+[2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Correction to the stop rule
+above: stopping at the claim has already done damage, and the cost sentence was wrong.** By the time the loop sees
+a foreign task's id, `claim_task` has already written it: `UPDATE tasks SET status = 'claimed', owner_agent_id =
+:agent, lease_expires_at = now() + interval '5 minutes'` [R: `control_plane/api/function_api.py:235-263`; H1
+report item 6]. So a harness that stops at that point leaves the task **`claimed`, owned by the harness, with a
+five-minute lease and nobody to complete it** -- and nothing in the product returns it to `queued`
+[R: same]. The consequence for restarts is the opposite of what was written: each restart claims and strands one
+more leftover task, so the queue is **consumed one task per restart** and the Nth restart finds the queue empty
+and proceeds. "Restarting on an engagement that has already been used will always stop this way as long as one
+queued task is left over" is therefore **not true** [R]; the stop rule is still wanted, but only as a backstop
+behind the check chosen immediately below.
+
+[2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Chosen: a read-only
+start-up check, before the first claim.** (i) Before claiming anything, the loop lists the engagement's tasks
+read-only through `query_state(conn, engagement_id=..., task_status=("queued", "claimed", "running"))`, which
+returns `status` and `owner_agent_id` per row and is confined to the engagement by row-level security on the
+ordinary `cyberorch_app` connection [R: `control_plane/api/function_api.py:1248-1260` for the columns and the
+status filter, `:1215-1222` for "Nothing here writes... Every row is confined to the current engagement by RLS",
+`:137` `_LIVE_TASK_STATUSES = ("queued", "claimed", "running")`, `:1326-1328` for the checked status vocabulary].
+(ii) Because the harness has created nothing yet at that moment, **any** row returned is foreign: the loop
+**refuses to start**, with its own exit code distinct from the claim-time one, claims nothing, proposes nothing,
+and reports the rows for a person. (iii) The claim-time stop rule above is kept as the backstop for a task that
+appears after the check (another writer, or a race), accepting that by then the task is `claimed` and stranded.
+(iv) **H6 must write the recovery down**: a new engagement, or a person clearing or completing the leftover tasks
+by hand. Reason [D]: this moves the refusal to before the only write that cannot be undone, which is what makes
+"fail closed" mean something here rather than merely stopping after the damage.
+
+*Two limits of the chosen check, stated rather than glossed [R].* `query_tasks` is **not** the function for this:
+it matches only on the identity key `(action, canonical target)` and needs an `action` and a `target` to ask
+about, so it cannot answer "is there any live task" [R: `control_plane/api/function_api.py:1286-1319`]. And
+`query_state`'s task page is capped -- `task_limit: int = 50` by default, `LIMIT :limit`, ordered
+`created_at ASC` [R: `:1200`, `:1248-1260`] -- so the check must pass a limit it has chosen and treat a full page
+as "found something", never as "that was all of them".
+
+[2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Three more mutation
+candidates** (names provisional, not yet in a catalogue): **H5-12** the start-up check is removed altogether -> a
+test that seeds one queued task in the engagement and asserts the loop refuses to start, claiming nothing, must
+fail; **H5-13** the claim-time backstop is removed while the start-up check stays -> a test that makes a task
+appear between the check and the claim and asserts the loop stops without proposing must fail; **H5-14** the
+start-up check runs **after** the first claim instead of before it -> a test asserting no `tasks` row was written
+(no row moved to `claimed`, no `owner_agent_id` set) when the loop refuses to start must fail. H5-14 is the one
+that matters most: it is the ordering bug the correction above describes, and a check in the wrong place passes
+H5-12's test while leaving the damage.
 
 [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Chosen: `result_summary`
 carries closed-vocabulary text only.** What the harness writes through `complete_task` is assembled from a fixed
@@ -731,6 +779,10 @@ need their own plan after H8; (4) the owner's decisions on the engagements, the 
 (5) the existing shadow report (`scripts/plan_fit_report.py`) shown able to read the harness's engagements without a
 change (design acceptance 11.11); (6) the rule that Q1 stays out of the shadow unless the owner opens a new
 registration [R: design D69-8a, OUTCOME.md].
+[2026-11-04 review layer, under the owner's standing delegation; the owner may veto] (7) **the owner's decision on
+the laundering path** (section 11 risk 10, section 14's row): the shadow is the first thing here that puts a real
+model in front of a `goal` written in an earlier round, so that decision comes before this registration, not after
+it. H7 is unaffected -- scripted roles only.
 
 **Does not.** Register anything, choose a value, set a threshold, run anything, or decide what the shadow concludes.
 
@@ -770,6 +822,10 @@ is a numbered change with a pinned test and a re-run of the shadow (design D69-2
     re-run of anything measured against the old wording, and `goal` is not a field the harness can sanitize
     without deciding what a goal may say -- an owner's call, not a build detail. Registered in section 14 so it is
     not carried as a silent assumption.
+    [2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Gate:** the owner's
+    decision on this path must be settled **before any run that uses a real model** -- that is, before the shadow
+    H8 registers (section 10's list, item (7) added the same date). H7 is **not** gated by it: H7 uses scripted
+    roles only, so no model reads the laundered `goal` there.
 9. **Non-determinism** is confined to the later recorded run with the real Worker and to the shadow; CI uses scripted
    roles only, as for the Reviewer [D].
 
@@ -858,6 +914,9 @@ the shadow run].
     [R: `agents/llm/supervisor_base.py:445-449`, `agents/llm/worker_base.py:631-638`;
     `docs/D69_H1_REPORT.md` item 7]. Section 11 risk 10 holds the detail; no mitigation is chosen, and changing a
     prompt is a numbered change this plan does not make.
+    [2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Gate, registered with
+    the row:** this decision is required before any real-model run -- before the shadow H8 registers (section 10,
+    list item (7)) -- and is **not** required before H7, which runs scripted roles only.
 21. [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **`result_summary` is a
     writable text field that reaches a trusted prompt region** [R: `agents/llm/supervisor_base.py:128`, `:138`,
     `:445-449`], and `complete_task` constrains it in no way
