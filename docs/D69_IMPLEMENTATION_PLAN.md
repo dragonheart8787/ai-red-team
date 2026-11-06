@@ -438,6 +438,64 @@ registry may hold scope objects whose actions are all excluded (the harness then
 and stop for that engagement, which is H5's concern). **How it stops.** A failing control test (the filtered and
 unfiltered candidates behave the same) means the premise is wrong: stop and report; do not continue to H3.
 
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **H2 is built; this is its record.** Commit
+`ff7762a2d5701c25a690c450c7595960b46c588d`, new files only -- `git diff --numstat` prints nothing for any existing
+path. CI run #308 on that head is green, and its two counting lines are, verbatim:
+`4542 passed, 24 warnings in 790.71s (0:13:10)` and `enforced: tests=4542 failures=0 errors=0 skipped=0`. The local
+full suite on the same tree: 4518 passed, 0 failed, 24 errors -- the missing-image errors of the baseline, in the
+baseline's own 2/16/4/2 split across `tests/scenarios/test_scenario_web_render.py` (2),
+`tests/test_ad_collector_credential_delivery.py` (16), `tests/test_browser_escape.py` (4) and
+`tests/test_dns_server_kernel_evidence.py` (2). New tests: 11. Mutations: D69-H2-1 to D69-H2-6, six valid, none
+equivalent. OPA: 82/82, `opa fmt` clean. The three numbers agree: **4542 = 4518 + 24 = 4531 + 11**, and 4542 is the
+number both CI lines carry. The six new files, with line counts and the sha256 of each file's content (recomputed
+from the committed blobs, not copied from a report):
+* `harness/__init__.py` -- 16 lines,
+  `639d38c16a0ef1b8a9862777af0cc553f5def4c15a4a33c0911070cdf9d0a750`
+* `harness/action_allowlist.py` -- 160 lines,
+  `00ba44f4af0c680598005b52b60ef3545c9d9b36d76f61c9406c217923fdd0af`
+* `harness/registry_view.py` -- 24 lines,
+  `eff8fc94288ee71fbb5a2a49cb4c962f2959a693ffda6630c242aecc65581e0e`
+* `tests/test_harness_action_allowlist.py` -- 271 lines,
+  `e28f4704a9eefdd57b659d384f62fc42b1ab0ba8493c06b8c2b7588a1e4ecf93`
+* `tests/test_harness_import_direction.py` -- 67 lines,
+  `189f5e1f595dfb91db3cc3eda504898c15889f7e357cc3478d4f1f934fd4ff29`
+* `scripts/mutations_d69.py` -- 123 lines,
+  `86e260bd879aa7c6164850774f558661d9bf84be699300b88e0be218f5f5c7e2`
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **P-2's retreat condition did not fire.** Both
+import-direction tests were written without touching an existing import, or any other existing file:
+`tests/test_harness_import_direction.py` reads imports with `ast` over `agents/`, `control_plane/` and `harness/`,
+and the H2 commit's `git diff --numstat` has no output for any existing path. P-2 stands as confirmed; it does not
+revert to pending the owner.
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **What H2 does not prove.** Three things, written down so
+that a later stage does not inherit them as settled:
+* (a) the "not re-asked" half of tests (4a) and (4b) is true by construction rather than demonstrated. The test owns
+  the loop that asks the role, so it cannot ask twice whatever the code does; no harness loop is exercised, because
+  H2 has none. The claim is testable only where a loop exists -- H4 (mutation H4-2) and H5 (mutation H5-4) -- and it
+  is those tests, not these, that would go red if a retry were ever added.
+* (b) `harness/registry_view.candidates_from_registry` has no test. H2 covers the pure function it delegates to; the
+  wrapper itself -- that what the real registry returns is what goes through the filter -- needs a database and
+  belongs to H5, against the real registry in the test database. New mutation candidate **H5-16**: the wrapper
+  returns the registry's scope objects without the filter -> a test must fail.
+* (c) the packaging gap. `harness` imports only because pytest puts the repository root on `sys.path`;
+  `pyproject.toml`'s `[tool.setuptools] packages` is an explicit list of `control_plane`, `agents` and
+  `tool_gateway`, and does not name `harness` [R: H2 pre-check P4]. Nothing outside a test run can import the
+  package from an installed copy. H5 must settle this before anything runs the harness outside pytest.
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **Two more mutation entries for H2**, to be added in the
+next code commit, which touches only `scripts/mutations_d69.py` and the tests and changes no behaviour: **H2-7** the
+refusal counter does not check the reason code (the closed-vocabulary check in `RefusalCounter.record` removed) -> an
+existing test must fail; **H2-8** a missing or non-string action is let through (the first branch of each check
+removed) -> an existing test must fail. **Stop rule:** either one that no existing test catches is a gap in H2's
+tests -- stop and report it; do not write a new test to cover the mutant up.
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **One wording correction owed.** `harness/__init__.py`
+says that each of the three import rules is pinned by a test in `tests/test_harness_import_direction.py`. Two are.
+The third -- that `harness` *may* import `agents.*` and the control plane's function API -- is a permission, not a
+rule a direction test can pin, and the test file's own docstring already says so. The correction is a comment-only
+change in the next code commit; no code and no test changes.
+
 ## 4. H3 -- the nmap Observation builder
 
 **Goal.** The first production code that builds a Worker-side `Observation` from stored evidence (design: this
@@ -779,6 +837,13 @@ evidence row to test the builder against without that authorization already cove
    nmap, no connection to a database or daemon outside the authorization given for that stage.
 6. **Registered files** (the D68 stage-1 plan, wording file and analysis script) are byte-identical to commit
    `0747cbe` before and after each stage's commit; `docs/D68_DP15_RECORD_MODE/stage1/` is never touched.
+7. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **Where a run's output may go.** A full
+   local suite takes about 24 minutes, which is past the limit of a single foreground command, so it is run in the
+   background and its output file goes to the session's scratchpad, outside the repository: that is allowed and
+   needs no further permission. Nothing else is: a hash list, a daemon's log, any other working file -- unnecessary,
+   and not allowed. H2's run wrote three scratchpad files and left one more that the tooling produced, all outside
+   the repository and all reported in that stage's report. This rule binds the stages after H2; it is not a
+   judgement on H2's run.
 
 ## 10. H8 -- the shadow pre-registration: where it goes and when
 
@@ -949,3 +1014,18 @@ the shadow run].
     [R: `control_plane/api/function_api.py:268-279`]. The closed-vocabulary rule chosen in section 1 applies to
     the harness only; whether the product should constrain the field itself is the owner's, and is not decided
     here.
+22. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **`harness/registry_view` is
+    untested as of H2** -- the pure function it delegates to is covered, the wrapper is not. H5 tests it against the
+    real registry in a test database, with mutation candidate **H5-16** (the wrapper returns the registry's scope
+    objects without the filter -> a test must fail).
+23. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **The packaging gap:** `harness` imports only because
+    pytest puts the repository root on `sys.path`; `pyproject.toml`'s `[tool.setuptools] packages` lists
+    `control_plane`, `agents` and `tool_gateway`, and not `harness` [R: H2 pre-check P4]. To be settled in H5,
+    before anything runs the harness outside a test run.
+24. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **Mutation entries H2-7 and H2-8** -- the refusal
+    counter not checking the reason code, and a missing or non-string action being let through -- to be added to
+    `scripts/mutations_d69.py` in the next code commit, with the stop rule recorded in section 3: either one that no
+    existing test catches is a gap in H2's tests, to be reported rather than papered over with a new test.
+25. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **A wording correction in `harness/__init__.py`**: it
+    claims a test for each of the three import rules, but the third is a permission, not a direction a test can
+    pin. A comment-only change in the next code commit.
