@@ -141,6 +141,14 @@ reading disagrees, the item reverts to pending the owner rather than being argue
   of today.** The owner has not replied to the narrower ground offered on 2026-10-30, so **H2 does not start**.
   Nothing in this round depends on it: the chosen lines dated 2026-11-04 are about H5's start-up order, and H1's
   report is already written.
+* [2026-11-06 the owner's reply, one word, '同意', to the review layer's recommendation] P-2 is confirmed as
+  recommended: a new top-level package `harness/` on the narrower ground already recorded (no existing module
+  imports a package named `harness`; the existing fence names only `control_plane.scheduler`, not `control_plane`
+  as a whole). `harness/` may import `agents.*` and `control_plane`'s function API; nothing under `agents/` or
+  `control_plane/` may import `harness`; `harness/` must not import `control_plane.scheduler`; each rule is
+  pinned by an import-direction test. The condition recorded earlier stays: if H2's own import-direction test
+  cannot be written without touching an existing import, P-2 reverts to pending the owner. This confirmation lets
+  H2 be authorized; it does not start H2.
 * [2026-10-29 review layer, under the owner's standing delegation; the owner may veto] **P-3 (a):** the enrolment
   table with its own operator CLI. H5 is written against a read interface for the enrolment list, with an
   in-memory fake used by every H5 test that is not H5b itself; H5b (the table, its migration, round-trip test and
@@ -277,6 +285,13 @@ about, so it cannot answer "is there any live task" [R: `control_plane/api/funct
 `created_at ASC` [R: `:1200`, `:1248-1260`] -- so the check must pass a limit it has chosen and treat a full page
 as "found something", never as "that was all of them".
 
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **Scope of the start-up
+check: per engagement, not per process.** The loop serves several enrolled engagements serially, and an
+engagement can be enrolled after the process started. The check therefore runs before the first claim **for each
+engagement**, including one enrolled later, not once at process start. A check done once at start leaves a
+later-enrolled engagement's leftover live tasks to be claimed, which is the fail-open direction. Reason [D]: the
+harm the check exists to prevent is the claim, and the claim happens per engagement.
+
 [2026-11-04 review layer, under the owner's standing delegation; the owner may veto] **Three more mutation
 candidates** (names provisional, not yet in a catalogue): **H5-12** the start-up check is removed altogether -> a
 test that seeds one queued task in the engagement and asserts the loop refuses to start, claiming nothing, must
@@ -286,6 +301,11 @@ start-up check runs **after** the first claim instead of before it -> a test ass
 (no row moved to `claimed`, no `owner_agent_id` set) when the loop refuses to start must fail. H5-14 is the one
 that matters most: it is the ordering bug the correction above describes, and a check in the wrong place passes
 H5-12's test while leaving the damage.
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **Mutation candidate H5-15**
+(name provisional): the start-up check runs only once at process start and not before the first claim of each
+engagement -> a test that enrolls a second engagement holding one queued task after the process started, and
+asserts the loop refuses that engagement and claims nothing in it, must fail.
 
 [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Chosen: `result_summary`
 carries closed-vocabulary text only.** What the harness writes through `complete_task` is assembled from a fixed
@@ -398,6 +418,12 @@ shared test.
 
 **Does not.** Add a loop, read a database, change the registry, or change what the registry authorizes (the filter
 restricts what the roles may choose, not what is authorized [R: design D69-6 facts]).
+
+[2026-11-06 review layer, under the owner's standing delegation; the owner may veto] H2 includes the
+import-direction tests for P-2: (i) nothing under `agents/` or `control_plane/` imports `harness`; (ii)
+`harness/` does not import `control_plane.scheduler`. Each needs a mutation candidate (H2-5, H2-6; names
+provisional): a module under `agents/` or `control_plane/` that imports `harness` -> test (i) must fail; a module
+under `harness/` that imports `control_plane.scheduler` -> test (ii) must fail.
 
 **Acceptance.** All tests above green; the full suite; OPA tests; CI. **Refuted if** a payload with an excluded
 action is accepted by `_to_proposal` or `_to_tasks` when given the harness's candidates.
