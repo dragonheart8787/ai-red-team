@@ -307,6 +307,12 @@ H5-12's test while leaving the damage.
 engagement -> a test that enrolls a second engagement holding one queued task after the process started, and
 asserts the loop refuses that engagement and claims nothing in it, must fail.
 
+[2026-11-07 review layer, under the owner's standing delegation; the owner may veto] **Mutation candidate H5-16** (name
+provisional; mirrored here from the H2 record in section 3, where it was first written down): the wrapper
+`harness/registry_view.candidates_from_registry` returns the registry's scope objects without the allowlist filter
+-> a test that reads the real registry of the test database through the wrapper, and asserts the candidates it
+returns carry only allowed actions, must fail. H2 left that wrapper untested, which is why this belongs to H5.
+
 [2026-10-31 review layer, under the owner's standing delegation; the owner may veto] **Chosen: `result_summary`
 carries closed-vocabulary text only.** What the harness writes through `complete_task` is assembled from a fixed
 set of tokens (the decision, kernel-generated reason codes, and ids such as `proposal_id`, `run_id`,
@@ -495,6 +501,48 @@ says that each of the three import rules is pinned by a test in `tests/test_harn
 The third -- that `harness` *may* import `agents.*` and the control plane's function API -- is a permission, not a
 rule a direction test can pin, and the test file's own docstring already says so. The correction is a comment-only
 change in the next code commit; no code and no test changes.
+
+[2026-11-07 review layer, under the owner's standing delegation; the owner may veto] **H2 follow-up, done.** Commit
+`e4e388c5266a41bb887b949b58c273a53fcb0ad0`, two existing files and nothing else: `scripts/mutations_d69.py`
+(27 insertions, 0 deletions) and `harness/__init__.py` (8 insertions, 4 deletions, all inside the module docstring;
+with the docstring removed, `ast.dump` is `Module(body=[], type_ignores=[])` before and after). No test was added or
+changed. The catalogue now holds nine entries and all nine are valid, each red on the test it names:
+* **D69-H2-1** -> both control tests (and, as a by-product, the not-offered test);
+* **D69-H2-2** -> `test_a_task_whose_action_is_outside_the_allowlist_is_refused_counted_and_not_re_asked`;
+* **D69-H2-3** -> `test_a_proposal_whose_action_is_outside_the_allowlist_is_refused_counted_and_not_re_asked`;
+* **D69-H2-4** -> `test_a_scope_object_whose_only_actions_are_excluded_is_not_offered_at_all`;
+* **D69-H2-5** -> `test_nothing_under_agents_or_the_control_plane_imports_the_harness`;
+* **D69-H2-6** -> `test_nothing_under_the_harness_imports_the_scheduler`;
+* **D69-H2-7** -> `test_a_refusal_record_takes_a_reason_code_and_not_a_string_a_model_produced`
+  (`Failed: DID NOT RAISE ValueError`);
+* **D69-H2-8a** -> `test_both_checks_refuse_a_missing_action_and_each_refusal_is_counted_on_its_own_side`
+  (`assert 'action_not_in_allowlist' == 'action_missing'`);
+* **D69-H2-8b** -> the same test (`assert None == 'action_missing'`).
+
+Local on that tree: the 11 harness tests pass; the full suite is 4518 passed, 0 failed, 24 errors in the baseline's
+2/16/4/2 split; `opa test` 82/82, `opa fmt` clean, `ruff check .` clean; the six files were byte-identical before
+and after the mutation run, with no probe file and no journal left, and nothing was committed during it. CI run
+#310 on that head is green: `enforced: tests=4542 failures=0 errors=0 skipped=0` and
+`4542 passed, 24 warnings in 803.33s (0:13:23)`. The three numbers are unchanged, because this commit adds no test:
+**4542 = 4518 + 24 = 4531 + 11**.
+
+[2026-11-07 review layer, under the owner's standing delegation; the owner may veto] **About the "N passed" lines quoted in
+these records.** For runs #308, #309 and #310 alike, the quoted `N passed` line is the summary of the step "Run test
+suite with task_relation enforcement ON", identified by its timestamp falling inside that step's window; the summary
+of step 26, "Run test suite", lay outside the single log window each round was allowed to retrieve and is not
+independently quoted. The two steps run the same tests, so the numbers are equal -- but what is recorded is one
+reading of the enforced step plus that step's own `enforced:` count, not two independent readings.
+
+[2026-11-07 review layer, under the owner's standing delegation; the owner may veto] **Correction to the 2026-11-06 description of
+H2-8.** It read "a missing or non-string action is let through", which is not what removing the branch does: with
+the branch gone such an action still fails the allowlist test and is refused, only under the other reason code.
+That mutant is **H2-8a**, and the test catches it on the reason code
+(`assert 'action_not_in_allowlist' == 'action_missing'`). Letting one through takes a branch that returns
+`ActionCheck(allowed=True, reason=None)`, which is **H2-8b**. Both are in the catalogue, both are valid, and the two
+behaviours are now distinguished instead of conflated.
+
+[2026-11-07 review layer, under the owner's standing delegation; the owner may veto] The two things this section owed -- the extra
+mutation entries and the docstring correction -- are done by commit `e4e388c`; no stop rule fired.
 
 ## 4. H3 -- the nmap Observation builder
 
@@ -1026,6 +1074,12 @@ the shadow run].
     counter not checking the reason code, and a missing or non-string action being let through -- to be added to
     `scripts/mutations_d69.py` in the next code commit, with the stop rule recorded in section 3: either one that no
     existing test catches is a gap in H2's tests, to be reported rather than papered over with a new test.
+    [2026-11-07 review layer, under the owner's standing delegation; the owner may veto] Done by commit `e4e388c` as
+    H2-7, H2-8a and H2-8b, with the H2-8 description corrected in section 3; all nine entries are valid, so the
+    stop rule did not fire.
 25. [2026-11-06 review layer, under the owner's standing delegation; the owner may veto] **A wording correction in `harness/__init__.py`**: it
     claims a test for each of the three import rules, but the third is a permission, not a direction a test can
     pin. A comment-only change in the next code commit.
+    [2026-11-07 review layer, under the owner's standing delegation; the owner may veto] Done by commit `e4e388c`: the
+    docstring now names the test that pins each of the two direction rules, and says the third is a permission no
+    test pins.
