@@ -624,6 +624,63 @@ at all for a proposal whose evidence came from a `HUMAN_APPROVAL` the scheduler 
 H5's note) -- the harness was not the caller of that `dispatch_approved` call and holds no `ActionOutcome` for it.
 H3 and H4 therefore need their own read, by task or by engagement, not a reuse of a call-scoped value.
 
+[2026-11-08 review layer, under the owner's standing delegation; the owner may veto] **H3 is built; this is its record.** Commit
+`29342ea6aed618db2c0f0f11d8d6b07cd005e7b8`: three new files and an append to the mutation catalogue, nothing else
+that already existed (52 insertions, 0 deletions on `scripts/mutations_d69.py`).
+* `harness/observations.py` -- 175 lines,
+  `2546ddb75b38bcdd1d7613a2afa05085fed7c024374723fe0b33057090e22f2e`
+* `tests/test_harness_observations.py` -- 303 lines,
+  `ab3b4cbe68fccae5725ee93e08418eabaf62a4eb7dd246ac3c98ec468325ead8`
+* `tests/test_harness_observations_db.py` -- 247 lines,
+  `9ef19601ebaedf570a6c65c872d238f0768189bc223481de16763aea97614bad`
+* `scripts/mutations_d69.py` -- 202 lines after the append,
+  `0ed2eba0e24727ec91c1123c6977ce3b9d695053b10b55b908ec87184fdef344`
+
+**Mutations: nine new, eighteen in the catalogue, all eighteen valid.** Each H3 entry is red on the test it names,
+on an assertion: **H3-a** (a hostname kept as an identity) ->
+`test_a_the_name_of_a_resolved_host_is_not_an_observed_identity`; **H3-b** (the requested target counted as
+observed) -> `test_d_a_requested_target_with_no_responder_is_not_an_observed_identity`; **H3-c** (the content
+transformed after it is built) -> `test_c_the_prompt_content_is_the_observation_content_byte_for_byte`; **H3-d**
+(connect and version collected too) -> the `connect` and `version` cases of
+`test_a_anything_but_the_exact_ping_value_observes_nothing` and of
+`test_b_a_connect_or_version_run_observes_nothing_from_the_same_output`; **H3-e** (an unknown scan type collects)
+-> the `missing` case of the first and `test_b_an_evidence_row_with_no_run_observes_nothing`; **H3-f** (the scan
+type read from the proposal's target) -> `test_b_a_run_whose_scan_type_differs_from_the_request_observes_nothing`,
+on `assert 'ping' == 'connect'`; **H3-g** (the window narrowed to one target) ->
+`test_b_the_window_is_newest_first_and_the_limit_bounds_it`; **H3-h** (`source` carrying the requested target) ->
+`test_e_source_and_description_carry_no_target_and_no_derived_text`; **H3-i** (an address used as nmap printed it)
+-> `test_a_an_ipv6_address_is_canonicalized`. None was unexpressible, and none needed a parameter the production
+code does not need. H3-a and H3-i are kept apart deliberately: H3-i drops the canonicalization altogether (so the
+IPv6 case goes red as well), H3-a keeps it and only admits what is not an IP.
+
+Local on that tree: 38 new tests (31 without a database, 7 with one), 49 harness tests in all; the full suite is
+4556 passed, 0 failed, 24 errors in the baseline's own 2/16/4/2 split; `opa test` 82/82, `opa fmt` clean,
+`ruff check .` clean; the nine files were byte-identical before and after the mutation runs, nothing was committed
+during them, and no probe file or journal was left. CI run #312 on that head is green:
+`enforced: tests=4580 failures=0 errors=0 skipped=0` and `4580 passed, 24 warnings in 727.90s (0:12:07)`, both
+lines from the step "Run test suite with task_relation enforcement ON". The three numbers agree:
+**4580 = 4556 + 24 = 4542 + 38**.
+
+[2026-11-08 review layer, under the owner's standing delegation; the owner may veto] **What H3 does not prove.**
+* (a) that a ping scan's `hosts` holds only responders is still **[D]**, not measured. No nmap was run in this
+  stage and no CIDR ping-sweep output exists in the repository to use as a fixture (P-6), so every `derived_view`
+  here came from hand-written stdout through the real `nmap.derive_view`, and each test says so. Section 14's
+  item 7 is the row that carries this.
+* (b) how much evidence a round may carry, and whether a single row's content needs a character ceiling, are the
+  owner's and are not decided here. `read_evidence_window` takes a **required** `limit` with no default and
+  refuses anything that is not a positive int, so no module quietly picks one; what the number should be is open.
+* (c) "the proposal asked for ping, the run was connect" is **not producible through the real pipeline**:
+  `execution_constraints` derives the capability's constraints from the proposal's stored target in one place, on
+  the ALLOW path and after a human approval alike, and `tool_runs.normalized_params` is `NmapPlan.as_params()` of
+  those same constraints (preflight P4). The divergence is therefore constructed with INSERTs on top of a real
+  ping proposal, and marked as constructed where it happens. It is the case the rule exists for, so it is tested;
+  it is not evidence that the pipeline can produce it.
+* (d) that the Supervisor and the Worker read the same window and the same string belongs to H4, not to H3. H3
+  establishes that the window is the engagement's and not one target's (H3-g), which is the half of that property
+  the builder can carry; the containment between what a Supervisor saw and what a task's observation set covers is
+  H4's, with H4-4 as its mutation.
+* (e) nothing in the list was unexpressible, so there is nothing recorded under that head.
+
 ## 5. H4 -- the task source
 
 **Goal.** The Supervisor's plan becomes tasks through the product's `create_task`, with the harness's own check for a
@@ -996,6 +1053,8 @@ the shadow run].
 6. **A new row, Class C:** the web console has no documented start command (design section 12, item 4).
 7. **A new row at H3 or H7, Class C:** no CIDR `-Pn` nmap stdout is stored anywhere in the repository, so the fixtures
    of H3 are constructed (P-6) and "ping scan `hosts` holds only responders" is [D].
+   [2026-11-08 review layer, under the owner's standing delegation; the owner may veto] H3 was built with constructed fixtures, as
+   this item anticipated; the [D] stands unmeasured and the row is still owed.
 8. **`D68_IMPLEMENTATION_PLAN.md` 7.1 and ACCEPTANCE 5.118** -- the sentence "gated on a production harness existing
    and being run in shadow first" refers to this plan's H8 and the later shadow plans.
 9. **`ADR_PRODUCTION_ORCHESTRATOR.md` index** -- a row for the proposing side (design section 12, item 7).
@@ -1083,3 +1142,11 @@ the shadow run].
     [2026-11-07 review layer, under the owner's standing delegation; the owner may veto] Done by commit `e4e388c`: the
     docstring now names the test that pins each of the two direction rules, and says the third is a permission no
     test pins.
+26. [2026-11-08 review layer, under the owner's standing delegation; the owner may veto] **The evidence window's ceiling:** how many
+    rows a round may carry, and whether a row's content needs a character ceiling, are undecided.
+    `read_evidence_window` requires `limit` and has no default, so the question cannot be answered by accident;
+    the answer itself is the owner's, and H5 is where the loop has to name a number.
+27. [2026-11-08 review layer, under the owner's standing delegation; the owner may veto] **The divergence case is constructed:** a run
+    whose `scan_type` differs from the proposal's cannot be produced through the pipeline (preflight P4), so
+    `tests/test_harness_observations_db.py` builds it with INSERTs on a real ping proposal. If the pipeline ever
+    gains a path that can diverge, that test should be rebuilt on it.
