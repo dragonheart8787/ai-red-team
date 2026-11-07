@@ -76,6 +76,10 @@ _remove_probe()                      # a previous run that was killed leaves not
 atexit.register(_remove_probe)       # and this one leaves nothing behind either
 
 
+OBSERVATIONS = "harness/observations.py"
+OBS_TESTS = ("tests/test_harness_observations.py",)
+OBS_DB_TESTS = ("tests/test_harness_observations_db.py",)
+
 CATALOGUE = [
     Mutation("D69-H2-1", "the candidate builder does not filter allowed_actions",
              ACTION_TESTS,
@@ -144,6 +148,54 @@ CATALOGUE = [
                          '    if not isinstance(action, str) or not action:\n        return ActionCheck(allowed=True, reason=None)\n')),
              prepare=_without_probe,
              targets=('test_both_checks_refuse_a_missing_action_and_each_refusal_is_counted_on_its_own_side',)),
+    Mutation("D69-H3-a", "a hostname that is not an IP literal is kept as an observed identity",
+             OBS_TESTS,
+             edits=(Edit(OBSERVATIONS, '        identity = _canonical_ip(host)\n        if identity is None:\n            continue\n', '        identity = _canonical_ip(host)\n        if identity is None:\n            identity = host\n'),),
+             prepare=_without_probe,
+             targets=('test_a_the_name_of_a_resolved_host_is_not_an_observed_identity',)),
+    Mutation("D69-H3-b", "the requested target is counted as an observed identity",
+             OBS_TESTS,
+             edits=(Edit(OBSERVATIONS, '    found: list[str] = []\n', '    found: list[str] = [row.requested_target] if row.requested_target else []\n'),),
+             prepare=_without_probe,
+             targets=('test_d_a_requested_target_with_no_responder_is_not_an_observed_identity',)),
+    Mutation("D69-H3-c", "the content is transformed after it is built (backslashes stripped)",
+             OBS_TESTS,
+             edits=(Edit(OBSERVATIONS, '    content = json.dumps(row.derived_view, sort_keys=True, default=str)\n', '    content = json.dumps(row.derived_view, sort_keys=True, default=str).replace("\\\\", "")\n'),),
+             prepare=_without_probe,
+             targets=('test_c_the_prompt_content_is_the_observation_content_byte_for_byte',)),
+    Mutation("D69-H3-d", "a connect or version scan's hosts are collected too",
+             OBS_TESTS + OBS_DB_TESTS,
+             edits=(Edit(OBSERVATIONS, '    if row.scan_type != PING_SCAN_TYPE:\n        return ()\n', '    if row.scan_type not in (PING_SCAN_TYPE, "connect", "version"):\n        return ()\n'),),
+             prepare=_without_probe,
+             targets=('test_a_anything_but_the_exact_ping_value_observes_nothing',
+                      'test_b_a_connect_or_version_run_observes_nothing_from_the_same_output')),
+    Mutation("D69-H3-e", "an unknown scan type collects hosts instead of nothing",
+             OBS_TESTS + OBS_DB_TESTS,
+             edits=(Edit(OBSERVATIONS, '    if row.scan_type != PING_SCAN_TYPE:\n        return ()\n', '    if row.scan_type is not None and row.scan_type != PING_SCAN_TYPE:\n        return ()\n'),),
+             prepare=_without_probe,
+             targets=('test_a_anything_but_the_exact_ping_value_observes_nothing',
+                      'test_b_an_evidence_row_with_no_run_observes_nothing')),
+    Mutation("D69-H3-f", "the scan type is read from the proposal's target instead of the run",
+             OBS_DB_TESTS,
+             edits=(Edit(OBSERVATIONS, "           r.normalized_params->>'scan_type' AS scan_type,\n", "           p.target->>'scan_type' AS scan_type,\n"),
+                    Edit(OBSERVATIONS, '      LEFT JOIN tool_runs r ON r.run_id = e.run_id\n', '      LEFT JOIN tool_runs r ON r.run_id = e.run_id\n      LEFT JOIN action_proposals p ON p.proposal_id = r.proposal_id\n')),
+             prepare=_without_probe,
+             targets=('test_b_a_run_whose_scan_type_differs_from_the_request_observes_nothing',)),
+    Mutation("D69-H3-g", "the window returns one target's rows instead of the engagement's",
+             OBS_DB_TESTS,
+             edits=(Edit(OBSERVATIONS, '     ORDER BY e.created_at DESC, e.evidence_id DESC\n', "     WHERE r.normalized_params->>'target' = (SELECT normalized_params->>'target' FROM tool_runs ORDER BY created_at DESC LIMIT 1)\n     ORDER BY e.created_at DESC, e.evidence_id DESC\n"),),
+             prepare=_without_probe,
+             targets=('test_b_the_window_is_newest_first_and_the_limit_bounds_it',)),
+    Mutation("D69-H3-h", "source carries the requested target as well as the tool",
+             OBS_TESTS,
+             edits=(Edit(OBSERVATIONS, '        source=f"tool:{row.tool}",\n', '        source=f"tool:{row.tool} target:{row.requested_target}",\n'),),
+             prepare=_without_probe,
+             targets=('test_e_source_and_description_carry_no_target_and_no_derived_text',)),
+    Mutation("D69-H3-i", "an address is used as nmap printed it, without normalize_ip",
+             OBS_TESTS,
+             edits=(Edit(OBSERVATIONS, '    try:\n        return normalize_ip(value)\n    except CanonicalizationError:\n        return None\n', '    return value\n'),),
+             prepare=_without_probe,
+             targets=('test_a_an_ipv6_address_is_canonicalized',)),
 ]
 
 if __name__ == "__main__":
