@@ -15,12 +15,17 @@ Two things live here:
 
 What the builder may and may not say, and why each rule is a rule:
 
-``content`` is ``json.dumps(derived_view, sort_keys=True, default=str)``, produced once and
-never transformed again. The Worker is shown this string JSON-escaped a second time by
-``BaseWorker.build_prompt``, while ``_discovery_provenance`` matches against the raw string --
-so the only difference between what the model reads and what provenance reads must be JSON
-string escaping. Stripping, truncating or "cleaning" the content here would make the two
-disagree, and a lure that provenance could no longer see is exactly the D13 failure.
+``content`` is ``json.dumps(derived_view, sort_keys=True, default=str, ensure_ascii=False)``,
+produced once and never transformed again. ``ensure_ascii=False`` is a decision and not a
+default: ``json.dumps`` normally writes every non-ASCII character as a ``\\uXXXX`` escape, and
+``_discovery_provenance`` matches against this raw string, so a host a banner names with a
+non-ASCII letter would be stored as ``m\\u00fcnchen`` and a proposal for ``münchen`` could
+not be found in it. Written as the character itself, it can. The Worker is shown this string
+JSON-escaped a second time by ``BaseWorker.build_prompt``, while ``_discovery_provenance``
+matches against the raw string -- so the only difference between what the model reads and what
+provenance reads must be JSON string escaping. Stripping, truncating or "cleaning" the content
+here would make the two disagree, and a lure that provenance could no longer see is exactly the
+D13 failure.
 
 ``source`` and ``description`` are built from kernel-set fields only -- the tool's name and the
 evidence id. Neither carries the target or any text out of ``derived_view``: they sit *outside*
@@ -159,7 +164,9 @@ def observed_identities(row: EvidenceWindowRow) -> tuple[str, ...]:
 
 def observation_from_evidence(row: EvidenceWindowRow) -> Observation:
     """One evidence row as the Worker's Observation."""
-    content = json.dumps(row.derived_view, sort_keys=True, default=str)
+    content = json.dumps(
+        row.derived_view, sort_keys=True, default=str, ensure_ascii=False,
+    )
     return Observation(
         source=f"tool:{row.tool}",
         description=f"evidence {row.evidence_id}",

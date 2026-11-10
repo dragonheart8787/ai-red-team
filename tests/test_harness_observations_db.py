@@ -245,3 +245,50 @@ def test_b_the_window_is_newest_first_and_the_limit_bounds_it(engagement_id, reg
 
     assert [r.evidence_id for r in window(engagement_id, limit=1)] == [third.evidence_id]
     assert len(window(engagement_id, limit=2)) == 2
+
+
+# -- follow-up: T2 -----------------------------------------------------------------------
+
+def construct_evidence_for_run(engagement_id: str, *, run_id: str, stdout: str) -> str:
+    """**A constructed evidence row** in ``engagement_id`` whose ``run_id`` is someone else's."""
+    evidence_id = f"EV-H3-{uuid.uuid4().hex[:10]}"
+    with committing_scope(engagement_id) as conn:
+        conn.execute(
+            text("""
+                INSERT INTO evidence (evidence_id, engagement_id, run_id, type,
+                    raw_artifact_path, raw_sha256, raw_collected_at, derived_view,
+                    tool, tool_version)
+                VALUES (:ev, :eng, :run, 'tool_output', '/dev/null', :sha, now(),
+                    CAST(:view AS JSONB), 'nmap', 'constructed')
+            """),
+            {"ev": evidence_id, "eng": engagement_id, "run": run_id,
+             "sha": f"{uuid.uuid4().hex}{uuid.uuid4().hex}",
+             "view": json.dumps(nmap.derive_view(stdout, ""))},
+        )
+    return evidence_id
+
+
+def test_b_an_evidence_row_pointing_at_another_engagements_run_has_no_scan_type(
+    engagement_id, registry, engagement_factory,
+):
+    """T2. The foreign key does not stop this row from existing; row-level security is what
+    keeps the other engagement's run out of the join. A regression guard on RLS, like the
+    cross-engagement test above, and like it carries no mutation. The row is **constructed**.
+
+    The foreign run is a real ping run, so a join that did leak it would put the other
+    engagement's responder into ``observed_identities``: the assertion is not vacuous.
+    """
+    other_id, other_registry = engagement_factory()
+    foreign = scan(other_id, other_registry, host=OTHER_HOST, scan_type="ping",
+                   stdout=OTHER_PING_STDOUT)
+    assert one(other_id, foreign.evidence_id).scan_type == "ping"      # visible to its owner
+
+    evidence_id = construct_evidence_for_run(
+        engagement_id, run_id=foreign.run_id, stdout=OTHER_PING_STDOUT,
+    )
+    row = one(engagement_id, evidence_id)
+
+    assert row.derived_view["hosts"] == [OTHER_HOST]
+    assert row.scan_type is None
+    assert row.requested_target is None
+    assert observed_identities(row) == ()
