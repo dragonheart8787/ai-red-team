@@ -793,6 +793,43 @@ adds it (leading whitespace removed, `address:port` not an address); H3-i and H3
 ceiling are still undecided. Nothing before H5's loop needs them; H4 takes the window size as a parameter and does not
 pick one.
 
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Probe Z5 (read-only, run in the H4 round before any file was written): the two Unicode spellings of one
+name, as banner and as proposed target.** NFC is `m` + U+00FC + `nchen`, NFD is `mu` + U+0308 + `nchen`; the targets
+are the NFC name, the NFD name and the punycode name; the banners are the NFC spelling, the NFD spelling and a control
+that names `dc99.lure.example`. Each cell is `introduced_by_untrusted` from the real `_discovery_provenance` with
+`candidates = ()`, over an `Observation` built by the real `observation_from_evidence` from the real
+`nmap.derive_view` of constructed stdout (P-6). Output as run:
+```
+code points  NFC name: ['0x6d', '0xfc', '0x6e', '0x63', '0x68']
+code points  NFD name: ['0x6d', '0x75', '0x308', '0x6e', '0x63', '0x68']
+
+Z5b: introduced_by_untrusted (real _discovery_provenance, candidates = ())
+observation \ proposed target      | fqdn NFC             | fqdn NFD             | fqdn xn--mnchen-3ya 
+(i)   banner NFC  (u+00fc)         | True                 | True                 | True                
+(ii)  banner NFD  (u + u+0308)     | True                 | True                 | True                
+(iii) banner control dc99          | False                | False                | False               
+
+Z5c: normalize_fqdn
+  NFC input  'münchen.lure.example' -> 'xn--mnchen-3ya.lure.example'
+  NFD input  'münchen.lure.example' -> 'xn--mnchen-3ya.lure.example'
+  the two outputs are equal: True
+
+Z5d: repr() of observation.content around "visit"
+  (i)   banner NFC  (u+00fc)         '.9 (visit münchen.lure.example)\\nNma'
+  (ii)  banner NFD  (u + u+0308)     '.9 (visit münchen.lure.example)\\nNm'
+  (iii) banner control dc99          '.9 (visit dc99.lure.example)\\nNmap d'
+  contents differ: True
+  utf-8 bytes of the name region, NFC: b'm\xc3\xbcnch'  NFD: b'mu\xcc\x88nch'
+  name as it sits inside content (utf-8), NFC: b'm\xc3\xbcnchen'
+  name as it sits inside content (utf-8), NFD: b'mu\xcc\x88nchen'
+```
+In this probe NFC, NFD and punycode are all mutually detected (every banner that names the host, in any of the two
+Unicode spellings, introduces every one of the three spellings of the target; the control banner introduces none), and
+`normalize_fqdn` outputs the same punycode, `xn--mnchen-3ya.lure.example`, for both Unicode spellings, which is
+why the cells agree. **Limits [N]:** only the `fqdn` type was covered, and only constructed stdout; NFKC
+compatibility characters and other forms (full-width letters, ligatures, confusables, mixed-script names) were not
+tried, so nothing is claimed about them.
+
 ## 5. H4 -- the task source
 
 **Goal.** The Supervisor's plan becomes tasks through the product's `create_task`, with the harness's own check for a
@@ -857,6 +894,133 @@ chooses to omit `findings`, per the chosen line above; if that choice ever chang
 kept as a fossil); **H4-7** after a restart, the harness proposes again for a task it finds already created by an
 earlier run -- a test that creates a task, restarts the in-memory snapshot as a fresh process, and asserts no
 second proposal for that `task_id` must fail.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4 as built.** Commit `411b5ef` (message "D69 H4: the task source (one snapshot per round, plan once,
+filter, create)"), CI run #316, head `411b5ef7fa63c6e7bc09085be087d0e790e6a0ac`. Four new files and two changed:
+* `harness/round_snapshot.py`, 100 lines, sha256 `1aa147b2aa936cb4e347e026e3270e15afbbcc7cac9d073c727c856b97df1982`;
+* `harness/task_source.py`, 142 lines, sha256 `9e34e24f6850a4ff28fa053ad19dec31218f094460141538340c51549917ed98`;
+* `tests/test_harness_task_source.py`, 617 lines, 31 tests (no database), sha256
+  `0a8d566e0fa94f6b6c8ae60b6523aa6e6ccc5e0224d0f4ff9b36617da7122349`;
+* `tests/test_harness_task_source_db.py`, 177 lines, 5 tests (test database), sha256
+  `24a52ee0bd07a2c8f3d8e290bb4e9d377b695dbb104523da4be5cdcd3735c623`;
+* `harness/action_allowlist.py` 163 lines, sha256 `f7156616f86ffa3c87bb0c4e0312435b5f21dff752d1d46e281a61fbf563e579`:
+  three lines added (`REASON_CIDR_WITHOUT_PREFIX` and its addition to `REASON_CODES`), none removed;
+* `scripts/mutations_d69.py` 307 lines, sha256 `b5cb7bb7ea35272045e59baff29c6463d7072ce359e4552c60ac3e106bd8a104`:
+  69 lines appended at the end of `CATALOGUE`, none removed.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4's tests.** No database (31): `test_a_the_snapshot_sends_one_query_when_taken_and_none_after`,
+`test_a_the_snapshot_limit_is_required`; `test_b_everything_the_supervisor_sees_is_in_the_set_a_worker_is_judged_against`,
+`test_b_the_supervisors_view_is_the_row_as_read_and_nothing_is_cut`,
+`test_b_the_worker_set_is_the_whole_window_in_order_and_the_same_for_every_call`;
+`test_c_a_task_on_a_host_only_another_scan_names_is_introduced_by_untrusted_text` (fqdn and ip),
+`test_c_the_responder_of_the_sweep_is_established_and_is_not_introduced`; the two `test_d_` tests (findings always
+empty; tasks and decisions default empty and are used as given); `test_e_a_plan_that_gives_nothing_is_asked_once_creates_nothing_and_records_a_code`
+(None, refusal, failure), `test_e_the_failure_vocabulary_is_closed`, `test_e_a_plan_that_succeeds_has_no_failure_and_is_asked_once`,
+`test_e_an_exception_other_than_a_refusal_is_not_swallowed`; `test_f_a_cidr_without_a_prefix_is_refused_and_counted_and_the_rest_pass`
+(six cases: v4 and v6 without prefix, v4 and v6 with prefix, bare ip, fqdn),
+`test_f_the_new_reason_is_in_the_closed_vocabulary_and_the_old_ones_are_kept_in_order`;
+`test_g_an_action_outside_the_allowlist_is_refused_and_counted_by_the_check` (the unfiltered candidates let the real
+`_to_tasks` pass the action first), `test_g_when_both_rules_apply_the_action_is_what_is_counted`;
+`test_h_a_refused_task_does_not_affect_the_other_tasks_of_the_plan`;
+`test_each_task_has_its_own_transaction_and_the_caller_supplies_created_by`;
+`test_k_a_stand_in_create_task_that_raises_propagates_and_earlier_tasks_stay`;
+`test_k2_a_task_whose_transaction_does_not_commit_is_not_in_the_ledger`;
+`test_the_ledger_has_add_membership_and_a_read_only_view_and_loads_nothing`;
+`test_m2_create_task_is_named_only_in_the_task_source_and_nothing_claims_proposes_or_completes`.
+Database (5): `test_i_a_passing_task_has_a_row_an_identity_key_an_audit_event_and_a_ledger_id`,
+`test_i_created_by_is_the_callers`, `test_j_a_refused_task_has_no_row_and_the_others_do`,
+`test_k_an_exception_from_create_task_propagates_and_earlier_tasks_stay` (the failing input is a task whose `goal`
+is `None`, which `create_task` inserts and `NOT NULL` refuses), `test_l_a_new_ledger_starts_empty_whatever_another_holds_and_the_database_holds`.
+Test (m) is H2's two import-direction tests, run and passing, plus `test_m2_...` above. In the no-database file
+`create_task` and `engagement_scope` are replaced by a recording stand-in (the request allowed either that or the test
+database); the database file uses the real ones. Tests not asked for in any form: `test_k2_...`, `test_m2_...`, the
+ledger test, the per-task-transaction test, the vocabulary tests of e and f, and `test_i_created_by_is_the_callers`.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Mutations: thirty-seven in the catalogue, all thirty-seven valid.** The twenty-five earlier ones were re-run
+and are all valid, which includes H2's nine entries, seven of whose anchors are in the changed
+`harness/action_allowlist.py`. The twelve new
+ones, each red by an assertion on the test it names: **H4-1** the prefix check removed (test f, three cases and
+test h); **H4-2** the Supervisor asked again after a planning failure (test e, `assert 2 == 1`); **H4-3** a task
+refused for its action is not counted (test g); **H4-4** `observations_for_task` without its last row (tests b and c,
+four failures); **H4-5** `supervisor_evidence` cuts the view (test b and test c); **H4-6** a finding in the state
+(test d); **H4-7** `observations_for_task` re-reads the window (test a, `assert 6 == 1`; three edits, because the
+snapshot holds no connection and one has to be added); **H4-8** the `create_task` exception swallowed (test k,
+both files); **H4-9** the id added to the ledger before the commit; **H4-10** the action check removed (tests g, h,
+j); **H4-10b** the filter order reversed (not in the request; test g's both-rules case); **H4-11** a refused cidr
+not counted (not in the request; test f). Three things to know. **H4-8** fails with `DID NOT RAISE`, which the runner
+counts as a target failure but which is `pytest.fail`, not an assertion in the code under test; the request said
+"by assertion", so this is flagged for the owner. **H4-9** is red on `test_k2_...`, not on test k: adding the id
+before `create_task` is not expressible, because the id does not exist yet, and the expressible form is adding it
+inside the transaction, before the commit. **The same-target variant of H4-4** (return only the rows of the task's
+own target) is not expressible: `observations_for_task` has no parameter, and adding one for the mutation's sake
+is exactly the production change that is refused. Names: the provisional H4-4 to H4-7 above are **not** the
+catalogue's: the catalogue's H4-4 is the partial window, H4-5 the transformed evidence, H4-6 the non-empty
+findings, H4-7 the re-read; the provisional H4-5 (two separate truncations) has no entry because H4 truncates
+nothing, and the provisional H4-7 (restart) moved to H5, below. After the runs every file's hash equalled its
+pre-run hash; no probe file and no journal.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Local, on this tree.** The seven harness test files (the two new, H2's two, H3's two, and
+`test_stage_vocabulary.py`): 138 passed. Full suite: 4615 passed, 0 failed, 24 errors, the errors in the baseline's
+split 2/16/4/2 (`test_scenario_web_render` 2, `test_ad_collector_credential_delivery` 16, `test_browser_escape` 4,
+`test_dns_server_kernel_evidence` 2); output at
+`/tmp/claude-0/-home-user-ai-red-team/3cc8933a-877a-5b9a-bf4e-a849e674060c/scratchpad/h4_full_suite.txt`.
+`opa test`: 82/82; `opa fmt --fail --list`: clean; `ruff check .`: clean.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **CI, run #316, head `411b5ef7fa63c6e7bc09085be087d0e790e6a0ac`, conclusion success.** From one `get_job_logs`
+call with `tail_lines=100000`, auto-saved to
+`/root/.claude/projects/-home-user-ai-red-team/3cc8933a-877a-5b9a-bf4e-a849e674060c/tool-results/mcp-github-get_job_logs-1794368769620.txt`
+(5000 lines came back: from 03:36:16 to 03:44:50). Step 27, "Run test suite with task_relation enforcement ON (zero
+failures expected)": `================ 4639 passed, 24 warnings in 728.76s (0:12:08) =================`. Step 28, "Assert the
+enforced run had no failure, no error and no skip": `enforced: tests=4639 failures=0 errors=0 skipped=0`. **Step 26,
+"Run test suite", also concluded success, but its own `passed` line is not in what the one call returned**: the
+window began inside step 27, and the call was not repeated. So that line is not quoted here, and nothing is
+claimed about its number beyond the step's conclusion.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Three-number check.** CI total 4639 (step 27, and the count line of step 28); local 4615 passed + 24 errors
+= 4639 (the 24 are the image tests, which run in CI); 4603 + 36 new tests = 4639. They agree.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4's design decisions.**
+* **R1** One function, `take_round_snapshot(conn, *, limit)`, reads the window once through
+  `read_evidence_window` (`limit` required, no default) and returns a frozen `RoundSnapshot` holding the rows and
+  `observations_from_window`'s observations. `supervisor_evidence()` returns `EvidenceRecord`s whose `derived_view`
+  is the row's object, not transformed and not cut; `observations_for_task()` takes no argument and returns the same
+  tuple, the whole window, not filtered by target; no character is truncated anywhere. The `derived_view` objects
+  are shared with the rows, neither copied nor frozen.
+* **R2** `build_state_summary` fills `evidence` from the snapshot, `findings` is always `()`, and `tasks` and
+  `decisions` are the caller's and default empty. They are caller-supplied and default empty **because the
+  laundering path (section 11, risk 10; section 14, item 20) is pending the owner**: reading them back from the
+  database would put a Supervisor-written `goal` into a trusted prompt half, and H4 does not decide that. The
+  pieces (1) of this section's "Pieces" paragraph, a `build_state` over `query_state`, `query_findings` and
+  `query_evidence`, is therefore **not** what H4 built: it built the snapshot and the empty-by-default summary.
+* **R3** `plan` is called once. `None` is recorded as `plan_returned_none`, a `SupervisorRefusal` as
+  `plan_refused`; these two are the whole vocabulary, and no model or exception text is copied. Any other exception
+  from `plan` propagates. The real adapters fold refusal and failure into `None`, so the two are not told apart.
+* **R4** `check_task_action` first, then a `cidr` whose value has no `/` is refused and counted as
+  `cidr_without_prefix` on the task side. A `cidr` whose value is not a string is also refused, under the same
+  code (fail closed). Neither refusal is retried or re-asked, and neither touches the other tasks of the plan.
+* **R5** Each passing task has its own `engagement_scope` transaction (commit on normal exit, rollback on
+  exception, preflight P4), and its id enters the in-memory `RunTaskLedger` only **after** that transaction
+  commits. The `create_task` exception is **not caught**: it propagates, the task is not in the ledger, and the
+  tasks created before it stay in the ledger and the database. The ledger has `add`, membership and a read-only
+  `ids`, and loads nothing from the database.
+* **R6** No claim, propose or complete (`test_m2_...` pins that no harness module names those), no stop codes, no
+  round cap, no loop.
+* **`REASON_CIDR_WITHOUT_PREFIX`** was added to H2's closed vocabulary: it is **H4's only change to an H2 file**, as
+  three added lines, so the original tuple stays as H2 wrote it and H2's nine mutation anchors still match.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **What H4 does not prove.** (a) The decoy test uses constructed stdout (P-6) and the real
+`_discovery_provenance`; it shows that the observations of the whole window judge a decoy named in another
+target's scan as introduced by untrusted text, for one fqdn and one ip, not that every spelling is. (b) The
+Supervisor's prompt dumps the evidence with `ensure_ascii=True` and the Observation's content uses
+`ensure_ascii=False`; they decode to the same structure and test b pins that, but the two strings are not
+byte-equal. (c) The window's `limit` is a parameter; no number was chosen. (d) A prefix-less `cidr` is refused
+by this check and not by `create_task`, which still reads it as `/32` or `/128` (the open owner question of
+5.122).
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **The provisional H4-7 moves to H5.** The 2026-10-30 candidate "after a restart, the harness proposes again for
+a task it finds already created by an earlier run" is **moved to H5**: it can only be tested with a loop that
+has a restart and a proposal step, and H4 has neither. What H4 provides toward it is an empty-start ledger, which
+`test_l_a_new_ledger_starts_empty_whatever_another_holds_and_the_database_holds` pins.
 
 ## 6. H5 -- the proposing loop skeleton
 
@@ -959,6 +1123,12 @@ sets no timer of its own, so the bound is [D], not a new reading of SIGTERM beha
 that the harness "does not own a running container", if read as meaning no harness process ever starts or waits on
 one, does not hold for the ALLOW path: `propose_action`'s own process starts the container and blocks on it, per
 this note and the one above.
+
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Mutation candidate moved here from H4:** after a restart, the harness proposes again for a task it finds
+already created by an earlier run -- a test that creates a task, starts a new in-memory ledger as a fresh
+process would, and asserts no second proposal for that `task_id` must fail. Name provisional (the catalogue's
+H4-7 is a different entry). Reason for the move: it needs the loop, which is H5's. H4 contributes only the
+empty-start `RunTaskLedger` (H4's test l).
 
 ## 7. H6 -- the operating description
 
@@ -1091,6 +1261,9 @@ registration [R: design D69-8a, OUTCOME.md].
 the laundering path** (section 11 risk 10, section 14's row): the shadow is the first thing here that puts a real
 model in front of a `goal` written in an earlier round, so that decision comes before this registration, not after
 it. H7 is unaffected -- scripted roles only.
+[2026-11-11 review layer, under the owner's standing delegation; the owner may veto] (8) **verify the form of non-ASCII bytes in a real nmap run's output** -- the raw byte, or a backslash-x
+escape of the form `\xHH` -- since the probes use constructed stdout and the second form would be a channel the
+content rule does not cover (section 4, what H3 does not prove, (i); section 14, item 29).
 
 **Does not.** Register anything, choose a value, set a threshold, run anything, or decide what the shadow concludes.
 
@@ -1268,8 +1441,27 @@ the shadow run].
 29. [2026-11-09 review layer, under the owner's standing delegation; the owner may veto] **Non-ASCII bytes in real nmap output [N]:** whether nmap prints them
     as the byte or as a backslash-x escape is unverified; the second would be a channel the current content rule does
     not cover. To be settled when a real run's output exists (item 7).
+    [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] Now also item (8) of H8's "What must exist before registering" list (section 10): the check is
+    a precondition of the registration, not only something to settle when a run exists.
 30. [2026-11-09 review layer, under the owner's standing delegation; the owner may veto] **Window order within one transaction is by `evidence_id`:** a
     `limit` that cuts through a group of rows with the same `created_at` keeps a reproducible but arbitrary subset.
     Noted for H5, where the loop names the limit.
 31. [2026-11-09 review layer, under the owner's standing delegation; the owner may veto] **Row-level security is the only thing keeping a foreign run out of the
     window's join** (T2): the foreign key does not scope `evidence.run_id` by engagement.
+32. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4 is built and recorded** (section 5): commit `411b5ef`, CI run #316, 36 new tests, thirty-seven
+    mutations all valid, the 24 image errors in the 2/16/4/2 split. Step 26's own `passed` line was outside the
+    one log call's window and is not quoted; step 27's and step 28's lines are.
+33. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **`REASON_CIDR_WITHOUT_PREFIX` is in H2's closed vocabulary** -- H4's only change to an H2 file, three
+    added lines; `REASON_CODES` now has three entries, and a test pins the order of the first two.
+34. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **The provisional H4-7 (restart) moved to H5** (section 6): it needs the loop. H4 provides the empty-start
+    `RunTaskLedger` and its test l.
+35. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **Probe Z5** (section 4, end): NFC, NFD and punycode are mutually detected and `normalize_fqdn` gives one
+    punycode for both Unicode spellings; only the fqdn type and constructed stdout were covered, and NFKC
+    compatibility characters and other forms were not tried **[N]**.
+36. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **`tasks` and `decisions` in the Supervisor's state are caller-supplied and default empty** in H4, because
+    the laundering path (item 20) is pending the owner; each task is created in its own transaction, and enters
+    the in-memory ledger only after that transaction commits; the `create_task` exception is not caught.
+37. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **P-8's numbers are still the owner's**, needed only by H5's loop; H4's snapshot function takes `limit` as a
+    required parameter and picks none.
+38. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4-8 fails by `DID NOT RAISE`**, which the runner counts as a target failure and which is not an assertion
+    in the code under test; flagged for the owner (section 5).
