@@ -58,6 +58,9 @@ SIDES: tuple[str, ...] = (SIDE_TASK, SIDE_PROPOSAL)
 REASON_ACTION_NOT_ALLOWED = "action_not_in_allowlist"
 REASON_ACTION_MISSING = "action_missing"
 REASON_CODES: tuple[str, ...] = (REASON_ACTION_NOT_ALLOWED, REASON_ACTION_MISSING)
+# H4: one more reason, appended below so the tuple above stays exactly as H2 wrote it.
+REASON_CIDR_WITHOUT_PREFIX = "cidr_without_prefix"
+REASON_CODES = (*REASON_CODES, REASON_CIDR_WITHOUT_PREFIX)
 
 
 @dataclass(frozen=True)
