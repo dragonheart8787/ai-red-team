@@ -15,13 +15,24 @@ What is in this module and what is deliberately not:
   two closed codes in :data:`PLAN_FAILURE_CODES`. Neither the model's words nor an exception's
   text is copied into the record, and nothing asks the Supervisor a second time. Any other
   exception from ``plan`` is not caught: it is a bug in the caller, not a planning outcome.
-* A planned task is refused, before ``create_task``, when its action is not on the allowlist
-  (H2's :func:`~harness.action_allowlist.check_task_action`) and then when it is a ``cidr``
-  with no prefix length. The second rule exists because the Task Manager reads a prefix-less
-  ``cidr`` as a single address: ``10.82.0.0`` becomes ``cidr:10.82.0.0/32``, which is not the
-  range the Supervisor meant, so it would be recorded, deduplicated and scanned as something
-  else. The order matters only for which reason is counted when both apply; the action comes
-  first.
+* A planned task is refused, before ``create_task``, by three filters applied in this order, and
+  **each task is counted for one reason only -- the first filter that refuses it**. A refused
+  task is not created, not retried and not asked about again:
+
+  1. its action is not on the allowlist (H2's
+     :func:`~harness.action_allowlist.check_task_action`), counted as ``action_not_in_allowlist``
+     (or ``action_missing`` when the action is absent or not a string);
+  2. it is a ``cidr`` with no prefix length, counted as ``cidr_without_prefix``. This rule exists
+     because the Task Manager reads a prefix-less ``cidr`` as a single address: ``10.82.0.0``
+     becomes ``cidr:10.82.0.0/32``, which is not the range the Supervisor meant, so it would be
+     recorded, deduplicated and scanned as something else;
+  3. its target does not canonicalize, that is,
+     :func:`~control_plane.canonicalizer.target.normalize_target` raises
+     ``CanonicalizationError``, counted as ``target_not_canonical``. Without this, ``create_task``
+     would insert such a task with no ``identity_key``, so that it matches no other task's overlap
+     check. Only ``CanonicalizationError`` is caught here; any other exception propagates.
+
+  The four reason codes are the closed vocabulary of ``harness.action_allowlist.REASON_CODES``.
 * The exception ``create_task`` raises, and the one an unsuccessful commit raises, are **not**
   caught. They propagate, and a task whose creation did not commit is not in the ledger. Tasks
   created earlier in the same plan stay created and stay in the ledger.

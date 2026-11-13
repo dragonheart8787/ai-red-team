@@ -327,6 +327,16 @@ CATALOGUE = [
              prepare=_without_probe,
              targets=('test_t12_the_failure_text_exists_where_it_could_be_copied_and_is_in_neither_record',
                       'test_e_a_plan_that_gives_nothing_is_asked_once_creates_nothing_and_records_a_code')),
+    Mutation("D69-H4-17", "the not-canonical filter catches any exception, not only CanonicalizationError",
+             ("tests/test_harness_task_source.py",),
+             edits=(Edit("harness/task_source.py", '        except CanonicalizationError:\n', '        except Exception:\n'),),
+             prepare=_without_probe,
+             targets=('test_t14_the_not_canonical_filter_catches_only_canonicalization_error',)),
+    Mutation("D69-H4-18", "an empty plan is taken for a planning failure",
+             ("tests/test_harness_task_source.py",),
+             edits=(Edit("harness/task_source.py", '    if planned is None:\n', '    if not planned:\n'),),
+             prepare=_without_probe,
+             targets=('test_t15_an_empty_plan_creates_nothing_and_is_not_a_planning_failure',)),
 ]
 
 if __name__ == "__main__":

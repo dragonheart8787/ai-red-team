@@ -697,3 +697,74 @@ def test_t12_the_failure_text_exists_where_it_could_be_copied_and_is_in_neither_
     # and neither the outcome nor the refusal counter carries them
     assert MODEL_WORDS not in repr(outcome)
     assert MODEL_WORDS not in repr(counter.entries())
+
+
+# -- (T14) the not-canonical filter catches CanonicalizationError and nothing else --------------
+
+def test_t14_the_not_canonical_filter_catches_only_canonicalization_error(recorder, monkeypatch):
+    from control_plane.canonicalizer.target import CanonicalizationError
+
+    real = task_source.normalize_target
+
+    # (1) any other exception from normalize_target is not a refusal: it propagates
+    def explode(target):
+        raise RuntimeError(EXCEPTION_WORDS)
+
+    monkeypatch.setattr(task_source, "normalize_target", explode)
+    reply = payload(item(target_value="10.82.0.0/25"), item(target_value="10.82.0.128/25"))
+    supervisor = PlanSupervisor(reply)
+    ledger = RunTaskLedger()
+    counter = RefusalCounter()
+
+    with pytest.raises(RuntimeError, match=EXCEPTION_WORDS):
+        run(supervisor, ledger=ledger, counter=counter)
+
+    assert supervisor.plan_calls == 1
+    assert recorder.created == []
+    assert recorder.scopes == []
+    assert ledger.ids == frozenset()
+    assert counter.entries() == ()
+
+    # (2) CanonicalizationError for one target only: that task alone is counted and skipped
+    def refuse_one(target):
+        if target["logical_identity"]["value"] == "10.82.0.128/25":
+            raise CanonicalizationError("a stand-in refusal")
+        return real(target)
+
+    monkeypatch.setattr(task_source, "normalize_target", refuse_one)
+    reply = payload(
+        item(goal="first", target_value="10.82.0.0/25"),
+        item(goal="refused", target_value="10.82.0.128/25"),
+        item(goal="last", target_value="10.82.1.0/25"),
+    )
+    supervisor = PlanSupervisor(reply)
+    outcome, counter, ledger = run(supervisor)
+
+    assert supervisor.plan_calls == 1
+    assert [c.task.goal for c in outcome.created] == ["first", "last"]
+    assert [t.goal for t in recorder.created] == ["first", "last"]
+    assert counter.entries() == ((SIDE_TASK, REASON_TARGET_NOT_CANONICAL),)
+    assert len(ledger.ids) == 2
+
+
+# -- (T15) an empty plan --------------------------------------------------------------------------
+
+def test_t15_an_empty_plan_creates_nothing_and_is_not_a_planning_failure(recorder):
+    """The Supervisor's ``plan`` returns ``[]``: no task, no failure, no refusal.
+
+    This pins the **current** behaviour so that H5's "consecutive rounds with zero tasks" rule
+    has something definite to build on. It is not a decision: whether an empty plan should count
+    towards that rule, and how, is for the owner.
+    """
+    supervisor = PlanSupervisor(payload())
+    assert supervisor._to_tasks(payload(), candidates=filtered_candidates()) == []
+
+    outcome, counter, ledger = run(supervisor)
+
+    assert supervisor.plan_calls == 1
+    assert outcome.created == ()
+    assert outcome.failure is None
+    assert recorder.created == []
+    assert recorder.scopes == []
+    assert counter.entries() == ()
+    assert ledger.ids == frozenset()
