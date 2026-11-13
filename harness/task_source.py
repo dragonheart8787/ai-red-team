@@ -43,9 +43,11 @@ from agents.base_agent import ProposedTask
 from agents.llm.supervisor_base import BaseSupervisor, StateSummary, SupervisorRefusal
 from agents.llm.worker_base import ScopeCandidate
 from control_plane.api.function_api import create_task
+from control_plane.canonicalizer.target import CanonicalizationError, normalize_target
 from control_plane.state.db import engagement_scope
 from harness.action_allowlist import (
     REASON_CIDR_WITHOUT_PREFIX,
+    REASON_TARGET_NOT_CANONICAL,
     SIDE_TASK,
     RefusalCounter,
     check_task_action,
@@ -128,6 +130,11 @@ def plan_and_create_tasks(
             continue
         if _is_cidr_without_prefix(task):
             counter.record(side=SIDE_TASK, reason=REASON_CIDR_WITHOUT_PREFIX)
+            continue
+        try:
+            normalize_target(dict(task.target))
+        except CanonicalizationError:
+            counter.record(side=SIDE_TASK, reason=REASON_TARGET_NOT_CANONICAL)
             continue
         allowed.append(task)
 

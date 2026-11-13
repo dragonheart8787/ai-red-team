@@ -53,6 +53,7 @@ from harness.action_allowlist import (
     REASON_ACTION_NOT_ALLOWED,
     REASON_CIDR_WITHOUT_PREFIX,
     REASON_CODES,
+    REASON_TARGET_NOT_CANONICAL,
     SIDE_TASK,
     RefusalCounter,
     candidates_from_scope_objects,
@@ -480,7 +481,8 @@ def test_f_a_cidr_without_a_prefix_is_refused_and_counted_and_the_rest_pass(
 def test_f_the_new_reason_is_in_the_closed_vocabulary_and_the_old_ones_are_kept_in_order():
     assert REASON_CODES[:2] == ("action_not_in_allowlist", "action_missing")
     assert REASON_CODES[2] == REASON_CIDR_WITHOUT_PREFIX == "cidr_without_prefix"
-    assert len(REASON_CODES) == 3
+    assert len(REASON_CODES) == 4
+    assert REASON_CODES[3] == REASON_TARGET_NOT_CANONICAL == "target_not_canonical"
 
 
 # -- (g) an action outside the allowlist -------------------------------------------------------
@@ -615,3 +617,83 @@ def test_m2_create_task_is_named_only_in_the_task_source_and_nothing_claims_prop
     for path, found in names.items():
         for forbidden in ("claim_task", "complete_task", "propose_action"):
             assert forbidden not in found, f"{path} names {forbidden}"
+
+
+# -- (T9) a target that does not canonicalize ---------------------------------------------------
+
+@pytest.mark.parametrize(
+    "target_type, value, created",
+    [
+        ("cidr", "10.82.0.5/24", False),       # host bits set: normalize_cidr refuses it
+        ("ip", "not-an-ip", False),            # not an address at all
+        ("cidr", "10.82.0.0/24", True),
+        ("ip", "10.82.0.5", True),
+        ("fqdn", "host.example", True),
+    ],
+    ids=["cidr with host bits", "ip that is not one", "cidr", "bare ip", "fqdn"],
+)
+def test_t9_a_target_that_does_not_canonicalize_is_refused_counted_and_the_rest_pass(
+    recorder, target_type, value, created
+):
+    supervisor = PlanSupervisor(payload(item(target_type=target_type, target_value=value)))
+    outcome, counter, ledger = run(supervisor)
+
+    assert supervisor.plan_calls == 1
+    assert (len(outcome.created) == 1) is created
+    assert len(recorder.created) == (1 if created else 0)
+    expected = 0 if created else 1
+    assert counter.count(side=SIDE_TASK, reason=REASON_TARGET_NOT_CANONICAL) == expected
+    assert counter.total == (0 if created else 1)
+    assert len(ledger.ids) == (1 if created else 0)
+    assert outcome.failure is None
+
+
+# -- (T10) one reason per task: the earlier rule is the one counted ----------------------------
+
+@pytest.mark.parametrize(
+    "action, target_type, value, reason",
+    [
+        ("code.secrets", "ip", "not-an-ip", REASON_ACTION_NOT_ALLOWED),
+        ("network.scan", "cidr", "not-an-ip", REASON_CIDR_WITHOUT_PREFIX),
+    ],
+    ids=["action and not canonical", "no prefix and not canonical"],
+)
+def test_t10_when_two_rules_apply_only_the_earlier_one_is_counted(
+    recorder, action, target_type, value, reason
+):
+    reply = payload(item(action=action, target_type=target_type, target_value=value))
+    outcome, counter, _ = run(PlanSupervisor(reply), candidates=unfiltered_candidates())
+
+    assert outcome.created == ()
+    assert counter.entries() == ((SIDE_TASK, reason),)
+
+
+# -- (T11) a task refused as not canonical does not touch the others ----------------------------
+
+def test_t11_a_target_refused_as_not_canonical_does_not_affect_the_other_tasks(recorder):
+    reply = payload(
+        item(goal="first", target_value="10.82.0.0/25"),
+        item(goal="host bits", target_value="10.82.0.5/24"),
+        item(goal="last", target_value="10.82.0.128/25"),
+    )
+    supervisor = PlanSupervisor(reply)
+    outcome, counter, ledger = run(supervisor)
+
+    assert supervisor.plan_calls == 1
+    assert [t.goal for t in recorder.created] == ["first", "last"]
+    assert [c.task.goal for c in outcome.created] == ["first", "last"]
+    assert ledger.ids == frozenset({"TASK-1", "TASK-2"})
+    assert counter.entries() == ((SIDE_TASK, REASON_TARGET_NOT_CANONICAL),)
+
+
+# -- (T12) the failure text exists where it could have been copied, and is in neither record ----
+
+def test_t12_the_failure_text_exists_where_it_could_be_copied_and_is_in_neither_record(recorder):
+    supervisor = PlanSupervisor(mode="failure")
+    outcome, counter, _ = run(supervisor)
+
+    # the words are really there to be copied: the Supervisor's own call log holds them
+    assert supervisor.calls[0].failure == MODEL_WORDS
+    # and neither the outcome nor the refusal counter carries them
+    assert MODEL_WORDS not in repr(outcome)
+    assert MODEL_WORDS not in repr(counter.entries())

@@ -61,6 +61,8 @@ REASON_CODES: tuple[str, ...] = (REASON_ACTION_NOT_ALLOWED, REASON_ACTION_MISSIN
 # H4: one more reason, appended below so the tuple above stays exactly as H2 wrote it.
 REASON_CIDR_WITHOUT_PREFIX = "cidr_without_prefix"
 REASON_CODES = (*REASON_CODES, REASON_CIDR_WITHOUT_PREFIX)
+REASON_TARGET_NOT_CANONICAL = "target_not_canonical"
+REASON_CODES = (*REASON_CODES, REASON_TARGET_NOT_CANONICAL)
 
 
 @dataclass(frozen=True)

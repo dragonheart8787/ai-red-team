@@ -30,6 +30,7 @@ from control_plane.state.db import engagement_scope
 from harness.action_allowlist import (
     REASON_ACTION_NOT_ALLOWED,
     REASON_CIDR_WITHOUT_PREFIX,
+    REASON_TARGET_NOT_CANONICAL,
     SIDE_TASK,
     RefusalCounter,
 )
@@ -175,3 +176,22 @@ def test_l_a_new_ledger_starts_empty_whatever_another_holds_and_the_database_hol
     fresh = RunTaskLedger()
     assert fresh.ids == frozenset()
     assert outcome.created[0].task_id not in fresh
+
+
+def test_t13_a_task_that_does_not_canonicalize_has_no_row_and_is_not_in_the_ledger(engagement_id):
+    reply = payload(
+        item(goal="first", target_value="10.82.0.0/25"),
+        item(goal="host bits", target_value="10.82.0.5/24"),
+        item(goal="last", target_value="10.82.0.128/25"),
+    )
+    counter = RefusalCounter()
+    ledger = RunTaskLedger()
+    outcome = _plan(engagement_id, PlanSupervisor(reply), ledger=ledger, counter=counter)
+
+    assert [c.task.goal for c in outcome.created] == ["first", "last"]
+    assert ledger.ids == frozenset(c.task_id for c in outcome.created)
+    assert len(_rows(engagement_id)) == 2
+    with engagement_scope(engagement_id) as conn:
+        goals = {r[0] for r in conn.execute(text("SELECT goal FROM tasks")).all()}
+    assert goals == {"first", "last"}
+    assert counter.entries() == ((SIDE_TASK, REASON_TARGET_NOT_CANONICAL),)
