@@ -1022,6 +1022,102 @@ a task it finds already created by an earlier run" is **moved to H5**: it can on
 has a restart and a proposal step, and H4 has neither. What H4 provides toward it is an empty-start ledger, which
 `test_l_a_new_ledger_starts_empty_whatever_another_holds_and_the_database_holds` pins.
 
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **H4 follow-up as built.** Commit `d4f4ec8d017aa30aa00b5228261013f84470ac27` (message "D69 H4 follow-up: a task whose
+target does not canonicalize is refused, and the tests that pin the planning record"), CI run #318. Five existing files
+changed, no new file:
+* `harness/action_allowlist.py`, 165 lines, +2 -0, sha256 `e8c4cbc6706b25b7038a2d2eba17265ca9229fc9ab7fad61ae24630d2c991fa4`:
+  `REASON_TARGET_NOT_CANONICAL = "target_not_canonical"` and its addition to `REASON_CODES`, after the H4 lines;
+* `harness/task_source.py`, 149 lines, +7 -0, sha256 `5b51243d212319b01bf27cc5d629c17293c2d0a816ef257e6a48ab609ea9004c`:
+  the import of `CanonicalizationError` and `normalize_target`, the import of the new reason, and the third filter;
+* `tests/test_harness_task_source.py`, 699 lines, +83 -1, sha256 `da968654eb80c1d7b35f2dd9c22425d1453efe7c818aa34feeb262b067ba00d0`:
+  the one deleted line is `assert len(REASON_CODES) == 3`, replaced by `== 4` and a new assertion on the fourth value;
+* `tests/test_harness_task_source_db.py`, 197 lines, +20 -0, sha256 `3e61e35391321d68e25fcfd33ef2ab77ba42d81aa10784913cda84a8fed2016c`;
+* `scripts/mutations_d69.py`, 333 lines, +26 -0, sha256 `65bbee9eee073df6e38234b629ee85f2d591de082c0eb3e992cc543e64226492`.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **The filter and the probe behind it.** After the action check and the prefix-less `cidr` check, each planned task is
+passed to `normalize_target(dict(task.target))`; only `CanonicalizationError` is caught, and the task is then counted as
+`target_not_canonical` on the task side and skipped; every other exception propagates. Read-only probe run before the
+change (`python -I -c`, no database, no file): `{"type": "cidr", "value": "10.82.0.5/24"}` raises
+`CanonicalizationError: cidr '10.82.0.5/24' has host bits set. It is ambiguous between one host and the 256-address network
+10.82.0.0/24, and normalizing it would pick the wider reading. Pass 10.82.0.0/24 for the network, or the bare address for the host.`;
+`{"type": "cidr", "value": "10.82.0.0/24"}` and `{"type": "fqdn", "value": "host.example"}` normalize; `{"type": "ip", "value":
+"not-an-ip"}` raises `CanonicalizationError: invalid ip 'not-an-ip': 'not-an-ip' does not appear to be an IPv4 or IPv6 address`.
+`CanonicalizationError` is defined at `control_plane/canonicalizer/target.py:35` and is a `ValueError`. One further probe,
+outside the four targets asked for, was needed for the order test: `{"type": "cidr", "value": "not-an-ip"}` (no prefix, and
+not a network) raises `CanonicalizationError: invalid cidr 'not-an-ip': 'not-an-ip' does not appear to be an IPv4 or IPv6 network`,
+so it is a target that violates both the prefix rule and the canonical rule.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **New tests (10 cases, 11 with the changed one).** T9 `test_t9_a_target_that_does_not_canonicalize_is_refused_counted_and_the_rest_pass`
+(5 cases: a `cidr` with host bits and an `ip` that is not one are refused and counted; `10.82.0.0/24`, a bare ip and an fqdn pass;
+`plan` is called once in each); T10 `test_t10_when_two_rules_apply_only_the_earlier_one_is_counted` (2 cases: action and not
+canonical counts the action only; no prefix and not canonical counts the prefix only); T11
+`test_t11_a_target_refused_as_not_canonical_does_not_affect_the_other_tasks`; T12
+`test_t12_the_failure_text_exists_where_it_could_be_copied_and_is_in_neither_record` (asserts that
+`supervisor.calls[0].failure` holds the words, and that they are in neither `repr(outcome)` nor `repr(counter.entries())`); T13, in
+the database file, `test_t13_a_task_that_does_not_canonicalize_has_no_row_and_is_not_in_the_ledger`. The changed line is in
+`test_f_the_new_reason_is_in_the_closed_vocabulary_and_the_old_ones_are_kept_in_order`. In all T9 cases the targets expected to be
+refused were refused by `normalize_target`; none of them passed.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Mutations: forty-two in the catalogue, all forty-two valid.** The thirty-seven earlier ones were re-run unchanged and are all
+valid, with every H2 and H4 anchor still matching. The five new ones: **H4-12** the not-canonical check removed (T9, two cases, and
+T11); **H4-13** a target refused as not canonical is not counted (T9, two cases, and T11); **H4-14** after a refusal the Supervisor is asked
+once more and its second refusal swallowed (test e's refusal case, `assert 2 == 1`); **H4-15** `except SupervisorRefusal` widened to
+`except Exception` (`test_e_an_exception_other_than_a_refusal_is_not_swallowed`, `Failed: DID NOT RAISE RuntimeError`); **H4-16** the
+recorded failure taken from `supervisor.calls[-1].failure` (T12, `assert 'MODEL-WORDS-7c1f' not in "PlanOutcome...WORDS-7c1f')"`, and
+test e's failure case, `assert 'MODEL-WORDS-7c1f' == 'plan_returned_none'`; test e's `none` case fails with `IndexError: list index out of
+range`, recorded as `other`, as the request said). The T10 cases also turned red under five of the earlier entries (H4-1,
+H4-3, H4-10, H4-10b, H4-11); that only widens what they are caught by. After the runs every file's hash equalled its
+pre-run hash; no probe file and no journal.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Local, on this tree.** The seven harness test files: 148 passed (138 before, plus the 10 new cases). Full suite: 4625 passed,
+0 failed, 24 errors in the baseline's 2/16/4/2 split (`test_scenario_web_render` 2, `test_ad_collector_credential_delivery` 16,
+`test_browser_escape` 4, `test_dns_server_kernel_evidence` 2); output at
+`/tmp/claude-0/-home-user-ai-red-team/3cc8933a-877a-5b9a-bf4e-a849e674060c/scratchpad/h4_followup_full_suite.txt`. `opa test`: 82/82;
+`opa fmt --fail --list`: clean; `ruff check .`: clean. The three registered files are SAME as the `0747cbe` blobs.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **CI, run #318, head `d4f4ec8d017aa30aa00b5228261013f84470ac27`, conclusion success.** From one `get_job_logs` call with
+`tail_lines=100000`, auto-saved to
+`/root/.claude/projects/-home-user-ai-red-team/3cc8933a-877a-5b9a-bf4e-a849e674060c/tool-results/mcp-github-get_job_logs-1794536590046.txt`
+(5000 lines came back, from 02:10:18 to 02:18:30). Step 27, "Run test suite with task_relation enforcement ON (zero failures
+expected)": `================ 4649 passed, 24 warnings in 712.09s (0:11:52) =================`. Step 28, "Assert the enforced run had no
+failure, no error and no skip": `enforced: tests=4649 failures=0 errors=0 skipped=0`. Step 26, "Run test suite", concluded success, but
+its own `passed` line again lies before the window the one call returned and is not quoted. **Three-number check:** CI total 4649;
+local 4625 passed + 24 errors = 4649; 4639 + 10 new cases = 4649. They agree.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Correction to the record of H4-8 (and H2-7, H3-n).** `Failed: DID NOT RAISE` is produced by `pytest.raises` and is an
+assertion-class failure of the test; the review layer rules that H4-8, H2-7 and H3-n are valid, and that H4-10b and H4-11 are accepted. The
+two places above that call H4-8 "flagged for the owner" -- the "Three things to know" sentence of the mutations paragraph of "H4 as
+built", and section 14, item 38 -- are treated as decided; those older lines are kept as they are.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Correction of a wording used in this plan.** The sentences that say the Supervisor, the Worker and `_discovery_provenance` use "the
+same string", "one string, three uses" or "one string used three ways" (the P-8 chosen lines, section 1; section 1's cost paragraph; section 4's
+"(d) the same window and the same string"; and the sentence at the end of section 4's content-encoding decision that H4 requires the two
+to "share this string") do not hold as written. The Supervisor's prompt is built by the base class, which dumps each `EvidenceRecord.as_dict()`
+with `json.dumps(..., indent=2, sort_keys=True, default=str)`, so with the default `ensure_ascii=True`; a Worker's `Observation.content` is
+`json.dumps(derived_view, sort_keys=True, default=str, ensure_ascii=False)`, and the Worker's prompt escapes that once more. The strings
+differ in bytes. The invariant that can be tested, and is (test b), is **equality of the data**: `json.loads(observation.content)` equals the
+`derived_view` the Supervisor was shown, for every row. `_discovery_provenance` still compares against `Observation.content`, so the
+property that matters -- the observation set covers everything the Supervisor was shown -- is unchanged.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Decision record: a target that does not canonicalize is refused (a review-layer choice; the owner may veto).** Why it is in the
+harness: `create_task` computes its identity with `_task_identity`, which turns a `CanonicalizationError` into `(None, None)` and goes on to
+insert the task with `identity_key` and `canonical_target` NULL [R: `control_plane/api/function_api.py`, `_task_identity` and `create_task`], so a
+task nobody can reduce is created and matches no other task's overlap check. The harness now refuses it before `create_task`, counts it as
+`target_not_canonical`, and does not ask the Supervisor again. The new reason code is the fourth in the closed vocabulary; `REASON_CODES`
+now has four entries. The order of the three filters is action, prefix-less `cidr`, not canonical, and **each task is counted for one
+reason only**, the first that applies (T10). Separately: `create_task` still reads a prefix-less `cidr` as `/32` (or `/128`); the harness
+refuses it by the narrower rule in place since H4. That rule is the harness's own and is unrelated to the open owner question of 5.122, so the
+closing clause of "What H4 does not prove", (d), above, is corrected to: the question of what `create_task` should do with a prefix-less `cidr`
+is not decided here. The module docstring of `harness/task_source.py` still lists two filters; it was not touched because the change was
+authorized as code only.
+
+[2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **What H4 does not prove, continued.** (e) The snapshot is read before the planning call and the tasks are created after it, so evidence
+written in between is not in the observations a Worker is later judged against; this is a limit the design accepts. (f) The Supervisor's
+`tasks` and `decisions` default to empty, so it cannot see the tasks already created and may plan the same work again in the next round;
+`create_task` marks the overlap and does not drop the task, and the bound is H5's round cap and call limits. (g) The five mutations added
+here protect, respectively: the not-canonical filter existing, its counting, one planning call after a refusal, the exception from `plan`
+that is not a refusal propagating, and the recorded failure carrying no model text.
+
 ## 6. H5 -- the proposing loop skeleton
 
 **Goal.** A resident, serial loop with its stop rules, built with **scripted** roles, against the real pipeline and
@@ -1465,3 +1561,20 @@ the shadow run].
     required parameter and picks none.
 38. [2026-11-11 review layer, under the owner's standing delegation; the owner may veto] **H4-8 fails by `DID NOT RAISE`**, which the runner counts as a target failure and which is not an assertion
     in the code under test; flagged for the owner (section 5).
+39. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **H4 follow-up is built and recorded** (section 5): commit `d4f4ec8`, CI run #318, 10 new cases, forty-two mutations all valid, the
+    24 image errors in the 2/16/4/2 split; step 26's own `passed` line was outside the one log call's window and is not quoted.
+40. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **H4-8, H2-7 and H3-n are valid** (section 5): `DID NOT RAISE` from `pytest.raises` is an assertion-class failure; item 38 above is
+    treated as decided.
+41. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **The "same string" wording is corrected** (section 5): the testable invariant is equality of data (test b), not of the string; the Supervisor's
+    prompt uses `ensure_ascii=True` and a Worker's `content` uses `ensure_ascii=False`.
+42. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **A target that does not canonicalize is refused by the harness** (section 5): reason code `target_not_canonical`, one reason per task, in the
+    order action, prefix-less `cidr`, not canonical; a review-layer choice. The module docstring of `harness/task_source.py` still lists two
+    filters and needs a comment-only correction in a later code commit.
+43. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **What `create_task` does with a prefix-less `cidr` (`/32` or `/128`) and with a target that does not canonicalize (a task with a NULL
+    `identity_key`)** is not decided here; the harness refuses both before `create_task`, and the question of changing `create_task` itself
+    belongs to the owner and is separate from 5.122.
+44. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **Two H4 limits** (section 5, "What H4 does not prove", (e) and (f)): evidence written between the snapshot and the creation of a task is
+    outside the Worker's observation set, and the Supervisor does not see tasks already created, so it may re-plan the same work; the bound is
+    H5's round cap and call limits.
+45. [2026-11-13 review layer, under the owner's standing delegation; the owner may veto] **A proposal, not a decision: H5 split into three parts** -- the pieces that need no database, the registry and its migration, and the
+    assembly of the loop. To be put forward by the review layer separately; nothing about it is decided and nothing here changes section 6.
