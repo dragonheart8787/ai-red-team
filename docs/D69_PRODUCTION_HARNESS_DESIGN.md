@@ -598,6 +598,7 @@ is a design choice of the owner's].
 * Pause and kill: `pause_engagement`, `resume_engagement`, `engage_kill_switch` change database rows
   (`engagement.py:222-279`). The pipeline checks them at every stage boundary of `propose_action` (ADR D60
   addendum; ACCEPTANCE 5.53), and the scheduler defers (`engagement_paused`, `engagement_killed`) [R].
+* [2026-11-14 superseded by docs/D69_H5_PREFLIGHT_REPORT.md section A.4 and plan item 54] The sentence that the pipeline checks pause and kill state "at every stage boundary of propose_action" is wider than the code: propose_action reads status and kill_switch_engaged only at the issue stage (check_preconditions) and at the start of dispatch (_fresh_capability); the decide stage and the stages before it do not read them, so the harness's own check before each Supervisor call, claim and proposal is what keeps a paused or killed engagement from reaching the Reviewer. The earlier lines are kept as they are.
 * **The kill switch does not stop a running container.** ACCEPTANCE 5.24: "nothing stops the container";
   revoking only flips a row checked at issue and renewal time; the ADR index: "D58-16 ... NOT built (the
   kill switch does not stop a running container)". Docker containers are labelled with their `run_id` and
