@@ -16,7 +16,7 @@ the first run and are not tuned from data (D69-5d), so no value here could be mi
   hold, the cap is reported: it is the one that does not depend on what the models said. It is
   meant to be asked at a round boundary, after ``end_round``.
 
-:class:`RunCounters` counts four things a run must be able to say afterwards, under a closed
+:class:`RunCounters` counts five things a run must be able to say afterwards, under a closed
 list of names; an unknown name is an error, not a new counter.
 """
 
@@ -28,9 +28,11 @@ COUNTER_SKIPPED_ENGAGEMENT = "skipped_engagement"
 COUNTER_NOT_RUN = "not_run"
 COUNTER_NOT_EXECUTED = "not_executed"
 COUNTER_UNKNOWN_OUTCOME = "unknown_outcome"
+COUNTER_DEDUPLICATED = "deduplicated"
 
 COUNTER_NAMES = (
     COUNTER_SKIPPED_ENGAGEMENT, COUNTER_NOT_RUN, COUNTER_NOT_EXECUTED, COUNTER_UNKNOWN_OUTCOME,
+    COUNTER_DEDUPLICATED,
 )
 
 
@@ -80,7 +82,7 @@ class Bounds:
 
 
 class RunCounters:
-    """Counts under the four names of :data:`COUNTER_NAMES`; any other name is a ``ValueError``."""
+    """Counts under the five names of :data:`COUNTER_NAMES`; any other name is a ``ValueError``."""
 
     def __init__(self) -> None:
         self._counts = {name: 0 for name in COUNTER_NAMES}

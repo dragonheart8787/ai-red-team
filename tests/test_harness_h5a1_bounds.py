@@ -152,8 +152,9 @@ def test_the_module_holds_no_number_of_its_own_beyond_0_and_1():
 # ---------------------------------------------------------------- the counters
 
 
-def test_the_counter_names_are_the_four_and_only_the_four():
-    assert b.COUNTER_NAMES == ("skipped_engagement", "not_run", "not_executed", "unknown_outcome")
+def test_the_counter_names_are_the_five_and_only_the_five():
+    assert b.COUNTER_NAMES == ("skipped_engagement", "not_run", "not_executed", "unknown_outcome",
+                               "deduplicated")
     assert RunCounters().snapshot() == dict.fromkeys(b.COUNTER_NAMES, 0)
 
 
@@ -177,7 +178,25 @@ def test_the_snapshot_is_a_copy():
     snap["not_executed"] = 99
     snap["invented"] = 1
     assert counters.snapshot() == {"skipped_engagement": 0, "not_run": 0, "not_executed": 1,
-                                   "unknown_outcome": 0}
+                                   "unknown_outcome": 0, "deduplicated": 0}
+
+
+def test_all_five_names_are_accepted_deduplicated_among_them_and_an_invented_one_is_refused():
+    counters = RunCounters()
+    assert len(b.COUNTER_NAMES) == 5
+    assert b.COUNTER_DEDUPLICATED == "deduplicated"
+    assert b.COUNTER_DEDUPLICATED in b.COUNTER_NAMES
+    for name in b.COUNTER_NAMES:
+        counters.increment(name)
+        assert counters.count(name) == 1
+    counters.increment("deduplicated")
+    assert counters.count("deduplicated") == 2
+    assert counters.count("unknown_outcome") == 1      # a dedup hit is not counted as one
+    with pytest.raises(ValueError):
+        counters.increment("invented")
+    with pytest.raises(ValueError):
+        counters.count("invented")
+    assert list(counters.snapshot()) == list(b.COUNTER_NAMES)
 
 
 @pytest.mark.parametrize("name", ["invented", "", "NOT_RUN", "not run", None, 3, "executed"])

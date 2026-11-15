@@ -14,6 +14,8 @@ import pytest
 
 from harness import result_summary as rs
 from harness.result_summary import (
+    FAILURE_DEDUP_HIT,
+    STATE_DEDUPLICATED,
     build_summary,
     executed_state,
     is_key_conflict,
@@ -82,6 +84,96 @@ def test_the_state_is_judged_by_the_ids_and_never_by_the_decision(decision):
     only_run = SimpleNamespace(decision=decision, failure=None, run_id="RUN-1", evidence_id=None)
     assert build_summary(both) == "executed"
     assert build_summary(only_run) == "unknown_outcome"
+
+
+# ---------------------------------------------------------------- the dedup hit (plan item 71)
+#
+# ``dispatch.py`` answers a dedup hit with ``DispatchOutcome(False, cached["run_id"], SUCCEEDED,
+# reason="dedup_hit")``: a run id, no evidence id, the failure ``dedup_hit``. The old run
+# succeeded and has its evidence, so this is not an unknown outcome.
+
+
+@pytest.mark.parametrize("decision", rs.DECISIONS)
+def test_a_dedup_hit_with_only_a_run_id_is_deduplicated_and_its_summary_is_dedup_hit(decision):
+    assert FAILURE_DEDUP_HIT == "dedup_hit"
+    assert STATE_DEDUPLICATED == "deduplicated"
+    for evidence_id in (None, ""):
+        assert executed_state("RUN-1", evidence_id, "dedup_hit") == "deduplicated"
+        out = Outcome(decision, failure="dedup_hit", run_id="RUN-1", evidence_id=evidence_id)
+        assert build_summary(out) == "dedup_hit"
+        assert build_summary(out) != "unknown_outcome"
+
+
+@pytest.mark.parametrize("failure", [
+    None, "", "dispatch_in_progress_or_unknown_outcome", "unknown_outcome", "tool_run_timed_out",
+    "dedup_hit ", " dedup_hit", "DEDUP_HIT", "dedup_hit: MODEL-WORDS-7c1f", *FREE_TEXTS,
+])
+def test_only_a_run_id_without_exactly_dedup_hit_stays_unknown_outcome(failure):
+    assert executed_state("RUN-1", None, failure) == "unknown_outcome"
+    assert build_summary(Outcome("ALLOW", failure=failure, run_id="RUN-1")) == "unknown_outcome"
+
+
+def test_the_failure_argument_is_optional_and_a_run_id_alone_is_still_unknown_outcome():
+    assert executed_state("RUN-1", None) == "unknown_outcome"
+    assert executed_state("RUN-1", None, None) == "unknown_outcome"
+
+
+def test_both_ids_with_a_dedup_hit_failure_is_executed():
+    assert executed_state("RUN-1", "EV-1", "dedup_hit") == "executed"
+    assert build_summary(Outcome("ALLOW", failure="dedup_hit", run_id="R", evidence_id="E")) \
+        == "executed"
+
+
+def test_neither_id_with_a_dedup_hit_failure_follows_the_decision_rules_as_before():
+    assert executed_state(None, None, "dedup_hit") == "not_executed"
+    assert executed_state("", "", "dedup_hit") == "not_executed"
+    assert build_summary(Outcome("ALLOW", failure="dedup_hit")) == "not_executed"
+    assert build_summary(Outcome("DENY", failure="dedup_hit")) == "DENY:dedup_hit"
+    assert build_summary(Outcome("HUMAN_APPROVAL", failure="dedup_hit")) \
+        == "HUMAN_APPROVAL:dedup_hit"
+    with pytest.raises(ValueError):
+        executed_state(None, "EV-1", "dedup_hit")       # an evidence id alone is still refused
+
+
+@pytest.mark.parametrize("bad", [5, 0, True, b"dedup_hit", ["dedup_hit"], ("dedup_hit",), 1.5])
+def test_a_failure_that_is_neither_a_string_nor_none_is_refused(bad):
+    for run_id, evidence_id in (("RUN-1", "EV-1"), ("RUN-1", None), (None, None), ("", "")):
+        with pytest.raises(ValueError):
+            executed_state(run_id, evidence_id, bad)
+        with pytest.raises(ValueError):
+            build_summary(Outcome("ALLOW", failure=bad, run_id=run_id, evidence_id=evidence_id))
+
+
+@pytest.mark.parametrize("text", FREE_TEXTS)
+def test_free_text_reaches_the_summary_in_none_of_the_four_states(text):
+    # One outcome per state. The failure carries the free text where the state allows one; a
+    # deduplicated state needs the failure ``dedup_hit``, so there the text sits in the other
+    # places an outcome has (the ids and the deny reasons), and one more case has it after the
+    # code, which is not a dedup hit.
+    cases = {
+        "executed": ("executed", Outcome("ALLOW", text, "RUN-1", "EV-1")),
+        "unknown_outcome": ("unknown_outcome", Outcome("ALLOW", text, "RUN-1", None)),
+        "dedup-shaped text is not a dedup hit": (
+            "unknown_outcome", Outcome("ALLOW", f"dedup_hit {text}", "RUN-1", None)),
+        "deduplicated": ("dedup_hit", Outcome("ALLOW", "dedup_hit", f"RUN-{text}", None,
+                                              deny_reasons=(text,))),
+        "not_executed": ("not_executed", Outcome("ALLOW", text)),
+    }
+    for label, (expected, outcome) in cases.items():
+        summary = build_summary(outcome)
+        assert summary == expected, (label, summary)
+        assert text not in summary, (label, summary)
+        assert is_valid_summary(summary), (label, summary)
+
+
+def test_the_dedup_summary_is_a_valid_summary_and_the_state_name_is_not():
+    assert is_valid_summary("dedup_hit") is True
+    assert is_valid_summary(build_summary(Outcome("ALLOW", "dedup_hit", "RUN-1", None))) is True
+    for decision in rs.DECISIONS:
+        for run_id, evidence_id in (("R", "E"), ("R", None), (None, None)):
+            summary = build_summary(Outcome(decision, "dedup_hit", run_id, evidence_id))
+            assert is_valid_summary(summary), (decision, run_id, evidence_id, summary)
+    assert is_valid_summary("deduplicated") is False    # a state, never a summary
 
 
 # ---------------------------------------------------------------- the summary

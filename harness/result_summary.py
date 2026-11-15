@@ -6,16 +6,22 @@ closed vocabulary, and never copies anything a model, a tool or an exception wro
 target string into it, ``:606`` an adapter's message, ``dispatch.py:482`` an exception's text),
 not ``deny_reasons`` text, nothing (plan items 55 and 56).
 
-Three states say whether an action ran, judged by the two ids and **not** by ``decision``:
+Four states say whether an action ran, judged by the two ids (and, in one case below, by the
+failure) and **not** by ``decision``:
 
 * both ``run_id`` and ``evidence_id`` -> ``executed``;
-* only ``run_id`` -> ``unknown_outcome``: a run row exists and no evidence was recorded, so the
-  tool may have run. It is not "not executed" and v0 does not retry it (plan item 65);
+* only ``run_id``, and ``failure`` is exactly ``dedup_hit`` -> ``deduplicated``: the pipeline found
+  an earlier run of the same work, which succeeded and has its evidence, and returned that run's
+  id without an evidence id (``dispatch.py`` ``DispatchOutcome(False, cached["run_id"], SUCCEEDED,
+  reason="dedup_hit")``). It is not an unknown outcome (plan item 71);
+* only ``run_id`` otherwise -> ``unknown_outcome``: a run row exists and no evidence was recorded,
+  so the tool may have run. It is not "not executed" and v0 does not retry it (plan item 65);
 * neither -> ``not_executed``.
 
 :func:`build_summary` turns an outcome into one closed string:
 
 * executed or unknown_outcome: that word, whatever the decision and the failure;
+* deduplicated: ``dedup_hit``, a token of the vocabulary;
 * not executed and ``ALLOW``: ``not_executed``;
 * not executed and ``DENY`` or ``HUMAN_APPROVAL``: the decision, and ``:<token>`` when there is
   a failure; a failure that is in the vocabulary is that token, one that is not is ``other``.
@@ -37,7 +43,12 @@ DECISIONS = (DECISION_ALLOW, DECISION_DENY, DECISION_HUMAN_APPROVAL)
 
 STATE_EXECUTED = "executed"
 STATE_UNKNOWN_OUTCOME = "unknown_outcome"
+STATE_DEDUPLICATED = "deduplicated"
 STATE_NOT_EXECUTED = "not_executed"
+
+#: The one failure that changes a state: a run id without an evidence id is a dedup hit, not an
+#: unknown outcome, when the failure is exactly this.
+FAILURE_DEDUP_HIT = "dedup_hit"
 
 TOKEN_NOT_RUN = "not_run"
 TOKEN_OTHER = "other"
@@ -88,12 +99,18 @@ def _present(value: object, name: str) -> bool:
     raise ValueError(f"{name} is a string or empty, not {type(value).__name__}")
 
 
-def executed_state(run_id: str | None, evidence_id: str | None) -> str:
-    """``executed``, ``unknown_outcome`` or ``not_executed``, from the two ids only."""
+def executed_state(run_id: str | None, evidence_id: str | None, failure: str | None = None) -> str:
+    """``executed``, ``deduplicated``, ``unknown_outcome`` or ``not_executed``, from the two ids
+    and, for a run id alone, from whether ``failure`` is exactly ``dedup_hit``. ``failure`` is a
+    string or ``None``; anything else is a ``ValueError``."""
+    if failure is not None and not isinstance(failure, str):
+        raise ValueError(f"failure is a string or None, not {type(failure).__name__}")
     has_run = _present(run_id, "run_id")
     has_evidence = _present(evidence_id, "evidence_id")
     if has_run and has_evidence:
         return STATE_EXECUTED
+    if has_run and failure == FAILURE_DEDUP_HIT:
+        return STATE_DEDUPLICATED
     if has_run:
         return STATE_UNKNOWN_OUTCOME
     if has_evidence:
@@ -116,9 +133,11 @@ def build_summary(outcome: Any) -> str:
     decision = outcome.decision
     if decision not in DECISIONS:
         raise ValueError(f"not a decision: {decision!r}")
-    state = executed_state(outcome.run_id, outcome.evidence_id)
+    state = executed_state(outcome.run_id, outcome.evidence_id, outcome.failure)
     if state == STATE_EXECUTED:
         return STATE_EXECUTED
+    if state == STATE_DEDUPLICATED:
+        return FAILURE_DEDUP_HIT
     if state == STATE_UNKNOWN_OUTCOME:
         return STATE_UNKNOWN_OUTCOME
     if decision == DECISION_ALLOW:
