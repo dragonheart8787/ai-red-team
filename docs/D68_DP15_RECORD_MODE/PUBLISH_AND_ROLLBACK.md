@@ -29,7 +29,7 @@ Steps (the database name is the owner's choice; `cyberorch_dp15` is what was tri
 
 1. **Create it, at head.** `DB_NAME=cyberorch_dp15 bash scripts/init_db.sh` creates the roles
    (idempotent), the database owned by `migration_owner`, and runs `alembic upgrade head`; the head
-   is **0030**. **It also rewrites `.env`** so that every connection string names the new database:
+   is **0031**. **It also rewrites `.env`** so that every connection string names the new database:
    keep the old file first (`cp -p .env .env.keep`), or run the script from a separate checkout.
    The measurement is then run with the `.env` that names the new database -- the generator prints
    that name first, and the owner reads it before typing `SEND`. [E: run on the development

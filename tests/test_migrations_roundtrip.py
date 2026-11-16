@@ -1070,3 +1070,35 @@ def test_0030_adds_only_the_record_of_looks_and_takes_it_back(scratch):
     scratch.alembic("upgrade", "0030")
     assert not snapshot_diff(s30, scratch.snapshot()), "\n".join(
         snapshot_diff(s30, scratch.snapshot()))
+
+
+
+def test_0031_adds_only_the_enrolment_table_of_the_harness_and_takes_it_back(scratch):
+    scratch.alembic("upgrade", "0030")
+    s30 = scratch.snapshot()
+
+    scratch.alembic("upgrade", "0031")
+    s31 = scratch.snapshot()
+    added = _additions_only(s30, s31)
+    assert {"relation:harness_enrolment", "index:harness_enrolment_live",
+            "constraint:harness_enrolment.harness_enrolment_purpose_check",
+            "constraint:harness_enrolment.harness_enrolment_withdrawn_pair",
+            "trigger:harness_enrolment.harness_enrolment_guard",
+            "function:harness_enrolment_guard()",
+            "policy:harness_enrolment.runtime_read", "policy:harness_enrolment.runtime_insert",
+            "policy:harness_enrolment.runtime_withdraw"} <= added, sorted(added)
+    assert all("harness_enrolment" in key for key in added), sorted(added)
+    grants = {(grantee, privilege) for table, grantee, privilege
+              in scratch.fingerprint()["table_grants"]
+              if table == "harness_enrolment" and grantee != "migration_owner"}
+    assert grants == {("cyberorch_app", "INSERT"), ("cyberorch_app", "SELECT")}
+
+    scratch.alembic("downgrade", "0030")
+    assert scratch.revision() == "0030"
+    assert not snapshot_diff(s30, scratch.snapshot()), "\n".join(
+        snapshot_diff(s30, scratch.snapshot()))
+    assert "harness_enrolment" not in scratch.tables()
+
+    scratch.alembic("upgrade", "0031")
+    assert not snapshot_diff(s31, scratch.snapshot()), "\n".join(
+        snapshot_diff(s31, scratch.snapshot()))

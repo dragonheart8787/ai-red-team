@@ -89,8 +89,8 @@ def test_position_3_an_engagement_closed_after_the_worker_answered_is_not_propos
 
 
 def test_a_kill_that_comes_in_after_a_proposal_is_not_noticed_until_the_next_check():
-    # The first task is proposed; the engagement is killed during its propose. The second task's
-    # work is the next thing, and the check before the proposal refuses it.
+    # The first task is proposed; the engagement is killed during its propose. The check before a
+    # claim (position 2) refuses the second task: never claimed, the stop completes it as not_run.
     ports = FakePorts(("ENG-1",), tasks_per_plan=2)
     ports.after("propose", lambda p, engagement_id, task_id: p.closed.add(engagement_id))
 

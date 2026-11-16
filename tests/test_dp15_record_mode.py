@@ -1004,6 +1004,53 @@ def test_the_script_publishes_no_global_policy_and_never_takes_the_one_look():
 # -- the documents that go with the guards ---------------------------------------
 
 DOCS = REPO / "docs" / "D68_DP15_RECORD_MODE"
+MIGRATIONS = REPO / "db" / "migrations" / "versions"
+
+
+def _migration_parents() -> dict[str, tuple[str, ...]]:
+    """Every migration revision and the revision(s) it follows, read from the files with ``ast``
+    (nothing is imported or run)."""
+    found: dict[str, tuple[str, ...]] = {}
+    for path in sorted(MIGRATIONS.glob("*.py")):
+        values = {}
+        for node in ast.parse(path.read_text()).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in ("revision", "down_revision")):
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+        down = values["down_revision"]
+        found[values["revision"]] = (
+            () if down is None else (down,) if isinstance(down, str) else tuple(down))
+    return found
+
+
+def _recorded_revision(out: str) -> str:
+    """The XXXX of the third line of a recorded dry run:
+    ``migration revision: XXXX -- this checkout's head is XXXX (matches)``."""
+    line = out.splitlines()[2]
+    prefix = "migration revision: "
+    assert line.startswith(prefix), line
+    revision = line[len(prefix):].split(" ", 1)[0]
+    assert line == f"{prefix}{revision} -- this checkout's head is {revision} (matches)", line
+    return revision
+
+
+def _is_a_revision_not_newer_than(revision: str, head: str, parents) -> bool:
+    """Whether ``revision`` is a migration revision that is ``head`` or one of its ancestors in the
+    ``down_revision`` chain. A revision is never compared as a string: ``9999`` is not newer than
+    ``0031`` because it is not in the chain, and a revision that exists but comes after ``head``
+    is not in the chain either."""
+    if revision not in parents:
+        return False
+    seen: set[str] = set()
+    stack = [head]
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in parents:
+            continue
+        seen.add(current)
+        stack.extend(parents[current])
+    return revision in seen
 
 
 def test_the_publish_document_says_how_to_make_the_clean_database_and_that_it_is_where_to_run():
@@ -1028,11 +1075,47 @@ def test_the_committed_dry_run_shows_the_policy_after_publication_with_the_switc
     assert "goal_fit_enforce: off" in after
     assert any("computed by the policy code" in line for line in lines)
     assert any("turns the switch on reads goal_fit_enforce: ON" in line for line in lines)
-    head = rm.code_head()
-    assert f"migration revision: {head} -- this checkout's head is {head}" in out
+    # The record was made at the head of its day and is not rewritten when a migration is added
+    # (docs/D69_IMPLEMENTATION_PLAN.md item 84): what is asked is that the revision it records is a
+    # real one and is not newer than the head of this checkout.
+    recorded = _recorded_revision(out)
+    assert _is_a_revision_not_newer_than(recorded, rm.code_head(), _migration_parents()), recorded
     assert ("calls already recorded (goal_fit_calls): "
             "code.scan 0, code.secrets 0, network.scan 0") in out
     assert "startup guards: ok" in out
     refused = (DOCS / "dry_run_refused_on_dev_db.txt").read_text()
     assert "WOULD REFUSE: network.scan already has" in refused
     assert refused.rstrip().endswith("(exit status 1)")
+
+
+def test_the_check_of_the_recorded_revision_refuses_one_that_is_not_a_revision_or_is_newer():
+    fake = ("DRY RUN -- nothing was sent\ndatabase: x\n"
+            "migration revision: 9999 -- this checkout's head is 9999 (matches)\n")
+    assert _recorded_revision(fake) == "9999"
+    chain = {"0001": (), "0002": ("0001",), "0003": ("0002",)}
+    # 9999 is not a revision there is, on a made-up chain and on the real one
+    assert not _is_a_revision_not_newer_than("9999", "0002", chain)
+    real, head = _migration_parents(), rm.code_head()
+    assert not _is_a_revision_not_newer_than("9999", head, real)
+    # a revision that exists and comes after the head is refused; the head and the ones before pass
+    assert not _is_a_revision_not_newer_than("0003", "0002", chain)
+    assert [_is_a_revision_not_newer_than(r, "0002", chain) for r in ("0001", "0002")] == [True] * 2
+    # on the real chain: a made-up child of the head is newer than the head, the head and its
+    # first ancestor are not
+    assert not _is_a_revision_not_newer_than("9999", head, {**real, "9999": (head,)})
+    assert _is_a_revision_not_newer_than(head, head, real)
+    assert _is_a_revision_not_newer_than("0001", head, real)
+    assert real["0001"] == ()
+
+
+def test_the_recorded_revision_is_read_from_the_third_line_in_its_form_only():
+    good = "a\nb\nmigration revision: 0030 -- this checkout's head is 0030 (matches)\n"
+    assert _recorded_revision(good) == "0030"
+    for bad in (
+        "a\nb\nmigration revision: 0030 -- this checkout's head is 0031 (matches)\n",
+        "a\nb\nmigration revision: 0030 -- this checkout's head is 0030\n",
+        "a\nb\nrevision: 0030\n",
+        "migration revision: 0030 -- this checkout's head is 0030 (matches)\na\nb\n",
+    ):
+        with pytest.raises(AssertionError):
+            _recorded_revision(bad)

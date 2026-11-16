@@ -73,6 +73,10 @@ NULL_IS_A_STATE = {
         "proposal_id is tested `IS NULL` / `IS NOT NULL` explicitly against kind.",
     ("scheduler_enrollment", "scheduler_enrollment_check"):
         "`(withdrawn_at IS NULL) = (withdrawn_by IS NULL)`: NULL-exact by construction.",
+    ("harness_enrolment", "harness_enrolment_withdrawn_pair"):
+        "`(withdrawn_at IS NULL) = (withdrawn_by IS NULL)`: NULL-exact by construction -- a live "
+        "registration has neither and a withdrawal has both (D69 H5b, 0031; the same check as "
+        "scheduler_enrollment_check).",
     ("audit_log", "audit_scope_consistent"):
         "engagement_id is tested `IS NULL` / `IS NOT NULL` explicitly against scope.",
 }

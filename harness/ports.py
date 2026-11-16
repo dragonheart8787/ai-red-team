@@ -25,7 +25,9 @@ The method names are fixed::
 ``decision``, ``failure``, ``run_id``, ``evidence_id`` and ``deny_reasons``. ``snapshot``,
 ``proposal`` and ``policy`` are opaque to the loop: it only hands them on.
 
-The loop catches nothing a port raises and never records its text (see :mod:`harness.loop`).
+A port may raise: ``run_loop`` catches whatever it raises, ends with ``FAULT_OUTSIDE_LIST``
+(exit code 12), cleans nothing up and never records the text of the exception (see
+:mod:`harness.loop`).
 """
 
 from __future__ import annotations
