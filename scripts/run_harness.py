@@ -6,10 +6,12 @@
     python scripts/run_harness.py residue --live-task-limit N
 
 ``run`` works on the engagements listed by ``scripts/manage_harness_enrolment.py`` (purpose
-``harness_lab``) and on nothing else. **Every bound is required and has no default**: the round
-cap, the model-call cap, the number of rounds without progress that stops the run, the evidence
-window and the limit of live tasks one engagement may hold. They are the owner's numbers and are
-written down before a run that is not a test.
+``harness_lab``) and on nothing else: the list is read **once at the start**, it is the banner's
+list, and the loop visits those of them that are still enrolled (``harness/frozen_enrolment.py``),
+so an engagement enrolled after the start waits for a restart. **Every bound is required and has
+no default**: the round cap, the model-call cap, the number of rounds without progress that stops
+the run, the evidence window and the limit of live tasks one engagement may hold. They are the
+owner's numbers and are written down before a run that is not a test.
 
 The roles come from ``--role-factory``, the dotted path of a function that returns an object with
 ``supervisor``, ``worker``, ``reviewer`` and ``sandbox``. **This script builds no model role and no
@@ -58,6 +60,7 @@ from harness.exit_codes import (  # noqa: E402
     EXIT_STARTUP_REFUSED,
     EXIT_UNEXPECTED,
 )
+from harness.frozen_enrolment import FrozenEnrolment  # noqa: E402
 from harness.lock import HarnessLock, LockGuardedPorts  # noqa: E402
 from harness.loop import run_loop  # noqa: E402
 from harness.loop_adapter import LoopAdapter  # noqa: E402
@@ -121,7 +124,8 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register) -> int:
             print(f"refused: the role factory failed ({type(exc).__name__})", file=sys.stderr)
             return EXIT_UNEXPECTED
         reader = EnrolledFromDatabase()
-        engagements = reader.enrolled()
+        engagements = reader.enrolled()           # the one read: the banner's list and the loop's
+        frozen = FrozenEnrolment(engagements, reader)
         try:
             facts = collect_banner_facts(
                 engagements=engagements, supervisor=roles.supervisor, worker=roles.worker,
@@ -137,7 +141,7 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register) -> int:
         install(register, flag, (signal.SIGINT, signal.SIGTERM))
         lock.start_watchdog(args.lock_watchdog_interval)
         adapter = LoopAdapter(
-            enrolment=reader, supervisor=roles.supervisor, worker=roles.worker,
+            enrolment=frozen, supervisor=roles.supervisor, worker=roles.worker,
             reviewer=roles.reviewer, sandbox=roles.sandbox, objective=args.objective,
             window_limit=args.window_limit, live_task_limit=args.live_task_limit)
         result = run_loop(

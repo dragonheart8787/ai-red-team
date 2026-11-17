@@ -821,6 +821,27 @@ CATALOGUE = [
              edits=(Edit('scripts/run_harness.py', '        print(format_banner(facts), flush=True)\n', '        format_banner(facts)\n'),),
              prepare=_without_probe,
              targets=('test_a_run_with_once_exits_0_after_one_round_and_prints_the_banner', 'test_the_banner_is_printed_before_the_loop_starts')),
+    # -- added by the implementer for the H5c2 repair (the frozen enrolment; plan item 97) ----------
+    Mutation('D69-H5-80', 'the frozen reader degenerates to returning the current enrolment [added by the implementer, H5c2 repair]',
+             ('tests/test_harness_h5c2_frozen.py',),
+             edits=(Edit('harness/frozen_enrolment.py', '        return tuple(engagement_id for engagement_id in self._at_start if engagement_id in now)\n', '        return now\n'),),
+             prepare=_without_probe,
+             targets=('test_an_engagement_enrolled_after_the_start_is_never_visited_and_is_no_cause_of_code_10', 'test_the_frozen_reader_never_returns_what_was_enrolled_after_the_start', 'test_the_visit_order_is_the_start_up_order_when_the_databases_order_has_changed')),
+    Mutation('D69-H5-81', 'the banner takes the first engagement\'s switch value when the engagements disagree, instead of refusing [added by the implementer, H5c2 repair]',
+             ('tests/test_harness_h5c2_banner.py',),
+             edits=(Edit('harness/banner_facts.py', '    for engagement_id in engagements:\n        policy = load_policy(engagement_id)\n', '    for engagement_id in list(engagements)[:1]:\n        policy = load_policy(engagement_id)\n'),),
+             prepare=_without_probe,
+             targets=('test_engagements_that_disagree_on_a_switch_give_no_banner',)),
+    Mutation('D69-H5-82', 'the banner is printed when no engagement is enrolled, instead of refusing [added by the implementer, H5c2 repair]',
+             ('tests/test_harness_h5c2_banner.py', 'tests/test_harness_h5c2_entry.py'),
+             edits=(Edit('harness/banner_facts.py', '    if not engagements:\n        raise BannerFactsUnavailable("switches: no engagement is enrolled, so no policy applies")\n', '    if not engagements:\n        return {"task_relation_enforce": False, "goal_fit_enforce": False}\n'),),
+             prepare=_without_probe,
+             targets=('test_no_enrolled_engagement_gives_no_banner', 'test_no_enrolled_engagement_is_a_refusal_with_code_10_and_no_banner')),
+    Mutation('D69-H5-83', 'the entry script treats an unreachable database as a lock that was acquired and goes on [added by the implementer, H5c2 repair]',
+             ('tests/test_harness_h5c2_entry.py',),
+             edits=(Edit('scripts/run_harness.py', '        return EXIT_DB_LOST\n    if not taken:', '        taken = True\n    if not taken:'),),
+             prepare=_without_probe,
+             targets=('test_a_database_that_cannot_be_reached_is_exit_4_and_the_driver_text_is_not_printed',)),
 ]
 
 if __name__ == "__main__":
