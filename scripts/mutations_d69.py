@@ -564,6 +564,134 @@ CATALOGUE = [
              edits=(Edit('tests/test_dp15_record_mode.py', '    return revision in seen\n', '    return True\n'),),
              prepare=_without_probe,
              targets=('test_the_check_of_the_recorded_revision_refuses_one_that_is_not_a_revision_or_is_newer',)),
+    # -- H5c1: the real adapter of the ports (harness/loop_adapter.py); H5-56 to H5-62 are the implementer's additions --
+    Mutation('D69-H5-1', 'the adapter passes the Worker proposal to propose_action as it is: no task attached, a task of another engagement let through',
+             ('tests/test_harness_h5c1_pipeline.py',),
+             edits=(Edit('harness/loop_adapter.py', """        if proposal.task_id is not None and proposal.task_id != task_id:
+            raise ValueError("the proposal names a task other than the one claimed")
+        carried = dataclasses.replace(proposal, task_id=task_id)
+""", """        carried = proposal
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_proposal_with_no_task_is_proposed_with_the_task_that_was_claimed', 'test_a_proposal_that_names_another_task_is_refused_before_propose_action')),
+    Mutation('D69-H5-3', 'the adapter swallows an exception from propose_action and answers with a DENY, so the loop goes on',
+             ('tests/test_harness_h5c1_pipeline.py',),
+             edits=(Edit('harness/loop_adapter.py', """        return propose_action(
+            engagement_id=engagement_id, proposal=carried, reviewer=self._reviewer,
+            policy=policy, agent_id=self._worker.agent_id, actor=self._actor,
+            sandbox=self._sandbox, idempotency_key=idempotency_key)
+""", """        try:
+            return propose_action(
+                engagement_id=engagement_id, proposal=carried, reviewer=self._reviewer,
+                policy=policy, agent_id=self._worker.agent_id, actor=self._actor,
+                sandbox=self._sandbox, idempotency_key=idempotency_key)
+        except Exception:
+            from control_plane.api.function_api import ActionOutcome
+            return ActionOutcome(decision="DENY", proposal_id="")
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_exception_in_propose_action_is_not_swallowed_and_the_rows_stay_coherent',)),
+    Mutation('D69-H5-5', 'the adapter answers accepts_work from the engagement row alone: a paused or killed engagement is let through',
+             ('tests/test_harness_h5c1_pipeline.py',),
+             edits=(Edit('harness/loop_adapter.py', '        return state is not None and state.accepts_work\n', '        return state is not None\n'),),
+             prepare=_without_probe,
+             targets=('test_after_the_kill_switch_is_engaged_the_loop_makes_no_further_propose_action_call', 'test_a_killed_engagement_is_not_planned_for_and_nothing_reaches_propose_action', 'test_a_kill_that_comes_in_while_the_worker_answers_stops_the_proposal')),
+    Mutation('D69-H5-16', 'candidates_from_registry returns the registry\'s scope objects without the allowlist filter',
+             ('tests/test_harness_h5c1_adapter.py',),
+             edits=(Edit('harness/registry_view.py', '    return candidates_from_scope_objects(list_scope_objects(conn))\n', '    return tuple(ScopeCandidate(scope_object_id=s.scope_object_id, type=s.type, value=s.value, allowed_actions=tuple(s.allowed_actions)) for s in list_scope_objects(conn))\n'),),
+             prepare=_without_probe,
+             targets=('test_take_snapshot_offers_the_real_registrys_candidates_filtered_to_the_allowlist',)),
+    Mutation('D69-H5-17', 'live_tasks answers with no task, so a new loop does not see the live task of the engagement',
+             ('tests/test_harness_h5c1_startup.py',),
+             edits=(Edit('harness/loop_adapter.py', '        return tuple(LiveTask(task_id=row["task_id"], status=row["status"]) for row in rows)\n', '        return ()\n'),),
+             prepare=_without_probe,
+             targets=('test_a_new_loop_with_a_live_task_on_the_engagement_ends_with_code_10_and_calls_no_one',)),
+    Mutation('D69-H5-25', 'the start-up check writes a row: live_tasks claims a task before it reads',
+             ('tests/test_harness_h5c1_startup.py',),
+             edits=(Edit('harness/loop_adapter.py', """        with engagement_scope(engagement_id) as conn:
+            state = query_state(
+""", """        with engagement_scope(engagement_id) as conn:
+            claim_task(conn, engagement_id=engagement_id, agent_id="startup-check")
+            state = query_state(
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_start_up_check_writes_no_row',)),
+    Mutation('D69-H5-26', 'the adapter passes propose_action a key the derivation did not produce',
+             ('tests/test_harness_h5c1_pipeline.py',),
+             edits=(Edit('harness/loop_adapter.py', 'sandbox=self._sandbox, idempotency_key=idempotency_key)\n', 'sandbox=self._sandbox, idempotency_key=f"x:{task_id}")\n'),),
+             prepare=_without_probe,
+             targets=('test_the_idempotency_key_stored_with_the_proposal_is_h5_task_1',)),
+    Mutation('D69-H5-29', 'the loop runs the start-up check after the first claim instead of before it',
+             ('tests/test_harness_h5c1_startup.py',),
+             edits=(Edit('harness/loop.py', """            self.start_check(engagement_id)
+            snapshot = self.ports.take_snapshot(engagement_id)
+""", """            snapshot = self.ports.take_snapshot(engagement_id)
+"""), Edit('harness/loop.py', """            task_id = self.ports.claim(engagement_id)
+            if task_id is None:
+                break
+""", """            task_id = self.ports.claim(engagement_id)
+            self.start_check(engagement_id)
+            if task_id is None:
+                break
+""")),
+             prepare=_without_probe,
+             targets=('test_the_start_up_check_comes_before_the_first_claim_on_the_real_rows',)),
+    Mutation('D69-H5-56', 'live_tasks reads without the status filter, so old completed tasks fill the page [added by the implementer: the 60 + 1 test of plan item 81]',
+             ('tests/test_harness_h5c1_startup.py',),
+             edits=(Edit('harness/loop_adapter.py', """                conn, engagement_id=engagement_id, task_status=LIVE_STATUSES,
+                task_limit=self._live_task_limit + 1, decision_limit=0)
+""", """                conn, engagement_id=engagement_id,
+                task_limit=self._live_task_limit + 1, decision_limit=0)
+"""),),
+             prepare=_without_probe,
+             targets=('test_sixty_completed_tasks_and_then_one_queued_task_are_refused_with_code_10',)),
+    Mutation('D69-H5-57', 'live_tasks returns the first rows when there are more than its limit, instead of refusing [added by the implementer]',
+             ('tests/test_harness_h5c1_startup.py',),
+             edits=(Edit('harness/loop_adapter.py', """        if len(rows) > self._live_task_limit:
+            raise LiveTasksNotReadable(
+                f"more than {self._live_task_limit} live tasks in {engagement_id}")
+""", """        rows = rows[: self._live_task_limit]
+"""),),
+             prepare=_without_probe,
+             targets=('test_more_live_tasks_than_the_limit_is_refused_and_never_returned_cut_short',)),
+    Mutation('D69-H5-58', 'accepts_work opens its connection and does not close it [added by the implementer: the leak]',
+             ('tests/test_harness_h5c1_adapter.py',),
+             edits=(Edit('harness/loop_adapter.py', """        with engagement_scope(engagement_id) as conn:
+            state = get_engagement(conn, engagement_id)
+        return state is not None and state.accepts_work
+""", """        scope = engagement_scope(engagement_id)
+        conn = scope.__enter__()
+        self.__dict__.setdefault("_held", []).append(scope)
+        state = get_engagement(conn, engagement_id)
+        return state is not None and state.accepts_work
+"""),),
+             prepare=_without_probe,
+             targets=('test_no_port_leaves_a_connection_checked_out',)),
+    Mutation('D69-H5-59', 'plan reads the registry again instead of using the candidates of its snapshot [added by the implementer]',
+             ('tests/test_harness_h5c1_adapter.py',),
+             edits=(Edit('harness/loop_adapter.py', 'ACTOR = "harness"\n', 'ACTOR = "harness"\n\n\ndef _candidates_now(engagement_id):\n    with engagement_scope(engagement_id) as conn:\n        return candidates_from_registry(conn)\n'), Edit('harness/loop_adapter.py', 'supervisor=self._supervisor, state=state, candidates=snap.candidates,', 'supervisor=self._supervisor, state=state, candidates=_candidates_now(engagement_id),')),
+             prepare=_without_probe,
+             targets=('test_plan_uses_the_candidates_of_its_snapshot_and_does_not_read_the_registry_again',)),
+    Mutation('D69-H5-60', 'another module of the harness names claim_task: the m2 allowance for the adapter must not let it through [added by the implementer]',
+             ('tests/test_harness_task_source.py',),
+             edits=(Edit('harness/round_snapshot.py', 'from __future__ import annotations\n', 'from __future__ import annotations\n\nfrom control_plane.api.function_api import claim_task  # noqa: F401\n'),),
+             prepare=_without_probe,
+             targets=('test_m2_create_task_is_named_only_in_the_task_source_and_nothing_claims_proposes_or_completes',)),
+    Mutation('D69-H5-61', 'the residue check reads no live harness registration [added by the implementer]',
+             ('tests/test_harness_h5c1_residue.py',),
+             edits=(Edit('tests/residue.py', """    with get_engine().connect() as conn:
+        return frozenset(r[0] for r in conn.execute(text(
+            "SELECT engagement_id FROM harness_enrolment WHERE withdrawn_at IS NULL")))
+""", """    return frozenset()
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_registration_made_after_the_snapshot_is_residue_and_one_before_it_is_not',)),
+    Mutation('D69-H5-62', 'leftovers() does not carry the harness registrations into what it reports [added by the implementer: the wiring]',
+             ('tests/test_harness_h5c1_residue.py',),
+             edits=(Edit('tests/residue.py', """        harness_enrollments=sorted(
+            live_harness_enrollments() - before.harness_enrollments))""", """        )"""),),
+             prepare=_without_probe,
+             targets=('test_a_registration_made_after_the_snapshot_is_residue_and_one_before_it_is_not',)),
 ]
 
 if __name__ == "__main__":

@@ -112,6 +112,8 @@ class Snapshot:
     started_us: int = 0
     #: the engagements live in the scheduler's enrollment when the session began
     enrollments: frozenset[str] = frozenset()
+    #: the engagements live in the harness's enrolment when the session began (D69 H5c1)
+    harness_enrollments: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -124,6 +126,8 @@ class Leftovers:
     database: list[str] = field(default_factory=list)
     #: engagements live in the scheduler's enrollment that were not when the session began
     enrollments: list[str] = field(default_factory=list)
+    #: engagements live in the harness's enrolment that were not when the session began
+    harness_enrollments: list[str] = field(default_factory=list)
 
     def failures(self) -> list[str]:
         out = list(self.database)
@@ -136,6 +140,8 @@ class Leftovers:
                        f"{self.networks_stuck}")
         if self.enrollments:
             out.append(f"scheduler enrollments left live by the session: {self.enrollments}")
+        if self.harness_enrollments:
+            out.append(f"harness enrolments left live by the session: {self.harness_enrollments}")
         return out
 
 
@@ -170,6 +176,15 @@ def live_enrollments() -> frozenset[str]:
             "SELECT engagement_id FROM scheduler_enrollment WHERE withdrawn_at IS NULL")))
 
 
+def live_harness_enrollments() -> frozenset[str]:
+    """The engagements the harness's loop would read on its next round (``harness_enrolment``,
+    D69 H5b). Read as ``cyberorch_app``, the only role the table is granted to; a live row left
+    here is one the real reader returns, so a session that leaves one fails at its end."""
+    with get_engine().connect() as conn:
+        return frozenset(r[0] for r in conn.execute(text(
+            "SELECT engagement_id FROM harness_enrolment WHERE withdrawn_at IS NULL")))
+
+
 def withdraw_enrollments(engagement_ids, *, by: str = "test-session-cleanup") -> int:
     """Withdraw these engagements' live enrollments (the operator CLI's act, without its audit)."""
     ids = sorted(engagement_ids)
@@ -201,6 +216,7 @@ def snapshot() -> Snapshot:
     return Snapshot(
         started_us=database_now_us(),
         enrollments=live_enrollments(),
+        harness_enrollments=live_harness_enrollments(),
         layers=frozenset(row[0] for row in _active_unbound_layers()),
         containers=None if client is None else frozenset(
             c.id for c in client.containers.list(all=True, ignore_removed=True)),
@@ -214,7 +230,9 @@ def leftovers(before: Snapshot) -> Leftovers:
     found = Leftovers(layers=[
         row for row in _active_unbound_layers() if row[0] not in before.layers],
         database=db_hygiene.current_problems(),
-        enrollments=sorted(live_enrollments() - before.enrollments))
+        enrollments=sorted(live_enrollments() - before.enrollments),
+        harness_enrollments=sorted(
+            live_harness_enrollments() - before.harness_enrollments))
     client = _docker()
     if client is None or before.containers is None:
         return found

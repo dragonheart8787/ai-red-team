@@ -609,12 +609,20 @@ def _harness_calls() -> dict[str, set[str]]:
     return found
 
 
+#: The one module that is the real adapter of the loop's ports (D69 H5c1): it is the only place that
+#: may name the three functions below. ``create_task`` is still named only in the task source, and
+#: no other module is let off: a second module naming one of the three fails this test.
+ADAPTER_MODULE = "harness/loop_adapter.py"
+
+
 def test_m2_create_task_is_named_only_in_the_task_source_and_nothing_claims_proposes_or_completes():
     names = _harness_calls()
     assert "harness/task_source.py" in names
     named_create = sorted(p for p, n in names.items() if "create_task" in n)
     assert named_create == ["harness/task_source.py"]
     for path, found in names.items():
+        if path == ADAPTER_MODULE:
+            continue
         for forbidden in ("claim_task", "complete_task", "propose_action"):
             assert forbidden not in found, f"{path} names {forbidden}"
 
