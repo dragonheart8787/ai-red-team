@@ -692,6 +692,135 @@ CATALOGUE = [
             live_harness_enrollments() - before.harness_enrollments))""", """        )"""),),
              prepare=_without_probe,
              targets=('test_a_registration_made_after_the_snapshot_is_residue_and_one_before_it_is_not',)),
+    # -- H5c2: the real shape of an answer, the lock, the signals, the banner, the residue listing. H5-7 is the one the plan
+    #    assigns to c2; H5-63 to H5-66 are the four of the task of H5c2 (A), added by the implementer; H5-7b and H5-67 to H5-79 are [proposal]
+    Mutation('D69-H5-7', 'the harness lock key is the scheduler\'s',
+             ('tests/test_harness_h5c2_lock.py',),
+             edits=(Edit('harness/lock.py', 'KEY = 0x0D69_5C4E_D000_0001\n', 'KEY = 0x0D62_5C4E_D000_0001\n'),),
+             prepare=_without_probe,
+             targets=('test_the_key_is_the_registered_value_and_is_not_the_schedulers', 'test_a_lock_the_scheduler_holds_does_not_block_the_harness_and_the_reverse')),
+    Mutation('D69-H5-7b', 'a second instance that cannot take the lock does not exit [H5-7, its second half]',
+             ('tests/test_harness_h5c2_lock.py',),
+             edits=(Edit('scripts/run_harness.py', """    if not taken:
+        print("refused: another instance holds the harness lock", file=sys.stderr)
+        return EXIT_LOCK_HELD
+""", """    pass
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_second_run_exits_with_code_2_before_it_reads_anything',)),
+    Mutation('D69-H5-63', 'executed_state judges the real shape by run_id alone [added by the implementer]',
+             ('tests/test_harness_h5c2_allow.py',),
+             edits=(Edit('harness/result_summary.py', """    if has_run and has_evidence:
+        return STATE_EXECUTED
+    if has_run and failure == FAILURE_DEDUP_HIT:
+        return STATE_DEDUPLICATED
+    if has_run:
+        return STATE_UNKNOWN_OUTCOME
+""", """    if has_run:
+        return STATE_EXECUTED
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_second_task_for_the_same_work_is_a_dedup_hit_and_not_an_unknown_outcome', 'test_a_sandbox_that_fails_after_the_run_began_is_an_unknown_outcome')),
+    Mutation('D69-H5-64', 'executed_state judges the real shape by evidence_id alone [added by the implementer]',
+             ('tests/test_harness_h5c2_allow.py',),
+             edits=(Edit('harness/result_summary.py', '    has_run = _present(run_id, "run_id")\n', '    has_run = _present(evidence_id, "run_id")\n'),),
+             prepare=_without_probe,
+             targets=('test_a_second_task_for_the_same_work_is_a_dedup_hit_and_not_an_unknown_outcome', 'test_a_sandbox_that_fails_after_the_run_began_is_an_unknown_outcome')),
+    Mutation('D69-H5-65', 'a dedup_hit is taken for an unknown outcome on the real shape (the error b216fcf fixed) [added by the implementer]',
+             ('tests/test_harness_h5c2_allow.py',),
+             edits=(Edit('harness/result_summary.py', """    if has_run and failure == FAILURE_DEDUP_HIT:
+        return STATE_DEDUPLICATED
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_a_second_task_for_the_same_work_is_a_dedup_hit_and_not_an_unknown_outcome',)),
+    Mutation('D69-H5-66', 'the summary copies the failure text of a refused proposal [added by the implementer]',
+             ('tests/test_harness_h5c2_allow.py',),
+             edits=(Edit('harness/result_summary.py', """    token = failure_token(outcome.failure)
+    if token is None:
+        return decision
+    return f"{decision}:{token}"
+""", """    if outcome.failure is None:
+        return decision
+    return f"{decision}:{outcome.failure}"
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_summary_never_holds_the_text_of_a_failure_in_any_of_three_places',)),
+    Mutation('D69-H5-67', 'a lost lock is not turned into exit code 6 [proposal]',
+             ('tests/test_harness_h5c2_lock.py',),
+             edits=(Edit('scripts/run_harness.py', '        code = EXIT_LOCK_LOST if lock.lost.is_set() else EXIT_CODE[result.reason]\n', '        code = EXIT_CODE[result.reason]\n'),),
+             prepare=_without_probe,
+             targets=('test_run_returns_the_lock_lost_exit_code_and_cleans_nothing_up',)),
+    Mutation('D69-H5-68', 'the guard around the ports does not look at the lock [proposal]',
+             ('tests/test_harness_h5c2_lock.py',),
+             edits=(Edit('harness/lock.py', """        if not self.held():
+            raise LockLost("the harness lock is lost")
+""", """        return
+"""),),
+             prepare=_without_probe,
+             targets=('test_once_the_lock_is_lost_no_port_is_called_and_the_call_raises', 'test_run_returns_the_lock_lost_exit_code_and_cleans_nothing_up')),
+    Mutation('D69-H5-69', 'an error of the lock session counts as the lock still held [proposal]',
+             ('tests/test_harness_h5c2_lock.py',),
+             edits=(Edit('harness/lock.py', """        except Exception:  # noqa: BLE001 - any failure of the lock session is "lost"
+            ok = False
+""", """        except Exception:  # noqa: BLE001 - any failure of the lock session is "lost"
+            ok = True
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_killed_lock_connection_is_noticed_by_the_watchdog',)),
+    Mutation('D69-H5-70', 'the entry script installs no signal handler [proposal]',
+             ('tests/test_harness_h5c2_entry.py', 'tests/test_harness_h5c2_signal.py'),
+             edits=(Edit('scripts/run_harness.py', '        install(register, flag, (signal.SIGINT, signal.SIGTERM))\n', '        pass\n'),),
+             prepare=_without_probe,
+             targets=('test_the_handlers_of_sigint_and_sigterm_are_installed_and_set_the_flag', 'test_a_real_sigterm_stops_the_process_cleanly_after_the_task_it_is_on')),
+    Mutation('D69-H5-71', 'the signal handler does not set the flag [proposal]',
+             ('tests/test_harness_h5c2_entry.py', 'tests/test_harness_h5c2_signal.py'),
+             edits=(Edit('harness/signals.py', """    def handler(*_args: Any) -> None:
+        flag.set()
+""", """    def handler(*_args: Any) -> None:
+        pass
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_handlers_of_sigint_and_sigterm_are_installed_and_set_the_flag', 'test_a_real_sigterm_stops_the_process_cleanly_after_the_task_it_is_on')),
+    Mutation('D69-H5-72', 'the banner states both switches as off whatever the policy says [proposal]',
+             ('tests/test_harness_h5c2_banner.py',),
+             edits=(Edit('harness/banner_facts.py', '    return {name: next(iter(seen)) for name, seen in values.items()}\n', '    return {name: False for name in values}\n'),),
+             prepare=_without_probe,
+             targets=('test_the_switches_are_read_from_the_policy_of_the_enrolled_engagements',)),
+    Mutation('D69-H5-73', 'the banner states a migration head that is not the database\'s [proposal]',
+             ('tests/test_harness_h5c2_banner.py',),
+             edits=(Edit('harness/banner_facts.py', '    return heads[0]\n', '    return "0000"\n'),),
+             prepare=_without_probe,
+             targets=('test_the_facts_are_the_ones_the_database_and_the_repository_give',)),
+    Mutation('D69-H5-74', 'the banner facts carry the database password [proposal]',
+             ('tests/test_harness_h5c2_banner.py',),
+             edits=(Edit('harness/banner_facts.py', '"name": url.database, "role": url.username}', '"name": url.database, "role": url.username, "password": url.password}'),),
+             prepare=_without_probe,
+             targets=('test_the_facts_are_the_ones_the_database_and_the_repository_give', 'test_the_banner_prints_every_field_in_order_and_never_the_password')),
+    Mutation('D69-H5-75', 'the Worker\'s prompt digest is made from the Supervisor\'s prompt [proposal]',
+             ('tests/test_harness_h5c2_banner.py',),
+             edits=(Edit('harness/banner_facts.py', '"worker": digest(WORKER_SYSTEM_PROMPT,', '"worker": digest(supervisor.system_prompt,'),),
+             prepare=_without_probe,
+             targets=('test_the_facts_are_the_ones_the_database_and_the_repository_give',)),
+    Mutation('D69-H5-76', 'the residue listing is not made in a read-only transaction [proposal]',
+             ('tests/test_harness_h5c2_residue.py',),
+             edits=(Edit('harness/residue_listing.py', '            conn.execute(text("SET TRANSACTION READ ONLY"))\n', ''),),
+             prepare=_without_probe,
+             targets=('test_the_read_is_made_in_a_read_only_transaction',)),
+    Mutation('D69-H5-77', 'the residue listing reads tasks of every state, not the three live ones [proposal]',
+             ('tests/test_harness_h5c2_residue.py',),
+             edits=(Edit('harness/residue_listing.py', '                conn, engagement_id=engagement_id, task_status=LIVE_STATUSES,\n                task_limit=limit, decision_limit=0)', '                conn, engagement_id=engagement_id,\n                task_limit=limit, decision_limit=0)'),),
+             prepare=_without_probe,
+             targets=('test_the_listing_shows_the_claimed_and_the_queued_task_a_fault_left',)),
+    Mutation('D69-H5-78', 'a bound of the entry script gets a default [proposal]',
+             ('tests/test_harness_h5c2_entry.py',),
+             edits=(Edit('scripts/run_harness.py', 'run.add_argument(f"--{name}", required=True, type=_positive, help="required, no default")', 'run.add_argument(f"--{name}", required=False, default=1, type=_positive, help="x")'),),
+             prepare=_without_probe,
+             targets=('test_every_bound_is_required_and_has_no_default', 'test_an_argument_that_is_left_out_is_a_usage_error_before_the_lock_is_taken')),
+    Mutation('D69-H5-79', 'the banner is not printed [proposal]',
+             ('tests/test_harness_h5c2_entry.py',),
+             edits=(Edit('scripts/run_harness.py', '        print(format_banner(facts), flush=True)\n', '        format_banner(facts)\n'),),
+             prepare=_without_probe,
+             targets=('test_a_run_with_once_exits_0_after_one_round_and_prints_the_banner', 'test_the_banner_is_printed_before_the_loop_starts')),
 ]
 
 if __name__ == "__main__":
