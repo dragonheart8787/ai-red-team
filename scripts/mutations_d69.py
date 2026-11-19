@@ -863,6 +863,35 @@ CATALOGUE = [
              edits=(Edit('harness/residue_listing.py', 'task_status=LIVE_STATUSES,', 'task_status=("queued",),'),),
              prepare=_without_probe,
              targets=('test_s4_a_fault_in_the_reviewer_ends_with_12_and_leaves_what_the_runbook_says',)),
+    # -- D69 H7, ACCEPTANCE 5.28: the three entries of the plan's section 8 (item 8, "Mutation entries") ----
+    # (the plan's names H7-1, H7-2, H7-3; where each edit is made is the review layer's decision of 2026-11-19, plan item 109)
+    Mutation('D69-H7-1', 'the loop passes no observations to the Worker (H7-1 of the plan, section 8)',
+             ('tests/test_harness_h7_528.py',),
+             edits=(Edit('harness/loop_adapter.py', '            observations=snap.round.observations_for_task(), task_id=task_id)', '            observations=(), task_id=task_id)'),),
+             prepare=_without_probe,
+             targets=('test_each_case_ends_with_the_decision_the_plan_states',)),
+    Mutation('D69-H7-2', 'the builder puts every IP literal of the content and every name in hosts into observed_identities (H7-2 of the plan, section 8)',
+             ('tests/test_harness_h7_528.py',),
+             edits=(Edit('harness/observations.py', r'''        observed_identities=observed_identities(row),
+''', r'''        observed_identities=observed_identities(row) + tuple(
+            __import__("re").findall(r"\d{1,3}(?:\.\d{1,3}){3}", content.replace("\\", ""))
+        ) + tuple(str(h) for h in (row.derived_view.get("hosts") or ())),
+'''),),
+             prepare=_without_probe,
+             targets=('test_each_case_ends_with_the_decision_the_plan_states',)),
+    Mutation('D69-H7-3', 'take_snapshot reads the evidence window through the engagement it served last (H7-3 of the plan, section 8)',
+             ('tests/test_harness_h7_528.py',),
+             edits=(Edit('harness/loop_adapter.py', '''        with engagement_scope(engagement_id) as conn:
+            round_snapshot = take_round_snapshot(conn, limit=self._window_limit)
+            candidates = candidates_from_registry(conn)
+''', '''        with engagement_scope(getattr(self, "_h7_last", engagement_id)) as conn:
+            round_snapshot = take_round_snapshot(conn, limit=self._window_limit)
+        with engagement_scope(engagement_id) as conn:
+            candidates = candidates_from_registry(conn)
+        self._h7_last = engagement_id
+'''),),
+             prepare=_without_probe,
+             targets=('test_another_engagements_evidence_is_never_shown_to_this_engagements_worker',)),
 ]
 
 if __name__ == "__main__":
