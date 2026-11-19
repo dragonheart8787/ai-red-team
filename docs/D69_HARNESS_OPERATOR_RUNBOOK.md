@@ -11,8 +11,9 @@ How to read the tags. Every fact names where it comes from.
   102 says which). **[D]** my own derivation from what I read, not shown by running.
   **[N]** not read.
 * A step that was **not executed** says so: "Not run; H7 verifies (未執行,H7 驗證)". Every step that
-  writes (register, withdraw, run, recovery, the reconciler) is of this kind. Only `--help`,
-  `manage_harness_enrolment.py list` and `run_harness.py residue` were run.
+  writes (register, withdraw, run, recovery, the reconciler) was of this kind when this runbook was
+  written, when only `--help`, `manage_harness_enrolment.py list` and `run_harness.py residue` had
+  been run. H7 ran the steps a section marks "Run in H7 (已執行,H7)", with the values it observed.
 * Where the repository has no operator command for something, this runbook says so and lists it as
   a gap. It invents no command.
 
@@ -87,8 +88,14 @@ Argument names checked against `register --help` [run]: `--engagement`, `--purpo
 `REGISTER` on a terminal; with no terminal it refuses (exit 2). `--yes` means a person has already
 decided [R `--help`, `:80-93`, `:157-169`]. Exit status: 0 done, 1 refused, 2 not confirmed or an
 argument-parser error [R `--help`]. Refusals the database gives: `no such engagement`, `already
-registered`, `purpose refused` [R `:99-112`]. The engagement must already exist. Not run; H7
-verifies (未執行,H7 驗證).
+registered` [R `:99-112`]; a purpose other than `harness_lab` is refused by the CLI itself, before
+the database (`refused: --purpose is one of harness_lab`, exit 1; the database's `purpose refused`
+is only the fallback behind it) [R `:144-154`]. The engagement must already exist. Run in H7
+(已執行,H7; `tests/test_harness_h7_lab.py`, S1): with no terminal and no `--yes` it printed
+`refusing: no terminal to confirm on …` and exited 2, writing nothing; with `--yes` it exited 0 and
+printed `registered <engagement> (harness_lab)`; a second registration exited 1 with `refused:
+already registered`; an engagement that does not exist exited 1 with `refused: no such engagement`;
+`--purpose production` exited 1 with the CLI's own refusal.
 
 ### 2.4 Withdraw an engagement
 
@@ -100,7 +107,10 @@ Arguments checked against `withdraw --help` [run]. It asks for `WITHDRAW`; a wit
 engagement that is not live is refused (`not currently registered`) [R `:115-121`, `:172-183`]. The
 confirmation text says "The loop will not visit it again; tasks it already created stay as they
 are" [R `:174`]. That is true **from the next round**; it does not stop the round in progress
-(section 5.2). Not run; H7 verifies (未執行,H7 驗證).
+(section 5.2). Run in H7 (已執行,H7; S2): `--yes` withdrew it (exit 0, `withdrawn <engagement>`),
+`list` then showed `[withdrawn by <actor> at <time>]`, a second withdrawal exited 1 with `refused:
+not currently registered`, and with no terminal and no `--yes` it exited 2 and left the
+registration live.
 
 ### 2.5 Look at what a previous run left
 
@@ -145,7 +155,10 @@ is not a test (item 98 b); this runbook gives none.
 | `--once` | one round, then stop (exit 0) | `harness/loop.py:171-172` |
 | `--lock-watchdog-interval` | seconds between looks at the lock, default 2.0 | not a cap |
 
-It does not restart itself or reconnect [R `--help`]. Not run; H7 verifies (未執行,H7 驗證).
+It does not restart itself or reconnect [R `--help`]. Run in H7 (已執行,H7; S3, S4, S5, S7) with the
+scripted roles: `run --once` on two enrolled engagements exited 0, standard output was the eleven
+field lines in the order of the table below, and the last line of standard error was
+`harness stopped (exit 0): reason=signal_or_once …`.
 
 ### 3.2 What happens, in order
 
@@ -260,7 +273,12 @@ with grep); the tests call `engage_kill_switch` on an `engagement_scope` connect
 needed. This is a gap** (section 7). The kill switch is one-way: `resume_engagement` is refused
 afterwards [R `engagement.py:257-266, 279-298`]. It does not stop a container already running or a
 model call already started (design D69-9 (A), `D69_PRODUCTION_HARNESS_DESIGN.md:602-610, 626`).
-Not run; H7 verifies (未執行,H7 驗證).
+Run in H7 (已執行,H7; S7) for a kill engaged **before** the start, by a direct call of
+`engage_kill_switch`: `run --once` exited 0, printed the banner, its `counters` showed
+`'skipped_engagement': 1`, and no task and no proposal was created; the same engagement without
+`--once` (`--no-progress-limit 2`) stopped with exit 14, `reason=no_progress`,
+`'skipped_engagement': 2`. A kill engaged **during** a run (the three checks) was not run in H7; the
+tests of H5c1 cover it in-process (item 89, H5-5). The pause was not run.
 
 ## 6. Residue: what a run leaves behind
 
@@ -299,8 +317,10 @@ anything else (`function_api.py:622-646`) and calls the Reviewer later, in the d
 with **no decision**. The H5-3 test asserts `stage in stages.UNDECIDED_STAGES and decision is None`
 (`tests/test_harness_h5c1_pipeline.py:141`; `UNDECIDED_STAGES = (RECEIVED, ABANDONED)`,
 `control_plane/orchestrator/stages.py:89`) and that no capability and no run exist. Straight after a
-fault the stage is `received` [D]; I did not observe the stage on the rows, and I did not read the
-H5c1 test's hook line by line.
+fault the stage is `received`: observed in H7 (S4; a reviewer that raises, run as a process, read as
+`cyberorch_app` in a read-only transaction): `pipeline_stage` `received`, `decision` null,
+`stage_detail` null, no capability and no run for it; the queued tasks of that plan have no proposal
+at all.
 
 (b) **What closes it in the product.** The reconciler (D64): rule R6 abandons a `received` proposal
 with no decision once it has stood for `RECONCILER_STAGE_GRACE_S` (`stage` becomes `abandoned`,
@@ -316,21 +336,32 @@ The repository's test clean-up (`residue.finish_test`) is for tests and does not
 
 (c) **The listing does not show it.** `residue` lists tasks only (`query_state` with
 `decision_limit=0`) [R `residue_listing.py:49-58`, `decision_limit=0` at `:53`]. The one view of such a proposal is the
-reconciler's dry run, and only after the grace has passed [D]. Not run; H7 verifies
-(未執行,H7 驗證).
+reconciler's dry run, and only after the grace has passed. Run in H7 (已執行,H7; S4, S9): the
+listing named no proposal; `run_reconciler.py --mode dry-run --once --engagement <id>`, with the
+`RECONCILER_*` values of `.env.example`, printed only its summary line for the fresh proposal
+(inside the grace: `"outcomes": {}`, `"summary": {}`); after the proposal's `stage_updated_at` was
+set back (the grace is at least 300 s; the test moves the time as `tests/reconciler_support.py`
+does, so a real wait was not observed) it printed `{"kind": "abandon", "outcome": "dry_run",
+"reason_code": "undecided_past_grace", "subject_id": "<proposal>", …}` and changed nothing.
+`--mode state-only --once --engagement <id>` with no `--enable` needed no terminal, exited 0, printed
+the same line with `"outcome": "done"`, and the proposal was then `abandoned` with `stage_detail`
+`undecided_past_grace`.
 
 (d) **The same key again.** The loop sends each key once: `h5:<task_id>:1`, no retry
 [R `harness/loop.py:97-98`]. If a caller sends the same key while the proposal is `received` with
 the same action and target, `propose_action` finds it and resumes at its stage, which runs the
-decision stage: a **new Reviewer call and a new decision** [R `function_api.py:625-690`, reading
-only]. A different action or target under the key is refused (`idempotency_key_reused_with_a_different_request`,
+decision stage: a **new Reviewer call and a new decision** [R `function_api.py:625-690`; run in H7,
+S9b: one Reviewer call, the same proposal id, decision `DENY` (the test database's neutral
+baseline), stage `closed`]. A different action or target under the key is refused (`idempotency_key_reused_with_a_different_request`,
 `:651-664`). Once the proposal is `abandoned` the call is answered `abandoned` and a new key must
 be used [R `:1144-1147`]. After you complete the task as `not_run` (6.4), `complete_task` changes
 the `tasks` row only [R `:268-279`]; the proposal stays as it is. The loop never sends that key
 again: a completed task is not claimed again and a new task has a new id and key. The start-up
 check reads tasks only (`loop_adapter.py:143-152`), so a stuck proposal does not block a start.
 Whether a stuck `received` proposal affects the de-duplication of a later proposal for the same
-work: **[N]** not read. Reading only; nothing here was executed (未執行,H7 驗證).
+work: **[N]** not read. Once the reconciler had abandoned the proposal, the same key was answered
+`DENY` with failure `abandoned` and reason `abandoned_before_decision`, and no Reviewer was called
+(run in H7, S9b; 已執行,H7).
 
 ### 6.3 No command clears tasks, and why
 
@@ -344,7 +375,9 @@ and `tests/test_harness_h5c1_structure.py`). v0 builds no tool.
 
 ### 6.4 Recovering by hand
 
-All steps: not run; H7 verifies (未執行,H7 驗證). This calls the function the adapter itself calls
+Run in H7 (已執行,H7; S6, S6b): the Python block of step 5, taken from this file as it stands and
+run in a separate process for each task the listing showed, with the steps around it as the tests did
+them (list, complete, list, start again). This calls the function the adapter itself calls
 (`harness/loop_adapter.py:221-224`); it is not a new tool.
 
 1. **Make sure no harness process is running.** The lock is released when its session ends. A
@@ -354,14 +387,24 @@ All steps: not run; H7 verifies (未執行,H7 驗證). This calls the function t
 3. **Decide per task.** A task the fault happened on is `claimed`; the rest of that plan is
    `queued`. `complete_task` has no precondition on status, lease or owner: its `UPDATE` matches on
    `task_id` alone, inside the engagement's row-level security [R `function_api.py:268-279`]. It
-   does not check that a row matched, so a mistyped id changes nothing and still writes a
-   `task.completed` audit record [D, from the same lines]. Check the id against the listing.
+   does not check that a row matched. Observed in H7 (S6b): the snippet run on a task already
+   completed as `DENY` set it to `not_run` and wrote a second `task.completed` record; run on a
+   mistyped id it changed no row and still wrote one `task.completed` record. Check the id against
+   the listing; the snippet overwrites the summary of a task that is already completed.
 4. **Complete with the word `not_run`.** It is the loop's own word for a task that did not reach
    a proposal (`harness/result_summary.py:53`); the loop refuses any other word, but `complete_task`
    itself stores any string [R `result_summary.py:3-4`, `loop.py:131-135`]. Use exactly `not_run`.
-   Caution: for the task a fault in `propose_action` happened on, `not_run` says no action ran; I
-   know of no command that shows whether its proposal got past the decision stage, so if the fault
-   came after a dispatch began, `not_run` may not be true. **[N]** how to tell is not read.
+   Caution: for the task a fault in `propose_action` happened on, `not_run` says no action ran. No
+   command shows how far its proposal got; a read-only query does (SQL, as `cyberorch_app` on an
+   `engagement_scope` connection in a read-only transaction), by the key the loop sent,
+   `h5:<task_id>:1`: `SELECT p.proposal_id, p.pipeline_stage, p.decision, p.stage_detail, (SELECT
+   count(*) FROM capabilities c WHERE c.proposal_id = p.proposal_id) AS capabilities, (SELECT
+   count(*) FROM tool_runs r WHERE r.proposal_id = p.proposal_id) AS runs FROM action_proposals p
+   WHERE p.request_idempotency_key = :k`. Observed in H7 (S4, S8): after a reviewer fault,
+   `received`, decision null, 0 capabilities, 0 runs (no decision was made, so no action ran); for a
+   task whose proposal was decided `DENY`: `closed`, `DENY`, `decision_DENY`, 0, 0. A proposal with a
+   capability or a run is the case in which `not_run` may not be true; H7 did not produce one (its
+   tests have no ALLOW path), so that was not observed. `query_state`'s counts are not per task.
 5. **The call.** With the repository's environment loaded:
 
    ```python

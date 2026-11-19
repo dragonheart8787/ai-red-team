@@ -842,6 +842,27 @@ CATALOGUE = [
              edits=(Edit('scripts/run_harness.py', '        return EXIT_DB_LOST\n    if not taken:', '        taken = True\n    if not taken:'),),
              prepare=_without_probe,
              targets=('test_a_database_that_cannot_be_reached_is_exit_4_and_the_driver_text_is_not_printed',)),
+    # -- added by the implementer for H7, the laboratory end to end (tests/test_harness_h7_lab.py) --
+    Mutation('D69-H7-L1', 'the start-up check never refuses a start (a leftover live task is not looked at) [added by the implementer, H7]',
+             ('tests/test_harness_h7_lab.py',),
+             edits=(Edit('harness/loop.py', '        if decide_startup(self.ports.live_tasks(engagement_id)) == STARTUP_REFUSE:\n', '        if False and decide_startup(self.ports.live_tasks(engagement_id)) == STARTUP_REFUSE:\n'),),
+             prepare=_without_probe,
+             targets=('test_s5_the_next_start_is_refused_with_10_and_no_refused_line',)),
+    Mutation('D69-H7-L2', 'the banner prints its engagements in another order than the one the loop visits and `list` shows [added by the implementer, H7]',
+             ('tests/test_harness_h7_lab.py',),
+             edits=(Edit('harness/banner_facts.py', '        "engagements": engagements,\n', '        "engagements": list(reversed(engagements)),\n'),),
+             prepare=_without_probe,
+             targets=('test_s3_a_run_once_ends_with_0_and_prints_the_banner_the_runbook_describes',)),
+    Mutation('D69-H7-L3', 'the recovery snippet of the runbook completes the task with another word than not_run [added by the implementer, H7]',
+             ('tests/test_harness_h7_lab.py',),
+             edits=(Edit('docs/D69_HARNESS_OPERATOR_RUNBOOK.md', 'result_summary="not_run", actor="<your name>")', 'result_summary="finished", actor="<your name>")'),),
+             prepare=_without_probe,
+             targets=('test_s6_the_recovery_snippet_completes_the_leftovers_and_the_next_start_passes',)),
+    Mutation('D69-H7-L4', 'the residue listing does not list a claimed task [added by the implementer, H7]',
+             ('tests/test_harness_h7_lab.py',),
+             edits=(Edit('harness/residue_listing.py', 'task_status=LIVE_STATUSES,', 'task_status=("queued",),'),),
+             prepare=_without_probe,
+             targets=('test_s4_a_fault_in_the_reviewer_ends_with_12_and_leaves_what_the_runbook_says',)),
 ]
 
 if __name__ == "__main__":
