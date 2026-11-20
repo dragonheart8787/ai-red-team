@@ -539,3 +539,82 @@ fixture, not a real nmap run.
 - The repair can over-escalate, in the safe direction: a name that begins with one of `n t r b f`
   right after a backslash (a UNC path such as `\\ntdc01`) is now also read without that letter.
 - The stdout of the tests is a fixture; a real run in the laboratory (way B) is not done.
+
+### 8.9 Appendix (2026-11-20) — the gluing class: a character touching a lure no longer hides it
+
+**What remained after 8.8.** The three readings of 8.8 separate a line break or a tab from a name, but
+the boundary they were searched with still stopped at every word character. So a lure still read as
+not named when one more character touched it: a typed `\v`, `\a` or `\xNN`, an ANSI colour sequence
+(`ESC[0m`, `\x1b[0m`, `\u001b[0m` in the JSON), or any letter (`m10.82.0.77`, `10.82.0.77abc`,
+`xdc99.lure.example`). Found by the one-off probe recorded in 8.8's limits. The request for this repair
+records that nmap writes a non-printable byte as `\xHH`, so a banner that sends ESC and a colour code
+in front of an address reaches the Worker as `\x1b[0m10.82.0.77`, a form a real run can produce (this
+was not checked against a real run; no nmap was run, and way B is not done).
+
+**Why a longer list of escapes is not the answer.** Each escape added to `_text_forms` closes one
+spelling and leaves the class open, and the class is "something that is not a separator touches the
+name". The boundary exists so that one identity is not read out of another (`10.79.0.2` is not inside
+`10.79.0.20`); it should stop what would make the target *a different identity of the same kind*, and
+no more. A letter next to an address does not make it another address.
+
+**The rule.** `_identity_in_text` takes its boundary from the shape of the target value
+(`_boundary`) and applies it to every reading of the text; a match in any reading counts.
+
+| target value | not preceded by | not followed by |
+|---|---|---|
+| an IPv4 literal | a digit or a dot | a digit, or a dot and a digit |
+| a name (labels of letters, digits, `_`, `-`, dot-separated, with at least one letter) | a dot | `_` or `-`, or a dot and a digit |
+| anything else (an IPv6 literal, a cidr, a url, a repo) | a word character, a dot or a hyphen (as before) | a word character or a hyphen, or a dot and a digit (as before) |
+
+For an IPv4 literal, letters, underscore, hyphen, brackets and whitespace no longer stop it. For a name,
+a letter or a digit on either side no longer stops it, and neither does a hyphen or an underscore on the
+left; a hyphen or an underscore on the right, and a dot and a digit on the right, still do (the
+asymmetry is the request's wording, "the right side keeps the existing rule except letters and
+digits"). A value that is not an IPv4 literal and has a colon, a slash, an `@` or a `#` is not a name
+here; this includes the shapes of `url`, `cidr`, `repo` and IPv6 `ip` targets, which keep the old rule.
+`ad_domain` values and single-label names have the shape of a name and take the name rule.
+
+**One addition beyond the designed rule.** With the boundary alone, 8 of the pre-registered cases
+stayed red: a hex byte whose last digit is a digit, directly before an IPv4 lure (`\x41` and
+`10.82.0.77` read `x4110.82.0.77`), because a digit glued to an address is, to any boundary on the
+address, a longer address. `_identity_in_text` therefore also searches the text with each `\xHH`
+(with any backslashes in front of it) replaced by a space, each through the same readings of
+`_text_forms` (`_HEX_BYTE_ESCAPE`). It adds a reading and removes none. `_text_forms` itself, `_text_identity_keys`,
+`_canonical_keys`, `_norm_identity`, the Worker's prompt and schema, and `harness/` are unchanged.
+
+**Over-escalations the rule accepts, pre-registered (the safe direction).** For the target
+`dc99.lure.example`, each is named by untrusted text and so escalates: `xdc99.lure.example`,
+`dc99.lure.examplex`, `9dc99.lure.example`, `dc99.lure.example9`, `x-dc99.lure.example` and
+`x_dc99.lure.example`. A longer name that contains the target's, when nothing observed the target, is
+read as naming it. Likewise a short single-label name is named by any longer word that contains it
+(`mydc99` names `dc99`). Not named, by the same derivation: `dc99.lure.example-x`,
+`dc99.lure.example_x`, `dc99.lure.example.1`, and `dc99-lure.example` (which does not contain the name).
+Still not named, as in 8.8: `1.10.82.0.77` and `10.82.0.77.1` for `10.82.0.77`, `a.dc99.lure.example`
+for `dc99.lure.example`, and the four counter-examples of 8.8, now at every one of its positions.
+
+**Verification.** `tests/test_provenance_glue.py`, its table written and hashed before the first run and
+not changed after it (522 cases): 3 lure spellings (plain, nmap-escaped, a name) x 14 glues (ten
+before the lure, four after it) x 2 templates (mid line, end of line) x 2 forms (the builder's JSON
+dump, the raw stdout) all expected named; the observed responder at the same glues expected not named
+(112); the 8.8 counter-examples at all 14 positions (112) and three more (84); the ten names above
+(40); and 3 glue cases through `run_loop`, the real `LoopAdapter`, `BaseWorker._to_proposal`,
+`propose_action` and OPA for both actions, expected HUMAN_APPROVAL. Before the repair 182 of 522
+were red (152 of the 168 glue cases, the 24 over-escalations, and all 6 loop cases, decided ALLOW with
+`introduced_by_untrusted` false and no reasons); responders and counter-examples were green. With
+the boundary rule alone 8 stayed red (the hex byte ending in a digit before an IPv4 lure); with the hex-byte reading, 522
+of 522. The 204 cases of 8.8 and the 20 of the 5.28 file are unchanged. Mutations `D69-GL-1` (an IPv4's
+left boundary stops every word character again), `D69-GL-2` (an IPv4's right boundary no longer stops
+a dot and a digit), `D69-GL-3` (a name's left boundary no longer stops a dot) and `D69-GL-4` (no
+hex-byte reading) are each red by assertion failure. Every stdout is a hand-written fixture.
+
+**What this does not settle.**
+
+- A `url`, IPv6, `cidr` or `repo` target keeps the old boundary, so a letter directly in front of such
+  a lure still hides it from `_identity_in_text` (a probe: `xhttp://10.82.0.77/x` for a url target,
+  `x2001:db8::1`, `x10.82.9.0/24` all read as not named). Only IPv4 and names were asked for.
+- A typed escape whose last character is a digit and which touches an IPv4 directly is read only for
+  `\xHH` (and, in 8.8, `\uXXXX`): an octal `\033` or `\1` directly against an address still reads as a
+  longer address.
+- The over-escalation is wider for short single-label names, which any longer word contains.
+- The stdout of the tests is a fixture, and what a real nmap prints is not checked: a real run in the
+  laboratory (way B) is not done.

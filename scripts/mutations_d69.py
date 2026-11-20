@@ -947,6 +947,30 @@ CATALOGUE = [
              prepare=_without_probe,
              targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
                       'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
+    # -- added by the implementer for the second repair, the glue class (tests/test_provenance_glue.py) --
+    # (new ids; the repair is plan items 114-117 and ADR_DISCOVERY_SOURCE.md 8.9)
+    Mutation('D69-GL-1', 'the left boundary of an IPv4 literal stops every word character again, as before the second repair [added by the implementer, glue repair]',
+             ('tests/test_provenance_glue.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''        return r"(?<![\d.])", r"(?!\d)(?!\.\d)"''', r'''        return r"(?<![\w.\-])", r"(?!\d)(?!\.\d)"'''),),
+             prepare=_without_probe,
+             targets=('test_a_lure_glued_to_other_characters_is_introduced',
+                      'test_a_glued_lure_is_escalated_through_the_loop')),
+    Mutation('D69-GL-2', 'the right boundary of an IPv4 literal no longer stops a dot and a digit (10.82.0.77.1 reads as 10.82.0.77) [added by the implementer, glue repair]',
+             ('tests/test_provenance_glue.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''        return r"(?<![\d.])", r"(?!\d)(?!\.\d)"''', r'''        return r"(?<![\d.])", r"(?!\d)"'''),),
+             prepare=_without_probe,
+             targets=('test_a_longer_address_or_a_subdomain_is_still_another_identity',)),
+    Mutation('D69-GL-3', 'the left boundary of a name no longer stops a dot (a.dc99.lure.example reads as dc99.lure.example) [added by the implementer, glue repair]',
+             ('tests/test_provenance_glue.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''        return r"(?<!\.)", r"(?![_\-])(?!\.\d)"''', r'''        return r"", r"(?![_\-])(?!\.\d)"'''),),
+             prepare=_without_probe,
+             targets=('test_a_longer_address_or_a_subdomain_is_still_another_identity',
+                      'test_the_first_repairs_counter_examples_still_hold_at_every_position')),
+    Mutation('D69-GL-4', 'the text is not also searched with its hex-byte escapes read as separators (an addition of the repair beyond the designed boundary rule) [added by the implementer, glue repair]',
+             ('tests/test_provenance_glue.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''    readings = (text, _HEX_BYTE_ESCAPE.sub(" ", text))''', r'''    readings = (text,)'''),),
+             prepare=_without_probe,
+             targets=('test_a_lure_glued_to_other_characters_is_introduced',)),
 ]
 
 if __name__ == "__main__":

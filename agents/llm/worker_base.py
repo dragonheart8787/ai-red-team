@@ -331,12 +331,60 @@ def _identity_in_text(value: str, text: str) -> bool:
     v = _norm_identity(value)
     if not v:
         return False
-    # Boundaries: not preceded by an identity character, not followed by a word
-    # char or hyphen, and not followed by a dot that continues into another octet
-    # (so ``10.79.0.2`` does not match inside ``10.79.0.20`` but does match
-    # ``10.79.0.2.`` at the end of a sentence).
-    pattern = r"(?<![\w.\-])" + re.escape(v) + r"(?![\w\-])(?!\.\d)"
-    return any(re.search(pattern, form.lower()) for form in _text_forms(text))
+    # The boundary depends on what ``v`` is (see :func:`_boundary`), and is applied
+    # to every reading of the text (see :func:`_text_forms`); a match in any counts.
+    left, right = _boundary(v)
+    pattern = left + re.escape(v) + right
+    # The text as given, and with its hex-byte escapes read as separators (see
+    # :data:`_HEX_BYTE_ESCAPE`), each through every reading of :func:`_text_forms`.
+    readings = (text, _HEX_BYTE_ESCAPE.sub(" ", text))
+    return any(
+        re.search(pattern, form.lower()) for t in readings for form in _text_forms(t)
+    )
+
+
+#: nmap writes a non-printable byte as ``\xHH``. Directly before an address, the hex
+#: pair's last digit reads as a digit glued to it (``\x41`` and ``10.79.0.2`` read
+#: ``x4110.79.0.2``), which no boundary on the address can tell from a longer address,
+#: so the escape itself is taken out as a separator in one more reading of the text.
+_HEX_BYTE_ESCAPE = re.compile(r"\\+x[0-9a-f]{2}", re.IGNORECASE)
+
+#: An IPv4 literal, as ``_norm_identity`` leaves it.
+_IPV4_LITERAL = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
+#: A name: dot-separated labels of letters, digits, underscore and hyphen, with at
+#: least one letter somewhere (so a bare number is not taken for one). Anything
+#: with a colon, a slash, an ``@`` or a ``#`` (an IPv6 literal, a CIDR, a url, a
+#: repo) is not a name here and keeps the original boundary.
+_NAME_SHAPE = re.compile(r"[a-z0-9_\-]+(?:\.[a-z0-9_\-]+)*\.?")
+
+
+def _boundary(v: str) -> tuple[str, str]:
+    """The regex lookbehind and lookahead that bound ``v`` as a whole identity in text.
+
+    A boundary exists so that one identity is not read out of another: ``10.79.0.2``
+    is not in ``10.79.0.20``. So what it must stop is what would make ``v`` a
+    *different identity of the same kind*, and no more. It used to stop every word
+    character, and that was too much: a letter glued to an address (``m10.79.0.2``
+    after an ANSI colour code, which nmap writes as ``\\x1b[0m``, or ``10.79.0.2abc``)
+    does not make it another address, and a boundary that stopped it let a lure hide
+    behind one character (plan items 116-117).
+
+    * An IPv4 literal: not preceded by a digit or a dot, not followed by a digit,
+      and not followed by a dot and a digit (``1.10.79.0.2``, ``10.79.0.20``,
+      ``10.79.0.2.1`` are other addresses). Letters, underscore, hyphen,
+      brackets and whitespace do not stop it.
+    * A name: not preceded by a dot (``a.dc01.example`` is another name). A letter
+      or a digit on either side no longer stops it, which over-escalates (a longer
+      name that contains this one) in the safe direction; an underscore or a hyphen
+      on the right, and a dot and a digit on the right, still do, as before.
+    * Anything else (an IPv6 literal, a cidr, a url, a repo): the original rule.
+    """
+    if _IPV4_LITERAL.fullmatch(v):
+        return r"(?<![\d.])", r"(?!\d)(?!\.\d)"
+    if _NAME_SHAPE.fullmatch(v) and re.search(r"[a-z]", v):
+        return r"(?<!\.)", r"(?![_\-])(?!\.\d)"
+    return r"(?<![\w.\-])", r"(?![\w\-])(?!\.\d)"
 
 
 def _text_forms(text: str) -> tuple[str, ...]:
