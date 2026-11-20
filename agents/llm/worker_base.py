@@ -334,14 +334,29 @@ def _identity_in_text(value: str, text: str) -> bool:
     # The boundary depends on what ``v`` is (see :func:`_boundary`), and is applied
     # to every reading of the text (see :func:`_text_forms`); a match in any counts.
     left, right = _boundary(v)
-    pattern = left + re.escape(v) + right
+    patterns = [left + re.escape(v) + right]
+    # A /32 is one address, and text names it by that address, never by "/32" (see
+    # :data:`_IPV4_SLASH32`): the address is searched for too, with the IPv4 boundary.
+    single = _IPV4_SLASH32.fullmatch(v)
+    if single:
+        address = single.group(1)
+        a_left, a_right = _boundary(address)
+        patterns.append(a_left + re.escape(address) + a_right)
     # The text as given, and with its hex-byte escapes read as separators (see
     # :data:`_HEX_BYTE_ESCAPE`), each through every reading of :func:`_text_forms`.
     readings = (text, _HEX_BYTE_ESCAPE.sub(" ", text))
     return any(
-        re.search(pattern, form.lower()) for t in readings for form in _text_forms(t)
+        re.search(pattern, form.lower())
+        for pattern in patterns for t in readings for form in _text_forms(t)
     )
 
+
+#: An IPv4 cidr of prefix length 32: one address. In the harness's loop a range wider
+#: than this is denied on its size before provenance matters (``max_targets`` is 1,
+#: ``target_count_exceeds_budget``), so a /32 is the cidr target that can reach ALLOW,
+#: and a banner names it by its bare address. Only /32: the network address of a wider
+#: range is not the range (plan items 119-120).
+_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/32")
 
 #: nmap writes a non-printable byte as ``\xHH``. Directly before an address, the hex
 #: pair's last digit reads as a digit glued to it (``\x41`` and ``10.79.0.2`` read

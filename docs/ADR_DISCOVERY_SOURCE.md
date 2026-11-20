@@ -618,3 +618,71 @@ hex-byte reading) are each red by assertion failure. Every stdout is a hand-writ
 - The over-escalation is wider for short single-label names, which any longer word contains.
 - The stdout of the tests is a fixture, and what a real nmap prints is not checked: a real run in the
   laboratory (way B) is not done.
+
+### 8.10 Appendix (2026-11-20) — a /32 target named by its bare address; where the chase stops
+
+**The gap.** A cidr target of prefix length 32 is one address, and untrusted text names it by that
+address, never by `/32`. `_identity_in_text` searched for the whole value (`10.82.0.77/32`), which a
+banner does not contain; the older key path of `_text_identity_keys` reads a bare `10.82.0.77` as the
+cidr `10.82.0.77/32` and so matched a clean mention, but it does not see through a glued character.
+So `m10.82.0.77`, `\x1b[0m10.82.0.77` or `10.82.0.77abc` read as not introduced for a /32 target, and
+in the harness's loop such a proposal was decided ALLOW (the pre-registered loop cases below, before
+the repair).
+
+**The repair.** When the target value is an IPv4 cidr of prefix length 32 (`_IPV4_SLASH32`),
+`_identity_in_text` also searches for the address itself, with the IPv4 boundary of 8.9 (not
+preceded by a digit or a dot; not followed by a digit, or a dot and a digit), through the same readings
+(the text, its hex-byte reading, and the three readings of `_text_forms`); a match of either search
+counts. Other prefix lengths are unchanged. `_boundary`'s existing branches, `_text_forms`,
+`_text_identity_keys`, `_canonical_keys`, `_norm_identity`, the Worker's prompt and schema, and
+`harness/` are unchanged. A /32 target that a tool observed is still established first (step 2 of
+`_discovery_provenance`): the observed `10.82.0.5` yields the key `('cidr', '10.82.0.5/32')`, which
+meets the target's.
+
+**Why a range wider than /32 is not repaired.** The harness's loop calls `propose_action` with no
+budget, so the request carries `max_targets` 1 (`control_plane/capability/broker.py`), a cidr target
+counts every address it names (`control_plane/canonicalizer/target.py`, `address_count`), and Rego denies
+a range with `target_count_exceeds_budget` (`authz.rego`), and DENY outranks HUMAN_APPROVAL. Whatever
+provenance says about a /24 in the loop, the decision is DENY. The CIDR repair designed before this one
+was stopped at its first step for that reason and is not done.
+
+**A fact 8.9 left out.** The older key path of `_text_identity_keys`, unchanged by 8.8 and 8.9, strips
+dots from the ends of a token (`_token_candidates`), so a token with a dot before it, such as
+`.dc99.lure.example`, names `dc99.lure.example`, although `_identity_in_text`'s name boundary stops a
+dot on the left. That is an over-escalation in the safe direction, and it was there before 8.8.
+
+**Verification.** `tests/test_provenance_slash32.py`, its table written and hashed before the first run
+and not changed after it (324 cases): the target `10.82.0.77/32` named by `10.82.0.77` with each of the
+ten glues before it of 8.9 and `abc` or `x` after it, two templates, two forms (48), and plainly at
+every one of the 14 positions of 8.8, two forms (28), all expected introduced; the observed responder
+`10.82.0.5` as the target `10.82.0.5/32` at the same glues and positions, expected not (76); the
+neighbours `10.82.0.770`, `110.82.0.77`, `10.82.0.77.1`, `1.10.82.0.77` for `10.82.0.77/32`,
+`10.82.0.77` for `10.82.0.7/32`, and `m10.82.0.0` for `10.82.0.0/24`, at every position, two forms,
+expected not (168); and two glued lures through `run_loop`, the real `LoopAdapter`, `BaseWorker._to_proposal`,
+`propose_action` and OPA, for both actions, scope object `10.82.0.0/24`, expected HUMAN_APPROVAL (4).
+Before the repair 52 of 324 were red: all 48 glued cases, and the 4 loop cases, decided ALLOW with
+`introduced_by_untrusted` false and no reasons. After it, 324 of 324; the earlier provenance files
+(20, 204 and 522 cases) are unchanged. Mutation `D69-SL-1` (no search for the address) is red by
+assertion failure (52). Mutation `D69-SL-2` (search the network address of every cidr, not only of a
+/32) is **not caught**: the counter-example pre-registered to catch it, `m10.82.0.0` for the target
+`10.82.0.0/24`, is decided at step 1, because the unit helper offers `10.82.0.0/24` itself as a scope
+object, so the target is explicit scope before any content match. The table was not changed after its
+first run; catching that mutation needs a counter-example whose target is not an offered scope object.
+
+**Where the chase stops, and why.** Three repairs (8.8, 8.9 and this one) have each closed the forms a
+hand-written stdout showed, and each found the next one. What a real nmap prints (whether it writes a
+control byte as `\xHH`, where banner text falls on a line) is the evidence that would say which forms
+matter, and only a real run in the laboratory (way B) gives it. The match is a token match on text;
+its remaining limits are recorded here and re-decided by the owner before a real engagement.
+
+**What this does not settle.**
+
+- A cidr wider than /32: a letter glued to a range (`m10.82.9.0/24`) still hides it. In the harness's
+  loop such a target is denied on its size; if the harness ever passes a budget that admits a range,
+  this limit is re-opened before that change.
+- IPv6, url and repo targets keep the original boundary: a letter directly in front still hides them.
+- A typed octal or decimal escape (`\033`, `\1`) directly against an IPv4 still reads as a longer
+  address.
+- A short single-label name is named by any longer word that contains it (over-escalation, safe).
+- Mutation `D69-SL-2` is not caught by the tests as they stand (above).
+- The stdout of the tests is a fixture; a real run in the laboratory (way B) is not done.

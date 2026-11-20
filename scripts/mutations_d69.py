@@ -971,6 +971,24 @@ CATALOGUE = [
              edits=(Edit('agents/llm/worker_base.py', r'''    readings = (text, _HEX_BYTE_ESCAPE.sub(" ", text))''', r'''    readings = (text,)'''),),
              prepare=_without_probe,
              targets=('test_a_lure_glued_to_other_characters_is_introduced',)),
+    # -- added by the implementer for the /32 repair (tests/test_provenance_slash32.py) --
+    # (new ids; the repair is plan items 119-120 and ADR_DISCOVERY_SOURCE.md 8.10)
+    Mutation('D69-SL-1', 'a /32 target is not also searched for by its bare address [added by the implementer, /32 repair]',
+             ('tests/test_provenance_slash32.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''    single = _IPV4_SLASH32.fullmatch(v)''', r'''    single = None'''),),
+             prepare=_without_probe,
+             targets=('test_a_slash32_target_is_introduced_by_its_glued_address',
+                      'test_a_glued_slash32_lure_is_escalated_through_the_loop')),
+    # D69-SL-2 is NOT caught as committed (runner: INVALID). The counter-example pre-registered to
+    # catch it, target 10.82.0.0/24 against text m10.82.0.0, is decided at step 1 of
+    # _discovery_provenance: the unit helper offers 10.82.0.0/24 itself as a scope object, so the
+    # target is explicit scope before any content match. The table is not changed after its first
+    # run; a counter-example that can catch it needs a new pre-registered table (plan item 120).
+    Mutation('D69-SL-2', 'every IPv4 cidr, not only a /32, is also searched for by its network address [added by the implementer, /32 repair; INVALID as committed, see the comment above]',
+             ('tests/test_provenance_slash32.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/32")''', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}")'''),),
+             prepare=_without_probe,
+             targets=('test_a_neighbour_of_a_slash32_target_is_not_its_address',)),
 ]
 
 if __name__ == "__main__":
