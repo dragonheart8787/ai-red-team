@@ -892,6 +892,61 @@ CATALOGUE = [
 '''),),
              prepare=_without_probe,
              targets=('test_another_engagements_evidence_is_never_shown_to_this_engagements_worker',)),
+    # -- added by the implementer for the token-boundary repair (tests/test_provenance_token_boundaries.py) --
+    # (new ids, not in the plan's section 8; the repair is plan items 111-113 and ADR_DISCOVERY_SOURCE.md 8.8)
+    Mutation('D69-TB-1', 'the text is searched only with its backslashes removed; the readings that separate a line break are dropped [added by the implementer, token-boundary repair]',
+             ('tests/test_provenance_token_boundaries.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''    return (
+        text.replace("\\", ""),     # backslashes removed: nmap's escaped dots
+        text.replace("\\", " "),    # backslashes as separators: a line break's
+        _CONTROL_ESCAPE.sub(" ", text).replace("\\", ""),   # both, in that order
+    )
+''', r'''    return (
+        text.replace("\\", ""),     # backslashes removed: nmap's escaped dots
+    )
+'''),),
+             prepare=_without_probe,
+             targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
+                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
+    Mutation('D69-TB-2', 'the text is searched only in the readings that separate a line break; the two that restore nmap\'s escaped dots are dropped [added by the implementer, token-boundary repair]',
+             ('tests/test_provenance_token_boundaries.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''    return (
+        text.replace("\\", ""),     # backslashes removed: nmap's escaped dots
+        text.replace("\\", " "),    # backslashes as separators: a line break's
+        _CONTROL_ESCAPE.sub(" ", text).replace("\\", ""),   # both, in that order
+    )
+''', r'''    return (
+        text.replace("\\", " "),    # backslashes as separators: a line break's
+        _CONTROL_ESCAPE.sub(" ", text),
+    )
+'''),),
+             prepare=_without_probe,
+             targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
+                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
+    Mutation('D69-TB-3', 'an identity counts as named only when every reading of the text finds it (intersection, not union) [added by the implementer, token-boundary repair]',
+             ('tests/test_provenance_token_boundaries.py',),
+             edits=(Edit('agents/llm/worker_base.py', r'''    return any(re.search(pattern, form.lower()) for form in _text_forms(text))''',
+                         r'''    return all(re.search(pattern, form.lower()) for form in _text_forms(text))'''),
+                    Edit('agents/llm/worker_base.py', r'''    keys: set[IdentityKey] = set()
+    for form in _text_forms(text):
+        for token in _TEXT_TOKEN.findall(form):
+            for candidate in _token_candidates(token):
+                keys |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
+                keys |= _untyped_repo_keys(candidate)
+    return keys
+''', r'''    per_form: list[set[IdentityKey]] = []
+    for form in _text_forms(text):
+        found: set[IdentityKey] = set()
+        for token in _TEXT_TOKEN.findall(form):
+            for candidate in _token_candidates(token):
+                found |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
+                found |= _untyped_repo_keys(candidate)
+        per_form.append(found)
+    return set.intersection(*per_form)
+'''),),
+             prepare=_without_probe,
+             targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
+                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
 ]
 
 if __name__ == "__main__":

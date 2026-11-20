@@ -475,3 +475,67 @@ Branch names are never resolved and never establish anything (§8.9/I8 unchanged
 strict "established" criterion is unchanged. Authorization was never affected — this is
 the extra human look D20 adds for content-introduced targets, restored for the one
 target shape that had escaped it.
+
+### 8.8 Appendix (2026-11-20) — a lure at the edge of a line was not recognised (fail open)
+
+**What was found.** D69 H7, ACCEPTANCE 5.28 way (A) (plan items 109 and 111): a one-off probe
+showed that a lure written at the start or at the end of a line of a tool's stdout
+(`...scan 10.82.0.77` then a line break, a line that begins with `10.82.0.77`, a name at the end of a
+line) came out with `introduced_by_untrusted` false, so a proposal for it would have been decided
+ALLOW. The tests of §8.6 and D20 did not see it because each puts the lure in the middle of a line.
+
+**Why.** `_identity_in_text` and `_text_identity_keys` removed every backslash from the text before
+matching, to undo nmap's escaped dots (`203\.0\.113\.77`, §6). The text provenance reads is, for
+the harness, the builder's JSON dump of the derived view (`harness/observations.py`), and in a JSON
+dump a line break is the two characters backslash and `n`. Removing the backslash left the `n`
+glued to the neighbouring token: a lure followed by a line break read `10.82.0.77n`, which has no
+token boundary after it, and a lure preceded by one read `n10.82.0.77`, which has a word character
+before it. A banner can also carry a literal backslash and a letter typed by whoever controls it,
+which does the same in the raw text. The direction of the error is the one §4 names: it fails open.
+
+**The repair.** The text is read through `_text_forms`, and an identity found in any reading is
+named; `_text_identity_keys` returns the union of the keys of every reading. Three readings:
+
+1. backslashes removed (the existing one, for nmap's escaped dots);
+2. each backslash replaced by a space;
+3. the escape sequences `\n`, `\t`, `\r`, `\b`, `\f` and `\uXXXX`, with any backslashes in front
+   of them (a literal backslash is two of them in JSON), replaced by a space, then the remaining
+   backslashes removed as in the first.
+
+Readings 1 and 2 were the repair as first specified. With only those two, 38 of the 204
+pre-registered cases were still red: every case with a line break or tab escape *before* the lure
+(a backslash turned into a space leaves the letter in front of the name) and the escaped spelling at
+the end of a line (its dots must be restored and its line break separated). Reading 3 was added in
+the same function for that. The direction is only more escalations: each reading is searched with
+the same token boundary as before, §8.2's order is unchanged (a scope object, then an observed
+identity, then the content), so an observed responder is still established whatever a banner says
+about it, and `_norm_identity`'s return value, the Worker's system prompt and schema, D52's
+canonical comparison and `harness/` are unchanged.
+
+**Verification.** `tests/test_provenance_token_boundaries.py`, with its expectation table written and
+hashed before the first run and not changed after it: 14 positions of a lure (mid line followed by a
+space, followed by a closing parenthesis, end of line, start of line, alone on a line, start and end
+of the whole stdout, after a tab, and a literal backslash with `n`, `t` or `r` directly before and
+directly after it) × 3 spellings (plain address, nmap's escaped address, a name) × 2 forms of the
+text (the real builder's JSON dump through `observation_from_evidence`, and the raw stdout), all
+expected to be introduced; an observed responder at every position expected not to be; token-boundary
+counter-examples (`10.82.0.77` for target `10.82.0.7`, `110.82.0.77` and `10.82.0.770` for target
+`10.82.0.77`, `dc99.lure.example` for target `lure.example`) expected not to be; four cases through
+`run_loop`, the real `LoopAdapter`, `BaseWorker._to_proposal`, `propose_action` and OPA, for both
+actions, expected to be HUMAN_APPROVAL. Before the repair 56 of 204 were red (48 unit cases; the 8
+loop cases were decided ALLOW with `introduced_by_untrusted` false and no reasons), the responders and
+the counter-examples all green; after it 204 of 204. Mutations `D69-TB-1` (only reading 1), `D69-TB-2`
+(only the readings that separate a line break) and `D69-TB-3` (an identity counts only when every
+reading finds it) are each red by assertion failure. Every stdout in these tests is a hand-written
+fixture, not a real nmap run.
+
+**What this does not settle.**
+
+- Other things that glue one more character to a name are not read. A typed `\v`, `\a` or `\xNN`
+  directly before a lure, and an ANSI colour sequence directly before one (`ESC[0m`, `\u001b[0m` in
+  the JSON), still come out as not introduced (a one-off probe; not in the table, not fixed here).
+  The limit under it is that the match is by token: whatever glues a character to a name hides it
+  from a token match, while a reader of the text may still see the name.
+- The repair can over-escalate, in the safe direction: a name that begins with one of `n t r b f`
+  right after a backslash (a UNC path such as `\\ntdc01`) is now also read without that letter.
+- The stdout of the tests is a fixture; a real run in the laboratory (way B) is not done.

@@ -336,7 +336,43 @@ def _identity_in_text(value: str, text: str) -> bool:
     # (so ``10.79.0.2`` does not match inside ``10.79.0.20`` but does match
     # ``10.79.0.2.`` at the end of a sentence).
     pattern = r"(?<![\w.\-])" + re.escape(v) + r"(?![\w\-])(?!\.\d)"
-    return re.search(pattern, _norm_identity(text)) is not None
+    return any(re.search(pattern, form.lower()) for form in _text_forms(text))
+
+
+def _text_forms(text: str) -> tuple[str, ...]:
+    """The forms ``text`` is searched in for a named identity; a match in any one counts.
+
+    A backslash in untrusted text can mean two different things, and a scan that
+    picks one of them fails open on the other. In nmap's own banner it escapes a
+    dot (``203\\.0\\.113\\.77``) and removing it restores the address. In the JSON
+    the harness hands the Worker, and in a banner whoever controls it typed, it is
+    the first half of ``\\n`` or ``\\t``: removing it glues the letter to the token
+    next to it (``...scan 10.82.0.77\\n`` reads ``...10.82.0.77n``), so a name at
+    the start or the end of a line was not found (plan item 109). So the text is
+    read more than one way, and an identity found under any of them is named.
+    Reading it another way can only find more, never less: this adds escalations
+    and removes none. :func:`_norm_identity` itself is unchanged.
+
+    The third form is for what the second cannot do: with only a backslash turned
+    into a space, ``\\n10.82.0.77`` still reads ``n10.82.0.77`` (the letter is
+    left in front of the name), and an escaped address at the end of a line
+    (``10\\.82\\.0\\.77\\n``) needs its dots restored *and* its line break
+    separated. So here the escape sequence itself (``\\n``, ``\\t``, ``\\r``,
+    ``\\b``, ``\\f``, ``\\uXXXX``, with any backslashes in front of it, which is
+    how a literal backslash is written in JSON) becomes a separator first, and
+    the backslashes that remain are removed as in the first form.
+    """
+    return (
+        text.replace("\\", ""),     # backslashes removed: nmap's escaped dots
+        text.replace("\\", " "),    # backslashes as separators: a line break's
+        _CONTROL_ESCAPE.sub(" ", text).replace("\\", ""),   # both, in that order
+    )
+
+
+#: A control-character escape as JSON (or a banner's author) writes it: ``\n``, ``\t``,
+#: ``\r``, ``\b``, ``\f`` or ``\uXXXX``, with the backslashes that may precede it (a
+#: literal backslash is ``\\`` in JSON, so a typed ``\n`` is ``\\n`` there).
+_CONTROL_ESCAPE = re.compile(r"\\+(?:u[0-9a-f]{4}|[ntrbf])", re.IGNORECASE)
 
 
 #: A comparable identity: ``(type, canonical value)``, or ``("raw", text)`` for the
@@ -484,10 +520,11 @@ def _token_candidates(token: str) -> tuple[str, ...]:
 def _text_identity_keys(text: str) -> set[IdentityKey]:
     """Identities named anywhere in ``text``, in canonical form."""
     keys: set[IdentityKey] = set()
-    for token in _TEXT_TOKEN.findall(text.replace("\\", "")):
-        for candidate in _token_candidates(token):
-            keys |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
-            keys |= _untyped_repo_keys(candidate)
+    for form in _text_forms(text):
+        for token in _TEXT_TOKEN.findall(form):
+            for candidate in _token_candidates(token):
+                keys |= _canonical_keys(candidate, _UNTYPED_IDENTITY_TYPES)
+                keys |= _untyped_repo_keys(candidate)
     return keys
 
 
