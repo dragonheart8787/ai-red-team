@@ -181,4 +181,4 @@ stored source, and its cost and latency units are not known; measurement 7's raw
 readable by the harness's role (design check G); how the runner detects each stop event; whether OPA's scope
 check is the whole of "a target the owner approved"; how "not restarted until a person has read the record" is
 enforced; the runner's integrity guard is not built; the existing shadow report is not shown to read the
-harness's engagements (design 11.11); whether H7 counts as closed while 5.28 stays open (section 6).
+harness's engagements (design 11.11).
