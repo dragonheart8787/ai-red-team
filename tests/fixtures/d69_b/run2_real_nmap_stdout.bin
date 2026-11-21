@@ -1,0 +1,6 @@
+Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-11-21 14:23 UTC
+Nmap scan report for 10.82.0.10
+Host is up (0.00019s latency).
+Skipping host 10.82.0.10 due to host timeout
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 116.25 seconds
