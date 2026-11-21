@@ -100,3 +100,10 @@ not a fail-open, for the same reason as run 1: the lures never entered the evide
 (sha256 as above) and the target's own address `10.82.0.10` (2 unit, 2 loop: introduced, `HUMAN_APPROVAL`,
 `untrusted_discovery_source`). The sample check's line "derived view fields carrying a lure ['stdout_excerpt']"
 matched on the target's own address (its filter tests for "82"), not on a lure.
+
+## Note (2026-11-21)
+
+Line 30 above names `tests/test_provenance_real_nmap.py`. That file has been moved, byte for byte, to this directory as
+`run1_preregistered_test.py.txt` (sha256 `8b994c2380a04467313298ac5e5d2d907c361bd1eba24e2dea7b6ec5e9dae720`); the old
+line is left as it was written. Neither of the two runs produced a banner, and no further run is made (plan items
+126 and 128).

@@ -8,6 +8,8 @@ How to read it. Every fact names its source: a plan item (`item N`, in `docs/D69
 file and line. `[N]` marks something not read or not known. Every number the owner has not decided is written
 `[owner: 未決定]`; no suggested value is given anywhere. Where a source is a decision of the review layer, it says so.
 
+Re-read on 2026-11-21 after way (B) (plan item 128); the changes are listed there.
+
 ## 1. Status
 
 - **A draft, not a registration.** It becomes a registration only by a commit made after the harness exists and
@@ -59,6 +61,11 @@ were read in the code named.
 | 5 | Observation side: proposals escalated on `introduced_by_untrusted`, per tool; for nmap separately by scan type (`connect`, `version`, `ping`) (design 572-575) | `action_proposals.discovery->>'introduced_by_untrusted'`, `action_proposals.decision` = `HUMAN_APPROVAL`, `action_proposals.decision_reasons` containing `untrusted_discovery_source`; the tool and the scan type of the evidence that introduced it: `discovery->>'evidence_id'` → `evidence.run_id` → `tool_runs.normalized_params->>'scan_type'` and `evidence.tool` (the join of `harness/observations.py:96-107`; the same read as `tests/test_harness_h7_528.py`, `_scan_type_of`) | `HUMAN_APPROVAL` decisions, counted per tool and per scan type |
 | 6 | stranded states: tasks left `claimed`, proposals left at `received` | `tasks.status` = `'claimed'` (the status values, `db/migrations/versions/0001_core_schema.py:139`); `action_proposals.pipeline_stage` = `'received'` | tasks; proposals |
 | 7 | for ping scans, the number of entries in `hosts` against the number of "Host is up" lines in the raw artifact's stdout, per run | `evidence.derived_view->'hosts'` (`harness/observations.py:96-107`); the raw artifact: whether the harness's role can read it is **[N]** (design section 3, check G, line 268, and line 578) | entries and lines, per run |
+
+**Measurement 5, observed in way (B).** The two real runs showed that, under the adapter's current
+`--host-timeout`, an unrecognised service that holds its connections makes nmap skip the host without reporting the
+service, and one that closes at once is reported `tcpwrapped`; in neither case was the banner in the stdout (items
+125 and 127). This is an observation, not a threshold.
 
 Remarks. Measurement 5 is design measurement 5, the one the request names. The plan's text says "item 5 and 7
 by scan type" (line 1340); the design says item 5 by scan type (line 574) and item 7 for ping scans only (line
@@ -137,17 +144,17 @@ failure ("a classifier stop counts, no re-ask", design line 584 -- a candidate, 
 | the provenance match is a token match on text and its limits (ADR 8.9, 8.10) are re-decided before a real engagement; a budget that admits a range re-opens the gluing limit for ranges | item 119 (a), (b) | pending the owner |
 | the laundering path: a Supervisor-written `goal` enters the trusted half of both roles' prompts one round later | plan section 11 risk 10 (`docs/D69_IMPLEMENTATION_PLAN.md:1389-1405`); plan section 10 (7), line 1356 | the owner's decision comes before this registration |
 | the real-role factory's conditions | item 98 (a); item 110 | pending the owner |
-| the form of non-ASCII bytes in a real nmap run's output (`\xHH` or the raw byte) | plan section 10 (8), line 1360 | to be verified by way (B), section 7 |
-| H1-H7 closed with the full-suite and CI lines quoted; the existing shadow report shown able to read the harness's engagements without a change | plan section 10 (1), (5); design 11.11 | (1) the CI records of H7 are items 106 and 111, and of the provenance repairs after it items 115, 118 and 121 (121 written with this draft); whether H7 counts as closed while 5.28 stays open (item 122 (a)) is the owner's [N]; (5) not shown [N] |
+| the form of non-ASCII bytes in a real nmap run's output (`\xHH` or the raw byte) | plan section 10 (8), line 1360 | way (B) was run twice (items 125 and 127), with no banner either time: not answered; still a precondition of registering (plan section 10 (8)); a further attempt needs a new authorization of the owner |
+| H1-H7 closed with the full-suite and CI lines quoted; the existing shadow report shown able to read the harness's engagements without a change | plan section 10 (1), (5); design 11.11 | (1) H7 is closed by item 128; 5.28 stays Open (item 122 (a)); the two are independent; (5) design 11.11 (the existing report reads the harness's engagements) is still not shown [N] |
 
 ## 7. Preconditions
 
 - **ACCEPTANCE 5.28 stays Open** (owner decision, 2026-11-21; item 122 (a)). Its row in
   `docs/ACCEPTANCE_MVP1_AGENTS.md:675` is not changed here.
-- **Way (B) is authorized in principle by the owner, follows this draft, and is not executed** (item 122 (b)).
-  Its result -- the form of a real nmap stdout, whether a control byte is written as `\xHH`, where banner text
-  falls on a line -- may change sections 3 and 4 (measurement 5's inputs, measurement 7's raw-artifact count, and
-  the stop event 1). **This draft is re-read after (B) is done, before it is registered.**
+- **Way (B) was run twice under the owner's authorization, and neither run produced a banner** (items 125 and
+  127); this draft was re-read accordingly (item 128). Sections 3 and 4 are not changed by it, but what
+  measurement 5 and stop event 1 rest on -- that a real nmap writes a banner into its stdout -- is still not
+  confirmed by a real run.
 - ACCEPTANCE 5.118 records "Not done: … a live-harness shadow" (`docs/ACCEPTANCE_MVP1_AGENTS.md:851`).
 
 ## 8. What this draft does not cover
