@@ -116,7 +116,10 @@ def _roles(spec: str):
     return getattr(importlib.import_module(module_name), function)()
 
 
-def _run(args: argparse.Namespace, lock: HarnessLock, register) -> int:
+def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None) -> int:
+    # ``roles`` (plan item 137): the roles the shadow runner has already built from the approved
+    # factory and checked, so that the instances checked are the instances that run. None: the
+    # factory is called here, as before. The factory string is compared first either way.
     if args.role_factory not in APPROVED_ROLE_FACTORIES:
         print("refused: the role factory is not an approved one", file=sys.stderr)
         return EXIT_STARTUP_REFUSED
@@ -130,7 +133,8 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register) -> int:
         return EXIT_LOCK_HELD
     try:
         try:
-            roles = _roles(args.role_factory)
+            if roles is None:
+                roles = _roles(args.role_factory)
         except Exception as exc:  # noqa: BLE001 - what a factory raised is not printed
             print(f"refused: the role factory failed ({type(exc).__name__})", file=sys.stderr)
             return EXIT_UNEXPECTED
@@ -175,12 +179,12 @@ def _residue(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None, *, lock: HarnessLock | None = None,
-         register=signal.signal) -> int:
+         register=signal.signal, roles=None) -> int:
     args = build_parser().parse_args(argv)
     load_dotenv()
     if args.command == "residue":
         return _residue(args)
-    return _run(args, lock if lock is not None else HarnessLock(), register)
+    return _run(args, lock if lock is not None else HarnessLock(), register, roles=roles)
 
 
 if __name__ == "__main__":

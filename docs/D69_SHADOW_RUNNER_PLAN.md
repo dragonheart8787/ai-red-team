@@ -530,3 +530,4 @@ a lure to `ALLOW` (2e); whether a `HUMAN_APPROVAL` proposal carries `plan_fit` a
 prints a fingerprint within the adapter's timeout (2h); whether `propose_action` calls Q1 during a harness run (R29).
 
 Stage S0 decided by the review layer on 2026-11-22 (plan item 134); the owner may veto. S5 done or refuted: plan item 135.
+S1 built: plan items 137 (correction of 2d, way 1) and 138.
