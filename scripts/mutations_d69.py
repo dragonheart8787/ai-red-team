@@ -1016,6 +1016,18 @@ CATALOGUE = [
              edits=(Edit('scripts/run_harness.py', '''APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build")''', '''APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build", "anything:at_all")'''),),
              prepare=_without_probe,
              targets=('test_the_approved_factories_are_exactly_the_two_scripted_ones',)),
+    # -- added by the implementer for S5, design 11.11 (tests/test_harness_shadow_report_reads.py) --
+    # (new ids; plan item 135). Both break the test, not the report: they show the test is not empty.
+    Mutation('D69-S5-1', "the test's table reading counts only ALLOW proposals [added by the implementer, S5]",
+             ('tests/test_harness_shadow_report_reads.py',),
+             edits=(Edit('tests/test_harness_shadow_report_reads.py', '''    rows = _read(engagement_id, "SELECT agent_id, decision FROM action_proposals")''', '''    rows = _read(engagement_id, "SELECT agent_id, decision FROM action_proposals WHERE decision = 'ALLOW'")'''),),
+             prepare=_without_probe,
+             targets=('test_the_existing_report_reads_an_engagement_the_harness_made',)),
+    Mutation('D69-S5-2', "the test reads the --json report's total across the named engagements instead of the one engagement [added by the implementer, S5]",
+             ('tests/test_harness_shadow_report_reads.py',),
+             edits=(Edit('tests/test_harness_shadow_report_reads.py', '''    from_json = report["engagements"][engagement_id]''', '''    from_json = report["total"]'''),),
+             prepare=_without_probe,
+             targets=('test_the_existing_report_reads_an_engagement_the_harness_made',)),
 ]
 
 if __name__ == "__main__":

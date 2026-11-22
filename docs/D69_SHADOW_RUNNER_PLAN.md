@@ -528,3 +528,5 @@ produces call entries (2b); whether tokens or the envelope's list price correspo
 sees every way around `_to_proposal`, and the Reviewer's and Supervisor's own conditions (2d); how a lab test brings
 a lure to `ALLOW` (2e); whether a `HUMAN_APPROVAL` proposal carries `plan_fit` as an `ALLOW` does (2f); whether nmap
 prints a fingerprint within the adapter's timeout (2h); whether `propose_action` calls Q1 during a harness run (R29).
+
+Stage S0 decided by the review layer on 2026-11-22 (plan item 134); the owner may veto. S5 done or refuted: plan item 135.
