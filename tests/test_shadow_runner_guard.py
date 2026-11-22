@@ -37,6 +37,9 @@ APPROVED = {"worker": (compliant.ShadowWorker,), "supervisor": (compliant.Shadow
 NOWHERE = "/nonexistent/shadow-record.jsonl"
 #: The two caps run_shadow requires (S3, plan item 143); large enough never to be reached here.
 CAPS = ["--max-tokens", "100000", "--max-minutes", "60"]
+#: What ``claude auth status --json`` says for a subscription login (plan item 145): handed in, so
+#: that no test runs the CLI.
+SUBSCRIPTION_LOGIN = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
 
 
 def _harness_argv(factory=ONCE):
@@ -55,6 +58,7 @@ def _subscription_only(monkeypatch):
     for name in auth_guard.BILLING_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent/claude-config")
+    monkeypatch.setattr(auth_guard, "query_login", lambda **kwargs: dict(SUBSCRIPTION_LOGIN))
 
 
 def _registration(**override):

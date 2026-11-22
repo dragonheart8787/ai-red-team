@@ -19,6 +19,10 @@ Before anything reads the database the runner refuses, in this order (plan items
    a Claude Code settings file, is ``api_billing_auth_present``; the refusal names the variable or
    the file and key, never a value;
 
+   1b. **the login** (plan item 145): ``claude auth status --json`` (no model call) must say the
+   CLI is logged in by the subscription; anything else, a failed query or output that is not a
+   JSON object included, is ``login_not_subscription``;
+
 2. **the integrity guard**, with the meaning of ``integrity()`` in ``scripts/dp15_stage1_run.py``:
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
@@ -127,12 +131,15 @@ DIGEST_MISMATCH = "digest_mismatch"
 RECORD_EXISTS = "record_exists"
 RECORD_UNWRITABLE = "record_unwritable"
 API_BILLING_AUTH_PRESENT = "api_billing_auth_present"
+#: The login itself is not the subscription's, or cannot be read (plan item 145): kept apart from
+#: ``api_billing_auth_present``, which names a variable or a setting the operator can remove.
+LOGIN_NOT_SUBSCRIPTION = "login_not_subscription"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
     FACTORY_NOT_APPROVED, FACTORY_FAILED, ROLE_CLASS_NOT_APPROVED, ROLE_NOT_A_BASE_SUBCLASS,
     ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH, RECORD_EXISTS,
-    RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT,
+    RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT, LOGIN_NOT_SUBSCRIPTION,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -417,7 +424,8 @@ def refuse(problems: list[Problem]) -> int:
 def main(argv: list[str] | None = None, *, registration: Registration | None = None,
          repo: Path = REPO_ROOT, git: Callable = _git, lock=None,
          register=signal.signal, environ: Mapping[str, str] | None = None,
-         settings_files: tuple[Path, ...] | None = None) -> int:
+         settings_files: tuple[Path, ...] | None = None,
+         login_query: Callable[[], Mapping[str, object]] | None = None) -> int:
     record_path, harness_argv = _shadow_argv(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
     problems = registration_problems(reg, repo=repo)                                     # 1
@@ -430,6 +438,16 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     if found:
         return refuse([(API_BILLING_AUTH_PRESENT, f"{what}: the shadow runner uses the "
                                                   "subscription login only") for what in found])
+    query = login_query if login_query is not None else (                                 # 1b
+        lambda: auth_guard.query_login(environ=environ))
+    try:
+        login = query()
+    except Exception as exc:  # noqa: BLE001 - a login that cannot be read is not the subscription
+        return refuse([(LOGIN_NOT_SUBSCRIPTION, f"the login cannot be read "
+                                                f"({type(exc).__name__})")])
+    found = auth_guard.login_problems(login)
+    if found:
+        return refuse([(LOGIN_NOT_SUBSCRIPTION, what) for what in found])
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
@@ -466,6 +484,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
         try:
             record.header({
                 "format": 1, "started_at": _now(), "auth_guard": "passed",
+                "login": {"auth_method": login.get("authMethod"),
+                          "api_provider": login.get("apiProvider")},
                 "registered_commit": reg.commit,
                 "head": checked.head, "registered_sha256": checked.registered_sha256,
                 "code_sha256": checked.code_sha256,

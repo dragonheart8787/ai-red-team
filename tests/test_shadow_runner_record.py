@@ -33,7 +33,7 @@ CLASSES = {"worker": (compliant.RecordWorker,), "supervisor": (compliant.RecordS
            "reviewer": (compliant.RecordReviewer,), "sandbox": (compliant.ShadowSandbox,)}
 HEADER_KEYS = {"line", "format", "started_at", "registered_commit", "head", "registered_sha256",
                "code_sha256", "digests", "supervisor_warn_about_duplicates", "role_factory",
-               "role_classes", "bounds", "once", "auth_guard"}
+               "role_classes", "bounds", "once", "auth_guard", "login"}
 
 
 def _registration():

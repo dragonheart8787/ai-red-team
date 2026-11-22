@@ -1239,6 +1239,33 @@ CATALOGUE = [
              edits=(Edit('agents/llm/auth_guard.py', '''    return {key: value for key, value in source.items() if key not in BILLING_VARIABLES}''', '''    return dict(source)'''),),
              prepare=_without_probe,
              targets=('test_the_cli_of_each_role_starts_without_the_billing_variables',)),
+    # -- added by the implementer for the guard's follow-up (plan items 144-145); new ids --
+    Mutation('D69-AG-5', 'ANTHROPIC_BASE_URL is missing from BILLING_VARIABLES [added by the implementer, item 145]',
+             ('tests/test_shadow_runner_auth.py', 'tests/test_shadow_runner_login.py'),
+             edits=(Edit('agents/llm/auth_guard.py', '''    "ANTHROPIC_BASE_URL",                       # sends the CLI's calls to another endpoint
+''', ''),),
+             prepare=_without_probe,
+             targets=('test_the_reviewed_lists_are_disjoint_and_cover_every_name_found',
+                      'test_a_base_url_is_refused_and_not_passed_to_the_cli',
+                      'test_the_list_is_the_expected_one_and_keeps_the_subscription_login_out')),
+    Mutation('D69-AG-6', "a settings file's env object is not looked at [added by the implementer, item 145]",
+             ('tests/test_shadow_runner_login.py',),
+             edits=(Edit('agents/llm/auth_guard.py', '''    if SETTINGS_ENV in settings:''', '''    if False:'''),),
+             prepare=_without_probe,
+             targets=('test_a_billing_variable_in_a_settings_env_is_refused',
+                      'test_a_settings_env_that_is_not_an_object_is_refused')),
+    Mutation('D69-AG-7', "an env that is not an object is let through [added by the implementer, item 145]",
+             ('tests/test_shadow_runner_login.py',),
+             edits=(Edit('agents/llm/auth_guard.py', '''            found.append(f"{path} has an {SETTINGS_ENV} that is not an object, so a billing "
+                         "variable in it cannot be ruled out")''', '''            pass'''),),
+             prepare=_without_probe,
+             targets=('test_a_settings_env_that_is_not_an_object_is_refused',)),
+    Mutation('D69-AG-8', 'a login query that fails is let through as a subscription login [added by the implementer, item 145]',
+             ('tests/test_shadow_runner_login.py',),
+             edits=(Edit('scripts/run_shadow.py', '''        return refuse([(LOGIN_NOT_SUBSCRIPTION, f"the login cannot be read "
+                                                f"({type(exc).__name__})")])''', '''        login = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}'''),),
+             prepare=_without_probe,
+             targets=('test_a_login_that_cannot_be_read_is_refused',)),
 ]
 
 if __name__ == "__main__":
