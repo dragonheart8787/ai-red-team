@@ -13,6 +13,12 @@ no default**: the round cap, the model-call cap, the number of rounds without pr
 the run, the evidence window and the limit of live tasks one engagement may hold. They are the
 owner's numbers and are written down before a run that is not a test.
 
+Two caps are optional on this script (S3, plan item 143): ``--max-tokens N`` (the input and output
+tokens of the three roles' calls, cache reads not counted) and ``--max-minutes N`` (from the moment
+the bounds are built). They are optional here only because the factory gate admits two scripted
+factories and nothing else (plan item 131); ``scripts/run_shadow.py`` requires both. A cap reached
+ends the run with 13, and the stop line then ends with ``cap=`` and the cap's name.
+
 The roles come from ``--role-factory``, the dotted path of a function that returns an object with
 ``supervisor``, ``worker``, ``reviewer`` and ``sandbox``. **This script builds no model role and no
 real sandbox**: it is the stage of the lock, the signals and the banner, and H5c2's tests give it
@@ -61,6 +67,7 @@ from harness.exit_codes import (  # noqa: E402
     EXIT_LOCK_LOST,
     EXIT_STARTUP_REFUSED,
     EXIT_UNEXPECTED,
+    StopReason,
 )
 from harness.frozen_enrolment import FrozenEnrolment  # noqa: E402
 from harness.lock import HarnessLock, LockGuardedPorts  # noqa: E402
@@ -87,7 +94,8 @@ class _Observation:
     reason)`` for each new entry of the adapter's ``RefusalCounter``, ``on_call(role, call)`` for
     each new entry of a role's ``calls``, ``on_round(number, progress)``, ``on_stop(reason, code)``.
     An exception of the observer's is kept and re-raised, never swallowed: the loop then stops (as
-    it does for any exception), and the run ends with exit 3."""
+    it does for any exception), and the run ends with exit 3. Since S3 (plan item 143) ``on_stop``
+    also gets the cap reached (``None`` unless the reason is ``cap_reached``) and ``token_use``."""
 
     ROLES = ("supervisor", "worker", "reviewer")
 
@@ -121,8 +129,9 @@ class _Observation:
 class _ObservedBounds(Bounds):
     """``Bounds``, telling the observer when a round ends (after what the round produced)."""
 
-    def __init__(self, max_rounds, max_model_calls, no_progress_limit, *, observation) -> None:
-        super().__init__(max_rounds, max_model_calls, no_progress_limit)
+    def __init__(self, max_rounds, max_model_calls, no_progress_limit, *, observation,
+                 **caps) -> None:
+        super().__init__(max_rounds, max_model_calls, no_progress_limit, **caps)
         self._observation = observation
         self._round = 0
 
@@ -155,6 +164,27 @@ class _ObservedPorts:
         return call
 
 
+#: The roles whose ``calls`` the token cap reads.
+TOKEN_ROLES = ("supervisor", "worker", "reviewer")
+
+
+def token_use(roles) -> dict[str, int]:
+    """``input_tokens``, ``output_tokens`` and ``cache_read_tokens`` over the three roles'
+    ``calls``. The token cap counts the first two; cache reads are kept apart (plan item 143)."""
+    totals = dict.fromkeys(("input_tokens", "output_tokens", "cache_read_tokens"), 0)
+    for role in TOKEN_ROLES:
+        for call in list(getattr(getattr(roles, role, None), "calls", None) or ()):
+            for key in totals:
+                totals[key] += int(getattr(call, key, 0) or 0)
+    return totals
+
+
+def tokens_spent(roles) -> int:
+    """What the token cap is compared with: input plus output tokens, no cache reads."""
+    use = token_use(roles)
+    return use["input_tokens"] + use["output_tokens"]
+
+
 def _positive(text: str) -> int:
     try:
         value = int(text)
@@ -176,6 +206,9 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("window-limit", "max-rounds", "max-model-calls", "no-progress-limit",
                  "live-task-limit"):
         run.add_argument(f"--{name}", required=True, type=_positive, help="required, no default")
+    for name in ("max-tokens", "max-minutes"):
+        run.add_argument(f"--{name}", type=_positive, default=None,
+                         help="optional here (plan item 131's gate); required by run_shadow.py")
     run.add_argument("--once", action="store_true", help="one round, then stop")
     run.add_argument("--lock-watchdog-interval", type=float, default=WATCHDOG_INTERVAL,
                      help=f"seconds between looks at the lock (default {WATCHDOG_INTERVAL})")
@@ -243,28 +276,33 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
             reviewer=roles.reviewer, sandbox=roles.sandbox, objective=args.objective,
             window_limit=args.window_limit, live_task_limit=args.live_task_limit)
         ports = LockGuardedPorts(adapter, lock)
-        bounds = Bounds(args.max_rounds, args.max_model_calls, args.no_progress_limit)
-        if observation is not None:
+        caps = {"max_tokens": args.max_tokens, "max_minutes": args.max_minutes,
+                "tokens_spent": lambda: tokens_spent(roles)}
+        if observation is None:
+            bounds = Bounds(args.max_rounds, args.max_model_calls, args.no_progress_limit, **caps)
+        else:
             observation.refusals = adapter.refusals
             ports = _ObservedPorts(ports, observation)
             bounds = _ObservedBounds(args.max_rounds, args.max_model_calls,
-                                     args.no_progress_limit, observation=observation)
+                                     args.no_progress_limit, observation=observation, **caps)
         result = run_loop(
             ports, bounds,
             RunCounters(), adapter.refusals, window_limit=args.window_limit, stop_event=flag,
             once=args.once)
         code = EXIT_LOCK_LOST if lock.lost.is_set() else EXIT_CODE[result.reason]
+        cap = bounds.cap_hit if result.reason is StopReason.CAP_REACHED else None
         if observation is not None:
             try:
                 if observation.failure is None:
                     observation.catch_up()
-                    observation.emit("on_stop", result.reason.value, code)
+                    observation.emit("on_stop", result.reason.value, code, cap, token_use(roles))
             except Exception:  # noqa: BLE001 - kept in observation.failure, ends the run as 3
                 pass
             if observation.failure is not None:
                 return _record_failed(observation)
         print(f"harness stopped (exit {code}): reason={result.reason.value} "
-              f"rounds={result.rounds} counters={result.counters}", file=sys.stderr, flush=True)
+              f"rounds={result.rounds} counters={result.counters}"
+              + (f" cap={cap}" if cap is not None else ""), file=sys.stderr, flush=True)
         return code
     finally:
         lock.close()

@@ -53,6 +53,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+from agents.llm.auth_guard import subprocess_environment
+
 CLI = "claude"
 
 #: Alias rather than a pinned id: the CLI resolves 'opus'/'sonnet' to whatever
@@ -173,6 +175,9 @@ def run_headless(
             # around it was invoked is a call whose results cannot be compared
             # between runs.
             stdin=subprocess.DEVNULL,
+            # The caller's environment without the API-billing variables of ``auth_guard`` (plan
+            # item 143): the CLI may use the subscription login only. Everything else is passed.
+            env=subprocess_environment(),
             timeout=timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:

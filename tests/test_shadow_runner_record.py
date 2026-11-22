@@ -20,14 +20,20 @@ from tests import shadow_compliant_roles as compliant
 from tests.harness_h5c2_roles import Roles
 from tests.test_harness_h5c2_entry import world  # noqa: F401 - a fixture
 from tests.test_harness_h5c2_support import enrolled
-from tests.test_shadow_runner_guard import COMMIT, SUPPORT, _codes, _Git
+from tests.test_shadow_runner_guard import (  # noqa: F401 - _subscription_only is a fixture
+    COMMIT,
+    SUPPORT,
+    _codes,
+    _Git,
+    _subscription_only,
+)
 
 RECORDING = "tests.shadow_compliant_roles:build_recording"
 CLASSES = {"worker": (compliant.RecordWorker,), "supervisor": (compliant.RecordSupervisor,),
            "reviewer": (compliant.RecordReviewer,), "sandbox": (compliant.ShadowSandbox,)}
 HEADER_KEYS = {"line", "format", "started_at", "registered_commit", "head", "registered_sha256",
                "code_sha256", "digests", "supervisor_warn_about_duplicates", "role_factory",
-               "role_classes", "bounds", "once"}
+               "role_classes", "bounds", "once", "auth_guard"}
 
 
 def _registration():
@@ -37,10 +43,11 @@ def _registration():
                                    digests=run_shadow.role_digests(roles), role_classes=CLASSES)
 
 
-def _argv(record):
+def _argv(record, *, max_tokens=100000, max_minutes=60):
     return ["--record", str(record), "--role-factory", RECORDING, "--objective", "o",
             "--window-limit", "25", "--max-rounds", "1", "--max-model-calls", "100",
-            "--no-progress-limit", "5", "--live-task-limit", "200", "--once"]
+            "--no-progress-limit", "5", "--live-task-limit", "200", "--once",
+            "--max-tokens", str(max_tokens), "--max-minutes", str(max_minutes)]
 
 
 @pytest.fixture
@@ -60,9 +67,9 @@ def run(world, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(run_harness, "LoopAdapter", capture)
     path = tmp_path / "run.jsonl"
 
-    def go():
+    def go(**caps):
         with enrolled(world.engagement_id):
-            code = run_shadow.main(_argv(path), registration=_registration(), git=_Git(),
+            code = run_shadow.main(_argv(path, **caps), registration=_registration(), git=_Git(),
                                    register=lambda *a: None)
         lines = [json.loads(x) for x in path.read_text().splitlines()]
         return code, lines, compliant.BUILT_RECORDING[-1], adapters[-1], path
@@ -99,7 +106,9 @@ def test_one_round_is_recorded_line_by_line_without_any_model_text(run):
     assert header["supervisor_warn_about_duplicates"] is False
     assert header["role_factory"] == RECORDING and header["once"] is True
     assert header["bounds"] == {"window_limit": 25, "max_rounds": 1, "max_model_calls": 100,
-                                "no_progress_limit": 5, "live_task_limit": 200}
+                                "no_progress_limit": 5, "live_task_limit": 200,
+                                "max_tokens": 100000, "max_minutes": 60}
+    assert header["auth_guard"] == "passed"
 
     refusals = [(x["side"], x["reason"]) for x in _of(lines, "refusal")]
     assert refusals and refusals == list(adapter.refusals.entries())
@@ -123,6 +132,8 @@ def test_one_round_is_recorded_line_by_line_without_any_model_text(run):
     assert _of(lines, "round") == [{"line": "round", "round": 1, "progress": True}]
     footer = lines[-1]
     assert footer["exit_code"] == code == 0 and footer["stop_reason"] == "signal_or_once"
+    assert footer["cap_hit"] is None
+    assert footer["token_use"] == run_harness.token_use(roles)
 
 
 def test_every_line_is_on_disk_before_the_next_event(run, monkeypatch):
@@ -181,3 +192,45 @@ def test_an_abnormal_end_leaves_every_written_line_and_no_footer(run, monkeypatc
     assert kinds[:3] == ["header", "banner", "refusal"]
     assert [x["role"] for x in _of(lines, "call")] == ["supervisor"]   # written before the end
     assert "footer" not in kinds and "round" not in kinds
+
+
+# -- S3 (plan item 143): the token cap in a real round, and the login's value ----------------------
+
+
+def _stop_line(err):
+    return [x for x in err.splitlines() if x.startswith("harness stopped")][-1]
+
+
+def test_a_token_cap_equal_to_the_planning_calls_tokens_ends_the_run_with_13(run, capsys):
+    code, lines, roles, _, path = run(max_tokens=18)              # the Supervisor's 7 + 11
+    stop = _stop_line(capsys.readouterr().err)
+    print("RECORD\n" + path.read_text() + "STOP " + stop)
+    assert code == 13 and stop.startswith("harness stopped (exit 13): reason=cap_reached ")
+    assert stop.endswith(" cap=tokens")
+    assert len(roles.supervisor.calls) == 1 and roles.worker.calls == []   # stopped before work
+    header, footer = lines[0], lines[-1]
+    assert (header["bounds"]["max_tokens"], header["bounds"]["max_minutes"]) == (18, 60)
+    assert footer["line"] == "footer" and footer["exit_code"] == 13
+    assert (footer["stop_reason"], footer["cap_hit"]) == ("cap_reached", "tokens")
+    assert footer["token_use"] == {"input_tokens": 7, "output_tokens": 11, "cache_read_tokens": 0}
+
+
+def test_below_the_token_cap_the_run_goes_on_to_the_workers_call(run, capsys):
+    code, lines, roles, _, _ = run(max_tokens=19)
+    stop = _stop_line(capsys.readouterr().err)
+    assert len(roles.worker.calls) >= 1                           # 18 < 19: the Worker was asked
+    assert code == 13 and stop.endswith(" cap=tokens") and lines[-1]["cap_hit"] == "tokens"
+
+
+def test_a_run_that_reaches_no_cap_has_no_cap_on_its_stop_line(run, capsys):
+    code, lines, _, _, _ = run()
+    stop = _stop_line(capsys.readouterr().err)
+    assert code == 0 and "cap=" not in stop and lines[-1]["cap_hit"] is None
+
+
+def test_the_subscription_logins_value_is_not_in_the_record(run, monkeypatch):
+    mark = "MARKED-LOGIN-9e07"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", mark)
+    code, lines, _, _, path = run()
+    assert code == 0 and lines[0]["auth_guard"] == "passed"
+    assert mark not in path.read_text()

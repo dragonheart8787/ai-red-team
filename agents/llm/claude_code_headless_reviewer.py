@@ -82,6 +82,7 @@ from agents.llm.reviewer_base import (
     BaseReviewer,
     ReviewCall,
 )
+from control_plane.plan_fit.failure_kind import classify_failure
 
 __all__ = ["CLI", "DEFAULT_MODEL", "ISOLATION_FLAGS", "ClaudeCodeHeadlessReviewer"]
 
@@ -131,7 +132,9 @@ class ClaudeCodeHeadlessReviewer(BaseReviewer):
                 runner=self._runner,
             )
         except HeadlessError as exc:
-            return self._escalate(started, str(exc))
+            # D69-NC-1 (plan item 142): the kind, from what the CLI said, never from the text
+            return self._escalate(started, str(exc),
+                                  failure_kind=classify_failure(exception=exc))
 
         self.calls.append(ReviewCall(
             latency_seconds=time.monotonic() - started,

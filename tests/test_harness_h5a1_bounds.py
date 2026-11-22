@@ -132,9 +132,15 @@ def test_end_round_takes_a_bool_and_nothing_else():
 def test_every_parameter_is_required_and_none_has_a_default():
     for cls in (Bounds,):
         params = [p for name, p in inspect.signature(cls.__init__).parameters.items()
-                  if name != "self"]
+                  if name != "self" and p.kind is not inspect.Parameter.KEYWORD_ONLY]
         assert [p.name for p in params] == ["max_rounds", "max_model_calls", "no_progress_limit"]
         assert all(p.default is inspect.Parameter.empty for p in params)
+        # S3 (plan item 143): the token and minute caps are keyword-only, and None is "no cap"
+        signature = inspect.signature(cls.__init__).parameters.items()
+        optional = {name: p.default for name, p in signature
+                    if p.kind is inspect.Parameter.KEYWORD_ONLY}
+        assert optional == {"max_tokens": None, "max_minutes": None, "tokens_spent": None,
+                            "clock": b.time.monotonic}
     with pytest.raises(TypeError):
         Bounds()
     with pytest.raises(TypeError):

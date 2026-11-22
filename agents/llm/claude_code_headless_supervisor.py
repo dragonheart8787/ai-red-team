@@ -36,6 +36,7 @@ from agents.llm.supervisor_base import (
     SupervisorRefusal,
     plan_schema,
 )
+from control_plane.plan_fit.failure_kind import UNCLASSIFIED, classify_failure
 
 
 class ClaudeCodeHeadlessSupervisor(BaseSupervisor):
@@ -98,12 +99,15 @@ class ClaudeCodeHeadlessSupervisor(BaseSupervisor):
                 runner=self._runner,
             )
         except HeadlessError as exc:
-            return self._refuse(started, str(exc))
+            # D69-NC-1 (plan item 142): the kind, from what the CLI said, never from the text
+            return self._refuse(started, str(exc), failure_kind=classify_failure(exception=exc))
 
         try:
             tasks = self._to_tasks(result.payload, candidates=candidates)
         except SupervisorRefusal as exc:
-            return self._refuse(started, f"unusable plan: {exc}")
+            # an out-of-contract reply is ``unclassified`` (failure_kind.py); its tokens were spent
+            return self._refuse(started, f"unusable plan: {exc}", usage=result,
+                                failure_kind=UNCLASSIFIED)
 
         self.calls.append(SupervisorCall(
             latency_seconds=time.monotonic() - started,

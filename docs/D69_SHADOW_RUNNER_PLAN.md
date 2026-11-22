@@ -532,3 +532,4 @@ prints a fingerprint within the adapter's timeout (2h); whether `propose_action`
 Stage S0 decided by the review layer on 2026-11-22 (plan item 134); the owner may veto. S5 done or refuted: plan item 135.
 S1 built: plan items 137 (correction of 2d, way 1) and 138.
 S2 built: plan items 139 (S1's sandbox gap) and 140.
+S3 built and numbered change D69-NC-1: plan items 141 to 143.

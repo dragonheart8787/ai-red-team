@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from agents.fake.adversarial_fake_reviewer import HonestFakeReviewer
+from agents.llm import auth_guard
 from harness.banner_facts import BannerFactsUnavailable
 from harness.exit_codes import EXIT_LOCK_HELD, EXIT_STARTUP_REFUSED
 from scripts import run_harness, run_shadow
@@ -34,6 +35,8 @@ APPROVED = {"worker": (compliant.ShadowWorker,), "supervisor": (compliant.Shadow
             "reviewer": (compliant.ShadowReviewer,), "sandbox": (compliant.ShadowSandbox,)}
 #: A record path whose directory does not exist: a run refused before step 7 never creates it.
 NOWHERE = "/nonexistent/shadow-record.jsonl"
+#: The two caps run_shadow requires (S3, plan item 143); large enough never to be reached here.
+CAPS = ["--max-tokens", "100000", "--max-minutes", "60"]
 
 
 def _harness_argv(factory=ONCE):
@@ -41,7 +44,17 @@ def _harness_argv(factory=ONCE):
 
 
 def _argv(factory=ONCE, record=NOWHERE):
-    return ["--record", str(record), *_harness_argv(factory)]
+    return ["--record", str(record), *_harness_argv(factory), *CAPS]
+
+
+@pytest.fixture(autouse=True)
+def _subscription_only(monkeypatch):
+    """The billing guard (plan item 143) sees no billing variable and no user settings file, so
+    that these tests do not depend on the machine they run on; the guard's own tests are in
+    ``tests/test_shadow_runner_auth.py``."""
+    for name in auth_guard.BILLING_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent/claude-config")
 
 
 def _registration(**override):

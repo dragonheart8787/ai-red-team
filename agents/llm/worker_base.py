@@ -180,6 +180,9 @@ class WorkerCall:
     model: str = ""
     failed: bool = False
     failure: str | None = None
+    #: The kind of a failed call (numbered change D69-NC-1, plan item 142), in the vocabulary of
+    #: ``control_plane/plan_fit/failure_kind.py``; ``None`` when the caller did not give one.
+    failure_kind: str | None = None
 
 
 class WorkerRefusal(ValueError):
@@ -858,7 +861,8 @@ class BaseWorker:
             reason=str(payload.get("reason") or ""),
         )
 
-    def _refuse(self, started: float, reason: str, *, usage: Any = None) -> None:
+    def _refuse(self, started: float, reason: str, *, usage: Any = None,
+                failure_kind: str | None = None) -> None:
         """The fail-closed path: no proposal at all.
 
         A Worker has no advisory channel to escalate through — its output either
@@ -874,6 +878,6 @@ class BaseWorker:
             latency_seconds=time.monotonic() - started,
             input_tokens=getattr(usage, "input_tokens", 0) or 0,
             output_tokens=getattr(usage, "output_tokens", 0) or 0,
-            model=self.model, failed=True, failure=reason,
+            model=self.model, failed=True, failure=reason, failure_kind=failure_kind,
         ))
         return None

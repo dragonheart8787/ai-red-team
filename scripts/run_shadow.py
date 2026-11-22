@@ -2,15 +2,23 @@
 
     python scripts/run_shadow.py --record PATH --role-factory module:function --objective TEXT \\
         --window-limit N --max-rounds N --max-model-calls N --no-progress-limit N \\
-        --live-task-limit N [--once]
+        --live-task-limit N --max-tokens N --max-minutes N [--once]
 
 The arguments are those of ``scripts/run_harness.py run``, plus ``--record PATH``, required and with
 no default: the run's record (plan item 140), a new file the runner creates and never appends to.
+``--max-tokens`` and ``--max-minutes`` (S3, plan item 143), optional on ``run_harness.py``, are
+required here and have no default; a missing one is a usage error (exit 2) before any check.
 Before anything reads the database the runner refuses, in this order (plan items 131, 134, 137):
 
 1. **the registration constants** -- ``REGISTERED_COMMIT``, ``REGISTERED_FILES``,
    ``REGISTERED_DIGESTS`` and ``APPROVED_ROLE_CLASSES`` -- when any is empty, or when a listed
    role class's module is not a registered file;
+
+   1a. **the billing guard** (the owner's decision of 2026-11-22, plan items 141 c and 143): a
+   variable of ``agents.llm.auth_guard.BILLING_VARIABLES`` with a value, or an ``apiKeyHelper`` in
+   a Claude Code settings file, is ``api_billing_auth_present``; the refusal names the variable or
+   the file and key, never a value;
+
 2. **the integrity guard**, with the meaning of ``integrity()`` in ``scripts/dp15_stage1_run.py``:
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
@@ -35,8 +43,11 @@ The codes are the closed list ``REASONS``.
 written: a ``header``, the ``banner``, every ``refusal`` of the harness's own check, every role
 ``call``, every ``round``, and a ``footer`` once ``run_harness`` has returned. No text a model wrote
 is written: a call keeps its role, model, latency, tokens and whether it failed, and the kind of a
-failure is ``unknown``, because the roles keep only its free text. A record with no footer is a run
-that did not end normally.
+failure is the one its call record carries (numbered change D69-NC-1, plan item 142) when that is
+one of ``control_plane/plan_fit/failure_kind.py``'s three, and ``unknown`` otherwise; never its free
+text. A record with no footer is a run that did not end normally. The header says
+``auth_guard: "passed"`` (it is written only once every check has passed); the footer has the cap
+reached (``cap_hit``) and the tokens of the run (``token_use``).
 
 All four constants are empty: **this runner refuses every start until a registration is
 committed**, and S1 makes no real role runnable.
@@ -61,10 +72,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from agents.llm import auth_guard  # noqa: E402
 from agents.llm.reviewer_base import OPINION_SCHEMA, BaseReviewer  # noqa: E402
 from agents.llm.reviewer_base import SYSTEM_PROMPT as REVIEWER_SYSTEM_PROMPT  # noqa: E402
 from agents.llm.supervisor_base import BaseSupervisor, plan_schema  # noqa: E402
 from agents.llm.worker_base import WORKER_SYSTEM_PROMPT, BaseWorker, proposal_schema  # noqa: E402
+from control_plane.plan_fit.failure_kind import FAILURE_KINDS  # noqa: E402
 from harness.action_allowlist import ALLOWED_ACTIONS  # noqa: E402
 from harness.banner_facts import digest  # noqa: E402
 from harness.exit_codes import EXIT_AUDIT_FAILED, EXIT_STARTUP_REFUSED  # noqa: E402
@@ -113,12 +126,13 @@ DIGEST_UNAVAILABLE = "digest_unavailable"
 DIGEST_MISMATCH = "digest_mismatch"
 RECORD_EXISTS = "record_exists"
 RECORD_UNWRITABLE = "record_unwritable"
+API_BILLING_AUTH_PRESENT = "api_billing_auth_present"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
     FACTORY_NOT_APPROVED, FACTORY_FAILED, ROLE_CLASS_NOT_APPROVED, ROLE_NOT_A_BASE_SUBCLASS,
     ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH, RECORD_EXISTS,
-    RECORD_UNWRITABLE,
+    RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -315,12 +329,15 @@ class Record:
     written before an abnormal end is in the file; a record with no ``footer`` is a run that did
     not end normally. Created with mode ``x``: an existing file is never appended to. Nothing a
     model wrote is written -- a Supervisor's ``assessment_note`` and the free text of a failure
-    are not; the kind of a failure is ``unknown``, because the roles keep only that free text.
+    are not; the kind of a failure is its call record's ``failure_kind`` when that is one of
+    ``FAILURE_KINDS`` (D69-NC-1, plan item 142), and ``unknown`` otherwise.
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.stop_reason: str | None = None
+        self.cap_hit: str | None = None
+        self.token_use: dict | None = None
         self._file = open(path, "x", encoding="utf-8")
 
     def _write(self, line: dict) -> None:
@@ -345,28 +362,43 @@ class Record:
                      "latency_seconds": float(getattr(call, "latency_seconds", 0.0)),
                      "input_tokens": int(getattr(call, "input_tokens", 0) or 0),
                      "output_tokens": int(getattr(call, "output_tokens", 0) or 0),
-                     "failed": failed, "failure_kind": "unknown" if failed else None})
+                     "failed": failed, "failure_kind": _kind(call) if failed else None})
 
     def on_round(self, number: int, progress: bool) -> None:
         self._write({"line": "round", "round": number, "progress": bool(progress)})
 
-    def on_stop(self, reason: str, code: int) -> None:
-        self.stop_reason = reason              # written in the footer, once run_harness returns
+    def on_stop(self, reason: str, code: int, cap_hit: str | None = None,
+                token_use: Mapping[str, int] | None = None) -> None:
+        # written in the footer, once run_harness returns
+        self.stop_reason, self.cap_hit = reason, cap_hit
+        self.token_use = None if token_use is None else {k: int(v) for k, v in token_use.items()}
 
     def footer(self, code: int) -> None:
         self._write({"line": "footer", "stop_reason": self.stop_reason, "exit_code": code,
-                     "ended_at": _now()})
+                     "cap_hit": self.cap_hit, "token_use": self.token_use, "ended_at": _now()})
 
     def close(self) -> None:
         self._file.close()
 
 
-def _record_path(argv: list[str]) -> tuple[Path, list[str]]:
-    """``--record PATH`` (required, no default) and the arguments that are run_harness's."""
+def _kind(call: object) -> str:
+    """A failed call's kind as its record carries it, if it is one of the closed three."""
+    kind = getattr(call, "failure_kind", None)
+    return kind if isinstance(kind, str) and kind in FAILURE_KINDS else "unknown"
+
+
+def _shadow_argv(argv: list[str]) -> tuple[Path, list[str]]:
+    """``--record PATH``, ``--max-tokens N`` and ``--max-minutes N`` (all three required, none
+    with a default; a missing one is argparse's usage error, exit 2), and the arguments for
+    run_harness, the two caps passed on to it."""
     parser = argparse.ArgumentParser(prog="run_shadow.py", add_help=False)
     parser.add_argument("--record", required=True, help="the run's record: a new file")
+    for name in ("--max-tokens", "--max-minutes"):
+        parser.add_argument(name, required=True, type=run_harness._positive,
+                            help="required, no default (plan item 143)")
     known, rest = parser.parse_known_args(argv)
-    return Path(known.record), rest
+    caps = ["--max-tokens", str(known.max_tokens), "--max-minutes", str(known.max_minutes)]
+    return Path(known.record), [*rest, *caps]
 
 
 # -- the order -------------------------------------------------------------------------------------
@@ -384,12 +416,20 @@ def refuse(problems: list[Problem]) -> int:
 
 def main(argv: list[str] | None = None, *, registration: Registration | None = None,
          repo: Path = REPO_ROOT, git: Callable = _git, lock=None,
-         register=signal.signal) -> int:
-    record_path, harness_argv = _record_path(sys.argv[1:] if argv is None else argv)
+         register=signal.signal, environ: Mapping[str, str] | None = None,
+         settings_files: tuple[Path, ...] | None = None) -> int:
+    record_path, harness_argv = _shadow_argv(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
     problems = registration_problems(reg, repo=repo)                                     # 1
     if problems:
         return refuse(problems)
+    environ = os.environ if environ is None else environ                                  # 1a
+    if settings_files is None:
+        settings_files = auth_guard.settings_files(environ=environ, home=Path.home(), project=repo)
+    found = auth_guard.problems(environ, settings_files)
+    if found:
+        return refuse([(API_BILLING_AUTH_PRESENT, f"{what}: the shadow runner uses the "
+                                                  "subscription login only") for what in found])
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
@@ -425,7 +465,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     try:
         try:
             record.header({
-                "format": 1, "started_at": _now(), "registered_commit": reg.commit,
+                "format": 1, "started_at": _now(), "auth_guard": "passed",
+                "registered_commit": reg.commit,
                 "head": checked.head, "registered_sha256": checked.registered_sha256,
                 "code_sha256": checked.code_sha256,
                 "digests": {role: computed[role] for role in ROLES},
@@ -437,7 +478,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                 "bounds": {"window_limit": args.window_limit, "max_rounds": args.max_rounds,
                            "max_model_calls": args.max_model_calls,
                            "no_progress_limit": args.no_progress_limit,
-                           "live_task_limit": args.live_task_limit},
+                           "live_task_limit": args.live_task_limit,
+                           "max_tokens": args.max_tokens, "max_minutes": args.max_minutes},
                 "once": args.once})
         except OSError as exc:
             return refuse([(RECORD_UNWRITABLE, f"{record_path}: the header cannot be written "

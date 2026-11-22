@@ -35,6 +35,7 @@ from agents.llm.worker_base import (
     WorkerRefusal,
     proposal_schema,
 )
+from control_plane.plan_fit.failure_kind import UNCLASSIFIED, classify_failure
 
 
 class ClaudeCodeHeadlessWorker(BaseWorker):
@@ -98,7 +99,8 @@ class ClaudeCodeHeadlessWorker(BaseWorker):
                 runner=self._runner,
             )
         except HeadlessError as exc:
-            return self._refuse(started, str(exc))
+            # D69-NC-1 (plan item 142): the kind, from what the CLI said, never from the text
+            return self._refuse(started, str(exc), failure_kind=classify_failure(exception=exc))
 
         try:
             proposal = self._to_proposal(
@@ -106,7 +108,9 @@ class ClaudeCodeHeadlessWorker(BaseWorker):
                 observations=observations,
             )
         except WorkerRefusal as exc:
-            return self._refuse(started, f"unusable proposal: {exc}")
+            # an out-of-contract reply is ``unclassified`` (failure_kind.py); its tokens were spent
+            return self._refuse(started, f"unusable proposal: {exc}", usage=result,
+                                failure_kind=UNCLASSIFIED)
 
         self.calls.append(WorkerCall(
             latency_seconds=time.monotonic() - started,
