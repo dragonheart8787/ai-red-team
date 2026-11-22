@@ -1,11 +1,12 @@
 """The shadow runner (D69 shadow runner plan, stage S1): checks, then the harness in this process.
 
-    python scripts/run_shadow.py --role-factory module:function --objective TEXT \\
+    python scripts/run_shadow.py --record PATH --role-factory module:function --objective TEXT \\
         --window-limit N --max-rounds N --max-model-calls N --no-progress-limit N \\
         --live-task-limit N [--once]
 
-The arguments are those of ``scripts/run_harness.py run``. Before anything reads the database the
-runner refuses, in this order (plan items 131, 134, 137):
+The arguments are those of ``scripts/run_harness.py run``, plus ``--record PATH``, required and with
+no default: the run's record (plan item 140), a new file the runner creates and never appends to.
+Before anything reads the database the runner refuses, in this order (plan items 131, 134, 137):
 
 1. **the registration constants** -- ``REGISTERED_COMMIT``, ``REGISTERED_FILES``,
    ``REGISTERED_DIGESTS`` and ``APPROVED_ROLE_CLASSES`` -- when any is empty, or when a listed
@@ -21,12 +22,21 @@ runner refuses, in this order (plan items 131, 134, 137):
    not ``isinstance``), a subclass of its base, and its inherited boundary methods the base's own
    function objects (Worker ``build_prompt``, ``_to_proposal``, ``_refuse``; Supervisor
    ``build_prompt``, ``_to_tasks``, ``_refuse``; Reviewer ``build_prompt``, ``_to_opinion``,
-   ``_escalate``);
+   ``_escalate``); the sandbox's class exactly one of ``APPROVED_ROLE_CLASSES["sandbox"]``;
 6. **the prompt digests** of the three roles, compared with ``REGISTERED_DIGESTS``;
+7. **the record**: ``--record`` names a path that does not exist yet and can be created;
 
-and then hands the same role instances to ``run_harness.main(..., roles=...)`` in this process.
-Every refusal prints ``refused: <code>: <explanation>`` to standard error, one line per problem,
-and ends with exit 10. The codes are the closed list ``REASONS``.
+and then writes the record's header and hands the same role instances to
+``run_harness.main(..., roles=..., observer=...)`` in this process. Every refusal prints
+``refused: <code>: <explanation>`` to standard error, one line per problem, and ends with exit 10.
+The codes are the closed list ``REASONS``.
+
+**The record** (plan item 140) is one JSON object per line, each flushed and fsynced as it is
+written: a ``header``, the ``banner``, every ``refusal`` of the harness's own check, every role
+``call``, every ``round``, and a ``footer`` once ``run_harness`` has returned. No text a model wrote
+is written: a call keeps its role, model, latency, tokens and whether it failed, and the kind of a
+failure is ``unknown``, because the roles keep only its free text. A record with no footer is a run
+that did not end normally.
 
 All four constants are empty: **this runner refuses every start until a registration is
 committed**, and S1 makes no real role runnable.
@@ -34,12 +44,16 @@ committed**, and S1 makes no real role runnable.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib
 import inspect
+import json
+import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,15 +67,16 @@ from agents.llm.supervisor_base import BaseSupervisor, plan_schema  # noqa: E402
 from agents.llm.worker_base import WORKER_SYSTEM_PROMPT, BaseWorker, proposal_schema  # noqa: E402
 from harness.action_allowlist import ALLOWED_ACTIONS  # noqa: E402
 from harness.banner_facts import digest  # noqa: E402
-from harness.exit_codes import EXIT_STARTUP_REFUSED  # noqa: E402
+from harness.exit_codes import EXIT_AUDIT_FAILED, EXIT_STARTUP_REFUSED  # noqa: E402
 from scripts import run_harness  # noqa: E402
 
 # -- the registration ------------------------------------------------------------------------------
 # These four are written only by the commit that registers the shadow, authorized by the owner
 # (plan section 10; items 134 and 137). Until then they are empty and the runner refuses to start.
-# A real role class put into APPROVED_ROLE_CLASSES must have its module file in REGISTERED_FILES
-# at the same time (checked in step 1), so that a later change to its ``propose``, ``plan`` or
-# ``review`` is refused by the integrity guard.
+# APPROVED_ROLE_CLASSES has four keys -- worker, supervisor, reviewer and sandbox (item 140) -- and
+# an empty or missing key is a refusal. A real class put into it must have its module file in
+# REGISTERED_FILES at the same time (checked in step 1), so that a later change to its
+# ``propose``, ``plan``, ``review`` or ``run`` is refused by the integrity guard.
 REGISTERED_COMMIT: str | None = None
 REGISTERED_FILES: tuple[str, ...] | None = None
 REGISTERED_DIGESTS: Mapping[str, str] | None = None
@@ -71,6 +86,9 @@ APPROVED_ROLE_CLASSES: Mapping[str, tuple[type, ...]] = {}
 CODE_FILES = ("scripts/run_shadow.py", "scripts/run_harness.py")
 
 ROLES = ("worker", "supervisor", "reviewer")
+#: The keys of APPROVED_ROLE_CLASSES: the three roles and the sandbox, whose class is checked by
+#: exact type only (it has no base class of the project's to compare methods with).
+ROLE_KEYS = (*ROLES, "sandbox")
 #: For each role: its base class, and the inherited methods that must be the base's own objects.
 BOUNDARY: Mapping[str, tuple[type, tuple[str, ...]]] = {
     "worker": (BaseWorker, ("build_prompt", "_to_proposal", "_refuse")),
@@ -93,11 +111,14 @@ ROLE_NOT_A_BASE_SUBCLASS = "role_not_a_base_subclass"
 ROLE_BOUNDARY_OVERRIDDEN = "role_boundary_overridden"
 DIGEST_UNAVAILABLE = "digest_unavailable"
 DIGEST_MISMATCH = "digest_mismatch"
+RECORD_EXISTS = "record_exists"
+RECORD_UNWRITABLE = "record_unwritable"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
     FACTORY_NOT_APPROVED, FACTORY_FAILED, ROLE_CLASS_NOT_APPROVED, ROLE_NOT_A_BASE_SUBCLASS,
-    ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH,
+    ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH, RECORD_EXISTS,
+    RECORD_UNWRITABLE,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -134,6 +155,9 @@ def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT) -> list[
         ("REGISTERED_COMMIT", reg.commit), ("REGISTERED_FILES", reg.files),
         ("REGISTERED_DIGESTS", reg.digests), ("APPROVED_ROLE_CLASSES", reg.role_classes))
         if not value]
+    if reg.role_classes:
+        empty += [f"APPROVED_ROLE_CLASSES[{key!r}]" for key in ROLE_KEYS
+                  if not reg.role_classes.get(key)]
     if empty:
         return [(NOT_REGISTERED, f"{', '.join(empty)} empty: the shadow is not registered")]
     problems: list[Problem] = []
@@ -230,6 +254,11 @@ def integrity(*, repo: Path, registered_commit: str, files: tuple[str, ...],
 
 def role_problems(roles: object, approved: Mapping[str, tuple[type, ...]]) -> list[Problem]:
     problems: list[Problem] = []
+    sandbox = type(getattr(roles, "sandbox", None))
+    if sandbox not in approved.get("sandbox", ()):
+        problems.append((ROLE_CLASS_NOT_APPROVED,
+                         f"sandbox {sandbox.__module__}.{sandbox.__qualname__} is not an approved "
+                         "sandbox class"))
     for role in ROLES:
         cls = type(getattr(roles, role, None))
         base, methods = BOUNDARY[role]
@@ -273,6 +302,73 @@ def digest_problems(computed: Mapping[str, object], expected: Mapping[str, str])
             for role in ROLES if expected.get(role) != computed[role]]
 
 
+# -- the record ------------------------------------------------------------------------------------
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+class Record:
+    """The run's record, and ``run_harness``'s observer (plan item 140; shadow runner plan 2b, b3).
+
+    One JSON object per line, written, flushed and fsynced as it happens, so that whatever was
+    written before an abnormal end is in the file; a record with no ``footer`` is a run that did
+    not end normally. Created with mode ``x``: an existing file is never appended to. Nothing a
+    model wrote is written -- a Supervisor's ``assessment_note`` and the free text of a failure
+    are not; the kind of a failure is ``unknown``, because the roles keep only that free text.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.stop_reason: str | None = None
+        self._file = open(path, "x", encoding="utf-8")
+
+    def _write(self, line: dict) -> None:
+        self._file.write(json.dumps(line, sort_keys=True, default=str) + "\n")
+        self._file.flush()
+        os.fsync(self._file.fileno())
+
+    def header(self, fields: Mapping[str, object]) -> None:
+        self._write({"line": "header", **fields})
+
+    # -- the observer's methods, called by run_harness as things happen --
+
+    def on_banner(self, facts: Mapping[str, object]) -> None:
+        self._write({"line": "banner", "facts": dict(facts)})
+
+    def on_refusal(self, side: str, reason: str) -> None:
+        self._write({"line": "refusal", "side": side, "reason": reason})
+
+    def on_call(self, role: str, call: object) -> None:
+        failed = bool(getattr(call, "failed", False))
+        self._write({"line": "call", "role": role, "model": str(getattr(call, "model", "")),
+                     "latency_seconds": float(getattr(call, "latency_seconds", 0.0)),
+                     "input_tokens": int(getattr(call, "input_tokens", 0) or 0),
+                     "output_tokens": int(getattr(call, "output_tokens", 0) or 0),
+                     "failed": failed, "failure_kind": "unknown" if failed else None})
+
+    def on_round(self, number: int, progress: bool) -> None:
+        self._write({"line": "round", "round": number, "progress": bool(progress)})
+
+    def on_stop(self, reason: str, code: int) -> None:
+        self.stop_reason = reason              # written in the footer, once run_harness returns
+
+    def footer(self, code: int) -> None:
+        self._write({"line": "footer", "stop_reason": self.stop_reason, "exit_code": code,
+                     "ended_at": _now()})
+
+    def close(self) -> None:
+        self._file.close()
+
+
+def _record_path(argv: list[str]) -> tuple[Path, list[str]]:
+    """``--record PATH`` (required, no default) and the arguments that are run_harness's."""
+    parser = argparse.ArgumentParser(prog="run_shadow.py", add_help=False)
+    parser.add_argument("--record", required=True, help="the run's record: a new file")
+    known, rest = parser.parse_known_args(argv)
+    return Path(known.record), rest
+
+
 # -- the order -------------------------------------------------------------------------------------
 
 def _factory(spec: str):
@@ -289,6 +385,7 @@ def refuse(problems: list[Problem]) -> int:
 def main(argv: list[str] | None = None, *, registration: Registration | None = None,
          repo: Path = REPO_ROOT, git: Callable = _git, lock=None,
          register=signal.signal) -> int:
+    record_path, harness_argv = _record_path(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
     problems = registration_problems(reg, repo=repo)                                     # 1
     if problems:
@@ -296,7 +393,7 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
-    run_argv = ["run", *(sys.argv[1:] if argv is None else argv)]
+    run_argv = ["run", *harness_argv]
     args = run_harness.build_parser().parse_args(run_argv)
     if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES:                       # 3
         return refuse([(FACTORY_NOT_APPROVED, f"{args.role_factory} is not in "
@@ -316,7 +413,46 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     problems = digest_problems(computed, reg.digests)
     if problems:
         return refuse(problems)
-    return run_harness.main(run_argv, lock=lock, register=register, roles=roles)
+    if record_path.exists():                                                                # 7
+        return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
+    try:
+        record = Record(record_path)
+    except FileExistsError:
+        return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
+    except OSError as exc:
+        return refuse([(RECORD_UNWRITABLE, f"{record_path} cannot be created "
+                                           f"({type(exc).__name__})")])
+    try:
+        try:
+            record.header({
+                "format": 1, "started_at": _now(), "registered_commit": reg.commit,
+                "head": checked.head, "registered_sha256": checked.registered_sha256,
+                "code_sha256": checked.code_sha256,
+                "digests": {role: computed[role] for role in ROLES},
+                "supervisor_warn_about_duplicates": computed["supervisor_warn_about_duplicates"],
+                "role_factory": args.role_factory,
+                "role_classes": {key: f"{type(getattr(roles, key)).__module__}."
+                                      f"{type(getattr(roles, key)).__qualname__}"
+                                 for key in ROLE_KEYS},
+                "bounds": {"window_limit": args.window_limit, "max_rounds": args.max_rounds,
+                           "max_model_calls": args.max_model_calls,
+                           "no_progress_limit": args.no_progress_limit,
+                           "live_task_limit": args.live_task_limit},
+                "once": args.once})
+        except OSError as exc:
+            return refuse([(RECORD_UNWRITABLE, f"{record_path}: the header cannot be written "
+                                               f"({type(exc).__name__})")])
+        code = run_harness.main(run_argv, lock=lock, register=register, roles=roles,
+                                observer=record)
+        try:
+            record.footer(code)
+        except Exception as exc:  # noqa: BLE001 - a footer that cannot be written ends the run as 3
+            print(f"record: the footer could not be written ({type(exc).__name__})",
+                  file=sys.stderr)
+            return EXIT_AUDIT_FAILED
+        return code
+    finally:
+        record.close()
 
 
 if __name__ == "__main__":

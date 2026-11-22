@@ -54,6 +54,7 @@ from harness.banner_facts import BannerFactsUnavailable, collect_banner_facts  #
 from harness.bounds import Bounds, RunCounters  # noqa: E402
 from harness.enrolment_db import EnrolledFromDatabase  # noqa: E402
 from harness.exit_codes import (  # noqa: E402
+    EXIT_AUDIT_FAILED,
     EXIT_CODE,
     EXIT_DB_LOST,
     EXIT_LOCK_HELD,
@@ -77,6 +78,81 @@ WATCHDOG_INTERVAL = 2.0
 #: of real roles is a numbered change the owner authorizes (plan items 98 (a), 101 (b), 110 and
 #: 131), not an argument of this script.
 APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build")
+
+
+# -- the observer (plan item 140): only when one is given; with none, nothing below is used --------
+
+class _Observation:
+    """Hands an observer what happened, as it happens: ``on_banner(facts)``, ``on_refusal(side,
+    reason)`` for each new entry of the adapter's ``RefusalCounter``, ``on_call(role, call)`` for
+    each new entry of a role's ``calls``, ``on_round(number, progress)``, ``on_stop(reason, code)``.
+    An exception of the observer's is kept and re-raised, never swallowed: the loop then stops (as
+    it does for any exception), and the run ends with exit 3."""
+
+    ROLES = ("supervisor", "worker", "reviewer")
+
+    def __init__(self, observer, roles) -> None:
+        self.observer, self.roles = observer, roles
+        self.refusals = None
+        self.failure: Exception | None = None
+        self._refusals_seen = 0
+        self._calls_seen = dict.fromkeys(self.ROLES, 0)
+
+    def emit(self, method: str, *args) -> None:
+        try:
+            getattr(self.observer, method)(*args)
+        except Exception as exc:
+            if self.failure is None:
+                self.failure = exc
+            raise
+
+    def catch_up(self) -> None:
+        entries = self.refusals.entries() if self.refusals is not None else ()
+        for side, reason in entries[self._refusals_seen:]:
+            self._refusals_seen += 1
+            self.emit("on_refusal", side, reason)
+        for role in self.ROLES:
+            calls = list(getattr(getattr(self.roles, role, None), "calls", None) or ())
+            for call in calls[self._calls_seen[role]:]:
+                self._calls_seen[role] += 1
+                self.emit("on_call", role, call)
+
+
+class _ObservedBounds(Bounds):
+    """``Bounds``, telling the observer when a round ends (after what the round produced)."""
+
+    def __init__(self, max_rounds, max_model_calls, no_progress_limit, *, observation) -> None:
+        super().__init__(max_rounds, max_model_calls, no_progress_limit)
+        self._observation = observation
+        self._round = 0
+
+    def start_round(self) -> None:
+        super().start_round()
+        self._round += 1
+
+    def end_round(self, progress: bool) -> None:
+        super().end_round(progress)
+        self._observation.catch_up()
+        self._observation.emit("on_round", self._round, progress)
+
+
+class _ObservedPorts:
+    """The loop's ports, unchanged, with the observer caught up after every port call."""
+
+    def __init__(self, ports, observation) -> None:
+        self._ports, self._observation = ports, observation
+
+    def __getattr__(self, name):
+        attr = getattr(self._ports, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                self._observation.catch_up()
+        return call
 
 
 def _positive(text: str) -> int:
@@ -116,7 +192,8 @@ def _roles(spec: str):
     return getattr(importlib.import_module(module_name), function)()
 
 
-def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None) -> int:
+def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
+         observer=None) -> int:
     # ``roles`` (plan item 137): the roles the shadow runner has already built from the approved
     # factory and checked, so that the instances checked are the instances that run. None: the
     # factory is called here, as before. The factory string is compared first either way.
@@ -151,6 +228,12 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None) -> i
             print(f"refused: {exc}", file=sys.stderr)
             return EXIT_STARTUP_REFUSED
         print(format_banner(facts), flush=True)
+        observation = None if observer is None else _Observation(observer, roles)
+        if observation is not None:
+            try:
+                observation.emit("on_banner", facts)
+            except Exception:  # noqa: BLE001 - kept in observation.failure, ends the run as 3
+                return _record_failed(observation)
 
         flag = SignalFlag()
         install(register, flag, (signal.SIGINT, signal.SIGTERM))
@@ -159,17 +242,40 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None) -> i
             enrolment=frozen, supervisor=roles.supervisor, worker=roles.worker,
             reviewer=roles.reviewer, sandbox=roles.sandbox, objective=args.objective,
             window_limit=args.window_limit, live_task_limit=args.live_task_limit)
+        ports = LockGuardedPorts(adapter, lock)
+        bounds = Bounds(args.max_rounds, args.max_model_calls, args.no_progress_limit)
+        if observation is not None:
+            observation.refusals = adapter.refusals
+            ports = _ObservedPorts(ports, observation)
+            bounds = _ObservedBounds(args.max_rounds, args.max_model_calls,
+                                     args.no_progress_limit, observation=observation)
         result = run_loop(
-            LockGuardedPorts(adapter, lock),
-            Bounds(args.max_rounds, args.max_model_calls, args.no_progress_limit),
+            ports, bounds,
             RunCounters(), adapter.refusals, window_limit=args.window_limit, stop_event=flag,
             once=args.once)
         code = EXIT_LOCK_LOST if lock.lost.is_set() else EXIT_CODE[result.reason]
+        if observation is not None:
+            try:
+                if observation.failure is None:
+                    observation.catch_up()
+                    observation.emit("on_stop", result.reason.value, code)
+            except Exception:  # noqa: BLE001 - kept in observation.failure, ends the run as 3
+                pass
+            if observation.failure is not None:
+                return _record_failed(observation)
         print(f"harness stopped (exit {code}): reason={result.reason.value} "
               f"rounds={result.rounds} counters={result.counters}", file=sys.stderr, flush=True)
         return code
     finally:
         lock.close()
+
+
+def _record_failed(observation: _Observation) -> int:
+    """The observer could not take an event: the run stops, and the code is 3, "an audit record
+    could not be written" (``harness/exit_codes.py``), the one reason that names a lost record."""
+    print(f"harness stopped (exit {EXIT_AUDIT_FAILED}): the run record could not be written "
+          f"({type(observation.failure).__name__})", file=sys.stderr, flush=True)
+    return EXIT_AUDIT_FAILED
 
 
 def _residue(args: argparse.Namespace) -> int:
@@ -179,12 +285,13 @@ def _residue(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None, *, lock: HarnessLock | None = None,
-         register=signal.signal, roles=None) -> int:
+         register=signal.signal, roles=None, observer=None) -> int:
     args = build_parser().parse_args(argv)
     load_dotenv()
     if args.command == "residue":
         return _residue(args)
-    return _run(args, lock if lock is not None else HarnessLock(), register, roles=roles)
+    return _run(args, lock if lock is not None else HarnessLock(), register, roles=roles,
+                observer=observer)
 
 
 if __name__ == "__main__":

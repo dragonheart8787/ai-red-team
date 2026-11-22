@@ -31,11 +31,17 @@ COMMIT = "c" * 40
 BOUNDS = ["--objective", "o", "--window-limit", "25", "--max-rounds", "1",
           "--max-model-calls", "100", "--no-progress-limit", "5", "--live-task-limit", "200"]
 APPROVED = {"worker": (compliant.ShadowWorker,), "supervisor": (compliant.ShadowSupervisor,),
-            "reviewer": (compliant.ShadowReviewer,)}
+            "reviewer": (compliant.ShadowReviewer,), "sandbox": (compliant.ShadowSandbox,)}
+#: A record path whose directory does not exist: a run refused before step 7 never creates it.
+NOWHERE = "/nonexistent/shadow-record.jsonl"
 
 
-def _argv(factory=ONCE):
+def _harness_argv(factory=ONCE):
     return ["--role-factory", factory, *BOUNDS]
+
+
+def _argv(factory=ONCE, record=NOWHERE):
+    return ["--record", str(record), *_harness_argv(factory)]
 
 
 def _registration(**override):
@@ -265,7 +271,7 @@ def test_both_scripted_factories_of_run_harness_are_refused_at_the_role_check(fa
     code = run_shadow.main(_argv(factory), registration=_registration(), git=_Git(), lock=lock)
     codes = _codes(capsys.readouterr().err)
     assert code == EXIT_STARTUP_REFUSED and lock.asked == 0
-    assert set(codes) == {run_shadow.ROLE_CLASS_NOT_APPROVED} and len(codes) == 3
+    assert set(codes) == {run_shadow.ROLE_CLASS_NOT_APPROVED} and len(codes) == 4
 
 
 # -- 5. the roles ----------------------------------------------------------------------------------
@@ -329,7 +335,7 @@ def test_the_honest_fake_reviewer_is_refused_even_when_listed():
 
 
 def test_a_role_refusal_comes_before_the_digests_and_the_harness(through, monkeypatch, capsys):
-    reg = _registration(role_classes={**APPROVED, "worker": ()})
+    reg = _registration(role_classes={**APPROVED, "worker": (compliant.SubclassedWorker,)})
     computed = []
     monkeypatch.setattr(run_shadow, "role_digests", lambda roles: computed.append(roles) or {})
     lock = _Lock(True)
@@ -362,9 +368,11 @@ def test_the_digests_cover_three_roles_and_record_the_supervisors_setting():
     assert run_shadow.role_digests(warned)["supervisor"] != got["supervisor"]
 
 
-def test_matching_digests_hand_the_checked_instances_to_run_harness_once(through, capsys):
+def test_matching_digests_hand_the_checked_instances_to_run_harness_once(through, capsys,
+                                                                          tmp_path):
     lock = _Lock(True)
-    code = run_shadow.main(_argv(), registration=_registration(), git=_Git(), lock=lock)
+    code = run_shadow.main(_argv(record=tmp_path / "run.jsonl"), registration=_registration(),
+                           git=_Git(), lock=lock)
     err = capsys.readouterr().err
     assert code == EXIT_STARTUP_REFUSED and "stopped by the test after the hand-over" in err
     assert len(compliant.BUILT) == 1                      # the factory was called once, not twice
@@ -381,8 +389,8 @@ def test_matching_digests_hand_the_checked_instances_to_run_harness_once(through
 
 def test_run_harness_uses_the_roles_it_is_given_and_does_not_call_the_factory(through):
     given = compliant.build()
-    code = run_harness.main(["run", *_argv()], lock=_Lock(True), register=lambda *a: None,
-                            roles=given)
+    code = run_harness.main(["run", *_harness_argv()], lock=_Lock(True),
+                            register=lambda *a: None, roles=given)
     assert code == EXIT_STARTUP_REFUSED                   # the spy's stop
     assert compliant.BUILT == []
     assert through[0]["worker"] is given.worker
@@ -390,7 +398,7 @@ def test_run_harness_uses_the_roles_it_is_given_and_does_not_call_the_factory(th
 
 def test_roles_do_not_get_past_the_factory_string_gate(through, capsys):
     lock = _Lock(True)
-    code = run_harness.main(["run", *_argv(f"{PROBE}:build")], lock=lock,
+    code = run_harness.main(["run", *_harness_argv(f"{PROBE}:build")], lock=lock,
                             register=lambda *a: None, roles=compliant.build())
     assert code == EXIT_STARTUP_REFUSED
     refusal = "refused: the role factory is not an approved one"
@@ -399,12 +407,42 @@ def test_roles_do_not_get_past_the_factory_string_gate(through, capsys):
 
 
 def test_without_roles_run_harness_still_calls_the_factory(through):
-    code = run_harness.main(["run", *_argv()], lock=_Lock(True), register=lambda *a: None)
+    code = run_harness.main(["run", *_harness_argv()], lock=_Lock(True),
+                            register=lambda *a: None)
     assert code == EXIT_STARTUP_REFUSED and len(compliant.BUILT) == 1
     assert through[0]["worker"] is compliant.BUILT[0].worker
 
 
-def test_a_held_lock_still_ends_the_run_with_2_after_the_hand_over(through, capsys):
-    code = run_shadow.main(_argv(), registration=_registration(), git=_Git(), lock=_Lock(False))
+def test_a_held_lock_still_ends_the_run_with_2_after_the_hand_over(through, capsys, tmp_path):
+    code = run_shadow.main(_argv(record=tmp_path / "run.jsonl"), registration=_registration(),
+                           git=_Git(), lock=_Lock(False))
     assert code == EXIT_LOCK_HELD and len(compliant.BUILT) == 1 and through == []
     assert "holds the harness lock" in capsys.readouterr().err
+
+
+# -- the sandbox (S2, plan item 140) ---------------------------------------------------------------
+
+
+def test_a_sandbox_whose_class_is_not_listed_is_refused():
+    roles = _roles(sandbox=object())
+    assert [c for c, _ in run_shadow.role_problems(roles, APPROVED)] == [
+        run_shadow.ROLE_CLASS_NOT_APPROVED]
+
+
+def test_a_subclass_of_a_listed_sandbox_class_is_refused():
+    roles = _roles(sandbox=compliant.SubclassedSandbox())
+    got = run_shadow.role_problems(roles, APPROVED)
+    assert [c for c, _ in got] == [run_shadow.ROLE_CLASS_NOT_APPROVED] and "sandbox" in got[0][1]
+
+
+def test_an_empty_sandbox_key_is_not_registered(capsys):
+    reg = _registration(role_classes={k: v for k, v in APPROVED.items() if k != "sandbox"})
+    assert run_shadow.main(_argv(), registration=reg, git=_Git()) == EXIT_STARTUP_REFUSED
+    err = capsys.readouterr().err
+    assert _codes(err) == [run_shadow.NOT_REGISTERED] and "'sandbox'" in err
+
+
+def test_a_sandbox_class_whose_module_is_not_registered_is_refused(capsys):
+    reg = _registration(role_classes={**APPROVED, "sandbox": (HonestFakeReviewer,)})
+    assert run_shadow.main(_argv(), registration=reg, git=_Git()) == EXIT_STARTUP_REFUSED
+    assert _codes(capsys.readouterr().err) == [run_shadow.CLASS_MODULE_NOT_REGISTERED]

@@ -18,12 +18,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.base_agent import ProposedTask
+from agents.base_agent import ProposedAction, ProposedTask
 from agents.llm import headless
+from agents.llm.claude_code_headless_reviewer import ClaudeCodeHeadlessReviewer
 from agents.llm.claude_code_headless_supervisor import ClaudeCodeHeadlessSupervisor
 from agents.llm.claude_code_headless_worker import ClaudeCodeHeadlessWorker
+from agents.llm.reviewer_base import SYSTEM_PROMPT as REVIEWER_SYSTEM_PROMPT
+from agents.llm.reviewer_base import BaseReviewer
 from agents.llm.supervisor_base import BaseSupervisor, StateSummary
 from agents.llm.worker_base import WORKER_SYSTEM_PROMPT, BaseWorker, ScopeCandidate
+from control_plane.canonicalizer.target import normalize_target
 from harness.observations import EvidenceWindowRow, observation_from_evidence
 from tests.test_harness_h7_528 import STDOUT
 from tool_gateway.adapters import nmap
@@ -116,3 +120,36 @@ def test_the_real_supervisor_refuses_a_plan_that_to_tasks_refuses():
     supervisor, tasks, seen = _plan("SCOPE-NOT-OFFERED")
     assert len(seen) == 1 and tasks is None
     assert supervisor.calls[-1].failed and "was not among" in supervisor.calls[-1].failure
+
+
+# -- the real Reviewer (S2, plan item 140): the system prompt the Reviewer's digest assumes --------
+
+
+def _review(risk_hint):
+    seen = []
+    reviewer = ClaudeCodeHeadlessReviewer(runner=_runner({"risk_hint": risk_hint}, seen))
+    proposal = ProposedAction(
+        action="network.scan", target={"logical_identity": {"type": "ip", "value": "10.82.0.5"}},
+        authorization={"source": "engagement_scope", "scope_object_id": SCOPE},
+        discovery={"source": "explicit_scope"}, task_id="TASK-PIN")
+    opinion = reviewer.review(proposal=proposal,
+                              canonical_target=normalize_target(proposal.target))
+    return reviewer, opinion, seen
+
+
+def test_the_real_reviewer_inherits_the_boundary_methods():
+    for method in ("build_prompt", "_to_opinion", "_escalate"):
+        assert getattr(ClaudeCodeHeadlessReviewer, method) is getattr(BaseReviewer, method)
+
+
+def test_the_real_reviewer_sends_the_reviewer_system_prompt():
+    _, _, seen = _review("medium")
+    assert len(seen) == 1                                       # one "model call", no process
+    assert seen[0][seen[0].index("--system-prompt") + 1] == REVIEWER_SYSTEM_PROMPT
+
+
+def test_the_real_reviewer_makes_its_opinion_through_to_opinion():
+    reviewer, opinion, _ = _review("medium")
+    assert opinion.reviewer_id == reviewer.reviewer_id and opinion.risk_hint == "medium"
+    _, coerced, _ = _review("not-a-risk-level")                 # _to_opinion's own coercion
+    assert coerced.risk_hint == "high"

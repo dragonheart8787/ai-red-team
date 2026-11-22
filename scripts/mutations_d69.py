@@ -1091,6 +1091,68 @@ CATALOGUE = [
     monkeypatch.setattr(ClaudeCodeHeadlessWorker, "_to_proposal", lambda self, payload, **kw: __import__("dataclasses").replace(BaseWorker._to_proposal(self, payload, **kw), discovery={"source": "explicit_scope", "introduced_by_untrusted": False}))'''),),
              prepare=_without_probe,
              targets=('test_a_lure_named_in_the_evidence_is_introduced_by_the_real_worker',)),
+    # -- added by the implementer for S2, the run record and S1's two additions
+    # (tests/test_shadow_runner_record.py, _guard.py, _pins.py); new ids; plan items 139-140 --
+    Mutation('D69-S2-1', "the Reviewer's calls are not recorded (shadow runner plan SR-B1) [added by the implementer, S2]",
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_shadow.py', '''    def on_call(self, role: str, call: object) -> None:''', '''    def on_call(self, role: str, call: object) -> None:
+        if role == "reviewer":
+            return'''),),
+             prepare=_without_probe,
+             targets=('test_one_round_is_recorded_line_by_line_without_any_model_text',)),
+    Mutation('D69-S2-2', 'the failure kind is written as the free text of the failure (SR-B2) [added by the implementer, S2]',
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_shadow.py', '''"failed": failed, "failure_kind": "unknown" if failed else None})''', '''"failed": failed, "failure_kind": getattr(call, "failure", None)})'''),),
+             prepare=_without_probe,
+             targets=('test_one_round_is_recorded_line_by_line_without_any_model_text',)),
+    Mutation('D69-S2-3', 'the lines are held and written only with the footer, at a clean end (SR-B3) [added by the implementer, S2]',
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_shadow.py', '''        self._file.write(json.dumps(line, sort_keys=True, default=str) + "\\n")
+        self._file.flush()
+        os.fsync(self._file.fileno())''', '''        held = self.__dict__.setdefault("_held", [])
+        held.append(json.dumps(line, sort_keys=True, default=str) + "\\n")
+        if line["line"] != "footer":
+            return
+        self._file.write("".join(held))
+        self._file.flush()
+        os.fsync(self._file.fileno())'''),),
+             prepare=_without_probe,
+             targets=('test_an_abnormal_end_leaves_every_written_line_and_no_footer',
+                      'test_every_line_is_on_disk_before_the_next_event')),
+    Mutation('D69-S2-4', 'no flush and no fsync: the lines reach the file only when it is closed [added by the implementer, S2]',
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_shadow.py', '''        self._file.write(json.dumps(line, sort_keys=True, default=str) + "\\n")
+        self._file.flush()
+        os.fsync(self._file.fileno())''', '''        self._file.write(json.dumps(line, sort_keys=True, default=str) + "\\n")'''),),
+             prepare=_without_probe,
+             targets=('test_every_line_is_on_disk_before_the_next_event',)),
+    Mutation('D69-S2-5', 'an existing record is appended to [added by the implementer, S2]',
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_shadow.py', '''    if record_path.exists():''', '''    if False:'''),
+                    Edit('scripts/run_shadow.py', '''self._file = open(path, "x", encoding="utf-8")''', '''self._file = open(path, "a", encoding="utf-8")''')),
+             prepare=_without_probe,
+             targets=('test_an_existing_record_is_refused_and_left_as_it_was',)),
+    Mutation('D69-S2-6', "run_harness swallows the observer's exception [added by the implementer, S2]",
+             ('tests/test_shadow_runner_record.py',),
+             edits=(Edit('scripts/run_harness.py', '''        except Exception as exc:
+            if self.failure is None:
+                self.failure = exc
+            raise''', '''        except Exception:
+            pass'''),),
+             prepare=_without_probe,
+             targets=('test_a_record_that_cannot_take_an_event_stops_the_run_with_3',)),
+    Mutation('D69-S2-7', 'the sandbox the factory returns is not checked [added by the implementer, S2]',
+             ('tests/test_shadow_runner_guard.py',),
+             edits=(Edit('scripts/run_shadow.py', '''    if sandbox not in approved.get("sandbox", ()):''', '''    if False:'''),),
+             prepare=_without_probe,
+             targets=('test_a_sandbox_whose_class_is_not_listed_is_refused',
+                      'test_a_subclass_of_a_listed_sandbox_class_is_refused')),
+    Mutation('D69-S2-8', "the real Reviewer's system prompt is replaced, in the pin test, by another string [added by the implementer, S2]",
+             ('tests/test_shadow_runner_pins.py',),
+             edits=(Edit('tests/test_shadow_runner_pins.py', '''    reviewer = ClaudeCodeHeadlessReviewer(runner=_runner({"risk_hint": risk_hint}, seen))''', '''    reviewer = ClaudeCodeHeadlessReviewer(runner=_runner({"risk_hint": risk_hint}, seen))
+    __import__("pytest").MonkeyPatch().setattr(__import__("agents.llm.claude_code_headless_reviewer", fromlist=["_"]), "SYSTEM_PROMPT", "another system prompt")'''),),
+             prepare=_without_probe,
+             targets=('test_the_real_reviewer_sends_the_reviewer_system_prompt',)),
 ]
 
 if __name__ == "__main__":
