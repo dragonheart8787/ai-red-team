@@ -26,7 +26,8 @@ restart itself or reconnect.
 
 Exit status: 0 stopped by a signal or ``--once``; 1 unexpected (the role factory failed); 2 another
 instance holds the lock; 4 the database cannot be reached (the lock cannot be asked for); 6 the lock
-was lost; 10 the start-up check refused an engagement (it
+was lost; 10 the role factory is not in ``APPROVED_ROLE_FACTORIES`` (refused before the lock and
+before any import), or the start-up check refused an engagement (it
 holds a live task), or the banner cannot be stated (no engagement enrolled, or the enrolled
 engagements disagree on a switch); 11 a task that is not the loop's own was claimed; 12 a fault
 outside the closed list; 13 a round or model-call cap was reached; 14 no progress.
@@ -70,6 +71,13 @@ from harness.signals import SignalFlag, install  # noqa: E402
 #: Seconds between the watchdog's looks at the lock. Not a cap of the run; the scheduler's value.
 WATCHDOG_INTERVAL = 2.0
 
+#: The only role factories ``run`` accepts: the tests' two scripted factories (no model, no real
+#: sandbox). ``--role-factory`` is compared with this tuple, as a string, before the lock is taken
+#: and before the factory's module is imported; any other is refused with exit 10. Adding a factory
+#: of real roles is a numbered change the owner authorizes (plan items 98 (a), 101 (b), 110 and
+#: 131), not an argument of this script.
+APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build")
+
 
 def _positive(text: str) -> int:
     try:
@@ -109,6 +117,9 @@ def _roles(spec: str):
 
 
 def _run(args: argparse.Namespace, lock: HarnessLock, register) -> int:
+    if args.role_factory not in APPROVED_ROLE_FACTORIES:
+        print("refused: the role factory is not an approved one", file=sys.stderr)
+        return EXIT_STARTUP_REFUSED
     try:
         taken = lock.acquire()
     except Exception as exc:  # noqa: BLE001 - what the driver raised is not printed

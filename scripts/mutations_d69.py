@@ -989,6 +989,33 @@ CATALOGUE = [
              edits=(Edit('agents/llm/worker_base.py', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/32")''', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}")'''),),
              prepare=_without_probe,
              targets=('test_a_neighbour_of_a_slash32_target_is_not_its_address',)),
+    # -- added by the implementer for the approved-factory gate (tests/test_harness_approved_factory.py) --
+    # (new ids; the gate is plan items 131-132)
+    Mutation('D69-AF-1', 'the entry no longer compares --role-factory with APPROVED_ROLE_FACTORIES [added by the implementer, approved-factory gate]',
+             ('tests/test_harness_approved_factory.py',),
+             edits=(Edit('scripts/run_harness.py', '''    if args.role_factory not in APPROVED_ROLE_FACTORIES:
+        print("refused: the role factory is not an approved one", file=sys.stderr)
+        return EXIT_STARTUP_REFUSED
+    try:
+        taken = lock.acquire()''', '''    try:
+        taken = lock.acquire()'''),),
+             prepare=_without_probe,
+             targets=('test_an_unapproved_factory_ends_with_10_and_says_why',
+                      'test_an_unapproved_factory_takes_no_lock_and_reads_no_database')),
+    Mutation('D69-AF-2', "the factory's module is imported before the comparison [added by the implementer, approved-factory gate]",
+             ('tests/test_harness_approved_factory.py',),
+             edits=(Edit('scripts/run_harness.py', '''    if args.role_factory not in APPROVED_ROLE_FACTORIES:''', '''    try:
+        importlib.import_module(args.role_factory.partition(":")[0])
+    except Exception:  # noqa: BLE001 - the mutant imports first and compares afterwards
+        pass
+    if args.role_factory not in APPROVED_ROLE_FACTORIES:'''),),
+             prepare=_without_probe,
+             targets=('test_an_unapproved_factory_is_not_imported',)),
+    Mutation('D69-AF-3', 'APPROVED_ROLE_FACTORIES holds one more, arbitrary, entry [added by the implementer, approved-factory gate]',
+             ('tests/test_harness_approved_factory.py',),
+             edits=(Edit('scripts/run_harness.py', '''APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build")''', '''APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build", "anything:at_all")'''),),
+             prepare=_without_probe,
+             targets=('test_the_approved_factories_are_exactly_the_two_scripted_ones',)),
 ]
 
 if __name__ == "__main__":

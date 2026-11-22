@@ -145,7 +145,7 @@ is not a test (item 98 b); this runbook gives none.
 
 | argument | meaning | note |
 |---|---|---|
-| `--role-factory` | `module:function` giving the roles | only the tests' scripted factory exists (section 1) |
+| `--role-factory` | `module:function` giving the roles | only the tests' scripted factory exists (section 1). Only a factory in `APPROVED_ROLE_FACTORIES` (`scripts/run_harness.py`) is accepted; any other is refused with exit 10 and is not imported (item 131) |
 | `--objective` | the objective the Supervisor is shown | free text |
 | `--window-limit` | the evidence window (rows) the snapshot reads | P-8's number (item 90) |
 | `--max-rounds` | round cap | reaching it is exit 13 |
@@ -224,7 +224,7 @@ through its own path first.
 | 4 | the database cannot be reached when the lock is asked for (stderr: `refused: the database cannot be reached (<ExceptionName>)`); the driver text is not printed [R `:111-116`] | no (nothing read) | bring the database up. A database lost **during** a run is 6 (the lock's session dies with it) or 12, not 4 [D, `lock.py:92-107`, `loop.py:334-335`] |
 | 6 | the lock was lost; no port is called again, nothing is written after the loss; a call already in flight cannot be interrupted [R `lock.py:15-21`, `run_harness.py:152`] | no | claimed task stays claimed, the rest queued: `residue`, then section 6.4; find why the session was lost |
 | 7 | reserved; a 7 is not ours [R `exit_codes.py:16, 52`] | — | |
-| 10 | two causes. (a) The banner's facts cannot be stated: stderr `refused: …` (no engagement enrolled; engagements disagree on a switch; no project version) and **nothing started** [R `run_harness.py:131-137`]. (b) The start-up check found a live (queued, claimed, running) task on an engagement at its first visit: no `refused:` line, final line `reason=startup_check_refused` [R `loop.py:197-202`] | yes (a controlled stop) | (a) fix the enrolment or the policy; (b) `residue`, section 6.4 |
+| 10 | two causes. (a) The banner's facts cannot be stated: stderr `refused: …` (no engagement enrolled; engagements disagree on a switch; no project version) and **nothing started** [R `run_harness.py:131-137`]. (b) The start-up check found a live (queued, claimed, running) task on an engagement at its first visit: no `refused:` line, final line `reason=startup_check_refused` [R `loop.py:197-202`]. Also (item 131): only a factory in `APPROVED_ROLE_FACTORIES` is accepted; any other is refused with exit 10 (stderr `refused: the role factory is not an approved one`), before the lock is taken and without being imported | yes (a controlled stop) | (a) fix the enrolment or the policy; (b) `residue`, section 6.4 |
 | 11 | a task that is not the loop's own was claimed [R `loop.py:239-240`] | no | the foreign task is now `claimed` by the Worker's agent id and is not completed; `residue`; find who else creates tasks on that engagement |
 | 12 | a fault outside the closed list: an exception from `propose_action`, a key conflict, more live tasks than `--live-task-limit`, any exception of a port [R `loop.py:268-269, 334-335`, item 96 c] | no | one claimed task and the rest queued, and possibly a proposal left at `received` (section 6.2); `residue`, section 6.4 |
 | 13 | the round cap or the model-call cap was reached [R `loop.py:165-166, 209-210, 248-250, 261-263`] | yes | nothing unless the numbers are wrong; a task claimed when the call cap hit is completed `not_run` |
