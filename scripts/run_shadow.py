@@ -23,6 +23,10 @@ Before anything reads the database the runner refuses, in this order (plan items
    CLI is logged in by the subscription; anything else, a failed query or output that is not a
    JSON object included, is ``login_not_subscription``;
 
+   1c. **the CLI's version** (plan item 148): ``claude --version`` (no model call) must be
+   ``agents.llm.auth_guard.REVIEWED_CLI_VERSION``, the version the name lists of 1a were reviewed
+   on; another version, or a version that cannot be read, is ``cli_version_unreviewed``;
+
 2. **the integrity guard**, with the meaning of ``integrity()`` in ``scripts/dp15_stage1_run.py``:
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
@@ -50,8 +54,9 @@ is written: a call keeps its role, model, latency, tokens and whether it failed,
 failure is the one its call record carries (numbered change D69-NC-1, plan item 142) when that is
 one of ``control_plane/plan_fit/failure_kind.py``'s three, and ``unknown`` otherwise; never its free
 text. A record with no footer is a run that did not end normally. The header says
-``auth_guard: "passed"`` (it is written only once every check has passed); the footer has the cap
-reached (``cap_hit``) and the tokens of the run (``token_use``).
+``auth_guard: "passed"`` (it is written only once every check has passed) and the CLI's
+``cli_version``; the footer has the cap reached (``cap_hit``) and the tokens of the run
+(``token_use``).
 
 All four constants are empty: **this runner refuses every start until a registration is
 committed**, and S1 makes no real role runnable.
@@ -134,12 +139,15 @@ API_BILLING_AUTH_PRESENT = "api_billing_auth_present"
 #: The login itself is not the subscription's, or cannot be read (plan item 145): kept apart from
 #: ``api_billing_auth_present``, which names a variable or a setting the operator can remove.
 LOGIN_NOT_SUBSCRIPTION = "login_not_subscription"
+#: The CLI is not the version the name lists were reviewed on, or its version cannot be read (plan
+#: item 148).
+CLI_VERSION_UNREVIEWED = "cli_version_unreviewed"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
     FACTORY_NOT_APPROVED, FACTORY_FAILED, ROLE_CLASS_NOT_APPROVED, ROLE_NOT_A_BASE_SUBCLASS,
     ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH, RECORD_EXISTS,
-    RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT, LOGIN_NOT_SUBSCRIPTION,
+    RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT, LOGIN_NOT_SUBSCRIPTION, CLI_VERSION_UNREVIEWED,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -432,7 +440,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
          repo: Path = REPO_ROOT, git: Callable = _git, lock=None,
          register=signal.signal, environ: Mapping[str, str] | None = None,
          settings_files: tuple[Path, ...] | None = None,
-         login_query: Callable[[], Mapping[str, object]] | None = None) -> int:
+         login_query: Callable[[], Mapping[str, object]] | None = None,
+         version_query: Callable[[], str] | None = None) -> int:
     record_path, harness_argv = _shadow_argv(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
     problems = registration_problems(reg, repo=repo)                                     # 1
@@ -455,6 +464,18 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     found = auth_guard.login_problems(login)
     if found:
         return refuse([(LOGIN_NOT_SUBSCRIPTION, what) for what in found])
+    ask_version = version_query if version_query is not None else (                       # 1c
+        lambda: auth_guard.query_cli_version(environ=environ))
+    try:
+        cli_version = ask_version()
+    except Exception as exc:  # noqa: BLE001 - a version that cannot be read is not the reviewed one
+        return refuse([(CLI_VERSION_UNREVIEWED, f"the CLI's version cannot be read "
+                                                f"({type(exc).__name__})")])
+    if cli_version != auth_guard.REVIEWED_CLI_VERSION:
+        return refuse([(CLI_VERSION_UNREVIEWED, f"the CLI is {str(cli_version)[:40]!r}; the name "
+                                                f"lists were reviewed on "
+                                                f"{auth_guard.REVIEWED_CLI_VERSION} and are "
+                                                "reviewed again before another version runs")])
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
@@ -493,6 +514,7 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                 "format": 1, "started_at": _now(), "auth_guard": "passed",
                 "login": {"auth_method": login.get("authMethod"),
                           "api_provider": login.get("apiProvider")},
+                "cli_version": cli_version,
                 "registered_commit": reg.commit,
                 "head": checked.head, "registered_sha256": checked.registered_sha256,
                 "code_sha256": checked.code_sha256,

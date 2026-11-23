@@ -31,12 +31,20 @@ Added by the follow-up of plan item 145:
   must be the subscription's (``authMethod`` ``claude.ai`` or ``oauth_token``, ``apiProvider``
   ``firstParty``, logged in, and no ``apiKeySource``); a query that fails or cannot be parsed is
   a refusal too.
+
+Added by plan item 148:
+
+* :data:`REVIEWED_CLI_VERSION` and :func:`query_cli_version` -- the name lists above were read out
+  of one installed CLI, 2.1.330; another version can read names they do not list. The shadow
+  runner asks ``claude --version`` (no model call) and refuses any other version, and a version
+  that cannot be read, until the lists are reviewed again on it.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -354,3 +362,38 @@ def login_problems(status: Mapping[str, object]) -> list[str]:
     if "apiKeySource" in status:
         found.append("apiKeySource is present: an API key is available to the CLI")
     return found
+
+
+# -- the CLI's version (plan item 148) ---------------------------------------------------------
+
+#: The version of the installed CLI the name lists were reviewed on (plan items 145 and 147). A CLI
+#: of another version may read names the lists do not hold: the lists and this constant are
+#: reviewed again together, and until then the shadow runner refuses (``cli_version_unreviewed``).
+REVIEWED_CLI_VERSION = "2.1.330"
+VERSION_ARGS = ("--version",)
+VERSION_QUERY_TIMEOUT_SECONDS = 30.0
+#: ``claude --version`` prints the version, optionally followed by `` (Claude Code)``.
+_VERSION_REPLY = re.compile(r"\s*(\d+\.\d+\.\d+)(?: \(Claude Code\))?\s*")
+
+
+class VersionQueryFailed(RuntimeError):
+    """The CLI's version could not be read: the command failed, timed out, or printed no version."""
+
+
+def query_cli_version(*, executable: str = "claude", runner: Callable = subprocess.run,
+                      environ: Mapping[str, str] | None = None) -> str:
+    """The version ``claude --version`` prints, run with :func:`subprocess_environment` and a
+    30-second limit. Raises :class:`VersionQueryFailed`; its message never holds what the command
+    printed."""
+    try:
+        done = runner([executable, *VERSION_ARGS], capture_output=True, text=True,
+                      stdin=subprocess.DEVNULL, env=subprocess_environment(environ),
+                      timeout=VERSION_QUERY_TIMEOUT_SECONDS, check=False)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise VersionQueryFailed(type(exc).__name__) from None
+    if done.returncode != 0:
+        raise VersionQueryFailed(f"exit {done.returncode}")
+    match = _VERSION_REPLY.fullmatch(done.stdout if isinstance(done.stdout, str) else "")
+    if match is None:
+        raise VersionQueryFailed("the reply is not a version")
+    return match.group(1)

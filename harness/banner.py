@@ -19,7 +19,8 @@ the dict must be refused, not printed. The message of a refusal names the field,
     cli_version
     prompt_digests    supervisor, worker
     window_limit      a positive int
-    caps              max_rounds, max_model_calls, no_progress_limit  (a positive int or "not set")
+    caps              max_rounds, max_model_calls, no_progress_limit, max_tokens, max_minutes
+                      (each a positive int or "not set")
     lock_key          "0x" and hexadecimal digits (underscores between groups allowed)
 
 One line per field, in this order. Lists keep the order they were given; a mapping is printed in
@@ -43,7 +44,8 @@ REQUIRED_FIELDS = (
 _DATABASE_KEYS = ("host", "name", "role")
 _SWITCH_KEYS = ("task_relation_enforce", "goal_fit_enforce")
 _DIGEST_KEYS = ("supervisor", "worker")
-_CAP_KEYS = ("max_rounds", "max_model_calls", "no_progress_limit")
+#: The token and minute caps (S3, plan item 143) are shown under their own names (plan item 148).
+_CAP_KEYS = ("max_rounds", "max_model_calls", "no_progress_limit", "max_tokens", "max_minutes")
 _LOCK_KEY = re.compile(r"0x[0-9a-fA-F]+(_[0-9a-fA-F]+)*")
 
 

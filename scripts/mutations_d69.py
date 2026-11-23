@@ -895,7 +895,8 @@ CATALOGUE = [
     # -- added by the implementer for the token-boundary repair (tests/test_provenance_token_boundaries.py) --
     # (new ids, not in the plan's section 8; the repair is plan items 111-113 and ADR_DISCOVERY_SOURCE.md 8.8)
     Mutation('D69-TB-1', 'the text is searched only with its backslashes removed; the readings that separate a line break are dropped [added by the implementer, token-boundary repair]',
-             ('tests/test_provenance_token_boundaries.py',),
+             ('tests/test_provenance_token_boundaries.py',
+              'tests/test_provenance_readings.py'),
              edits=(Edit('agents/llm/worker_base.py', r'''    return (
         text.replace("\\", ""),     # backslashes removed: nmap's escaped dots
         text.replace("\\", " "),    # backslashes as separators: a line break's
@@ -907,7 +908,9 @@ CATALOGUE = [
 '''),),
              prepare=_without_probe,
              targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
-                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
+                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop',
+                      # plan item 148: the pre-registered readings table
+                      'test_a_reading_case_is_judged_at_every_position')),
     Mutation('D69-TB-2', 'the text is searched only in the readings that separate a line break; the two that restore nmap\'s escaped dots are dropped [added by the implementer, token-boundary repair]',
              ('tests/test_provenance_token_boundaries.py',),
              edits=(Edit('agents/llm/worker_base.py', r'''    return (
@@ -1297,6 +1300,47 @@ CATALOGUE = [
              prepare=_without_probe,
              targets=('test_the_footer_counts_the_failed_calls_without_tokens',
                       'test_the_footer_counts_the_rounds_failed_calls_without_tokens')),
+    # -- added by the implementer for plan item 148: the banner's token and minute caps, the CLI's version lock --
+    Mutation('D69-BC-1', 'the banner accepts max_minutes 0 [added by the implementer, item 148]',
+             ('tests/test_harness_h5a1_banner.py',),
+             edits=(Edit('harness/banner.py', """        shown = NOT_SET if isinstance(v, str) and v == NOT_SET else str(_positive("caps." + key, v))
+""", """        shown = NOT_SET if isinstance(v, str) and v == NOT_SET else (
+            "0" if key == "max_minutes" and type(v) is int and v == 0
+            else str(_positive("caps." + key, v)))
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_cap_that_is_not_a_positive_int_or_not_set_is_refused',)),
+    Mutation('D69-BC-2', 'the banner has no max_tokens key [added by the implementer, item 148]',
+             ('tests/test_harness_h5a1_banner.py',),
+             edits=(Edit('harness/banner.py', """_CAP_KEYS = ("max_rounds", "max_model_calls", "no_progress_limit", "max_tokens", "max_minutes")
+""", """_CAP_KEYS = ("max_rounds", "max_model_calls", "no_progress_limit", "max_minutes")
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_missing_part_of_a_field_is_refused',)),
+    Mutation('D69-BC-3', 'the banner prints a second "token" beside max_tokens=, which an exemption that removed every "token" would let pass [added by the implementer, item 148]',
+             ('tests/test_harness_h5a1_banner.py',),
+             edits=(Edit('harness/banner.py', """        parts.append(f"{key}={shown}")
+""", """        parts.append(f"{key}={shown}" + (" (tokens)" if key == "max_tokens" else ""))
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_output_has_nothing_but_the_eleven_lines',)),
+    Mutation('D69-VL-1', 'run_shadow lets a CLI of another version through [added by the implementer, item 148]',
+             ('tests/test_shadow_runner_cli_version.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if cli_version != auth_guard.REVIEWED_CLI_VERSION:
+""", """    if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_cli_version_that_is_not_the_reviewed_one_is_refused',)),
+    Mutation('D69-VL-2', "run_shadow lets a CLI whose version cannot be read through [added by the implementer, item 148]",
+             ('tests/test_shadow_runner_cli_version.py',),
+             edits=(Edit('scripts/run_shadow.py', """    except Exception as exc:  # noqa: BLE001 - a version that cannot be read is not the reviewed one
+        return refuse([(CLI_VERSION_UNREVIEWED, f"the CLI's version cannot be read "
+                                                f"({type(exc).__name__})")])
+""", """    except Exception:  # noqa: BLE001 - a version that cannot be read is not the reviewed one
+        cli_version = auth_guard.REVIEWED_CLI_VERSION
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_cli_version_that_cannot_be_read_is_refused',)),
 ]
 
 if __name__ == "__main__":

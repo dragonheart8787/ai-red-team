@@ -33,7 +33,8 @@ CLASSES = {"worker": (compliant.RecordWorker,), "supervisor": (compliant.RecordS
            "reviewer": (compliant.RecordReviewer,), "sandbox": (compliant.ShadowSandbox,)}
 HEADER_KEYS = {"line", "format", "started_at", "registered_commit", "head", "registered_sha256",
                "code_sha256", "digests", "supervisor_warn_about_duplicates", "role_factory",
-               "role_classes", "bounds", "once", "auth_guard", "login"}
+               "role_classes", "bounds", "once", "auth_guard", "login",
+               "cli_version"}                                            # plan item 148
 
 
 def _registration():
@@ -109,6 +110,10 @@ def test_one_round_is_recorded_line_by_line_without_any_model_text(run):
                                 "no_progress_limit": 5, "live_task_limit": 200,
                                 "max_tokens": 100000, "max_minutes": 60}
     assert header["auth_guard"] == "passed"
+    assert header["cli_version"] == "2.1.330"                            # plan item 148
+    assert lines[1]["facts"]["caps"] == {"max_rounds": 1, "max_model_calls": 100,
+                                         "no_progress_limit": 5, "max_tokens": 100000,
+                                         "max_minutes": 60}
 
     refusals = [(x["side"], x["reason"]) for x in _of(lines, "refusal")]
     assert refusals and refusals == list(adapter.refusals.entries())

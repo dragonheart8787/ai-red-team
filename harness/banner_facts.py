@@ -23,7 +23,9 @@ prompt_digests        SHA-256 of the Supervisor's system prompt and its plan sch
                       no scope object and the allowlisted actions (they are closed over what a
                       call may reference, so that is the form that does not depend on a round).
 window_limit, caps    the arguments of the run (a cap that is not given is not a banner: the entry
-                      script requires them all).
+                      script requires them all), and the token and minute caps (plan item 148),
+                      which are optional on the entry script: one not given is handed in as
+                      ``"not set"``.
 lock_key              :data:`harness.lock.KEY`.
 ====================  ==============================================================================
 
@@ -136,6 +138,8 @@ def collect_banner_facts(
     max_rounds: int,
     max_model_calls: int,
     no_progress_limit: int,
+    max_tokens: int | str,
+    max_minutes: int | str,
     load_policy: Callable[[str], object] = load_policy_of,
     migration_head: Callable[[], str] = read_migration_head,
 ) -> dict:
@@ -153,6 +157,7 @@ def collect_banner_facts(
         "prompt_digests": prompt_digests(supervisor),
         "window_limit": window_limit,
         "caps": {"max_rounds": max_rounds, "max_model_calls": max_model_calls,
-                 "no_progress_limit": no_progress_limit},
+                 "no_progress_limit": no_progress_limit, "max_tokens": max_tokens,
+                 "max_minutes": max_minutes},
         "lock_key": format_key(),
     }

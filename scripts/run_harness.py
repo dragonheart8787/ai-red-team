@@ -18,6 +18,7 @@ tokens of the three roles' calls, cache reads not counted) and ``--max-minutes N
 the bounds are built). They are optional here only because the factory gate admits two scripted
 factories and nothing else (plan item 131); ``scripts/run_shadow.py`` requires both. A cap reached
 ends the run with 13, and the stop line then ends with ``cap=`` and the cap's name.
+The banner shows both under their own names, ``not set`` for one not given (plan item 148).
 
 The roles come from ``--role-factory``, the dotted path of a function that returns an object with
 ``supervisor``, ``worker``, ``reviewer`` and ``sandbox``. **This script builds no model role and no
@@ -55,7 +56,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from control_plane.config import load_dotenv  # noqa: E402
-from harness.banner import format_banner  # noqa: E402
+from harness.banner import NOT_SET, format_banner  # noqa: E402
 from harness.banner_facts import BannerFactsUnavailable, collect_banner_facts  # noqa: E402
 from harness.bounds import Bounds, RunCounters  # noqa: E402
 from harness.enrolment_db import EnrolledFromDatabase  # noqa: E402
@@ -256,7 +257,9 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
                 engagements=engagements, supervisor=roles.supervisor, worker=roles.worker,
                 reviewer=roles.reviewer, window_limit=args.window_limit,
                 max_rounds=args.max_rounds, max_model_calls=args.max_model_calls,
-                no_progress_limit=args.no_progress_limit)
+                no_progress_limit=args.no_progress_limit,
+                max_tokens=NOT_SET if args.max_tokens is None else args.max_tokens,
+                max_minutes=NOT_SET if args.max_minutes is None else args.max_minutes)
         except BannerFactsUnavailable as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return EXIT_STARTUP_REFUSED

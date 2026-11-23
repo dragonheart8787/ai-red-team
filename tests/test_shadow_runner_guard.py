@@ -59,6 +59,9 @@ def _subscription_only(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent/claude-config")
     monkeypatch.setattr(auth_guard, "query_login", lambda **kwargs: dict(SUBSCRIPTION_LOGIN))
+    # the CLI's version (plan item 148): the reviewed one, written out; its own tests are in
+    # ``tests/test_shadow_runner_cli_version.py``
+    monkeypatch.setattr(auth_guard, "query_cli_version", lambda **kwargs: "2.1.330")
 
 
 def _registration(**override):

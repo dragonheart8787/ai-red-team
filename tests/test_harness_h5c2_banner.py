@@ -37,7 +37,8 @@ from tests.test_harness_h5c1_support import make_world
 from tests.test_harness_h5c2_support import enrolled
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPS = {"max_rounds": 3, "max_model_calls": 40, "no_progress_limit": 2}
+CAPS = {"max_rounds": 3, "max_model_calls": 40, "no_progress_limit": 2, "max_tokens": 9000,
+        "max_minutes": 20}
 
 
 @pytest.fixture

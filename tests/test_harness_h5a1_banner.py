@@ -28,7 +28,8 @@ FACTS = {
     "cli_version": "2.0.0",
     "prompt_digests": {"supervisor": "sha256:aaaa", "worker": "sha256:bbbb"},
     "window_limit": 200,
-    "caps": {"max_rounds": 10, "max_model_calls": 100, "no_progress_limit": 3},
+    "caps": {"max_rounds": 10, "max_model_calls": 100, "no_progress_limit": 3,
+             "max_tokens": 5000, "max_minutes": 30},
     "lock_key": "0x0D69_5C4E_D000_0001",
 }
 
@@ -42,7 +43,7 @@ EXPECTED_LINES = [
     "cli_version: 2.0.0",
     "prompt_digests: supervisor=sha256:aaaa worker=sha256:bbbb",
     "window_limit: 200",
-    "caps: max_rounds=10 max_model_calls=100 no_progress_limit=3",
+    "caps: max_rounds=10 max_model_calls=100 no_progress_limit=3 max_tokens=5000 max_minutes=30",
     "lock_key: 0x0D69_5C4E_D000_0001",
 ]
 
@@ -80,6 +81,7 @@ def test_a_missing_field_is_refused(missing):
     ("switches", "task_relation_enforce"), ("switches", "goal_fit_enforce"),
     ("prompt_digests", "supervisor"), ("prompt_digests", "worker"),
     ("caps", "max_rounds"), ("caps", "max_model_calls"), ("caps", "no_progress_limit"),
+    ("caps", "max_tokens"), ("caps", "max_minutes"),
 ])
 def test_a_missing_part_of_a_field_is_refused(sub):
     outer, inner = sub
@@ -118,23 +120,29 @@ def test_the_output_is_deterministic_and_the_mapping_order_does_not_matter():
 def test_the_output_has_nothing_but_the_eleven_lines():
     text = format_banner(FACTS)
     assert text.count("\n") == len(FIELDS) - 1
+    assert text.count("max_tokens=") == 1
     for secret_like in ("password", "token", "url", "env"):
-        assert secret_like not in text
+        assert secret_like not in text.replace("max_tokens=", "", 1)
 
 
 def test_caps_not_set_is_accepted_for_each_cap():
-    caps = {"max_rounds": "not set", "max_model_calls": "not set", "no_progress_limit": "not set"}
+    caps = {"max_rounds": "not set", "max_model_calls": "not set", "no_progress_limit": "not set",
+            "max_tokens": "not set", "max_minutes": "not set"}
     lines = format_banner(facts(caps=caps)).split("\n")
-    assert lines[9] == "caps: max_rounds=not set max_model_calls=not set no_progress_limit=not set"
-    mixed = {"max_rounds": 5, "max_model_calls": "not set", "no_progress_limit": 2}
+    assert lines[9] == ("caps: max_rounds=not set max_model_calls=not set no_progress_limit=not set"
+                        " max_tokens=not set max_minutes=not set")
+    mixed = {"max_rounds": 5, "max_model_calls": "not set", "no_progress_limit": 2,
+             "max_tokens": "not set", "max_minutes": 7}
     assert format_banner(facts(caps=mixed)).split("\n")[9] \
-        == "caps: max_rounds=5 max_model_calls=not set no_progress_limit=2"
+        == ("caps: max_rounds=5 max_model_calls=not set no_progress_limit=2 max_tokens=not set"
+            " max_minutes=7")
 
 
 @pytest.mark.parametrize("bad", [-1, 0, True, False, 1.5, "none", "Not Set", "3", None, []])
 def test_a_cap_that_is_not_a_positive_int_or_not_set_is_refused(bad):
-    for key in ("max_rounds", "max_model_calls", "no_progress_limit"):
-        caps = {"max_rounds": 1, "max_model_calls": 1, "no_progress_limit": 1, key: bad}
+    for key in ("max_rounds", "max_model_calls", "no_progress_limit", "max_tokens", "max_minutes"):
+        caps = {"max_rounds": 1, "max_model_calls": 1, "no_progress_limit": 1, "max_tokens": 1,
+                "max_minutes": 1, key: bad}
         with pytest.raises(ValueError):
             format_banner(facts(caps=caps))
 

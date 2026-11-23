@@ -210,6 +210,13 @@ The lock is a Postgres session advisory lock on its own connection; a second ins
 before it reads anything. It guards against an accident and is not an authorization mechanism
 [R `harness/lock.py:1-25`, item 96 f].
 
+### 3.6 The shadow runner (`scripts/run_shadow.py`)
+
+`run_shadow` must be started from a clean shell, not inside a Claude Code session, because a
+session's own variables are among the names it refuses [R item 148]. After a CLI upgrade, the name
+lists of `agents/llm/auth_guard.py` and `REVIEWED_CLI_VERSION` must be reviewed again on the new
+version, and until then `run_shadow` refuses with `cli_version_unreviewed` [R item 148].
+
 ## 4. Exit codes
 
 The exit status is the loop's reason, except that a lost lock is 6 [R `scripts/run_harness.py:152`].
