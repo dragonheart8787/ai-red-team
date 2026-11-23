@@ -925,8 +925,18 @@ CATALOGUE = [
                       'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop')),
     Mutation('D69-TB-3', 'an identity counts as named only when every reading of the text finds it (intersection, not union) [added by the implementer, token-boundary repair]',
              ('tests/test_provenance_token_boundaries.py',),
-             edits=(Edit('agents/llm/worker_base.py', r'''    return any(re.search(pattern, form.lower()) for form in _text_forms(text))''',
-                         r'''    return all(re.search(pattern, form.lower()) for form in _text_forms(text))'''),
+             # re-anchored 2026-11-23 (plan item 147): the line below replaced the original one,
+             # ``return any(re.search(pattern, form.lower()) for form in _text_forms(text))``, when
+             # the hex-escape reading and the /32 pattern were added; the mutant is the same,
+             # every reading of _text_forms must find the identity, for each pattern and reading
+             edits=(Edit('agents/llm/worker_base.py', r'''    return any(
+        re.search(pattern, form.lower())
+        for pattern in patterns for t in readings for form in _text_forms(t)
+    )''',
+                         r'''    return any(
+        all(re.search(pattern, form.lower()) for form in _text_forms(t))
+        for pattern in patterns for t in readings
+    )'''),
                     Edit('agents/llm/worker_base.py', r'''    keys: set[IdentityKey] = set()
     for form in _text_forms(text):
         for token in _TEXT_TOKEN.findall(form):
@@ -984,7 +994,7 @@ CATALOGUE = [
     # _discovery_provenance: the unit helper offers 10.82.0.0/24 itself as a scope object, so the
     # target is explicit scope before any content match. The table is not changed after its first
     # run; a counter-example that can catch it needs a new pre-registered table (plan item 120).
-    Mutation('D69-SL-2', 'every IPv4 cidr, not only a /32, is also searched for by its network address [added by the implementer, /32 repair; INVALID as committed, see the comment above]',
+    Mutation('D69-SL-2', 'every IPv4 cidr, not only a /32, is also searched for by its network address [added by the implementer, /32 repair; INVALID as committed, see the comment above] ACCEPTED SURVIVOR 2026-11-23: over-escalation only (fail-closed direction); ranges wider than /32 are denied by the budget before provenance (max_targets 1); see plan item 146',
              ('tests/test_provenance_slash32.py',),
              edits=(Edit('agents/llm/worker_base.py', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/32")''', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}")'''),),
              prepare=_without_probe,
@@ -1200,10 +1210,9 @@ CATALOGUE = [
                       'test_the_record_uses_failure_kind_py_s_vocabulary_and_writes_unknown_outside_it')),
     Mutation('D69-NC1-2', "the three adapters put the failure's free text into failure_kind [added by the implementer, D69-NC-1]",
              ('tests/test_shadow_runner_failure_kinds.py',),
-             edits=(Edit('agents/llm/claude_code_headless_worker.py', '''            return self._refuse(started, str(exc), failure_kind=classify_failure(exception=exc))''', '''            return self._refuse(started, str(exc), failure_kind=str(exc))'''),
-                    Edit('agents/llm/claude_code_headless_supervisor.py', '''            return self._refuse(started, str(exc), failure_kind=classify_failure(exception=exc))''', '''            return self._refuse(started, str(exc), failure_kind=str(exc))'''),
-                    Edit('agents/llm/claude_code_headless_reviewer.py', '''            return self._escalate(started, str(exc),
-                                  failure_kind=classify_failure(exception=exc))''', '''            return self._escalate(started, str(exc), failure_kind=str(exc))''')),
+             edits=(Edit('agents/llm/claude_code_headless_worker.py', '''failure_kind=classify_failure(exception=exc))''', '''failure_kind=str(exc))'''),
+                    Edit('agents/llm/claude_code_headless_supervisor.py', '''failure_kind=classify_failure(exception=exc))''', '''failure_kind=str(exc))'''),
+                    Edit('agents/llm/claude_code_headless_reviewer.py', '''failure_kind=classify_failure(exception=exc))''', '''failure_kind=str(exc))''')),
              prepare=_without_probe,
              targets=('test_a_failed_call_keeps_its_kind_and_the_record_writes_the_kind_not_the_text',)),
     Mutation('D69-AG-1', 'the billing list is one variable short (CLAUDE_CODE_USE_VERTEX) [added by the implementer, item 143]',
@@ -1266,6 +1275,28 @@ CATALOGUE = [
                                                 f"({type(exc).__name__})")])''', '''        login = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}'''),),
              prepare=_without_probe,
              targets=('test_a_login_that_cannot_be_read_is_refused',)),
+    # -- added by the implementer for S3's closure (plan items 146-147); new ids --
+    Mutation('D69-AG-9', 'CLAUDE_CODE_CUSTOM_OAUTH_URL, a name of the second review, is dropped from the list [added by the implementer, item 147]',
+             ('tests/test_shadow_runner_names_b3.py', 'tests/test_shadow_runner_auth.py'),
+             edits=(Edit('agents/llm/auth_guard.py', '''    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+''', ''),),
+             prepare=_without_probe,
+             targets=('test_the_second_review_is_written_into_the_module_as_listed_here',
+                      'test_the_names_the_review_layer_named_are_refused',
+                      'test_each_billing_variable_is_refused_before_the_lock_and_the_database')),
+    Mutation('D69-NC1a-1', "the adapters drop a failed call's usage [added by the implementer, D69-NC-1a]",
+             ('tests/test_shadow_runner_failed_usage.py',),
+             edits=(Edit('agents/llm/claude_code_headless_worker.py', '''            return self._refuse(started, str(exc), usage=exc.usage,''', '''            return self._refuse(started, str(exc), usage=None,'''),
+                    Edit('agents/llm/claude_code_headless_supervisor.py', '''            return self._refuse(started, str(exc), usage=exc.usage,''', '''            return self._refuse(started, str(exc), usage=None,'''),
+                    Edit('agents/llm/claude_code_headless_reviewer.py', '''            return self._escalate(started, str(exc), exc.usage,''', '''            return self._escalate(started, str(exc), None,''')),
+             prepare=_without_probe,
+             targets=('test_a_failed_envelope_with_usage_keeps_its_tokens_and_the_cap_counts_them',)),
+    Mutation('D69-NC1a-2', "the footer writes 0 failed calls without tokens, whatever it saw [added by the implementer, D69-NC-1a]",
+             ('tests/test_shadow_runner_failed_usage.py', 'tests/test_shadow_runner_record.py'),
+             edits=(Edit('scripts/run_shadow.py', '''                     "failed_calls_without_tokens": self.failed_calls_without_tokens,''', '''                     "failed_calls_without_tokens": 0,'''),),
+             prepare=_without_probe,
+             targets=('test_the_footer_counts_the_failed_calls_without_tokens',
+                      'test_the_footer_counts_the_rounds_failed_calls_without_tokens')),
 ]
 
 if __name__ == "__main__":

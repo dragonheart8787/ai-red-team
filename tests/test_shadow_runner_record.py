@@ -234,3 +234,12 @@ def test_the_subscription_logins_value_is_not_in_the_record(run, monkeypatch):
     code, lines, _, _, path = run()
     assert code == 0 and lines[0]["auth_guard"] == "passed"
     assert mark not in path.read_text()
+
+
+def test_the_footer_counts_the_rounds_failed_calls_without_tokens(run):
+    """D69-NC-1a (plan item 147): the scripted Worker's failure has no tokens; it is counted."""
+    code, lines, roles, _, path = run()
+    print("RECORD\n" + path.read_text())
+    without = sum(1 for role in run_shadow.ROLES for c in getattr(roles, role).calls
+                  if c.failed and not (c.input_tokens or c.output_tokens))
+    assert code == 0 and lines[-1]["failed_calls_without_tokens"] == without == 1

@@ -106,14 +106,29 @@ class HeadlessError(RuntimeError):
     validator can tell a safety stop from an outage (``failure_kind.py`` in
     ``control_plane/plan_fit``): ``stop_reason``, ``api_error_status`` and ``timed_out``. No
     caller that ignores them is affected.
+
+    A fourth, ``usage`` (D69-NC-1a, plan item 147): when the envelope of the failed call carries a
+    ``usage`` object, its tokens read the way a successful call's are (a :class:`HeadlessUsage`,
+    a missing or ill-typed field counting 0); ``None`` when there is no envelope or no ``usage``
+    object in it.
     """
 
     def __init__(self, message: str = "", *, stop_reason: Any = None,
-                 api_error_status: Any = None, timed_out: bool = False) -> None:
+                 api_error_status: Any = None, timed_out: bool = False,
+                 usage: Any = None) -> None:
         super().__init__(message)
         self.stop_reason = stop_reason
         self.api_error_status = api_error_status
         self.timed_out = timed_out
+        self.usage = usage
+
+
+@dataclass(frozen=True)
+class HeadlessUsage:
+    """The tokens of a failed call, as its envelope gave them (D69-NC-1a)."""
+
+    input_tokens: int
+    output_tokens: int
 
 
 def _envelope_facts(stdout: str | None) -> dict[str, Any]:
@@ -125,8 +140,12 @@ def _envelope_facts(stdout: str | None) -> dict[str, Any]:
         return {}
     if not isinstance(envelope, dict):
         return {}
-    return {"stop_reason": envelope.get("stop_reason"),
-            "api_error_status": envelope.get("api_error_status")}
+    facts = {"stop_reason": envelope.get("stop_reason"),
+             "api_error_status": envelope.get("api_error_status")}
+    if isinstance(envelope.get("usage"), dict):          # read as a successful call's (``usage``)
+        facts["usage"] = HeadlessUsage(input_tokens=usage(envelope, "input_tokens"),
+                                       output_tokens=usage(envelope, "output_tokens"))
+    return facts
 
 
 def build_command(

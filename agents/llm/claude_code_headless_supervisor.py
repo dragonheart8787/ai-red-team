@@ -100,7 +100,8 @@ class ClaudeCodeHeadlessSupervisor(BaseSupervisor):
             )
         except HeadlessError as exc:
             # D69-NC-1 (plan item 142): the kind, from what the CLI said, never from the text
-            return self._refuse(started, str(exc), failure_kind=classify_failure(exception=exc))
+            return self._refuse(started, str(exc), usage=exc.usage,
+                                failure_kind=classify_failure(exception=exc))
 
         try:
             tasks = self._to_tasks(result.payload, candidates=candidates)

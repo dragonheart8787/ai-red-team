@@ -133,7 +133,7 @@ class ClaudeCodeHeadlessReviewer(BaseReviewer):
             )
         except HeadlessError as exc:
             # D69-NC-1 (plan item 142): the kind, from what the CLI said, never from the text
-            return self._escalate(started, str(exc),
+            return self._escalate(started, str(exc), exc.usage,
                                   failure_kind=classify_failure(exception=exc))
 
         self.calls.append(ReviewCall(

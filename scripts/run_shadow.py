@@ -345,6 +345,9 @@ class Record:
         self.stop_reason: str | None = None
         self.cap_hit: str | None = None
         self.token_use: dict | None = None
+        #: Failed calls whose input and output tokens are both 0: their tokens are not known, so
+        #: the token cap did not count them (D69-NC-1a, plan item 147); written in the footer.
+        self.failed_calls_without_tokens = 0
         self._file = open(path, "x", encoding="utf-8")
 
     def _write(self, line: dict) -> None:
@@ -365,6 +368,8 @@ class Record:
 
     def on_call(self, role: str, call: object) -> None:
         failed = bool(getattr(call, "failed", False))
+        if failed and not (getattr(call, "input_tokens", 0) or getattr(call, "output_tokens", 0)):
+            self.failed_calls_without_tokens += 1
         self._write({"line": "call", "role": role, "model": str(getattr(call, "model", "")),
                      "latency_seconds": float(getattr(call, "latency_seconds", 0.0)),
                      "input_tokens": int(getattr(call, "input_tokens", 0) or 0),
@@ -382,7 +387,9 @@ class Record:
 
     def footer(self, code: int) -> None:
         self._write({"line": "footer", "stop_reason": self.stop_reason, "exit_code": code,
-                     "cap_hit": self.cap_hit, "token_use": self.token_use, "ended_at": _now()})
+                     "cap_hit": self.cap_hit, "token_use": self.token_use,
+                     "failed_calls_without_tokens": self.failed_calls_without_tokens,
+                     "ended_at": _now()})
 
     def close(self) -> None:
         self._file.close()

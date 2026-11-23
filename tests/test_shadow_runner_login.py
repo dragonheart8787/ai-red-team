@@ -32,6 +32,7 @@ from tests.test_shadow_runner_guard import (  # noqa: F401 - fixtures
     _subscription_only,
     through,
 )
+from tests.test_shadow_runner_names_b3 import B3_FOUND, B3_REFUSE
 
 #: A value no refusal line and no record may contain.
 MARK = "MARKED-VALUE-4b0e"
@@ -66,8 +67,9 @@ def _start(tmp_path, *, environ=CLEAN, settings=(), login=None, query=None):
 
 def test_the_reviewed_lists_are_disjoint_and_cover_every_name_found():
     refused, kept = set(auth_guard.REVIEWED_REFUSE), set(auth_guard.REVIEWED_KEEP)
+    refused |= set(B3_REFUSE)                    # plan item 147: the second review, B3
     assert not refused & kept
-    assert refused | kept == FOUND_OUTSIDE_THE_FIRST_LIST
+    assert refused | kept == FOUND_OUTSIDE_THE_FIRST_LIST | B3_FOUND
     assert refused <= set(auth_guard.BILLING_VARIABLES)
     assert not kept & set(auth_guard.BILLING_VARIABLES)
     assert "ANTHROPIC_BASE_URL" in auth_guard.BILLING_VARIABLES
