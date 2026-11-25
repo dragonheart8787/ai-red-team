@@ -34,7 +34,7 @@ CLASSES = {"worker": (compliant.RecordWorker,), "supervisor": (compliant.RecordS
 HEADER_KEYS = {"line", "format", "started_at", "registered_commit", "head", "registered_sha256",
                "code_sha256", "digests", "supervisor_warn_about_duplicates", "role_factory",
                "role_classes", "bounds", "once", "auth_guard", "login",
-               "cli_version"}                                            # plan item 148
+               "claude_cli_version"}                                     # plan items 148, 150
 
 
 def _registration():
@@ -110,7 +110,7 @@ def test_one_round_is_recorded_line_by_line_without_any_model_text(run):
                                 "no_progress_limit": 5, "live_task_limit": 200,
                                 "max_tokens": 100000, "max_minutes": 60}
     assert header["auth_guard"] == "passed"
-    assert header["cli_version"] == "2.1.330"                            # plan item 148
+    assert header["claude_cli_version"] == "2.1.330"                     # plan items 148, 150
     assert lines[1]["facts"]["caps"] == {"max_rounds": 1, "max_model_calls": 100,
                                          "no_progress_limit": 5, "max_tokens": 100000,
                                          "max_minutes": 60}

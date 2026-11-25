@@ -54,9 +54,10 @@ is written: a call keeps its role, model, latency, tokens and whether it failed,
 failure is the one its call record carries (numbered change D69-NC-1, plan item 142) when that is
 one of ``control_plane/plan_fit/failure_kind.py``'s three, and ``unknown`` otherwise; never its free
 text. A record with no footer is a run that did not end normally. The header says
-``auth_guard: "passed"`` (it is written only once every check has passed) and the CLI's
-``cli_version``; the footer has the cap reached (``cap_hit``) and the tokens of the run
-(``token_use``).
+``auth_guard: "passed"`` (it is written only once every check has passed) and
+``claude_cli_version``, the version of the ``claude`` CLI that step 1c read (the banner's
+``cli_version`` is another fact: the project's version, from ``pyproject.toml``); the footer has
+the cap reached (``cap_hit``) and the tokens of the run (``token_use``).
 
 All four constants are empty: **this runner refuses every start until a registration is
 committed**, and S1 makes no real role runnable.
@@ -514,7 +515,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                 "format": 1, "started_at": _now(), "auth_guard": "passed",
                 "login": {"auth_method": login.get("authMethod"),
                           "api_provider": login.get("apiProvider")},
-                "cli_version": cli_version,
+                # the claude CLI's version (step 1c), not the banner's project ``cli_version``
+                "claude_cli_version": cli_version,
                 "registered_commit": reg.commit,
                 "head": checked.head, "registered_sha256": checked.registered_sha256,
                 "code_sha256": checked.code_sha256,

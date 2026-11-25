@@ -191,7 +191,7 @@ snapshot** (item 96 a): its values do not change if policy changes during the ru
 | `cli_version` | the project version | `pyproject.toml`, `:94-103` |
 | `prompt_digests` | SHA-256 of the Supervisor prompt with its plan schema, and of the Worker prompt with its proposal schema | `:106-122` |
 | `window_limit` | the argument | |
-| `caps` | `max_rounds`, `max_model_calls`, `no_progress_limit` | the arguments |
+| `caps` | `max_rounds`, `max_model_calls`, `no_progress_limit` | the arguments. Since S3 (plan items 143, 149) the banner's caps line has five caps; section 3.1 lists them. |
 | `lock_key` | `0x0D69_5C4E_D000_0001` | `harness/lock.py:39` |
 
 Cautions. The Worker digest is made over the module constant `WORKER_SYSTEM_PROMPT`; that is the

@@ -894,7 +894,7 @@ CATALOGUE = [
              targets=('test_another_engagements_evidence_is_never_shown_to_this_engagements_worker',)),
     # -- added by the implementer for the token-boundary repair (tests/test_provenance_token_boundaries.py) --
     # (new ids, not in the plan's section 8; the repair is plan items 111-113 and ADR_DISCOVERY_SOURCE.md 8.8)
-    Mutation('D69-TB-1', 'the text is searched only with its backslashes removed; the readings that separate a line break are dropped [added by the implementer, token-boundary repair]',
+    Mutation('D69-TB-1', 'the text is searched only with its backslashes removed; the readings that separate a line break are dropped [added by the implementer, token-boundary repair; old targets removed 2026-11-25: since the glue repair they cannot catch this mutant (plan items 146 c, 149); the readings table (item 148) does]',
              ('tests/test_provenance_token_boundaries.py',
               'tests/test_provenance_readings.py'),
              edits=(Edit('agents/llm/worker_base.py', r'''    return (
@@ -907,10 +907,8 @@ CATALOGUE = [
     )
 '''),),
              prepare=_without_probe,
-             targets=('test_a_lure_is_introduced_at_every_position_in_every_spelling',
-                      'test_a_lure_at_the_edge_of_a_line_is_escalated_through_the_loop',
-                      # plan item 148: the pre-registered readings table
-                      'test_a_reading_case_is_judged_at_every_position')),
+             # plan item 148: the pre-registered readings table
+             targets=('test_a_reading_case_is_judged_at_every_position',)),
     Mutation('D69-TB-2', 'the text is searched only in the readings that separate a line break; the two that restore nmap\'s escaped dots are dropped [added by the implementer, token-boundary repair]',
              ('tests/test_provenance_token_boundaries.py',),
              edits=(Edit('agents/llm/worker_base.py', r'''    return (

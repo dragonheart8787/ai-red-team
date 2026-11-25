@@ -6,7 +6,8 @@ the stripped environment and a 30-second limit and parses the version; a failure
 reply that is not a version raises, and the message never holds what was printed.
 ``scripts/run_shadow.py`` asks it at step 1c, after the login (1b) and before the integrity guard
 (2), and refuses another version, or one that cannot be read, as ``cli_version_unreviewed`` with
-exit 10; the record's header has the version. The query is always handed in or run on a fake
+exit 10; the record's header has the version as ``claude_cli_version`` (plan item 150: the
+banner's ``cli_version`` is the project's version). The query is always handed in or run on a fake
 runner: no test runs the CLI. Records are written under pytest's ``tmp_path``.
 """
 
@@ -63,7 +64,7 @@ def test_the_reviewed_version_passes_and_is_in_the_header(tmp_path, through):  #
     code, git, lock, record = _start(tmp_path)
     assert lock.asked == 1 and len(through) == 1 and git.calls
     header = json.loads(record.read_text().splitlines()[0])
-    assert header["cli_version"] == "2.1.330"
+    assert header["claude_cli_version"] == "2.1.330"
 
 
 @pytest.mark.parametrize("version", ["2.1.331", "2.1.33", "2.1.3300", "3.0.0", "2.1.329", "",
