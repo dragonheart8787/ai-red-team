@@ -192,12 +192,14 @@ def test_the_loop_has_no_other_literal_summary_than_not_run_and_that_one_is_a_na
 def test_run_loop_takes_every_argument_and_only_once_has_a_default():
     parameters = inspect.signature(loop.run_loop).parameters
     assert list(parameters) == [
-        "ports", "bounds", "counters", "refusals", "window_limit", "stop_event", "once"]
+        "ports", "bounds", "counters", "refusals", "window_limit", "stop_event", "once",
+        "stop_events"]                                          # plan item 151: the event check
     defaults = {name: p.default for name, p in parameters.items()
                 if p.default is not inspect.Parameter.empty}
-    assert defaults == {"once": False}
+    assert defaults == {"once": False, "stop_events": None}     # None: no event is asked
     assert parameters["window_limit"].kind is inspect.Parameter.KEYWORD_ONLY
     assert parameters["stop_event"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["stop_events"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_the_loop_does_not_exit_the_process_and_does_not_log():

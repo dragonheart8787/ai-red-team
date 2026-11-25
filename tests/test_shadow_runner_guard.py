@@ -40,6 +40,13 @@ CAPS = ["--max-tokens", "100000", "--max-minutes", "60"]
 #: What ``claude auth status --json`` says for a subscription login (plan item 145): handed in, so
 #: that no test runs the CLI.
 SUBSCRIPTION_LOGIN = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
+#: The stop events' registration (S4, plan item 151) every test's registration carries: a lure no
+#: test proposes, the scope range the test worlds use, and the directory acknowledgements go in.
+#: The records directory is the test's own ``tmp_path`` (set by the autouse fixture below).
+LURES = ({"logical_identity": {"type": "ip", "value": "192.0.2.77"}},)
+APPROVED_TARGETS = ({"logical_identity": {"type": "cidr", "value": "10.82.0.0/24"}},)
+ACKS_DIR = "docs/D69_SHADOW_ACKS"
+RECORDS: dict[str, str] = {}
 
 
 def _harness_argv(factory=ONCE):
@@ -51,10 +58,12 @@ def _argv(factory=ONCE, record=NOWHERE):
 
 
 @pytest.fixture(autouse=True)
-def _subscription_only(monkeypatch):
+def _subscription_only(monkeypatch, tmp_path):
     """The billing guard (plan item 143) sees no billing variable and no user settings file, so
     that these tests do not depend on the machine they run on; the guard's own tests are in
-    ``tests/test_shadow_runner_auth.py``."""
+    ``tests/test_shadow_runner_auth.py``. And (S4) the test's ``tmp_path`` is the registered
+    records directory of the registrations ``_registration`` builds."""
+    RECORDS["dir"] = str(tmp_path)
     for name in auth_guard.BILLING_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent/claude-config")
@@ -66,7 +75,9 @@ def _subscription_only(monkeypatch):
 
 def _registration(**override):
     values = dict(commit=COMMIT, files=(SUPPORT,),
-                  digests=run_shadow.role_digests(compliant.build()), role_classes=APPROVED)
+                  digests=run_shadow.role_digests(compliant.build()), role_classes=APPROVED,
+                  lure_targets=LURES, approved_targets=APPROVED_TARGETS,      # S4, plan item 151
+                  records_dir=RECORDS["dir"], acks_dir=ACKS_DIR)
     values.update(override)
     return run_shadow.Registration(**values)
 

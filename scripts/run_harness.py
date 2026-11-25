@@ -20,6 +20,13 @@ factories and nothing else (plan item 131); ``scripts/run_shadow.py`` requires b
 ends the run with 13, and the stop line then ends with ``cap=`` and the cap's name.
 The banner shows both under their own names, ``not set`` for one not given (plan item 148).
 
+**Stop events** (plan items 151 and 152; ``harness/stop_events.py``): ``main`` takes a
+``stop_events`` check, handed in by ``scripts/run_shadow.py`` and by nothing else -- the ``run``
+command has no argument for it, so this script run on its own asks no event check (a gate before a
+real engagement, plan item 98). When one is given, every ``propose`` is told to it, and the loop
+asks it at each round boundary; a stop for an event is exit 15, and the stop line ends with
+``event=`` and the event's name.
+
 The roles come from ``--role-factory``, the dotted path of a function that returns an object with
 ``supervisor``, ``worker``, ``reviewer`` and ``sandbox``. **This script builds no model role and no
 real sandbox**: it is the stage of the lock, the signals and the banner, and H5c2's tests give it
@@ -147,10 +154,12 @@ class _ObservedBounds(Bounds):
 
 
 class _ObservedPorts:
-    """The loop's ports, unchanged, with the observer caught up after every port call."""
+    """The loop's ports, unchanged, with the observer caught up after every port call; and, when a
+    stop-event check is given (plan item 151), each ``propose`` and its outcome told to it."""
 
-    def __init__(self, ports, observation) -> None:
+    def __init__(self, ports, observation, stop_events=None) -> None:
         self._ports, self._observation = ports, observation
+        self._stop_events = stop_events
 
     def __getattr__(self, name):
         attr = getattr(self._ports, name)
@@ -159,10 +168,26 @@ class _ObservedPorts:
 
         def call(*args, **kwargs):
             try:
-                return attr(*args, **kwargs)
+                result = attr(*args, **kwargs)
+                if name == "propose" and self._stop_events is not None:
+                    _observe_propose(self._stop_events, args, kwargs, result)
+                return result
             finally:
-                self._observation.catch_up()
+                if self._observation is not None:
+                    self._observation.catch_up()
         return call
+
+
+def _observe_propose(stop_events, args, kwargs, outcome) -> None:
+    """``propose(engagement_id, task_id, proposal, policy, idempotency_key)``: the proposal's
+    target, and the decision, proposal id and evidence id of the pipeline's ``ActionOutcome``."""
+    engagement_id = args[0] if args else kwargs.get("engagement_id")
+    proposal = args[2] if len(args) > 2 else kwargs.get("proposal")
+    stop_events.observe(getattr(outcome, "proposal_id", None),
+                        getattr(outcome, "decision", None),
+                        getattr(proposal, "target", None),
+                        getattr(outcome, "evidence_id", None),
+                        engagement_id=engagement_id)
 
 
 #: The roles whose ``calls`` the token cap reads.
@@ -227,7 +252,7 @@ def _roles(spec: str):
 
 
 def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
-         observer=None) -> int:
+         observer=None, stop_events=None) -> int:
     # ``roles`` (plan item 137): the roles the shadow runner has already built from the approved
     # factory and checked, so that the instances checked are the instances that run. None: the
     # factory is called here, as before. The factory string is compared first either way.
@@ -285,13 +310,14 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
             bounds = Bounds(args.max_rounds, args.max_model_calls, args.no_progress_limit, **caps)
         else:
             observation.refusals = adapter.refusals
-            ports = _ObservedPorts(ports, observation)
             bounds = _ObservedBounds(args.max_rounds, args.max_model_calls,
                                      args.no_progress_limit, observation=observation, **caps)
+        if observation is not None or stop_events is not None:
+            ports = _ObservedPorts(ports, observation, stop_events)
         result = run_loop(
             ports, bounds,
             RunCounters(), adapter.refusals, window_limit=args.window_limit, stop_event=flag,
-            once=args.once)
+            once=args.once, stop_events=stop_events)
         code = EXIT_LOCK_LOST if lock.lost.is_set() else EXIT_CODE[result.reason]
         cap = bounds.cap_hit if result.reason is StopReason.CAP_REACHED else None
         if observation is not None:
@@ -305,7 +331,9 @@ def _run(args: argparse.Namespace, lock: HarnessLock, register, roles=None,
                 return _record_failed(observation)
         print(f"harness stopped (exit {code}): reason={result.reason.value} "
               f"rounds={result.rounds} counters={result.counters}"
-              + (f" cap={cap}" if cap is not None else ""), file=sys.stderr, flush=True)
+              + (f" cap={cap}" if cap is not None else "")
+              + (f" event={result.stop_event.name}" if result.stop_event is not None else ""),
+              file=sys.stderr, flush=True)
         return code
     finally:
         lock.close()
@@ -326,13 +354,13 @@ def _residue(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None, *, lock: HarnessLock | None = None,
-         register=signal.signal, roles=None, observer=None) -> int:
+         register=signal.signal, roles=None, observer=None, stop_events=None) -> int:
     args = build_parser().parse_args(argv)
     load_dotenv()
     if args.command == "residue":
         return _residue(args)
     return _run(args, lock if lock is not None else HarnessLock(), register, roles=roles,
-                observer=observer)
+                observer=observer, stop_events=stop_events)
 
 
 if __name__ == "__main__":

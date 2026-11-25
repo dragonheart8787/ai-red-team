@@ -21,7 +21,11 @@ from tests.harness_h5c2_roles import Roles
 from tests.test_harness_h5c2_entry import world  # noqa: F401 - a fixture
 from tests.test_harness_h5c2_support import enrolled
 from tests.test_shadow_runner_guard import (  # noqa: F401 - _subscription_only is a fixture
+    ACKS_DIR,
+    APPROVED_TARGETS,
     COMMIT,
+    LURES,
+    RECORDS,
     SUPPORT,
     _codes,
     _Git,
@@ -41,7 +45,9 @@ def _registration():
     roles = Roles(compliant.RecordSupervisor(), compliant.RecordWorker(),
                   compliant.RecordReviewer(), compliant.ShadowSandbox())
     return run_shadow.Registration(commit=COMMIT, files=(SUPPORT,),
-                                   digests=run_shadow.role_digests(roles), role_classes=CLASSES)
+                                   digests=run_shadow.role_digests(roles), role_classes=CLASSES,
+                                   lure_targets=LURES, approved_targets=APPROVED_TARGETS,  # S4
+                                   records_dir=RECORDS["dir"], acks_dir=ACKS_DIR)
 
 
 def _argv(record, *, max_tokens=100000, max_minutes=60):

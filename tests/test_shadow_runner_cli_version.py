@@ -44,7 +44,7 @@ CLEAN = {"PATH": "/usr/bin:/bin", "HOME": "/home/shadow"}
 def test_the_reviewed_version_is_the_one_the_lists_were_read_from():
     assert auth_guard.REVIEWED_CLI_VERSION == "2.1.330"
     assert run_shadow.CLI_VERSION_UNREVIEWED in run_shadow.REASONS
-    assert len(set(run_shadow.REASONS)) == len(run_shadow.REASONS) == 19
+    assert len(set(run_shadow.REASONS)) == len(run_shadow.REASONS) == 25    # 19 + S4's six
 
 
 def _start(tmp_path, *, version=None, query=None, login_query=None):

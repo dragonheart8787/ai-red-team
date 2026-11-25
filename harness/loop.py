@@ -32,6 +32,13 @@ After the last engagement the round ends: ``end_round(progress)``, where progres
 reached ``propose`` (a DENY result included, plan item 60) and a round that skipped everything made
 none; then ``--once``, then ``stop_reason()``.
 
+**Stop events** (plan item 151; ``harness/stop_events.py``). Only when ``run_loop`` is given
+``stop_events``: right after ``end_round`` and before ``--once`` and ``stop_reason()``, the loop
+asks ``stop_events.event_after_round()``; an event ends the run as a controlled stop,
+``STOP_EVENT`` (exit code 15), and :class:`LoopResult` carries it as ``stop_event``. With
+``stop_events=None`` (the default) nothing is asked and the loop is what it was. A cap reached in
+the middle of a round leaves that round's boundary unasked: the caller asks ``pending()`` itself.
+
 **What counts as a model call** (the owner's decision): the Supervisor's ``plan``, the Worker's
 ``work`` and each ``propose`` (inside it the pipeline calls the Reviewer) count once each. The cap
 is held entirely here, by asking ``call_may_be_made()`` before each of the three and
@@ -105,6 +112,8 @@ class LoopResult:
     reason: StopReason
     rounds: int
     counters: dict[str, int]
+    #: The event a ``STOP_EVENT`` stop was for (plan item 151); None for every other reason.
+    stop_event: object | None = None
 
 
 class _Stop(Exception):
@@ -145,12 +154,15 @@ class _Run:
         counters: RunCounters,
         refusals: RefusalCounter,
         stop_event: StopFlag,
+        stop_events: object | None = None,
     ) -> None:
         self.ports = ports
         self.bounds = bounds
         self.counters = counters
         self.refusals = refusals
         self.stop_event = stop_event
+        self.stop_events = stop_events
+        self.event: object | None = None
         self.rounds = 0
         self.checked: set[str] = set()
         self.created_ids: set[str] = set()
@@ -168,6 +180,11 @@ class _Run:
             self.rounds += 1
             progress = self.one_round()
             self.bounds.end_round(progress)
+            if self.stop_events is not None:
+                event = self.stop_events.event_after_round()
+                if event is not None:
+                    self.event = event
+                    raise _ControlledStop(StopReason.STOP_EVENT)
             if once:
                 raise _ControlledStop(StopReason.SIGNAL_OR_ONCE)
             stop = self.bounds.stop_reason()
@@ -311,6 +328,7 @@ def run_loop(
     window_limit: int,
     stop_event: StopFlag,
     once: bool = False,
+    stop_events: object | None = None,
 ) -> LoopResult:
     """Run the loop until it stops and say why. Every argument is required except ``once``."""
     if not isinstance(bounds, Bounds):
@@ -324,7 +342,9 @@ def run_loop(
         raise ValueError("stop_event has an is_set()")
     if not isinstance(once, bool):
         raise ValueError("once is a bool")
-    run = _Run(ports, bounds, counters, refusals, stop_event)
+    if stop_events is not None and not callable(getattr(stop_events, "event_after_round", None)):
+        raise ValueError("stop_events has an event_after_round()")
+    run = _Run(ports, bounds, counters, refusals, stop_event, stop_events)
     try:
         run.drive(once)
     except _ControlledStop as stop:
@@ -333,4 +353,5 @@ def run_loop(
         reason = stop.reason
     except Exception:
         reason = StopReason.FAULT_OUTSIDE_LIST
-    return LoopResult(reason=reason, rounds=run.rounds, counters=counters.snapshot())
+    return LoopResult(reason=reason, rounds=run.rounds, counters=counters.snapshot(),
+                      stop_event=run.event if reason is StopReason.STOP_EVENT else None)

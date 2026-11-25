@@ -12,7 +12,10 @@ Before anything reads the database the runner refuses, in this order (plan items
 
 1. **the registration constants** -- ``REGISTERED_COMMIT``, ``REGISTERED_FILES``,
    ``REGISTERED_DIGESTS`` and ``APPROVED_ROLE_CLASSES`` -- when any is empty, or when a listed
-   role class's module is not a registered file;
+   role class's module is not a registered file; and (S4, plan item 151) the stop events' four:
+   ``REGISTERED_LURE_TARGETS`` and ``REGISTERED_APPROVED_TARGETS`` (targets the canonicalizer
+   accepts), ``REGISTERED_RECORDS_DIR`` (an absolute path) and ``REGISTERED_ACKS_DIR`` (a path
+   inside the repository), each its own code when empty or unusable;
 
    1a. **the billing guard** (the owner's decision of 2026-11-22, plan items 141 c and 143): a
    variable of ``agents.llm.auth_guard.BILLING_VARIABLES`` with a value, or an ``apiKeyHelper`` in
@@ -31,6 +34,14 @@ Before anything reads the database the runner refuses, in this order (plan items
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
    the hashes of the code files are recorded and not compared;
+
+   2a. **the acknowledgements** (S4, plan item 151 (c), (e)): every record in
+   ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) of the same registered commit that has no footer, or
+   whose footer's ``exit_code`` is not 0, 10, 13 or 14, or whose header cannot be read, needs a
+   committed acknowledgement, ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``, tracked by
+   git (``git ls-files``; the clean tree of step 2 makes tracked committed). Every such record is
+   checked, not the newest only; one without its acknowledgement is ``unacknowledged_record``, and
+   the refusal names the record's file and sha256, never its content;
 3. **the factory string**, which must be in ``run_harness.APPROVED_ROLE_FACTORIES`` (the runner
    keeps no list of its own);
 4. **the factory**, imported and called once;
@@ -40,7 +51,8 @@ Before anything reads the database the runner refuses, in this order (plan items
    ``build_prompt``, ``_to_tasks``, ``_refuse``; Reviewer ``build_prompt``, ``_to_opinion``,
    ``_escalate``); the sandbox's class exactly one of ``APPROVED_ROLE_CLASSES["sandbox"]``;
 6. **the prompt digests** of the three roles, compared with ``REGISTERED_DIGESTS``;
-7. **the record**: ``--record`` names a path that does not exist yet and can be created;
+7. **the record**: ``--record`` names a path inside ``REGISTERED_RECORDS_DIR``
+   (``record_outside_registered_dir``) that does not exist yet and can be created;
 
 and then writes the record's header and hands the same role instances to
 ``run_harness.main(..., roles=..., observer=...)`` in this process. Every refusal prints
@@ -59,8 +71,23 @@ text. A record with no footer is a run that did not end normally. The header say
 ``cli_version`` is another fact: the project's version, from ``pyproject.toml``); the footer has
 the cap reached (``cap_hit``) and the tokens of the run (``token_use``).
 
-All four constants are empty: **this runner refuses every start until a registration is
-committed**, and S1 makes no real role runnable.
+**Stop events** (S4; shadow runner plan 2e; plan items 134 and 151). The runner hands
+``run_harness`` a ``harness.stop_events.StopEventCheck`` over the registered lure list and approved
+targets; the loop asks it at each round boundary and stops with 15 on an event. A cap reached in
+the middle of a round skips that boundary, so once ``run_harness`` returns the runner asks the check
+what the unfinished round held, and an event found then also ends the run with 15, marked
+``detected_after_stop``. Either way the record gets a ``stop_event`` line (the event, the proposal,
+its decision, evidence id and canonical target) before the footer, and the footer has
+``stop_event`` and ``loop_exit_code`` (the loop's own code). The line holds no tool output: the
+evidence's raw artifact (``$ command``, ``--- stdout ---``, the stdout, ``--- stderr ---``, the
+stderr) is read by its evidence id and only its sha256 and length are written
+(``raw_artifact_sha256``, ``raw_artifact_bytes``); ``stdout_sha256`` and ``stdout_bytes`` are null,
+because the stdout is not stored apart from the artifact and cannot be cut out of it without
+ambiguity (a stdout may itself contain ``--- stderr ---``). A record whose code is 15, or that has
+no footer, needs an acknowledgement before the next start (2a).
+
+All the registration constants are empty: **this runner refuses every start until a registration
+is committed**, and S1 makes no real role runnable.
 """
 
 from __future__ import annotations
@@ -90,7 +117,15 @@ from agents.llm.worker_base import WORKER_SYSTEM_PROMPT, BaseWorker, proposal_sc
 from control_plane.plan_fit.failure_kind import FAILURE_KINDS  # noqa: E402
 from harness.action_allowlist import ALLOWED_ACTIONS  # noqa: E402
 from harness.banner_facts import digest  # noqa: E402
-from harness.exit_codes import EXIT_AUDIT_FAILED, EXIT_STARTUP_REFUSED  # noqa: E402
+from harness.exit_codes import (  # noqa: E402
+    EXIT_AUDIT_FAILED,
+    EXIT_CAP_REACHED,
+    EXIT_NO_PROGRESS,
+    EXIT_OK,
+    EXIT_STARTUP_REFUSED,
+    EXIT_STOP_EVENT,
+)
+from harness.stop_events import StopEvent, StopEventCheck  # noqa: E402
 from scripts import run_harness  # noqa: E402
 
 # -- the registration ------------------------------------------------------------------------------
@@ -104,6 +139,18 @@ REGISTERED_COMMIT: str | None = None
 REGISTERED_FILES: tuple[str, ...] | None = None
 REGISTERED_DIGESTS: Mapping[str, str] | None = None
 APPROVED_ROLE_CLASSES: Mapping[str, tuple[type, ...]] = {}
+# The stop events' registration (S4, plan item 151), empty until the same commit: the laboratory's
+# lure targets and the approved targets (each a target block, ``{"logical_identity": {"type": ...,
+# "value": ...}}``), the directory every record is written in (an absolute path), and the directory,
+# inside the repository, of the committed acknowledgements.
+REGISTERED_LURE_TARGETS: tuple[Mapping[str, object], ...] = ()
+REGISTERED_APPROVED_TARGETS: tuple[Mapping[str, object], ...] = ()
+REGISTERED_RECORDS_DIR: str | None = None
+REGISTERED_ACKS_DIR: str | None = None
+
+#: The exit codes of a record that needs no acknowledgement: the draft's controlled stops (stop
+#: event 3's set). Any other code, 15 included, and a record with no footer, need one.
+NORMAL_EXIT_CODES = (EXIT_OK, EXIT_STARTUP_REFUSED, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
 
 #: Recorded, not compared: the runner and the entry it calls may be mended after registration.
 CODE_FILES = ("scripts/run_shadow.py", "scripts/run_harness.py")
@@ -143,12 +190,21 @@ LOGIN_NOT_SUBSCRIPTION = "login_not_subscription"
 #: The CLI is not the version the name lists were reviewed on, or its version cannot be read (plan
 #: item 148).
 CLI_VERSION_UNREVIEWED = "cli_version_unreviewed"
+#: S4 (plan item 151): the stop events' registration, the record's directory, the acknowledgements.
+LURE_LIST_UNREGISTERED = "lure_list_unregistered"
+APPROVED_TARGETS_UNREGISTERED = "approved_targets_unregistered"
+RECORDS_DIR_UNREGISTERED = "records_dir_unregistered"
+ACKS_DIR_UNREGISTERED = "acks_dir_unregistered"
+RECORD_OUTSIDE_REGISTERED_DIR = "record_outside_registered_dir"
+UNACKNOWLEDGED_RECORD = "unacknowledged_record"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
     FACTORY_NOT_APPROVED, FACTORY_FAILED, ROLE_CLASS_NOT_APPROVED, ROLE_NOT_A_BASE_SUBCLASS,
     ROLE_BOUNDARY_OVERRIDDEN, DIGEST_UNAVAILABLE, DIGEST_MISMATCH, RECORD_EXISTS,
     RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT, LOGIN_NOT_SUBSCRIPTION, CLI_VERSION_UNREVIEWED,
+    LURE_LIST_UNREGISTERED, APPROVED_TARGETS_UNREGISTERED, RECORDS_DIR_UNREGISTERED,
+    ACKS_DIR_UNREGISTERED, RECORD_OUTSIDE_REGISTERED_DIR, UNACKNOWLEDGED_RECORD,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -156,17 +212,22 @@ Problem = tuple[str, str]          # (code, explanation)
 
 @dataclass(frozen=True)
 class Registration:
-    """The four registration constants, as one value a test can hand in."""
+    """The registration constants, as one value a test can hand in."""
 
     commit: str | None
     files: tuple[str, ...] | None
     digests: Mapping[str, str] | None
     role_classes: Mapping[str, tuple[type, ...]] = field(default_factory=dict)
+    lure_targets: tuple[Mapping[str, object], ...] = ()
+    approved_targets: tuple[Mapping[str, object], ...] = ()
+    records_dir: str | None = None
+    acks_dir: str | None = None
 
 
 def registered() -> Registration:
     return Registration(REGISTERED_COMMIT, REGISTERED_FILES, REGISTERED_DIGESTS,
-                        APPROVED_ROLE_CLASSES)
+                        APPROVED_ROLE_CLASSES, REGISTERED_LURE_TARGETS,
+                        REGISTERED_APPROVED_TARGETS, REGISTERED_RECORDS_DIR, REGISTERED_ACKS_DIR)
 
 
 # -- 1. the registration constants -----------------------------------------------------------------
@@ -198,7 +259,129 @@ def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT) -> list[
                 problems.append((CLASS_MODULE_NOT_REGISTERED,
                                  f"{role} class {cls.__qualname__}: its module "
                                  f"{name or '(outside the repository)'} is not a registered file"))
+    return problems + stop_event_registration_problems(reg)
+
+
+def stop_event_registration_problems(reg: Registration) -> list[Problem]:
+    """The stop events' four constants (S4, plan item 151): each empty or unusable one, by name."""
+    problems: list[Problem] = []
+    for code, name, targets in (
+            (LURE_LIST_UNREGISTERED, "REGISTERED_LURE_TARGETS", reg.lure_targets),
+            (APPROVED_TARGETS_UNREGISTERED, "REGISTERED_APPROVED_TARGETS", reg.approved_targets)):
+        if not targets:
+            problems.append((code, f"{name} empty: the stop events cannot be detected"))
+            continue
+        try:
+            StopEventCheck(targets, targets)
+        except ValueError:
+            problems.append((code, f"{name}: a target the canonicalizer refuses, or not a "
+                                   "sequence of targets"))
+    if not reg.records_dir:
+        problems.append((RECORDS_DIR_UNREGISTERED,
+                         "REGISTERED_RECORDS_DIR empty: the records cannot be checked"))
+    elif not Path(reg.records_dir).is_absolute():
+        problems.append((RECORDS_DIR_UNREGISTERED,
+                         "REGISTERED_RECORDS_DIR is not an absolute path"))
+    acks = Path(reg.acks_dir) if reg.acks_dir else None
+    if acks is None:
+        problems.append((ACKS_DIR_UNREGISTERED,
+                         "REGISTERED_ACKS_DIR empty: a record cannot be acknowledged"))
+    elif acks.is_absolute() or ".." in acks.parts:
+        problems.append((ACKS_DIR_UNREGISTERED,
+                         "REGISTERED_ACKS_DIR is not a path inside the repository"))
     return problems
+
+
+# -- 2a. the acknowledgements (S4, plan item 151 (c), (e)) -----------------------------------------
+
+def _line(raw: bytes) -> dict | None:
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def needs_acknowledgement(data: bytes, registered_commit: str) -> bool | None:
+    """Whether a record needs an acknowledgement before a restart; None when it is another
+    registration's (its header names another commit, or none), which this start does not check."""
+    lines = data.splitlines()
+    header = _line(lines[0]) if lines else None
+    if header is None or header.get("line") != "header":
+        return True                                     # a header that cannot be read
+    if header.get("registered_commit") != registered_commit:
+        return None
+    footer = _line(lines[-1]) if len(lines) > 1 else None
+    if footer is None or footer.get("line") != "footer":
+        return True                                     # no footer: the run did not end normally
+    code = footer.get("exit_code")
+    return not (type(code) is int and code in NORMAL_EXIT_CODES)
+
+
+def acknowledgement_problems(*, records_dir: str, acks_dir: str, registered_commit: str,
+                             repo: Path, git: Callable) -> list[Problem]:
+    """Every record of this registration that needs an acknowledgement and has none committed."""
+    problems: list[Problem] = []
+    for path in sorted(Path(records_dir).glob("*.jsonl")):
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            problems.append((UNACKNOWLEDGED_RECORD, f"{path.name} cannot be read "
+                                                    f"({type(exc).__name__}): it cannot be "
+                                                    "acknowledged"))
+            continue
+        if not needs_acknowledgement(data, registered_commit):
+            continue
+        sha = hashlib.sha256(data).hexdigest()
+        ack = f"{Path(acks_dir).as_posix()}/{sha}.md"
+        if not _tracked(ack, repo=repo, git=git):
+            problems.append((UNACKNOWLEDGED_RECORD,
+                             f"{path.name} (sha256 {sha}) ended abnormally and has no committed "
+                             f"acknowledgement {ack}"))
+    return problems
+
+
+def _tracked(name: str, *, repo: Path, git: Callable) -> bool:
+    """Whether git tracks ``name``; with the clean tree of step 2, tracked is committed."""
+    try:
+        done = git(repo, "ls-files", "--", name)
+    except Exception:  # noqa: BLE001 - not being able to ask is not an acknowledgement
+        return False
+    return done.returncode == 0 and done.stdout.decode().strip() == name
+
+
+# -- the stop event's tool output: its evidence's raw artifact, by evidence id ---------------------
+
+def read_raw_artifact_of(engagement_id: str, evidence_id: str) -> bytes | None:
+    """The raw artifact of ``evidence_id``, read under the engagement's scope; None if it cannot be
+    had. Its bytes are hashed and counted for the record and never written."""
+    from sqlalchemy import text
+
+    from control_plane.evidence.store import read_raw_artifact
+    from control_plane.state.db import engagement_scope
+    with engagement_scope(engagement_id) as conn:
+        row = conn.execute(text("SELECT raw_artifact_path FROM evidence WHERE evidence_id = :e"),
+                           {"e": evidence_id}).mappings().one_or_none()
+    return None if row is None else read_raw_artifact(row["raw_artifact_path"])
+
+
+def stop_event_line(event: StopEvent, *, detected_after_stop: bool,
+                    reader: Callable[[str, str], bytes | None]) -> dict:
+    """The record's ``stop_event`` line: the event and what its evidence's raw artifact hashes to,
+    never the artifact's bytes."""
+    raw = None
+    if event.evidence_id is not None and event.engagement_id is not None:
+        try:
+            raw = reader(event.engagement_id, event.evidence_id)
+        except Exception:  # noqa: BLE001 - an artifact that cannot be read is recorded as null
+            raw = None
+    return {"line": "stop_event", "event": event.name, "proposal_id": event.proposal_id,
+            "evidence_id": event.evidence_id, "decision": event.decision, "target": event.target,
+            "engagement_id": event.engagement_id,
+            "stdout_sha256": None, "stdout_bytes": None,
+            "raw_artifact_sha256": None if raw is None else hashlib.sha256(raw).hexdigest(),
+            "raw_artifact_bytes": None if raw is None else len(raw),
+            "detected_after_stop": bool(detected_after_stop)}
 
 
 # -- 2. the integrity guard ------------------------------------------------------------------------
@@ -394,8 +577,14 @@ class Record:
         self.stop_reason, self.cap_hit = reason, cap_hit
         self.token_use = None if token_use is None else {k: int(v) for k, v in token_use.items()}
 
-    def footer(self, code: int) -> None:
+    def stop_event(self, line: Mapping[str, object]) -> None:
+        self._write(dict(line))
+
+    def footer(self, code: int, *, loop_exit_code: int | None = None,
+               stop_event: str | None = None) -> None:
         self._write({"line": "footer", "stop_reason": self.stop_reason, "exit_code": code,
+                     "loop_exit_code": code if loop_exit_code is None else loop_exit_code,
+                     "stop_event": stop_event,
                      "cap_hit": self.cap_hit, "token_use": self.token_use,
                      "failed_calls_without_tokens": self.failed_calls_without_tokens,
                      "ended_at": _now()})
@@ -442,7 +631,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
          register=signal.signal, environ: Mapping[str, str] | None = None,
          settings_files: tuple[Path, ...] | None = None,
          login_query: Callable[[], Mapping[str, object]] | None = None,
-         version_query: Callable[[], str] | None = None) -> int:
+         version_query: Callable[[], str] | None = None,
+         evidence_reader: Callable[[str, str], bytes | None] | None = None) -> int:
     record_path, harness_argv = _shadow_argv(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
     problems = registration_problems(reg, repo=repo)                                     # 1
@@ -480,6 +670,11 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
+    problems = acknowledgement_problems(                                                   # 2a
+        records_dir=reg.records_dir, acks_dir=reg.acks_dir, registered_commit=reg.commit,
+        repo=repo, git=git)
+    if problems:
+        return refuse(problems)
     run_argv = ["run", *harness_argv]
     args = run_harness.build_parser().parse_args(run_argv)
     if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES:                       # 3
@@ -500,7 +695,10 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     problems = digest_problems(computed, reg.digests)
     if problems:
         return refuse(problems)
-    if record_path.exists():                                                                # 7
+    if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
+        return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
+                         f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    if record_path.exists():
         return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
     try:
         record = Record(record_path)
@@ -535,14 +733,32 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
         except OSError as exc:
             return refuse([(RECORD_UNWRITABLE, f"{record_path}: the header cannot be written "
                                                f"({type(exc).__name__})")])
-        code = run_harness.main(run_argv, lock=lock, register=register, roles=roles,
-                                observer=record)
+        check = StopEventCheck(reg.lure_targets, reg.approved_targets)
+        loop_code = run_harness.main(run_argv, lock=lock, register=register, roles=roles,
+                                     observer=record, stop_events=check)
+        code, event, after = loop_code, None, False
+        if loop_code == EXIT_STOP_EVENT:
+            event = check.reported
+        else:
+            # plan item 151 (h): a cap in the middle of a round skipped that round's boundary
+            event = check.pending()
+            if event is not None:
+                code, after = EXIT_STOP_EVENT, True
         try:
-            record.footer(code)
+            if event is not None:
+                record.stop_event(stop_event_line(
+                    event, detected_after_stop=after,
+                    reader=evidence_reader if evidence_reader is not None
+                    else read_raw_artifact_of))
+            record.footer(code, loop_exit_code=loop_code,
+                          stop_event=None if event is None else event.name)
         except Exception as exc:  # noqa: BLE001 - a footer that cannot be written ends the run as 3
             print(f"record: the footer could not be written ({type(exc).__name__})",
                   file=sys.stderr)
             return EXIT_AUDIT_FAILED
+        if after:
+            print(f"shadow stopped (exit {EXIT_STOP_EVENT}): event={event.name} detected after "
+                  f"the loop stopped (loop exit {loop_code})", file=sys.stderr, flush=True)
         return code
     finally:
         record.close()

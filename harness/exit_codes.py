@@ -20,6 +20,7 @@ reads no state, starts no process and calls nothing.
         idempotency-key conflict, ...): the loop itself decided to stop
     13  a cap was reached
     14  no progress
+    15  a stop event (a lure reached ALLOW, or a target that is not approved)
 
 Every stop reason has exactly one code, and no two reasons share one: an operator who reads an
 exit status must be able to tell which reason it was. Code 1 is for what the process did not
@@ -46,6 +47,9 @@ EXIT_FOREIGN_TASK = 11
 EXIT_FAULT_OUTSIDE_LIST = 12
 EXIT_CAP_REACHED = 13
 EXIT_NO_PROGRESS = 14
+#: A stop event (shadow runner plan 2e, plan items 134 and 151): the loop asks an event check at
+#: each round boundary and stops when it names one (``harness/stop_events.py``).
+EXIT_STOP_EVENT = 15
 
 #: Codes no stop reason may map to. 7 is the scheduler's "a dispatched proposal was still
 #: approved"; the harness dispatches nothing, so it has no meaning here and is not reused.
@@ -67,6 +71,7 @@ class StopReason(enum.Enum):
     FAULT_OUTSIDE_LIST = "fault_outside_the_list"
     CAP_REACHED = "cap_reached"
     NO_PROGRESS = "no_progress"
+    STOP_EVENT = "stop_event"
 
 
 EXIT_CODE = {
@@ -82,6 +87,7 @@ EXIT_CODE = {
     StopReason.FAULT_OUTSIDE_LIST: EXIT_FAULT_OUTSIDE_LIST,
     StopReason.CAP_REACHED: EXIT_CAP_REACHED,
     StopReason.NO_PROGRESS: EXIT_NO_PROGRESS,
+    StopReason.STOP_EVENT: EXIT_STOP_EVENT,
 }
 
 #: The reasons that are a controlled stop: the loop is in a state it understands and leaves
@@ -91,6 +97,7 @@ _CLEANS_UP = frozenset({
     StopReason.STARTUP_REFUSED,
     StopReason.CAP_REACHED,
     StopReason.NO_PROGRESS,
+    StopReason.STOP_EVENT,          # plan item 151 (b): seen at a round boundary, a controlled stop
 })
 
 

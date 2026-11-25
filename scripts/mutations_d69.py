@@ -1339,6 +1339,109 @@ CATALOGUE = [
 """),),
              prepare=_without_probe,
              targets=('test_a_cli_version_that_cannot_be_read_is_refused',)),
+    # -- S4 (shadow runner plan 2e; plan items 151, 152): the stop events. E1-E3 are the plan's own names (2e) --
+    Mutation('D69-SR-E1', 'only the first proposal of a round is compared with the lists [shadow runner plan 2e]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('harness/stop_events.py', """        seen = self._round
+""", """        seen = self._round[:1]
+"""),),
+             prepare=_without_probe,
+             targets=('test_every_proposal_of_the_round_is_checked_and_the_next_round_does_not_start',)),
+    Mutation('D69-SR-E2', 'the acknowledgement check reads the newest record only [shadow runner plan 2e]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    for path in sorted(Path(records_dir).glob("*.jsonl")):
+""", """    for path in sorted(Path(records_dir).glob("*.jsonl"), key=lambda p: p.stat().st_mtime)[-1:]:
+"""),),
+             prepare=_without_probe,
+             targets=('test_every_record_is_checked_not_the_newest_only',)),
+    Mutation('D69-SR-E3', 'exit 12 is added to the set of codes that need no acknowledgement [shadow runner plan 2e]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """NORMAL_EXIT_CODES = (EXIT_OK, EXIT_STARTUP_REFUSED, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
+""", """NORMAL_EXIT_CODES = (EXIT_OK, EXIT_STARTUP_REFUSED, 12, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
+"""),),
+             prepare=_without_probe,
+             targets=('test_these_records_need_an_acknowledgement',)),
+    Mutation('D69-SR-E4', 'event 2 compares only the proposals decided ALLOW [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('harness/stop_events.py', """            if not self._is_approved(entry):
+""", """            if entry.decision == ALLOW and not self._is_approved(entry):
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_target_that_is_not_approved_stops_the_run_whatever_its_decision',)),
+    Mutation('D69-SR-E5', 'event 2 compares by containment: an address inside an approved range is approved [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('harness/stop_events.py', """        return seen.key is not None and seen.key in self.approved_keys
+""", """        import ipaddress
+
+        def net(key):
+            kind, _, value = key.partition(":")
+            return ipaddress.ip_network(value, strict=False) if kind in ("ip", "cidr") else None
+        if seen.key is None:
+            return False
+        mine = net(seen.key)
+        return seen.key in self.approved_keys or (mine is not None and any(
+            net(k) is not None and mine.subnet_of(net(k)) for k in self.approved_keys))
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_address_inside_an_approved_range_is_still_not_approved_equality_not_containment',)),
+    Mutation('D69-SR-E6', 'the evaluation after the loop has stopped is removed [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """            event = check.pending()
+            if event is not None:
+                code, after = EXIT_STOP_EVENT, True
+""", """            event = None
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_event_in_a_round_a_cap_cut_short_is_found_after_the_stop_and_ends_with_15',)),
+    Mutation('D69-SR-E7', 'code 15 is taken out of the controlled stops: the unclaimed tasks are left [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py', 'tests/test_harness_h5a1_exit_codes.py'),
+             edits=(Edit('harness/exit_codes.py', """    StopReason.STOP_EVENT,          # plan item 151 (b): seen at a round boundary, a controlled stop
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_code_15_is_a_controlled_stop_and_completes_the_unclaimed_tasks_as_not_run',
+                      'test_cleans_up_unclaimed_is_true_for_exactly_five_reasons')),
+    Mutation('D69-SR-E8', 'an acknowledgement git does not track is accepted [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    return done.returncode == 0 and done.stdout.decode().strip() == name
+""", """    return True
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_acknowledgement_git_does_not_track_is_refused',)),
+    Mutation('D69-SR-E9', 'a cap at the round boundary is asked before the event: an event and a cap in one round end with 13 [added by the implementer, item 152]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('harness/loop.py', """            self.bounds.end_round(progress)
+            if self.stop_events is not None:
+                event = self.stop_events.event_after_round()
+                if event is not None:
+                    self.event = event
+                    raise _ControlledStop(StopReason.STOP_EVENT)
+            if once:
+                raise _ControlledStop(StopReason.SIGNAL_OR_ONCE)
+            stop = self.bounds.stop_reason()
+            if stop is not None:
+                raise _ControlledStop(stop)
+""", """            self.bounds.end_round(progress)
+            stop = self.bounds.stop_reason()
+            if stop is not None:
+                raise _ControlledStop(stop)
+            if self.stop_events is not None:
+                event = self.stop_events.event_after_round()
+                if event is not None:
+                    self.event = event
+                    raise _ControlledStop(StopReason.STOP_EVENT)
+            if once:
+                raise _ControlledStop(StopReason.SIGNAL_OR_ONCE)
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_event_and_a_cap_in_the_same_round_end_with_15_not_13',)),
+    Mutation('D69-SR-E10', "the stop_event line carries the evidence's raw artifact, stdout included [added by the implementer, item 152]",
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """            "detected_after_stop": bool(detected_after_stop)}
+""", """            "detected_after_stop": bool(detected_after_stop),
+            "raw_artifact": None if raw is None else raw.decode("utf-8", "replace")}
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_stop_event_line_has_the_artifacts_hash_and_length_never_its_bytes',)),
 ]
 
 if __name__ == "__main__":

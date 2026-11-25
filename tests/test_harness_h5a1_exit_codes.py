@@ -25,6 +25,7 @@ EXPECTED = {
     StopReason.FAULT_OUTSIDE_LIST: 12,
     StopReason.CAP_REACHED: 13,
     StopReason.NO_PROGRESS: 14,
+    StopReason.STOP_EVENT: 15,                  # plan item 151
 }
 
 
@@ -61,15 +62,17 @@ def test_the_named_constants_are_the_numbers_of_the_table():
             x.EXIT_DOCKER_LOST, x.EXIT_LOCK_LOST) == (0, 1, 2, 3, 4, 5, 6)
     assert (x.EXIT_STARTUP_REFUSED, x.EXIT_FOREIGN_TASK, x.EXIT_FAULT_OUTSIDE_LIST,
             x.EXIT_CAP_REACHED, x.EXIT_NO_PROGRESS) == (10, 11, 12, 13, 14)
+    assert x.EXIT_STOP_EVENT == 15                                   # plan item 151
 
 
-def test_cleans_up_unclaimed_is_true_for_exactly_four_reasons():
+def test_cleans_up_unclaimed_is_true_for_exactly_five_reasons():
     cleaning = {reason for reason in StopReason if cleans_up_unclaimed(reason)}
     assert cleaning == {
         StopReason.SIGNAL_OR_ONCE,      # code 0: a signal, or --once done
         StopReason.STARTUP_REFUSED,     # code 10
         StopReason.CAP_REACHED,         # code 13
         StopReason.NO_PROGRESS,         # code 14
+        StopReason.STOP_EVENT,          # code 15 (plan item 151 (b))
     }
     # ... and the faults and the lost things are not among them.
     for reason in (StopReason.UNEXPECTED, StopReason.FOREIGN_TASK, StopReason.FAULT_OUTSIDE_LIST,
