@@ -999,7 +999,8 @@ CATALOGUE = [
              ('tests/test_provenance_slash32.py',),
              edits=(Edit('agents/llm/worker_base.py', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/32")''', r'''_IPV4_SLASH32 = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}")'''),),
              prepare=_without_probe,
-             targets=('test_a_neighbour_of_a_slash32_target_is_not_its_address',)),
+             targets=('test_a_neighbour_of_a_slash32_target_is_not_its_address',),
+             accepted_survivor='over-escalation only (fail-closed direction); ranges wider than /32 are denied by the budget before provenance (max_targets 1); see plan item 146'),
     # -- added by the implementer for the approved-factory gate (tests/test_harness_approved_factory.py) --
     # (new ids; the gate is plan items 131-132)
     Mutation('D69-AF-1', 'the entry no longer compares --role-factory with APPROVED_ROLE_FACTORIES [added by the implementer, approved-factory gate]',
@@ -1406,7 +1407,8 @@ CATALOGUE = [
 """, """    return True
 """),),
              prepare=_without_probe,
-             targets=('test_an_acknowledgement_git_does_not_track_is_refused',)),
+             targets=('test_an_acknowledgement_git_does_not_track_is_refused',),
+             retired='equivalent since item 154; reading the acknowledgement from HEAD (git show HEAD:<file>) succeeds only for a committed file, so a separate ls-files check was dropped (item 155)'),
     Mutation('D69-SR-E9', 'a cap at the round boundary is asked before the event: an event and a cap in one round end with 13 [added by the implementer, item 152]',
              ('tests/test_shadow_stop_events.py',),
              edits=(Edit('harness/loop.py', """            self.bounds.end_round(progress)
@@ -1498,6 +1500,134 @@ CATALOGUE = [
 """, ""),),
              prepare=_without_probe,
              targets=('test_an_event_found_after_a_fault_keeps_the_faults_code_and_is_written',)),
+    # -- S6 (shadow runner plan 2g; plan item 156): the records' history and the ledger of looks --
+    # G1 and G2 are the plan's (2g, lines 406-407); H1, H2, L1, L2, L3 and L4 were named by the review
+    # layer's task; the others were added by the implementer.
+    Mutation('D69-SR-G1', 'the reason check is skipped when the ledger has exactly one entry [shadow runner plan 2g]',
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """    if earlier and reason is None:                                                        # e
+""", """    if len(earlier) > 1 and reason is None:                                               # e
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_second_look_without_a_reason_is_refused_and_one_with_a_reason_is_kept',)),
+    Mutation('D69-SR-G2', 'the clean-tree check ignores untracked files [shadow runner plan 2g]',
+             ('tests/test_shadow_ledger.py', 'tests/test_shadow_record_history.py'),
+             edits=(Edit('scripts/run_shadow.py', """    done = ask("status", "--porcelain", "--untracked-files=all")
+""", """    done = ask("status", "--porcelain", "--untracked-files=no")
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_untracked_file_anywhere_refuses_the_look',
+                      'test_a_record_written_and_not_committed_is_refused_by_the_integrity_guard')),
+    Mutation('D69-SR-H1', "the history check ignores a rename (R) [review layer's task, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """        elif status[0] == "R":
+            problems[(RECORD_REMOVED, f"{name} was renamed to {names[-1]} in commit "
+                                      f"{commit}")] = None
+""", """        elif status[0] == "R":
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_committed_record_changed_by_a_later_commit_refuses_the_next_start_and_look',)),
+    Mutation('D69-SR-H2', "the history check ignores a modification (M) [review layer's task, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """            problems[(RECORD_MODIFIED, f"{name} was modified in commit {commit}")] = None
+""", """            pass
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_committed_record_changed_by_a_later_commit_refuses_the_next_start_and_look',)),
+    Mutation('D69-SR-H3', 'a records directory git ignores is accepted [added by the implementer, item 156]',
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if done.returncode == 1:
+        return []                                       # none of them is ignored
+""", """    if True:
+        return []                                       # none of them is ignored
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_records_dir_git_ignores_is_refused_by_the_start_and_by_the_look',
+                      'test_an_exclude_rule_outside_gitignore_is_seen_too')),
+    Mutation('D69-SR-H4', 'a history git cannot read (a failing log) is taken as no change [added by the implementer, item 156]',
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if done.returncode != 0:
+        return [(GIT_UNAVAILABLE, f"git cannot read the history of {base} since "
+""", """    if False:
+        return [(GIT_UNAVAILABLE, f"git cannot read the history of {base} since "
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_history_git_cannot_answer_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-H5', "the history's log leaves rename detection to the configuration (no -M) [added by the implementer, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """        done = git(repo, "log", "--diff-filter=DMR", "--name-status", "-M", "-m", "--full-history",
+""", """        done = git(repo, "log", "--diff-filter=DMR", "--name-status", "-m", "--full-history",
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_committed_record_changed_by_a_later_commit_refuses_the_next_start_and_look',)),
+    Mutation('D69-SR-H6', "a records directory that resolves outside the repository (a symbolic link) is accepted [added by the implementer, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if not (root / path).resolve().is_relative_to(root.resolve()):
+""", """    if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_records_dir_that_is_not_inside_the_repository_is_refused_at_step_1',)),
+    Mutation('D69-SR-L1', "the ledger's committed versions are not checked to be appended to [review layer's task, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """                if not after.startswith(before):
+""", """                if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_ledger_rewritten_in_a_commit_is_refused',)),
+    Mutation('D69-SR-L2', "the ledger's numbering is not checked [review layer's task, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """        if type(entry.get("look")) is not int or entry["look"] != number:
+""", """        if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_ledger_that_cannot_be_read_or_skips_a_number_is_corrupt',)),
+    Mutation('D69-SR-L3', "the note does not list a record added since the previous look [review layer's task, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """    lines = [f"  added: {name} (sha256 {sha})" for name, sha in now.items() if name not in before]
+""", """    lines = []
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_two_looks_ledger_notes_an_added_record_and_leaves_out_another_registration',)),
+    Mutation('D69-SR-L4', "a reading that fails still writes the ledger [review layer's task, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """    except Exception as exc:  # noqa: BLE001 - what a reading raised is not printed
+""", """    except Exception as exc:  # noqa: BLE001 - what a reading raised is not printed
+        with ledger_path.open("a") as handle:
+            handle.write(json.dumps({"look": len(earlier) + 1, "verdict": None}) + "\\n")
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_reading_that_fails_writes_no_ledger',
+                      'test_a_reading_that_fails_after_a_look_leaves_the_ledger_as_it_was')),
+    Mutation('D69-SR-L5', "the ledger on disk is not compared with HEAD's [added by the implementer, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """        if head is not None and not current.startswith(head):
+""", """        if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_ledger_changed_on_disk_with_git_told_to_look_away_is_refused',)),
+    Mutation('D69-SR-L6', "the runner reads the ledger as a record [added by the implementer, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """        if path.name == LEDGER_NAME:
+            continue                                    # the ledger of looks is not a record
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_the_ledger_appended_to_and_committed_is_not_a_modified_record',)),
+    Mutation('D69-SR-L7', "a run may write its record under the ledger's name [added by the implementer, item 156]",
+             ('tests/test_shadow_record_history.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if record_path.name == LEDGER_NAME:                                                     # 7
+""", """    if False:                                                                               # 7
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_ledger_s_name_is_not_a_record',)),
+    Mutation('D69-SR-L8', "the reading is handed the records as writable values [added by the implementer, item 156]",
+             ('tests/test_shadow_ledger.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """def _frozen(value: object) -> object:
+""", """def _frozen(value: object) -> object:
+    return value
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_reading_that_fails_writes_no_ledger',)),
 ]
 
 if __name__ == "__main__":

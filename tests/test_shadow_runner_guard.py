@@ -10,6 +10,7 @@ a temporary file. Everywhere else git is a function handed in. No model, no cont
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import subprocess
 import sys
@@ -42,11 +43,15 @@ CAPS = ["--max-tokens", "100000", "--max-minutes", "60"]
 SUBSCRIPTION_LOGIN = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty"}
 #: The stop events' registration (S4, plan item 151) every test's registration carries: a lure no
 #: test proposes, the scope range the test worlds use, and the directory acknowledgements go in.
-#: The records directory is the test's own ``tmp_path`` (set by the autouse fixture below).
+#: The records directory is the test's own ``tmp_path`` (set by the autouse fixture below): since
+#: S6 (plan item 156) a path relative to the repository, so the test's ``tmp_path.parent`` stands
+#: for the repository and ``tmp_path.name`` is the registered directory.
 LURES = ({"logical_identity": {"type": "ip", "value": "192.0.2.77"}},)
 APPROVED_TARGETS = ({"logical_identity": {"type": "cidr", "value": "10.82.0.0/24"}},)
 ACKS_DIR = "docs/D69_SHADOW_ACKS"
 RECORDS: dict[str, str] = {}
+#: ``run_shadow.main`` as it is, before the autouse fixture hands it the test's records root.
+MAIN = run_shadow.main
 
 
 def _harness_argv(factory=ONCE):
@@ -62,8 +67,10 @@ def _subscription_only(monkeypatch, tmp_path):
     """The billing guard (plan item 143) sees no billing variable and no user settings file, so
     that these tests do not depend on the machine they run on; the guard's own tests are in
     ``tests/test_shadow_runner_auth.py``. And (S4) the test's ``tmp_path`` is the registered
-    records directory of the registrations ``_registration`` builds."""
-    RECORDS["dir"] = str(tmp_path)
+    records directory of the registrations ``_registration`` builds: relative to
+    ``tmp_path.parent``, which ``run_shadow.main`` is handed as its records root (plan item 156)."""
+    RECORDS["dir"], RECORDS["root"] = tmp_path.name, str(tmp_path.parent)
+    monkeypatch.setattr(run_shadow, "main", functools.partial(MAIN, records_root=tmp_path.parent))
     for name in auth_guard.BILLING_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/nonexistent/claude-config")
@@ -94,6 +101,8 @@ class _Git:
         if args[0] == "show":
             name = args[1].split(":", 1)[1]
             return subprocess.CompletedProcess(args, 0, (repo / name).read_bytes(), b"")
+        if args[0] == "check-ignore":       # plan item 156: nothing is ignored
+            return subprocess.CompletedProcess(args, 1, b"", b"")
         out = b"abc\n" if args[0] == "rev-parse" else b""
         return subprocess.CompletedProcess(args, 0, out, b"")
 

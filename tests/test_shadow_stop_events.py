@@ -269,7 +269,7 @@ def test_a_stop_events_without_the_question_is_refused():
     ({"approved_targets": ({"logical_identity": {"type": "ip"}},)},
      run_shadow.APPROVED_TARGETS_UNREGISTERED),
     ({"records_dir": None}, run_shadow.RECORDS_DIR_UNREGISTERED),
-    ({"records_dir": "relative/records"}, run_shadow.RECORDS_DIR_UNREGISTERED),
+    ({"records_dir": "/absolute/records"}, run_shadow.RECORDS_DIR_OUTSIDE_REPOSITORY),
     ({"acks_dir": None}, run_shadow.ACKS_DIR_UNREGISTERED),
     ({"acks_dir": "/etc/acks"}, run_shadow.ACKS_DIR_UNREGISTERED),
     ({"acks_dir": "docs/../../acks"}, run_shadow.ACKS_DIR_UNREGISTERED),
@@ -346,8 +346,9 @@ def _earlier(name, *, commit=COMMIT, code=15, footer=True, header=True):
 
 
 def _records_dir():
-    """The registered records directory of this test: its ``tmp_path``."""
-    return Path(RECORDS["dir"])
+    """The registered records directory of this test: its ``tmp_path``, relative to the records
+    root ``tmp_path.parent`` (plan item 156)."""
+    return Path(RECORDS["root"]) / RECORDS["dir"]
 
 
 def _ack(sha):

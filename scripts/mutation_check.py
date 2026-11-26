@@ -33,6 +33,13 @@ a killed test left (``tests/db_hygiene.py``), and says that it did.
 
 ``python scripts/mutation_check.py --list`` names them; ``python scripts/mutation_check.py M2 M13``
 runs some; with no names, all. The result is printed and written to ``--out`` as JSON.
+
+**Retired and accepted survivors** (D69 plan item 156). A mutation with ``retired`` set (why) is not
+run: it is reported ``RETIRED: <why>`` and is not a failure (an equivalent mutant whose anchor is
+gone). One with ``accepted_survivor`` set (why) is run as any other: INVALID, what the review layer
+accepted, is reported ``ACCEPTED SURVIVOR: <why>`` and is not a failure; valid is reported
+``ACCEPTED SURVIVOR NOW VALID`` and is a failure, so that the review layer is told to take the
+acceptance back.
 """
 
 from __future__ import annotations
@@ -106,6 +113,10 @@ class Mutation:
     #: raises, the mutation did not build and is INVALID, the same as a Python edit that does not
     #: compile.
     prepare: Callable[[], dict[str, str]] | None = None
+    #: Why the mutation is retired: it is not run, and is reported ``RETIRED`` (plan item 156).
+    retired: str | None = None
+    #: Why the mutation surviving (INVALID) is accepted: it is run, and only valid is a failure.
+    accepted_survivor: str | None = None
 
 
 @dataclass
@@ -417,6 +428,33 @@ def run(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
     return result
 
 
+RETIRED = "RETIRED"
+ACCEPTED_SURVIVOR = "ACCEPTED SURVIVOR"
+ACCEPTED_SURVIVOR_NOW_VALID = "ACCEPTED SURVIVOR NOW VALID"
+
+
+def run_entry(mutation: Mutation, baselines: dict[tuple[str, ...], str]) -> Result:
+    """``run``, except that a retired mutation is not run and an accepted survivor's verdict says
+    so (plan item 156)."""
+    if mutation.retired is not None:
+        return Result(mutation.id, mutation.summary, verdict=RETIRED, tests=mutation.tests,
+                      problems=[f"RETIRED: {mutation.retired}"])
+    result = run(mutation, baselines)
+    if mutation.accepted_survivor is not None:
+        if result.verdict == "valid":
+            result.verdict = ACCEPTED_SURVIVOR_NOW_VALID
+            result.problems.append(f"{ACCEPTED_SURVIVOR_NOW_VALID}: it is caught now; the "
+                                   f"acceptance ({mutation.accepted_survivor}) is to be taken back")
+        else:
+            result.verdict = ACCEPTED_SURVIVOR
+            result.problems.append(f"{ACCEPTED_SURVIVOR}: {mutation.accepted_survivor}")
+    return result
+
+
+#: The verdicts that are not a failure of the run.
+NOT_FAILED = ("valid", RETIRED, ACCEPTED_SURVIVOR)
+
+
 def _print(result: Result) -> None:
     c = result.counts()
     print(f"\n## {result.id}: {result.verdict}  (target {c['target']}, broken {c['broken']}, "
@@ -425,7 +463,7 @@ def _print(result: Result) -> None:
     for f in result.failures:
         print(f"   [{f['kind']}] {f['test']}\n        {f['message']}")
     for p in result.problems:
-        print(f"   PROBLEM: {p}")
+        print(f"   {p}" if p.startswith((RETIRED, ACCEPTED_SURVIVOR)) else f"   PROBLEM: {p}")
 
 
 def main(catalogue: dict[str, Mutation]) -> None:
@@ -451,7 +489,7 @@ def main(catalogue: dict[str, Mutation]) -> None:
     results = []
     try:
         for mutation in chosen:
-            result = run(mutation, baselines)
+            result = run_entry(mutation, baselines)
             _print(result)
             results.append(result)
             if args.out:
@@ -462,6 +500,11 @@ def main(catalogue: dict[str, Mutation]) -> None:
             print(f"AFTER THE INTERRUPT: {line}")
         print(f"\ninterrupted after {len(results)} of {len(chosen)}; files and database put back")
         sys.exit(130)
-    bad = [r.id for r in results if r.verdict != "valid"]
-    print(f"\n{len(results) - len(bad)} valid, {len(bad)} not: {bad}")
+    bad = [r.id for r in results if r.verdict not in NOT_FAILED]
+    valid = sum(r.verdict == "valid" for r in results)
+    retired = [r.id for r in results if r.verdict == RETIRED]
+    accepted = [r.id for r in results if r.verdict == ACCEPTED_SURVIVOR]
+    print(f"\n{valid} valid, {len(bad)} not: {bad}"
+          + (f"; retired, not run: {retired}" if retired else "")
+          + (f"; accepted survivors: {accepted}" if accepted else ""))
     sys.exit(1 if bad else 0)

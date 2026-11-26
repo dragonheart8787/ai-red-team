@@ -15,7 +15,10 @@ Before anything reads the database the runner refuses, in this order (plan items
    role class's module is not a registered file; and (S4, plan item 151) the stop events' four:
    ``REGISTERED_LURE_TARGETS`` and ``REGISTERED_APPROVED_TARGETS`` (targets the canonicalizer
    accepts), ``REGISTERED_RECORDS_DIR`` (an absolute path) and ``REGISTERED_ACKS_DIR`` (a path
-   inside the repository), each its own code when empty or unusable;
+   inside the repository), each its own code when empty or unusable; since S6 (plan item 156)
+   ``REGISTERED_RECORDS_DIR`` is, like ``REGISTERED_ACKS_DIR``, a path inside the repository,
+   relative to it: an absolute one, one with ``..``, one naming the repository itself or one that
+   resolves outside it is ``records_dir_outside_repository``;
 
    1a. **the billing guard** (the owner's decision of 2026-11-22, plan items 141 c and 143): a
    variable of ``agents.llm.auth_guard.BILLING_VARIABLES`` with a value, or an ``apiKeyHelper`` in
@@ -34,6 +37,17 @@ Before anything reads the database the runner refuses, in this order (plan items
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
    the hashes of the code files are recorded and not compared;
+
+   2a. **the records directory and its history** (S6, plan item 156): a path of the directory that
+   git ignores -- a ``*.jsonl`` probe, the ledger ``looks.jsonl``, every record in it and the
+   ``--record`` path -- is ``records_dir_ignored`` (a record there would never be committed, so
+   neither the clean tree of step 2 nor this history would see it); and, between the registered
+   commit and HEAD, a ``*.jsonl`` in the directory that a commit deleted or renamed is
+   ``record_removed`` and one a commit modified is ``record_modified`` (the ledger may be modified:
+   only appended to, which ``scripts/analyse_shadow.py`` checks); anything git cannot answer is
+   ``git_unavailable``. It comes after step 2, a question to git about the same checkout, and
+   before the factory is built, the record's path and the acknowledgements: an acknowledgement
+   names a record's sha256, which is only fixed while no commit can change the record;
 3. **the factory string**, which must be in ``run_harness.APPROVED_ROLE_FACTORIES`` (the runner
    keeps no list of its own);
 4. **the factory**, imported and called once;
@@ -45,7 +59,8 @@ Before anything reads the database the runner refuses, in this order (plan items
 6. **the prompt digests** of the three roles, compared with ``REGISTERED_DIGESTS``;
 7. **the record**: ``--record`` names a path inside ``REGISTERED_RECORDS_DIR``
    (``record_outside_registered_dir``) that does not exist yet (``record_exists``) -- two checks of
-   the path alone, which read no record (plan item 154) -- and then
+   the path alone, which read no record (plan item 154) -- and is not the ledger's name
+   (``looks.jsonl``, also ``record_outside_registered_dir``; plan item 156), and then
 
    7a. **the acknowledgements** (S4, plan items 151 (c), (e) and 154): every record in
    ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) that has no footer, or whose footer's ``exit_code`` is
@@ -54,6 +69,7 @@ Before anything reads the database the runner refuses, in this order (plan items
    ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``, read from HEAD (``git show
    HEAD:<file>``, which only a committed file passes; plan item 155), whose text contains that
    sha256.
+   The ledger of looks, ``looks.jsonl`` (plan item 156), is not a record and is not checked.
    Only a record whose header names another commit, as a string, is another registration's and is
    not checked. Every such record is checked, not the newest only; one without its
    acknowledgement is ``unacknowledged_record``, and the refusal names the record's file and
@@ -111,7 +127,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -150,7 +166,9 @@ APPROVED_ROLE_CLASSES: Mapping[str, tuple[type, ...]] = {}
 # The stop events' registration (S4, plan item 151), empty until the same commit: the laboratory's
 # lure targets and the approved targets (each a target block, ``{"logical_identity": {"type": ...,
 # "value": ...}}``), the directory every record is written in (an absolute path), and the directory,
-# inside the repository, of the committed acknowledgements.
+# inside the repository, of the committed acknowledgements. Since S6 (plan item 156) the records
+# directory is inside the repository too, a relative path (``docs/D69_SHADOW_RECORDS`` is the
+# suggested one), so that every record is committed before the next run (step 2) and kept (2a).
 REGISTERED_LURE_TARGETS: tuple[Mapping[str, object], ...] = ()
 REGISTERED_APPROVED_TARGETS: tuple[Mapping[str, object], ...] = ()
 REGISTERED_RECORDS_DIR: str | None = None
@@ -162,6 +180,10 @@ NORMAL_EXIT_CODES = (EXIT_OK, EXIT_STARTUP_REFUSED, EXIT_CAP_REACHED, EXIT_NO_PR
 #: The loop's codes an event found after the stop replaces with 15 (plan item 154): a signal or
 #: ``--once``, a cap, no progress. Any other code is a fault or a lost resource and is kept.
 STOP_EVENT_REPLACES = (EXIT_OK, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
+
+#: The ledger of looks (S6, plan item 156): one per registration, in the records directory; it is
+#: not a record, and no run may write a record by its name.
+LEDGER_NAME = "looks.jsonl"
 
 #: Recorded, not compared: the runner and the entry it calls may be mended after registration.
 CODE_FILES = ("scripts/run_shadow.py", "scripts/run_harness.py")
@@ -208,6 +230,12 @@ RECORDS_DIR_UNREGISTERED = "records_dir_unregistered"
 ACKS_DIR_UNREGISTERED = "acks_dir_unregistered"
 RECORD_OUTSIDE_REGISTERED_DIR = "record_outside_registered_dir"
 UNACKNOWLEDGED_RECORD = "unacknowledged_record"
+#: S6 (plan item 156): the records directory is inside the repository and not ignored, and no
+#: committed record in it has been deleted, renamed or modified since the registered commit.
+RECORDS_DIR_OUTSIDE_REPOSITORY = "records_dir_outside_repository"
+RECORDS_DIR_IGNORED = "records_dir_ignored"
+RECORD_REMOVED = "record_removed"
+RECORD_MODIFIED = "record_modified"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
@@ -216,6 +244,7 @@ REASONS = (
     RECORD_UNWRITABLE, API_BILLING_AUTH_PRESENT, LOGIN_NOT_SUBSCRIPTION, CLI_VERSION_UNREVIEWED,
     LURE_LIST_UNREGISTERED, APPROVED_TARGETS_UNREGISTERED, RECORDS_DIR_UNREGISTERED,
     ACKS_DIR_UNREGISTERED, RECORD_OUTSIDE_REGISTERED_DIR, UNACKNOWLEDGED_RECORD,
+    RECORDS_DIR_OUTSIDE_REPOSITORY, RECORDS_DIR_IGNORED, RECORD_REMOVED, RECORD_MODIFIED,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -252,7 +281,8 @@ def module_file(cls: type, repo: Path) -> str | None:
         return None
 
 
-def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT) -> list[Problem]:
+def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT,
+                          records_root: Path | None = None) -> list[Problem]:
     empty = [name for name, value in (
         ("REGISTERED_COMMIT", reg.commit), ("REGISTERED_FILES", reg.files),
         ("REGISTERED_DIGESTS", reg.digests), ("APPROVED_ROLE_CLASSES", reg.role_classes))
@@ -270,10 +300,12 @@ def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT) -> list[
                 problems.append((CLASS_MODULE_NOT_REGISTERED,
                                  f"{role} class {cls.__qualname__}: its module "
                                  f"{name or '(outside the repository)'} is not a registered file"))
-    return problems + stop_event_registration_problems(reg)
+    return problems + stop_event_registration_problems(
+        reg, root=repo if records_root is None else records_root)
 
 
-def stop_event_registration_problems(reg: Registration) -> list[Problem]:
+def stop_event_registration_problems(reg: Registration, *, root: Path = REPO_ROOT
+                                     ) -> list[Problem]:
     """The stop events' four constants (S4, plan item 151): each empty or unusable one, by name."""
     problems: list[Problem] = []
     for code, name, targets in (
@@ -290,9 +322,10 @@ def stop_event_registration_problems(reg: Registration) -> list[Problem]:
     if not reg.records_dir:
         problems.append((RECORDS_DIR_UNREGISTERED,
                          "REGISTERED_RECORDS_DIR empty: the records cannot be checked"))
-    elif not Path(reg.records_dir).is_absolute():
-        problems.append((RECORDS_DIR_UNREGISTERED,
-                         "REGISTERED_RECORDS_DIR is not an absolute path"))
+    else:
+        why = records_dir_outside(reg.records_dir, root)
+        if why is not None:
+            problems.append((RECORDS_DIR_OUTSIDE_REPOSITORY, f"REGISTERED_RECORDS_DIR {why}"))
     acks = Path(reg.acks_dir) if reg.acks_dir else None
     if acks is None:
         problems.append((ACKS_DIR_UNREGISTERED,
@@ -301,6 +334,96 @@ def stop_event_registration_problems(reg: Registration) -> list[Problem]:
         problems.append((ACKS_DIR_UNREGISTERED,
                          "REGISTERED_ACKS_DIR is not a path inside the repository"))
     return problems
+
+
+def records_dir_outside(name: str, root: Path) -> str | None:
+    """Why ``name`` is not a directory inside the repository ``root``, relative to it; None if it
+    is (S6, plan item 156: as ``REGISTERED_ACKS_DIR``, and resolved, so that a symbolic link out of
+    the repository is caught)."""
+    path = Path(name)
+    if path.is_absolute():
+        return "is an absolute path, not a path inside the repository relative to it"
+    if ".." in path.parts:
+        return "contains '..'"
+    if not path.parts:
+        return "names the repository itself, not a directory inside it"
+    if not (root / path).resolve().is_relative_to(root.resolve()):
+        return "resolves outside the repository"
+    return None
+
+
+# -- 2a. the records directory and its history (S6, plan item 156) --------------------------------
+
+def records_dir_problems(*, repo: Path, records_dir: str, names: tuple[str, ...] = (),
+                         git: Callable) -> list[Problem]:
+    """Whether git ignores a path of the records directory (``records_dir`` relative to the
+    repository): a ``*.jsonl`` probe, the ledger and ``names`` (the records in it, the new record),
+    each relative to the directory. A tracked file is never reported ignored by git, and need not
+    be: git sees its changes."""
+    base = Path(records_dir).as_posix()
+    paths = [f"{base}/{name}" for name in ("shadow-record-probe.jsonl", LEDGER_NAME, *names)]
+    try:
+        done = git(repo, "check-ignore", "--", *paths)
+    except Exception as exc:  # noqa: BLE001 - not being able to ask is a refusal
+        return [(GIT_UNAVAILABLE, f"git could not be run ({type(exc).__name__}): check-ignore")]
+    if done.returncode == 1:
+        return []                                       # none of them is ignored
+    if done.returncode != 0:
+        return [(GIT_UNAVAILABLE, f"git cannot say whether {base} is ignored")]
+    ignored = [x for x in done.stdout.decode("utf-8", "replace").splitlines() if x.strip()]
+    return [(RECORDS_DIR_IGNORED, f"{name} is ignored by git: a record there would never be "
+                                  "committed") for name in ignored or [base]]
+
+
+def _git_path(raw: str) -> str:
+    """A path as ``git log --name-status`` prints it, its quotes taken off (an unusual name is
+    printed quoted; its suffix is then still the name's)."""
+    return raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] == '"' else raw
+
+
+def record_history_problems(repo: Path, records_dir: str, registered_commit: str,
+                            git: Callable) -> list[Problem]:
+    """Every ``*.jsonl`` of the records directory that a commit between ``registered_commit`` and
+    HEAD deleted or renamed (``record_removed``) or modified (``record_modified``), by file name and
+    the commit's short hash, never content; the ledger may be modified (appended to, which the
+    analysis checks), not deleted or renamed. ``-M`` reports a rename whatever the configuration,
+    ``-m`` and ``--full-history`` the changes a merge brings in; a git that cannot answer is a
+    refusal."""
+    base = Path(records_dir).as_posix()
+    ledger = f"{base}/{LEDGER_NAME}"
+    try:
+        done = git(repo, "log", "--diff-filter=DMR", "--name-status", "-M", "-m", "--full-history",
+                   "--format=commit %h", f"{registered_commit}..HEAD", "--", base)
+    except Exception as exc:  # noqa: BLE001 - not being able to ask is a refusal
+        return [(GIT_UNAVAILABLE, f"git could not be run ({type(exc).__name__}): log")]
+    if done.returncode != 0:
+        return [(GIT_UNAVAILABLE, f"git cannot read the history of {base} since "
+                                  f"{registered_commit[:7]}")]
+    problems: dict[Problem, None] = {}
+    commit = None
+    for line in done.stdout.decode("utf-8", "replace").splitlines():
+        if not line.strip():
+            continue
+        if line.startswith("commit "):
+            commit = line[len("commit "):].strip()
+            continue
+        status, *paths = line.split("\t")
+        if commit is None or not paths or not status or status[0] not in "DMR":
+            return [(GIT_UNAVAILABLE, f"git's history of {base} cannot be read")]
+        names = [_git_path(x) for x in paths]
+        if not any(name.endswith(".jsonl") for name in names):
+            continue
+        name = names[0]
+        if status[0] == "M" and name == ledger:
+            continue                                    # the ledger is appended to
+        if status[0] == "D":
+            problems[(RECORD_REMOVED, f"{name} was deleted in commit {commit}")] = None
+        elif status[0] == "R":
+            problems[(RECORD_REMOVED, f"{name} was renamed to {names[-1]} in commit "
+                                      f"{commit}")] = None
+        else:
+            problems[(RECORD_MODIFIED, f"{name} was modified in commit {commit}")] = None
+    return list(problems)
 
 
 # -- 2a. the acknowledgements (S4, plan item 151 (c), (e)) -----------------------------------------
@@ -340,6 +463,8 @@ def acknowledgement_problems(*, records_dir: str, acks_dir: str, registered_comm
     """Every record of this registration that needs an acknowledgement and has none committed."""
     problems: list[Problem] = []
     for path in sorted(Path(records_dir).glob("*.jsonl")):
+        if path.name == LEDGER_NAME:
+            continue                                    # the ledger of looks is not a record
         try:
             data = path.read_bytes()
         except OSError as exc:
@@ -662,12 +787,19 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
          settings_files: tuple[Path, ...] | None = None,
          login_query: Callable[[], Mapping[str, object]] | None = None,
          version_query: Callable[[], str] | None = None,
-         evidence_reader: Callable[[str, str], bytes | None] | None = None) -> int:
+         evidence_reader: Callable[[str, str], bytes | None] | None = None,
+         records_root: Path | None = None) -> int:
+    """``records_root``: what ``REGISTERED_RECORDS_DIR`` is relative to, the repository unless a
+    test hands in its own directory (plan item 156)."""
     record_path, harness_argv = _shadow_argv(sys.argv[1:] if argv is None else argv)
     reg = registration if registration is not None else registered()
-    problems = registration_problems(reg, repo=repo)                                     # 1
+    root = repo if records_root is None else records_root
+    problems = registration_problems(reg, repo=repo, records_root=root)                  # 1
     if problems:
         return refuse(problems)
+    # from here on the registered records directory is its path in this checkout (plan item 156)
+    records_rel = Path(reg.records_dir).as_posix()
+    reg = replace(reg, records_dir=str(root / records_rel))
     environ = os.environ if environ is None else environ                                  # 1a
     if settings_files is None:
         settings_files = auth_guard.settings_files(environ=environ, home=Path.home(), project=repo)
@@ -700,6 +832,15 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
+    directory = Path(reg.records_dir)                                                     # 2a
+    names = tuple(path.name for path in sorted(directory.glob("*.jsonl"))
+                  if path.name != LEDGER_NAME)
+    if record_path.resolve().parent == directory.resolve():
+        names += (record_path.name,)
+    problems = records_dir_problems(repo=repo, records_dir=records_rel, names=names, git=git)
+    problems += record_history_problems(repo, records_rel, reg.commit, git)
+    if problems:
+        return refuse(problems)
     run_argv = ["run", *harness_argv]
     args = run_harness.build_parser().parse_args(run_argv)
     if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES:                       # 3
@@ -720,6 +861,9 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     problems = digest_problems(computed, reg.digests)
     if problems:
         return refuse(problems)
+    if record_path.name == LEDGER_NAME:                                                     # 7
+        return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
+                         f"{record_path} is the ledger's name, {LEDGER_NAME}: not a record")])
     if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
         return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
                          f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])

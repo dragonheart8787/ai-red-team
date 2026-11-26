@@ -216,6 +216,12 @@ before it reads anything. It guards against an accident and is not an authorizat
 session's own variables are among the names it refuses [R item 148]. After a CLI upgrade, the name
 lists of `agents/llm/auth_guard.py` and `REVIEWED_CLI_VERSION` must be reviewed again on the new
 version, and until then `run_shadow` refuses with `cli_version_unreviewed` [R item 148].
+The shadow's records are written in the registered records directory inside the repository
+(`REGISTERED_RECORDS_DIR`, a path relative to it; `docs/D69_SHADOW_RECORDS` is the suggested one)
+[R item 156]. Every record must be committed before the next run: the integrity check refuses an
+uncommitted or untracked record (`tree_not_clean`) [R item 156]. Once committed, a record must not
+be deleted, renamed or modified, or both the runner and `scripts/analyse_shadow.py` refuse
+(`record_removed`, `record_modified`) [R item 156].
 
 ## 4. Exit codes
 
