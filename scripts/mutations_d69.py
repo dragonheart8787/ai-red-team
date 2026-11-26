@@ -1442,6 +1442,62 @@ CATALOGUE = [
 """),),
              prepare=_without_probe,
              targets=('test_the_stop_event_line_has_the_artifacts_hash_and_length_never_its_bytes',)),
+    # -- the repair of S4 (plan items 153, 154) --
+    Mutation('D69-SR-E11', 'a record whose header names no commit is skipped as another registration\'s [added by the implementer, item 154]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if not isinstance(commit, str):
+        return True                                     # no commit named: cannot be told apart
+""", """    if not isinstance(commit, str):
+        return None
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_header_that_names_no_commit_string_needs_an_acknowledgement',)),
+    Mutation('D69-SR-E12', 'the acknowledgement check is put back before the two path checks of the record [added by the implementer, item 154]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
+        return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
+                         f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    if record_path.exists():
+        return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
+    problems = acknowledgement_problems(                                                   # 7a
+        records_dir=reg.records_dir, acks_dir=reg.acks_dir, registered_commit=reg.commit,
+        repo=repo, git=git)
+    if problems:
+        return refuse(problems)
+""", """    problems = acknowledgement_problems(                                                   # 7a
+        records_dir=reg.records_dir, acks_dir=reg.acks_dir, registered_commit=reg.commit,
+        repo=repo, git=git)
+    if problems:
+        return refuse(problems)
+    if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
+        return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
+                         f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    if record_path.exists():
+        return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_existing_record_path_is_refused_before_any_record_is_read',)),
+    Mutation('D69-SR-E13', "an event found after a fault replaces the fault's code with 15 [added by the implementer, item 154]",
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """        if after and loop_code not in STOP_EVENT_REPLACES:
+            code = loop_code            # plan item 154: a fault keeps its code
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_an_event_found_after_a_fault_keeps_the_faults_code_and_is_written',)),
+    Mutation('D69-SR-E14', "an acknowledgement's text is not checked [added by the implementer, item 154]",
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if sha not in done.stdout.decode("utf-8", "replace"):
+        return "the acknowledgement does not name the record's sha256"
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_an_acknowledgement_whose_text_does_not_name_the_record_is_refused',)),
+    Mutation('D69-SR-E15', 'a record with a stop_event line and a normal code needs no acknowledgement [added by the implementer, item 154]',
+             ('tests/test_shadow_stop_events.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if any(line is not None and line.get("line") == "stop_event" for line in rest):
+        return True                                     # an event, whatever code the run ended on
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_an_event_found_after_a_fault_keeps_the_faults_code_and_is_written',)),
 ]
 
 if __name__ == "__main__":

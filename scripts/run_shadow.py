@@ -34,14 +34,6 @@ Before anything reads the database the runner refuses, in this order (plan items
    an uncommitted or untracked path, a HEAD that does not contain the registered commit, a
    registered file whose bytes differ from its blob in that commit, or anything git cannot answer;
    the hashes of the code files are recorded and not compared;
-
-   2a. **the acknowledgements** (S4, plan item 151 (c), (e)): every record in
-   ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) of the same registered commit that has no footer, or
-   whose footer's ``exit_code`` is not 0, 10, 13 or 14, or whose header cannot be read, needs a
-   committed acknowledgement, ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``, tracked by
-   git (``git ls-files``; the clean tree of step 2 makes tracked committed). Every such record is
-   checked, not the newest only; one without its acknowledgement is ``unacknowledged_record``, and
-   the refusal names the record's file and sha256, never its content;
 3. **the factory string**, which must be in ``run_harness.APPROVED_ROLE_FACTORIES`` (the runner
    keeps no list of its own);
 4. **the factory**, imported and called once;
@@ -52,7 +44,19 @@ Before anything reads the database the runner refuses, in this order (plan items
    ``_escalate``); the sandbox's class exactly one of ``APPROVED_ROLE_CLASSES["sandbox"]``;
 6. **the prompt digests** of the three roles, compared with ``REGISTERED_DIGESTS``;
 7. **the record**: ``--record`` names a path inside ``REGISTERED_RECORDS_DIR``
-   (``record_outside_registered_dir``) that does not exist yet and can be created;
+   (``record_outside_registered_dir``) that does not exist yet (``record_exists``) -- two checks of
+   the path alone, which read no record (plan item 154) -- and then
+
+   7a. **the acknowledgements** (S4, plan items 151 (c), (e) and 154): every record in
+   ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) that has no footer, or whose footer's ``exit_code`` is
+   not 0, 10, 13 or 14, or that has a ``stop_event`` line, or whose header cannot be read or names
+   no commit (no ``registered_commit`` string), needs a committed acknowledgement,
+   ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``: tracked by git (``git ls-files``; the
+   clean tree of step 2 makes tracked committed), and whose committed text contains that sha256.
+   Only a record whose header names another commit, as a string, is another registration's and is
+   not checked. Every such record is checked, not the newest only; one without its
+   acknowledgement is ``unacknowledged_record``, and the refusal names the record's file and
+   sha256, never its content; and the record can be created;
 
 and then writes the record's header and hands the same role instances to
 ``run_harness.main(..., roles=..., observer=...)`` in this process. Every refusal prints
@@ -75,16 +79,19 @@ the cap reached (``cap_hit``) and the tokens of the run (``token_use``).
 ``run_harness`` a ``harness.stop_events.StopEventCheck`` over the registered lure list and approved
 targets; the loop asks it at each round boundary and stops with 15 on an event. A cap reached in
 the middle of a round skips that boundary, so once ``run_harness`` returns the runner asks the check
-what the unfinished round held, and an event found then also ends the run with 15, marked
-``detected_after_stop``. Either way the record gets a ``stop_event`` line (the event, the proposal,
-its decision, evidence id and canonical target) before the footer, and the footer has
+what the unfinished round held, and an event found then is written too, marked
+``detected_after_stop``: when the loop's code is 0, 13 or 14 it ends the run with 15; after any
+other code (a fault, a lost lock: 1, 6, 12, ...) the run keeps the loop's code, so that the fault
+is not hidden (plan item 154), and the record still needs an acknowledgement. Either way the
+record gets a ``stop_event`` line (the event, the proposal, its decision, evidence id and
+canonical target) before the footer, and the footer has
 ``stop_event`` and ``loop_exit_code`` (the loop's own code). The line holds no tool output: the
 evidence's raw artifact (``$ command``, ``--- stdout ---``, the stdout, ``--- stderr ---``, the
 stderr) is read by its evidence id and only its sha256 and length are written
 (``raw_artifact_sha256``, ``raw_artifact_bytes``); ``stdout_sha256`` and ``stdout_bytes`` are null,
 because the stdout is not stored apart from the artifact and cannot be cut out of it without
 ambiguity (a stdout may itself contain ``--- stderr ---``). A record whose code is 15, or that has
-no footer, needs an acknowledgement before the next start (2a).
+no footer, or a ``stop_event`` line, needs an acknowledgement before the next start (7a).
 
 All the registration constants are empty: **this runner refuses every start until a registration
 is committed**, and S1 makes no real role runnable.
@@ -151,6 +158,9 @@ REGISTERED_ACKS_DIR: str | None = None
 #: The exit codes of a record that needs no acknowledgement: the draft's controlled stops (stop
 #: event 3's set). Any other code, 15 included, and a record with no footer, need one.
 NORMAL_EXIT_CODES = (EXIT_OK, EXIT_STARTUP_REFUSED, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
+#: The loop's codes an event found after the stop replaces with 15 (plan item 154): a signal or
+#: ``--once``, a cap, no progress. Any other code is a fault or a lost resource and is kept.
+STOP_EVENT_REPLACES = (EXIT_OK, EXIT_CAP_REACHED, EXIT_NO_PROGRESS)
 
 #: Recorded, not compared: the runner and the entry it calls may be mended after registration.
 CODE_FILES = ("scripts/run_shadow.py", "scripts/run_harness.py")
@@ -303,15 +313,21 @@ def _line(raw: bytes) -> dict | None:
 
 
 def needs_acknowledgement(data: bytes, registered_commit: str) -> bool | None:
-    """Whether a record needs an acknowledgement before a restart; None when it is another
-    registration's (its header names another commit, or none), which this start does not check."""
+    """Whether a record needs an acknowledgement before a restart; None only when its header names
+    another commit, as a string: another registration's, which this start does not check."""
     lines = data.splitlines()
     header = _line(lines[0]) if lines else None
     if header is None or header.get("line") != "header":
         return True                                     # a header that cannot be read
-    if header.get("registered_commit") != registered_commit:
+    commit = header.get("registered_commit")
+    if not isinstance(commit, str):
+        return True                                     # no commit named: cannot be told apart
+    if commit != registered_commit:
         return None
-    footer = _line(lines[-1]) if len(lines) > 1 else None
+    rest = [_line(x) for x in lines[1:]]
+    if any(line is not None and line.get("line") == "stop_event" for line in rest):
+        return True                                     # an event, whatever code the run ended on
+    footer = rest[-1] if rest else None
     if footer is None or footer.get("line") != "footer":
         return True                                     # no footer: the run did not end normally
     code = footer.get("exit_code")
@@ -338,7 +354,25 @@ def acknowledgement_problems(*, records_dir: str, acks_dir: str, registered_comm
             problems.append((UNACKNOWLEDGED_RECORD,
                              f"{path.name} (sha256 {sha}) ended abnormally and has no committed "
                              f"acknowledgement {ack}"))
+            continue
+        why = _acknowledgement_text_problem(ack, sha, repo=repo, git=git)
+        if why is not None:
+            problems.append((UNACKNOWLEDGED_RECORD, f"{path.name} (sha256 {sha}): {why} ({ack})"))
     return problems
+
+
+def _acknowledgement_text_problem(name: str, sha: str, *, repo: Path, git: Callable) -> str | None:
+    """Why the committed acknowledgement ``name`` does not acknowledge the record ``sha``, or None:
+    its text, as committed in HEAD, must contain the record's sha256 as it is (plan item 154)."""
+    try:
+        done = git(repo, "show", f"HEAD:{name}")
+    except Exception:  # noqa: BLE001 - an acknowledgement that cannot be read is not one
+        return "the acknowledgement cannot be read"
+    if done.returncode != 0:
+        return "the acknowledgement cannot be read"
+    if sha not in done.stdout.decode("utf-8", "replace"):
+        return "the acknowledgement does not name the record's sha256"
+    return None
 
 
 def _tracked(name: str, *, repo: Path, git: Callable) -> bool:
@@ -670,11 +704,6 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     checked = integrity(repo=repo, registered_commit=reg.commit, files=reg.files, git=git)  # 2
     if checked.problems:
         return refuse(checked.problems)
-    problems = acknowledgement_problems(                                                   # 2a
-        records_dir=reg.records_dir, acks_dir=reg.acks_dir, registered_commit=reg.commit,
-        repo=repo, git=git)
-    if problems:
-        return refuse(problems)
     run_argv = ["run", *harness_argv]
     args = run_harness.build_parser().parse_args(run_argv)
     if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES:                       # 3
@@ -700,6 +729,11 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                          f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
     if record_path.exists():
         return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
+    problems = acknowledgement_problems(                                                   # 7a
+        records_dir=reg.records_dir, acks_dir=reg.acks_dir, registered_commit=reg.commit,
+        repo=repo, git=git)
+    if problems:
+        return refuse(problems)
     try:
         record = Record(record_path)
     except FileExistsError:
@@ -744,6 +778,8 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
             event = check.pending()
             if event is not None:
                 code, after = EXIT_STOP_EVENT, True
+        if after and loop_code not in STOP_EVENT_REPLACES:
+            code = loop_code            # plan item 154: a fault keeps its code
         try:
             if event is not None:
                 record.stop_event(stop_event_line(
@@ -757,7 +793,7 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                   file=sys.stderr)
             return EXIT_AUDIT_FAILED
         if after:
-            print(f"shadow stopped (exit {EXIT_STOP_EVENT}): event={event.name} detected after "
+            print(f"shadow stopped (exit {code}): event={event.name} detected after "
                   f"the loop stopped (loop exit {loop_code})", file=sys.stderr, flush=True)
         return code
     finally:

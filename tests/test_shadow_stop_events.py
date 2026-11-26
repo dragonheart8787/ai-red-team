@@ -301,11 +301,18 @@ def test_a_record_outside_the_registered_directory_is_refused(tmp_path, through,
 
 
 class _AckGit(_Git):
-    """The checkout git of the guard's tests, which also tracks the files named in ``tracked``."""
+    """The checkout git of the guard's tests, which also tracks the files named in ``tracked``.
 
-    def __init__(self, tracked=()):
+    ``git show HEAD:<name>`` of a tracked file answers its committed text (plan item 154): the one
+    in ``texts``, or by default a line that names the sha256 its file name carries (an
+    acknowledgement ``<dir>/<sha256>.md`` that names its record); a name in ``unreadable`` is
+    tracked but cannot be shown."""
+
+    def __init__(self, tracked=(), *, texts=None, unreadable=()):
         super().__init__()
-        self.tracked = set(tracked)
+        self.texts = dict(texts or {})
+        self.unreadable = set(unreadable)
+        self.tracked = set(tracked) | set(self.texts) | self.unreadable
 
     def __call__(self, repo, *args):
         if args[0] == "ls-files":
@@ -313,6 +320,13 @@ class _AckGit(_Git):
             name = args[-1]
             out = f"{name}\n".encode() if name in self.tracked else b""
             return subprocess.CompletedProcess(args, 0, out, b"")
+        if args[0] == "show" and args[1].startswith("HEAD:"):
+            self.calls.append(args)
+            name = args[1][len("HEAD:"):]
+            if name not in self.tracked or name in self.unreadable:
+                return subprocess.CompletedProcess(args, 128, b"", b"fatal: not in HEAD")
+            text = self.texts.get(name, f"Read by the test, 2026-11-26: {Path(name).stem}\n")
+            return subprocess.CompletedProcess(args, 0, text.encode(), b"")
         return super().__call__(repo, *args)
 
 
@@ -536,3 +550,152 @@ def test_an_event_in_a_round_a_cap_cut_short_is_found_after_the_stop_and_ends_wi
     assert (footer["stop_reason"], footer["cap_hit"], footer["stop_event"]) == \
         ("cap_reached", "model_calls", UNAPPROVED_TARGET)
     assert not [x for x in lines if x["line"] == "round"]   # the round never reached its end
+
+
+# == the repair of plan item 154 ===================================================================
+
+
+def _record_with(name, header, *, code=0):
+    """An earlier record with the header line given as it is, a round and a footer of ``code``."""
+    lines = [header if isinstance(header, str) else json.dumps(header),
+             json.dumps({"line": "round", "round": 1}),
+             json.dumps({"line": "footer", "exit_code": code})]
+    data = ("\n".join(lines) + "\n").encode()
+    (_records_dir() / name).write_bytes(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+@pytest.mark.parametrize("header", [
+    {"line": "header"},                                         # no registered_commit
+    {"line": "header", "registered_commit": None},
+    {"line": "header", "registered_commit": 12345},
+    {"line": "header", "registered_commit": ["c" * 40]},
+], ids=["missing", "null", "int", "list"])
+def test_a_header_that_names_no_commit_string_needs_an_acknowledgement(
+        header, through, capsys):  # noqa: F811
+    _record_with("earlier.jsonl", header, code=0)            # even with a normal code
+    code, lock = _start(_AckGit())
+    assert _codes(capsys.readouterr().err) == [run_shadow.UNACKNOWLEDGED_RECORD]
+    assert lock.asked == 0 and through == []
+
+
+def test_only_a_header_naming_another_commit_as_a_string_is_another_registrations(
+        through, capsys):  # noqa: F811
+    # also test_a_record_of_another_registration_is_not_checked, with a footer of 15
+    _record_with("earlier.jsonl", {"line": "header", "registered_commit": "e" * 40}, code=12)
+    code, lock = _start(_AckGit())
+    assert "refused: unacknowledged_record" not in capsys.readouterr().err
+    assert lock.asked == 1 and len(through) == 1
+
+
+def test_an_existing_record_path_is_refused_before_any_record_is_read(through, capsys):  # noqa: F811
+    _earlier("earlier.jsonl", code=15)                       # unacknowledged
+    existing = _records_dir() / "run.jsonl"
+    existing.write_bytes(b"{ not even a header\n")          # needs one too
+    code, lock = _start(_AckGit())
+    assert code == run_shadow.EXIT_STARTUP_REFUSED
+    assert _codes(capsys.readouterr().err) == [run_shadow.RECORD_EXISTS]
+    assert lock.asked == 0 and through == []
+
+
+def _stubbed_harness(monkeypatch, code, *, target=None):
+    """``run_harness.main`` replaced: it tells the check one proposal of a round a stop cut short
+    (an unapproved target, denied) and returns ``code``, as the loop would after that stop."""
+    seen = []
+
+    def main(argv, *, lock, register, roles, observer, stop_events):
+        seen.append(argv)
+        stop_events.observe("PROP-STUB-1", "DENY",
+                            target or {"logical_identity": {"type": "ip", "value": "10.99.0.1"}},
+                            None, engagement_id="ENG-STUB")
+        observer.on_stop("stubbed", code, None,
+                         {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0})
+        return code
+
+    monkeypatch.setattr(run_harness, "main", main)
+    return seen
+
+
+@pytest.mark.parametrize("loop_code", [1, 6, 10, 12])
+def test_an_event_found_after_a_fault_keeps_the_faults_code_and_is_written(
+        loop_code, through, monkeypatch, capsys):  # noqa: F811
+    seen = _stubbed_harness(monkeypatch, loop_code)
+    path = _records_dir() / "fault.jsonl"
+    lock = _Lock(True)
+    code = run_shadow.main(_argv(record=path), registration=_registration(), git=_AckGit(),
+                           lock=lock, environ=CLEAN, settings_files=())
+    err = capsys.readouterr().err
+    if loop_code == 6:
+        with capsys.disabled():
+            print("RECORD (loop exit 6, an event pending; run_harness.main injected)\n"
+                  + path.read_text())
+            print("STDERR\n" + err)
+    assert len(seen) == 1 and code == loop_code
+    assert f"shadow stopped (exit {loop_code}): event=unapproved_target detected after the " \
+           f"loop stopped (loop exit {loop_code})" in err
+    lines = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [x["line"] for x in lines] == ["header", "stop_event", "footer"]
+    event, footer = lines[1], lines[2]
+    assert event["detected_after_stop"] is True and event["event"] == UNAPPROVED_TARGET
+    assert (event["proposal_id"], event["target"]) == ("PROP-STUB-1", "ip:10.99.0.1")
+    assert footer["exit_code"] == footer["loop_exit_code"] == loop_code
+    assert footer["stop_event"] == UNAPPROVED_TARGET
+
+    # the record needs an acknowledgement, whatever code it ended with (10 included); the factory
+    # of these tests may be called once per start, and the check comes after it (step 7a)
+    compliant.BUILT.clear()
+    again = run_shadow.main(_argv(record=_records_dir() / "next.jsonl"),
+                            registration=_registration(), git=_AckGit(), lock=_Lock(True),
+                            environ=CLEAN, settings_files=())
+    assert again == run_shadow.EXIT_STARTUP_REFUSED
+    assert _codes(capsys.readouterr().err) == [run_shadow.UNACKNOWLEDGED_RECORD]
+
+
+@pytest.mark.parametrize("loop_code", [0, 13, 14])
+def test_an_event_found_after_a_controlled_stop_ends_the_run_with_15(
+        loop_code, through, monkeypatch, capsys):  # noqa: F811
+    # with the real loop on the test database: the cap case is
+    # test_an_event_in_a_round_a_cap_cut_short_is_found_after_the_stop_and_ends_with_15
+    _stubbed_harness(monkeypatch, loop_code)
+    path = _records_dir() / "stopped.jsonl"
+    code = run_shadow.main(_argv(record=path), registration=_registration(), git=_AckGit(),
+                           lock=_Lock(True), environ=CLEAN, settings_files=())
+    assert code == EXIT_STOP_EVENT
+    footer = json.loads(path.read_text().splitlines()[-1])
+    assert (footer["exit_code"], footer["loop_exit_code"]) == (15, loop_code)
+
+
+@pytest.mark.parametrize("text,why", [
+    ("", "the acknowledgement does not name the record's sha256"),
+    ("Read by A. Person on 2026-11-26.\n", "the acknowledgement does not name the record's sha256"),
+    (None, "the acknowledgement does not name the record's sha256"),       # another record's sha
+], ids=["empty", "no_sha", "another_records_sha"])
+def test_an_acknowledgement_whose_text_does_not_name_the_record_is_refused(
+        text, why, through, capsys):  # noqa: F811
+    sha = _earlier("earlier.jsonl", code=15)
+    other = _earlier("other.jsonl", code=0)                  # a normal record: no ack needed
+    body = f"Read by A. Person on 2026-11-26: {other}\n" if text is None else text
+    code, lock = _start(_AckGit(texts={_ack(sha): body}))
+    err = capsys.readouterr().err
+    with capsys.disabled():
+        print(f"STDERR (acknowledgement text: {text!r})\n" + err)
+    assert _codes(err) == [run_shadow.UNACKNOWLEDGED_RECORD]
+    assert why in err and sha in err and lock.asked == 0 and through == []
+
+
+def test_an_acknowledgement_that_cannot_be_read_is_refused(through, capsys):  # noqa: F811
+    sha = _earlier("earlier.jsonl", code=15)
+    code, lock = _start(_AckGit(unreadable={_ack(sha)}))
+    err = capsys.readouterr().err
+    assert _codes(err) == [run_shadow.UNACKNOWLEDGED_RECORD]
+    assert "the acknowledgement cannot be read" in err and lock.asked == 0
+
+
+def test_an_acknowledgement_whose_text_names_the_record_lets_the_start_through(
+        through, capsys):  # noqa: F811
+    sha = _earlier("earlier.jsonl", code=15)
+    text = f"Record {sha}\nRead by A. Person, 2026-11-26.\n"
+    code, lock = _start(_AckGit(texts={_ack(sha): text}))
+    assert "refused: unacknowledged_record" not in capsys.readouterr().err
+    assert lock.asked == 1 and len(through) == 1
+
