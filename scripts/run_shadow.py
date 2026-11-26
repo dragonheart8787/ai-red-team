@@ -51,8 +51,9 @@ Before anything reads the database the runner refuses, in this order (plan items
    ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) that has no footer, or whose footer's ``exit_code`` is
    not 0, 10, 13 or 14, or that has a ``stop_event`` line, or whose header cannot be read or names
    no commit (no ``registered_commit`` string), needs a committed acknowledgement,
-   ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``: tracked by git (``git ls-files``; the
-   clean tree of step 2 makes tracked committed), and whose committed text contains that sha256.
+   ``REGISTERED_ACKS_DIR/<sha256 of the record's bytes>.md``, read from HEAD (``git show
+   HEAD:<file>``, which only a committed file passes; plan item 155), whose text contains that
+   sha256.
    Only a record whose header names another commit, as a string, is another registration's and is
    not checked. Every such record is checked, not the newest only; one without its
    acknowledgement is ``unacknowledged_record``, and the refusal names the record's file and
@@ -350,15 +351,19 @@ def acknowledgement_problems(*, records_dir: str, acks_dir: str, registered_comm
             continue
         sha = hashlib.sha256(data).hexdigest()
         ack = f"{Path(acks_dir).as_posix()}/{sha}.md"
-        if not _tracked(ack, repo=repo, git=git):
+        why = _acknowledgement_text_problem(ack, sha, repo=repo, git=git)
+        if why is _NOT_IN_HEAD:
             problems.append((UNACKNOWLEDGED_RECORD,
                              f"{path.name} (sha256 {sha}) ended abnormally and has no committed "
                              f"acknowledgement {ack}"))
-            continue
-        why = _acknowledgement_text_problem(ack, sha, repo=repo, git=git)
-        if why is not None:
+        elif why is not None:
             problems.append((UNACKNOWLEDGED_RECORD, f"{path.name} (sha256 {sha}): {why} ({ack})"))
     return problems
+
+
+#: ``git show HEAD:<file>`` failed: the file is not committed (plan item 155: the only check that
+#: the acknowledgement is committed; a separate ``git ls-files`` check added nothing).
+_NOT_IN_HEAD = "not in HEAD"
 
 
 def _acknowledgement_text_problem(name: str, sha: str, *, repo: Path, git: Callable) -> str | None:
@@ -369,19 +374,10 @@ def _acknowledgement_text_problem(name: str, sha: str, *, repo: Path, git: Calla
     except Exception:  # noqa: BLE001 - an acknowledgement that cannot be read is not one
         return "the acknowledgement cannot be read"
     if done.returncode != 0:
-        return "the acknowledgement cannot be read"
+        return _NOT_IN_HEAD
     if sha not in done.stdout.decode("utf-8", "replace"):
         return "the acknowledgement does not name the record's sha256"
     return None
-
-
-def _tracked(name: str, *, repo: Path, git: Callable) -> bool:
-    """Whether git tracks ``name``; with the clean tree of step 2, tracked is committed."""
-    try:
-        done = git(repo, "ls-files", "--", name)
-    except Exception:  # noqa: BLE001 - not being able to ask is not an acknowledgement
-        return False
-    return done.returncode == 0 and done.stdout.decode().strip() == name
 
 
 # -- the stop event's tool output: its evidence's raw artifact, by evidence id ---------------------

@@ -305,8 +305,9 @@ class _AckGit(_Git):
 
     ``git show HEAD:<name>`` of a tracked file answers its committed text (plan item 154): the one
     in ``texts``, or by default a line that names the sha256 its file name carries (an
-    acknowledgement ``<dir>/<sha256>.md`` that names its record); a name in ``unreadable`` is
-    tracked but cannot be shown."""
+    acknowledgement ``<dir>/<sha256>.md`` that names its record); a file not in ``tracked`` is not
+    in HEAD (``git show`` fails, as it does for an uncommitted file); for a name in ``unreadable``
+    git itself cannot be run (plan item 155)."""
 
     def __init__(self, tracked=(), *, texts=None, unreadable=()):
         super().__init__()
@@ -323,7 +324,9 @@ class _AckGit(_Git):
         if args[0] == "show" and args[1].startswith("HEAD:"):
             self.calls.append(args)
             name = args[1][len("HEAD:"):]
-            if name not in self.tracked or name in self.unreadable:
+            if name in self.unreadable:
+                raise OSError("git cannot be run")
+            if name not in self.tracked:
                 return subprocess.CompletedProcess(args, 128, b"", b"fatal: not in HEAD")
             text = self.texts.get(name, f"Read by the test, 2026-11-26: {Path(name).stem}\n")
             return subprocess.CompletedProcess(args, 0, text.encode(), b"")

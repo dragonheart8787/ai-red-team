@@ -1400,7 +1400,7 @@ CATALOGUE = [
              prepare=_without_probe,
              targets=('test_code_15_is_a_controlled_stop_and_completes_the_unclaimed_tasks_as_not_run',
                       'test_cleans_up_unclaimed_is_true_for_exactly_five_reasons')),
-    Mutation('D69-SR-E8', 'an acknowledgement git does not track is accepted [added by the implementer, item 152]',
+    Mutation('D69-SR-E8', 'an acknowledgement git does not track is accepted [added by the implementer, item 152] RETIRED 2026-11-26: equivalent since item 154; reading the acknowledgement from HEAD (git show HEAD:<file>) succeeds only for a committed file, so a separate ls-files check was dropped (item 155)',
              ('tests/test_shadow_stop_events.py',),
              edits=(Edit('scripts/run_shadow.py', """    return done.returncode == 0 and done.stdout.decode().strip() == name
 """, """    return True
