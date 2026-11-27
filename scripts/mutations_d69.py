@@ -39,6 +39,10 @@ ALLOWLIST = "harness/action_allowlist.py"
 REGISTRY_VIEW = "harness/registry_view.py"
 ACTION_TESTS = ("tests/test_harness_action_allowlist.py",)
 DIRECTION_TESTS = ("tests/test_harness_import_direction.py",)
+#: Plan item 162 (D69-NC-2).
+NC2_API = "control_plane/api/function_api.py"
+NC2_TESTS = ("tests/test_inline_dispatch_allowlist.py",)
+NC2_CASE = "test_a_case_of_the_inline_dispatch_allowlist"
 
 #: D69-H2-5's mutation is a file, not an edit. Written under ``agents/`` so that the rule it breaks
 #: -- nothing under ``agents/`` or ``control_plane/`` imports ``harness`` -- is broken in the place
@@ -1705,6 +1709,79 @@ CATALOGUE = [
 """, ""),),
              prepare=_without_probe,
              targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    # -- plan item 162: D69-NC-2, the inline dispatch's network allowlist (docs/ADR_INLINE_DISPATCH_ALLOWLIST.md) --
+    # NC2-1 to NC2-6 were named by the review layer's task; NC2-7 and NC2-8 were added by the implementer.
+    Mutation('D69-NC2-1', "no derivation: the dispatch keeps the caller's allowlist or [target] [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """    if capability.action not in vocab.NETWORK_ACTIONS:
+        return run.network_allowlist, None
+""", """    if True:
+        return run.network_allowlist, None
+"""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-2', "the subnet check compares network addresses only [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """        if not any(entry.version == block.version and entry.subnet_of(block) for block in blocks):
+""", """        if not any(entry.network_address == block.network_address for block in blocks):
+"""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-3', "the target-in-allowlist check is removed [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """        if not any(address in entry for entry in entries):
+            return vocab.TARGET_OUTSIDE_ALLOWLIST
+""", ""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-4', "the caller's allowlist takes priority, unchecked [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """    identity = run.target.logical_identity
+    with engagement_scope(run.engagement_id) as conn:
+""", """    if run.network_allowlist:
+        return run.network_allowlist, None
+    identity = run.target.logical_identity
+    with engagement_scope(run.engagement_id) as conn:
+"""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-5', "the R-d wrapper is removed: a non-CIDR allowlist raises a plain ValueError [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit('tool_gateway/sandbox.py', """        try:
+            allowlist = validate_allowlist(network_allowlist)
+        except ValueError as exc:
+""", """        allowlist = validate_allowlist(network_allowlist)
+        if False:
+"""), Edit('tool_gateway/sandbox.py', """            raise NotStarted(str(exc)) from exc
+""", """            raise NotStarted("")
+""")),
+             prepare=_without_probe,
+             targets=('test_the_sandbox_turns_a_non_cidr_allowlist_into_not_started_before_docker',)),
+    Mutation('D69-NC2-6', "the sandbox is still called when the dispatch is not started [review layer's task, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """    if refusal is not None:
+        # D69-NC-2 (R-c): not started, the capability_missing way -- no sandbox, no run.
+""", """    if refusal is not None:
+        run.sandbox.run(network_allowlist=list(network_allowlist or ()))
+"""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-7', "a refused start leaves the proposal at capability_issued [added by the implementer, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """            stages.advance(conn, proposal_id, expected=stages.CAPABILITY_ISSUED,
+                           new=stages.CLOSED, detail=refusal)
+""", ""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
+    Mutation('D69-NC2-8', "an allowlist entry that is not a CIDR is skipped, not refused [added by the implementer, item 162]",
+             NC2_TESTS,
+             edits=(Edit(NC2_API, """        except ValueError:
+            return vocab.ALLOWLIST_INVALID
+""", """        except ValueError:
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=(NC2_CASE,)),
 ]
 
 if __name__ == "__main__":

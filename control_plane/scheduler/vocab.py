@@ -34,6 +34,18 @@ IPV6_UNSUPPORTED = "ipv6_not_supported_v0"
 SKIP_REASONS = (ACTION_NOT_SUPPORTED, SCOPE_TYPE_NO_RANGE, SCOPE_TOO_NARROW, TARGET_RESERVED,
                 IPV6_UNSUPPORTED)
 
+#: D69-NC-2 (``docs/ADR_INLINE_DISPATCH_ALLOWLIST.md``): why ``function_api._dispatch`` did not
+#: start a network dispatch whose allowlist the caller passed. Outcomes of the dispatch (the
+#: proposal's ``stage_detail`` and ``ActionOutcome.failure``), not dispositions of the scheduler, so
+#: they are apart from ``SKIP_REASONS``, which migration 0019's ``CHECK`` repeats. A skip reason of
+#: ``derive_network_allowlist`` is used as it is.
+ALLOWLIST_INVALID = "allowlist_invalid"                      # an entry is not a CIDR
+ALLOWLIST_EXCEEDS_SCOPE = "allowlist_exceeds_scope"          # an entry is not inside the scope
+TARGET_OUTSIDE_ALLOWLIST = "target_outside_allowlist"        # the ip target is in no entry
+AUTHORIZED_SCOPE_MISSING = "authorized_scope_missing"        # no scope object to derive from
+ALLOWLIST_REFUSALS = (ALLOWLIST_INVALID, ALLOWLIST_EXCEEDS_SCOPE, TARGET_OUTSIDE_ALLOWLIST,
+                      AUTHORIZED_SCOPE_MISSING)
+
 STOP_SIGNAL = "signal"
 STOP_LOCK_LOST = "lock_lost"
 STOP_DB_LOST = "db_lost"

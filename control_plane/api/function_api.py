@@ -54,6 +54,7 @@ are recorded together and can be read back with
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import uuid
@@ -90,7 +91,9 @@ from control_plane.plan_fit import relation as plan_relation
 from control_plane.policy.engine import build_policy_input, evaluate
 from control_plane.policy.merge import EffectivePolicy
 from control_plane.provenance import graph
-from control_plane.registry.scope_registry import list_scope_objects
+from control_plane.registry.scope_registry import get_scope_object, list_scope_objects
+from control_plane.scheduler import vocab
+from control_plane.scheduler.allowlist import derive_network_allowlist
 from control_plane.state.db import engagement_scope, get_engine
 from tool_gateway.adapters._http import AdapterError
 from tool_gateway.registry import adapter_for, side_effect_floor
@@ -1066,10 +1069,32 @@ def _dispatch(run: _Run, proposal_id: str) -> ActionOutcome:
             decision=ALLOW, failure="capability_missing", **_common(run, proposal_id),
         )
 
+    network_allowlist, refusal = _network_allowlist(run, proposal_id, capability)
+    if refusal is not None:
+        # D69-NC-2 (R-c): not started, the capability_missing way -- no sandbox, no run.
+        with engagement_scope(eid) as conn:
+            stages.advance(conn, proposal_id, expected=stages.CAPABILITY_ISSUED,
+                           new=stages.CLOSED, detail=refusal)
+            conn.execute(
+                text("UPDATE action_proposals SET dispatch_state = 'failed', updated_at = now() "
+                     "WHERE proposal_id = :p"), {"p": proposal_id})
+        record_audit(
+            engagement_id=eid, actor=run.actor, event_type="tool_run.refused",
+            subject_type="action_proposal", subject_id=proposal_id, decision="DENY",
+            reasons=(refusal,),
+            payload={"action": capability.action, "capability_id": capability.capability_id,
+                     "network_allowlist": list(run.network_allowlist or []),
+                     "derived_allowlist": list(network_allowlist or [])},
+        )
+        return ActionOutcome(
+            decision=ALLOW, capability_id=capability.capability_id, failure=refusal,
+            **_common(run, proposal_id),
+        )
+
     outcome = _dispatch_for_action(
         engagement_id=eid, proposal_id=proposal_id, capability=capability,
         target=run.target.logical_identity.value, actor=run.actor, sandbox=run.sandbox,
-        network_allowlist=run.network_allowlist, execution_context=run.execution_context,
+        network_allowlist=network_allowlist, execution_context=run.execution_context,
         proxy_url=run.proxy_url, ca_cert_pem=run.ca_cert_pem,
         proxy_cert_spki=run.proxy_cert_spki,
     )
@@ -1079,6 +1104,68 @@ def _dispatch(run: _Run, proposal_id: str) -> ActionOutcome:
         evidence_id=outcome.evidence_id, failure=outcome.reason,
         **_common(run, proposal_id),
     )
+
+
+def _network_allowlist(
+    run: _Run, proposal_id: str, capability,
+) -> tuple[Sequence[str] | None, str | None]:
+    """D69-NC-2 (``docs/ADR_INLINE_DISPATCH_ALLOWLIST.md``): the allowlist a dispatch is given, and
+    the reason it is not started (or ``None``).
+
+    Only an action in ``vocab.NETWORK_ACTIONS`` is checked; any other keeps the caller's allowlist,
+    unchecked (a gap the ADR states). R-a: the allowlist is derived from the scope object the
+    proposal was authorized by (D62's ``derive_network_allowlist``), and a skip reason means not
+    started. R-b: a caller's allowlist is used only when every entry is a CIDR inside the derived
+    block and an ip target lies in one of them; with none, the derived one is used. The second value
+    returned with a refusal is the derived allowlist, for the audit record.
+    """
+    if capability.action not in vocab.NETWORK_ACTIONS:
+        return run.network_allowlist, None
+    identity = run.target.logical_identity
+    with engagement_scope(run.engagement_id) as conn:
+        scope_object_id = conn.execute(
+            text("SELECT authorized_scope_object_id FROM action_proposals "
+                 "WHERE proposal_id = :p"), {"p": proposal_id}).scalar_one_or_none()
+        scope = get_scope_object(conn, scope_object_id) if scope_object_id else None
+    if scope is None:
+        return None, vocab.AUTHORIZED_SCOPE_MISSING
+    derived = derive_network_allowlist(
+        action=capability.action, scope_type=scope.type, scope_value=scope.value,
+        target_type=identity.type, target_value=str(identity.value))
+    if derived.skip is not None:
+        return None, derived.skip
+    if not run.network_allowlist:
+        return list(derived.allowlist), None
+    refusal = caller_allowlist_refusal(
+        run.network_allowlist, derived.allowlist, identity.type, str(identity.value))
+    if refusal is not None:
+        return list(derived.allowlist), refusal
+    return run.network_allowlist, None
+
+
+def caller_allowlist_refusal(
+    caller: Sequence[str], derived: Sequence[str], target_type: str, target_value: str,
+) -> str | None:
+    """R-b, a pure function: why a caller's allowlist may not be used, or ``None``.
+
+    An entry is read the way the sandbox reads it (``ipaddress.ip_network(entry, strict=False)``,
+    ``tool_gateway.sandbox.validate_allowlist``), so a bare address is its ``/32``.
+    """
+    entries = []
+    for entry in caller:
+        try:
+            entries.append(ipaddress.ip_network(str(entry), strict=False))
+        except ValueError:
+            return vocab.ALLOWLIST_INVALID
+    blocks = [ipaddress.ip_network(block) for block in derived]
+    for entry in entries:
+        if not any(entry.version == block.version and entry.subnet_of(block) for block in blocks):
+            return vocab.ALLOWLIST_EXCEEDS_SCOPE
+    if target_type == "ip":
+        address = ipaddress.ip_address(target_value)
+        if not any(address in entry for entry in entries):
+            return vocab.TARGET_OUTSIDE_ALLOWLIST
+    return None
 
 
 def _record_provenance(run: _Run, proposal_id: str) -> None:

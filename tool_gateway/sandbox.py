@@ -1001,7 +1001,13 @@ class DockerSandbox:
         container's entrypoint -- an image's own ENTRYPOINT follows it -- and the run's deadline is
         the budget plus ``dh.SLACK_SECONDS``, so the control plane's own timeout fires first.
         """
-        allowlist = validate_allowlist(network_allowlist)
+        try:
+            allowlist = validate_allowlist(network_allowlist)
+        except ValueError as exc:
+            # D69-NC-2 (R-d): an allowlist Docker cannot take is refused before anything exists,
+            # so it is a start that provably did not happen -- the base ``NotStarted``, with the
+            # message -- not a plain ValueError that no dispatch catches.
+            raise NotStarted(str(exc)) from exc
         run_id = run_id or uuid.uuid4().hex[:12]
         owner = engagement_id or NO_OWNER
         # Everything up to the container's creation is "not started" if it fails (D58-7), whatever

@@ -83,7 +83,7 @@ class StdoutSandbox:
 
 def scan(engagement_id: str, registry, *, host: str, scan_type: str, stdout: str):
     """One real dispatch of ``network.scan`` against ``host``, with a fake container."""
-    scope_id = sup.register_scope(registry, type="ip", value=host)
+    scope_id = sup.register_scope(registry, type="cidr", value="10.83.0.0/24")
     proposal = attach_task(
         engagement_id,
         sup.proposal_for(scope_id, host=host, scan_type=scan_type),
