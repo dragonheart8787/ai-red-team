@@ -63,13 +63,15 @@ def _argv(factory=ONCE, record=NOWHERE):
 
 
 @pytest.fixture(autouse=True)
-def _subscription_only(monkeypatch, tmp_path):
+def _subscription_only(monkeypatch, tmp_path, tmp_path_factory):
     """The billing guard (plan item 143) sees no billing variable and no user settings file, so
     that these tests do not depend on the machine they run on; the guard's own tests are in
     ``tests/test_shadow_runner_auth.py``. And (S4) the test's ``tmp_path`` is the registered
     records directory of the registrations ``_registration`` builds: relative to
     ``tmp_path.parent``, which ``run_shadow.main`` is handed as its records root (plan item 156)."""
     RECORDS["dir"], RECORDS["root"] = tmp_path.name, str(tmp_path.parent)
+    # a settings file a test writes is kept out of the records directory (plan item 159)
+    RECORDS["settings"] = str(tmp_path_factory.mktemp("settings"))
     monkeypatch.setattr(run_shadow, "main", functools.partial(MAIN, records_root=tmp_path.parent))
     for name in auth_guard.BILLING_VARIABLES:
         monkeypatch.delenv(name, raising=False)

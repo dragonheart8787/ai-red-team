@@ -47,7 +47,11 @@ Before anything reads the database the runner refuses, in this order (plan items
    only appended to, which ``scripts/analyse_shadow.py`` checks); anything git cannot answer is
    ``git_unavailable``. It comes after step 2, a question to git about the same checkout, and
    before the factory is built, the record's path and the acknowledgements: an acknowledgement
-   names a record's sha256, which is only fixed while no commit can change the record;
+   names a record's sha256, which is only fixed while no commit can change the record; then
+   (plan item 159) the directory's own entries: anything but a regular ``*.jsonl`` file (a
+   subdirectory, another suffix, a symbolic link, a hidden name) is
+   ``records_dir_unexpected_entry``, by name; a directory that does not exist is not refused
+   here (the record cannot be created, ``record_unwritable``);
 3. **the factory string**, which must be in ``run_harness.APPROVED_ROLE_FACTORIES`` (the runner
    keeps no list of its own);
 4. **the factory**, imported and called once;
@@ -60,7 +64,9 @@ Before anything reads the database the runner refuses, in this order (plan items
 7. **the record**: ``--record`` names a path inside ``REGISTERED_RECORDS_DIR``
    (``record_outside_registered_dir``) that does not exist yet (``record_exists``) -- two checks of
    the path alone, which read no record (plan item 154) -- and is not the ledger's name
-   (``looks.jsonl``, also ``record_outside_registered_dir``; plan item 156), and then
+   (``looks.jsonl``, also ``record_outside_registered_dir``; plan item 156), and, after the
+   check that it is inside the directory, is directly in it, ends with ``.jsonl`` and is not a
+   hidden name (``record_name_not_allowed``, naming the rule; plan item 159), and then
 
    7a. **the acknowledgements** (S4, plan items 151 (c), (e) and 154): every record in
    ``REGISTERED_RECORDS_DIR`` (``*.jsonl``) that has no footer, or whose footer's ``exit_code`` is
@@ -236,6 +242,10 @@ RECORDS_DIR_OUTSIDE_REPOSITORY = "records_dir_outside_repository"
 RECORDS_DIR_IGNORED = "records_dir_ignored"
 RECORD_REMOVED = "record_removed"
 RECORD_MODIFIED = "record_modified"
+#: Plan item 159: a record is a ``*.jsonl`` directly in the records directory, and the directory
+#: holds nothing else (the acknowledgement check and the analysis read exactly those files).
+RECORD_NAME_NOT_ALLOWED = "record_name_not_allowed"
+RECORDS_DIR_UNEXPECTED_ENTRY = "records_dir_unexpected_entry"
 REASONS = (
     NOT_REGISTERED, CLASS_MODULE_NOT_REGISTERED, GIT_UNAVAILABLE, TREE_NOT_CLEAN,
     REGISTERED_COMMIT_NOT_IN_HEAD, REGISTERED_FILE_MISSING, REGISTERED_FILE_DIFFERS,
@@ -245,6 +255,7 @@ REASONS = (
     LURE_LIST_UNREGISTERED, APPROVED_TARGETS_UNREGISTERED, RECORDS_DIR_UNREGISTERED,
     ACKS_DIR_UNREGISTERED, RECORD_OUTSIDE_REGISTERED_DIR, UNACKNOWLEDGED_RECORD,
     RECORDS_DIR_OUTSIDE_REPOSITORY, RECORDS_DIR_IGNORED, RECORD_REMOVED, RECORD_MODIFIED,
+    RECORD_NAME_NOT_ALLOWED, RECORDS_DIR_UNEXPECTED_ENTRY,
 )
 
 Problem = tuple[str, str]          # (code, explanation)
@@ -424,6 +435,55 @@ def record_history_problems(repo: Path, records_dir: str, registered_commit: str
         else:
             problems[(RECORD_MODIFIED, f"{name} was modified in commit {commit}")] = None
     return list(problems)
+
+
+def record_name_problem(record: Path, directory: Path) -> str | None:
+    """Which rule the name of ``record``, a path already inside ``directory``, breaks; None if it
+    is a record's name (plan item 159): directly in the directory, ``*.jsonl``, not hidden, not the
+    ledger's."""
+    if record.resolve().parent != directory.resolve():
+        return "is in a subdirectory: a record is directly in the records directory"
+    if record.suffix != ".jsonl":
+        return "does not end with .jsonl"
+    if record.name.startswith("."):
+        return "is a hidden name"
+    if record.name == LEDGER_NAME:
+        return f"is the ledger's name, {LEDGER_NAME}"
+    return None
+
+
+def records_dir_entry_problems(directory: Path) -> list[Problem]:
+    """Every entry directly in the records directory that is not a regular ``*.jsonl`` file (a
+    record, or the ledger): a subdirectory, another suffix, a symbolic link, a hidden name, or
+    anything else, by name, never content (plan item 159). A directory that does not exist has no
+    entries: nothing is refused here (the runner then cannot create the record,
+    ``record_unwritable``; the analysis finds no record, ``no_records``)."""
+    if directory.is_symlink():
+        return [(RECORDS_DIR_UNEXPECTED_ENTRY, f"{directory.name}: the records directory is a "
+                                               "symbolic link")]
+    if not directory.exists():
+        return []
+    if not directory.is_dir():
+        return [(RECORDS_DIR_UNEXPECTED_ENTRY, f"{directory.name}: the records directory is not "
+                                               "a directory")]
+    problems: list[Problem] = []
+    for entry in sorted(directory.iterdir()):
+        if entry.name.startswith("."):
+            kind = "a hidden name"
+        elif entry.is_symlink():
+            kind = "a symbolic link"
+        elif entry.is_dir():
+            kind = "a subdirectory"
+        elif not entry.is_file():
+            kind = "not a regular file"
+        elif entry.suffix != ".jsonl":
+            kind = "not a *.jsonl file"
+        else:
+            continue
+        problems.append((RECORDS_DIR_UNEXPECTED_ENTRY,
+                         f"{entry.name} is {kind}: the records directory holds only *.jsonl "
+                         f"records and {LEDGER_NAME}"))
+    return problems
 
 
 # -- 2a. the acknowledgements (S4, plan item 151 (c), (e)) -----------------------------------------
@@ -839,6 +899,7 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
         names += (record_path.name,)
     problems = records_dir_problems(repo=repo, records_dir=records_rel, names=names, git=git)
     problems += record_history_problems(repo, records_rel, reg.commit, git)
+    problems += records_dir_entry_problems(directory)                       # plan item 159
     if problems:
         return refuse(problems)
     run_argv = ["run", *harness_argv]
@@ -867,6 +928,9 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
     if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
         return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
                          f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    why = record_name_problem(record_path, Path(reg.records_dir))                          # 7
+    if why is not None:
+        return refuse([(RECORD_NAME_NOT_ALLOWED, f"{record_path} {why}")])
     if record_path.exists():
         return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
     problems = acknowledgement_problems(                                                   # 7a

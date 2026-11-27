@@ -255,6 +255,7 @@ def look(*, reason: str | None, registration: Registration, reading: str | None,
     names = tuple(p.name for p in sorted(directory.glob("*.jsonl")) if p.name != LEDGER_NAME)
     problems = run_shadow.records_dir_problems(repo=repo, records_dir=rel, names=names, git=git)
     problems += run_shadow.record_history_problems(repo, rel, reg.commit, git)            # b
+    problems += run_shadow.records_dir_entry_problems(directory)        # plan item 159
     if problems:
         raise Refused(problems)
     records = read_records(directory, reg.commit)                                         # c

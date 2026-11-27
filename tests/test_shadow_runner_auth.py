@@ -30,6 +30,7 @@ from harness.exit_codes import EXIT_STARTUP_REFUSED
 from scripts import run_shadow
 from tests import shadow_compliant_roles as compliant
 from tests.test_shadow_runner_guard import (  # noqa: F401 - fixtures
+    RECORDS,
     _argv,
     _codes,
     _Git,
@@ -105,7 +106,7 @@ def test_every_present_variable_is_named_on_its_own_line(through, capsys):  # no
 
 
 def _settings(tmp_path: Path, content) -> Path:
-    path = tmp_path / "settings.json"
+    path = Path(RECORDS["settings"]) / "settings.json"     # not in the records directory (item 159)
     path.write_text(content if isinstance(content, str) else json.dumps(content))
     return path
 

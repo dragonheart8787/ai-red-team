@@ -1459,6 +1459,9 @@ CATALOGUE = [
              edits=(Edit('scripts/run_shadow.py', """    if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
         return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
                          f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    why = record_name_problem(record_path, Path(reg.records_dir))                          # 7
+    if why is not None:
+        return refuse([(RECORD_NAME_NOT_ALLOWED, f"{record_path} {why}")])
     if record_path.exists():
         return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
     problems = acknowledgement_problems(                                                   # 7a
@@ -1474,6 +1477,9 @@ CATALOGUE = [
     if not record_path.resolve().is_relative_to(Path(reg.records_dir).resolve()):          # 7
         return refuse([(RECORD_OUTSIDE_REGISTERED_DIR,
                          f"{record_path} is not inside REGISTERED_RECORDS_DIR {reg.records_dir}")])
+    why = record_name_problem(record_path, Path(reg.records_dir))                          # 7
+    if why is not None:
+        return refuse([(RECORD_NAME_NOT_ALLOWED, f"{record_path} {why}")])
     if record_path.exists():
         return refuse([(RECORD_EXISTS, f"{record_path} exists: a run writes a new record")])
 """),),
@@ -1628,6 +1634,77 @@ CATALOGUE = [
 """),),
              prepare=_without_probe,
              targets=('test_a_reading_that_fails_writes_no_ledger',)),
+    # -- plan item 159: the name of --record and the entries of the records directory --
+    # N1 to N4 were named by the review layer's task; N5 to N9 were added by the implementer.
+    Mutation('D69-SR-N1', "a --record in a subdirectory of the records directory is allowed [review layer's task, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if record.resolve().parent != directory.resolve():
+""", """    if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_record_name_that_is_not_a_record_s_is_refused',)),
+    Mutation('D69-SR-N2', "a --record not named *.jsonl is allowed [review layer's task, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if record.suffix != ".jsonl":
+""", """    if False:
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_record_name_that_is_not_a_record_s_is_refused',)),
+    Mutation('D69-SR-N3', "the directory's entry check ignores a subdirectory [review layer's task, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """        elif entry.is_dir():
+            kind = "a subdirectory"
+""", """        elif entry.is_dir():
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-N4', "the analysis does not check the directory's entries [review layer's task, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/analyse_shadow.py', """    problems += run_shadow.records_dir_entry_problems(directory)        # plan item 159
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-N5', "a --record with a hidden name is allowed [added by the implementer, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """    if record.name.startswith("."):
+        return "is a hidden name"
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_a_record_name_that_is_not_a_record_s_is_refused',)),
+    Mutation('D69-SR-N6', "the directory's entry check ignores a symbolic link [added by the implementer, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """        elif entry.is_symlink():
+            kind = "a symbolic link"
+""", """        elif entry.is_symlink():
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-N7', "the directory's entry check ignores a hidden name [added by the implementer, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """        if entry.name.startswith("."):
+            kind = "a hidden name"
+""", """        if entry.name.startswith("."):
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-N8', "the directory's entry check ignores another suffix [added by the implementer, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """        elif entry.suffix != ".jsonl":
+            kind = "not a *.jsonl file"
+""", """        elif entry.suffix != ".jsonl":
+            continue
+"""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
+    Mutation('D69-SR-N9', "the runner does not check the directory's entries [added by the implementer, item 159]",
+             ('tests/test_shadow_record_names.py',),
+             edits=(Edit('scripts/run_shadow.py', """    problems += records_dir_entry_problems(directory)                       # plan item 159
+""", ""),),
+             prepare=_without_probe,
+             targets=('test_an_unexpected_entry_in_the_records_directory_refuses_the_start_and_the_look',)),
 ]
 
 if __name__ == "__main__":

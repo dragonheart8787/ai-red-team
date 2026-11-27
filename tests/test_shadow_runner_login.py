@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +24,7 @@ from harness.exit_codes import EXIT_STARTUP_REFUSED
 from scripts import run_shadow
 from tests import shadow_compliant_roles as compliant
 from tests.test_shadow_runner_guard import (  # noqa: F401 - fixtures
+    RECORDS,
     SUBSCRIPTION_LOGIN,
     _argv,
     _codes,
@@ -91,7 +93,7 @@ def test_a_base_url_is_refused_and_not_passed_to_the_cli(tmp_path, through, caps
 
 
 def _settings(tmp_path, content):
-    path = tmp_path / "settings.json"
+    path = Path(RECORDS["settings"]) / "settings.json"     # not in the records directory (item 159)
     path.write_text(content if isinstance(content, str) else json.dumps(content))
     return path
 
