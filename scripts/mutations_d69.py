@@ -1768,9 +1768,11 @@ CATALOGUE = [
              targets=(NC2_CASE,)),
     Mutation('D69-NC2-7', "a refused start leaves the proposal at capability_issued [added by the implementer, item 162]",
              NC2_TESTS,
-             edits=(Edit(NC2_API, """            stages.advance(conn, proposal_id, expected=stages.CAPABILITY_ISSUED,
-                           new=stages.CLOSED, detail=refusal)
-""", ""),),
+             edits=(Edit(NC2_API, """        # D69-NC-2 (R-c): not started, the capability_missing way -- no sandbox, no run.
+        with engagement_scope(eid) as conn:
+            stages.advance(""", """        # D69-NC-2 (R-c): not started, the capability_missing way -- no sandbox, no run.
+        with engagement_scope(eid) as conn:
+            False and stages.advance("""),),
              prepare=_without_probe,
              targets=(NC2_CASE,)),
     Mutation('D69-NC2-8', "an allowlist entry that is not a CIDR is skipped, not refused [added by the implementer, item 162]",
