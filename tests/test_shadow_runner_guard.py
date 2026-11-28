@@ -152,12 +152,31 @@ def _codes(err):
 # -- 1. the registration constants -----------------------------------------------------------------
 
 
-def test_the_four_constants_are_empty_and_the_runner_refuses_with_them(capsys):
-    assert run_shadow.REGISTERED_COMMIT is None and run_shadow.REGISTERED_FILES is None
-    assert run_shadow.REGISTERED_DIGESTS is None and run_shadow.APPROVED_ROLE_CLASSES == {}
+def test_the_four_constants_are_the_dry_run_registration_and_empty_ones_are_refused(capsys):
+    """Renamed from ``test_the_four_constants_are_empty_and_the_runner_refuses_with_them`` (plan
+    item 166): the constants are exactly the dry run's registration, and an empty registration,
+    handed in, is still refused."""
+    # dry-run registration of plan item 166; restored to empty by the commit that empties the registration (S8 2b)  # noqa: E501
+    from scripts.shadow_lab import dryrun_roles
+    from tool_gateway.sandbox import DockerSandbox
+    assert run_shadow.REGISTERED_COMMIT == "0c1412119ba1800485f3f43d152690cc35523d6b"
+    assert run_shadow.REGISTERED_FILES == (
+        "scripts/shadow_lab/dryrun_roles.py", "scripts/shadow_lab/dryrun_reading.py",
+        "scripts/shadow_lab/start_lab.sh", "scripts/shadow_lab/stop_lab.sh",
+        "tool_gateway/sandbox.py", "agents/llm/worker_base.py", "agents/llm/supervisor_base.py",
+        "agents/llm/reviewer_base.py", "agents/llm/auth_guard.py", "harness/loop.py",
+        "harness/stop_events.py", "scripts/run_harness.py", "control_plane/api/function_api.py")
+    assert run_shadow.REGISTERED_DIGESTS == {
+        "worker": "8ad2b2611a2235de284d16b5fba398e31ba2504463445f13fbaca4a4eea4b605",
+        "supervisor": "0f41aa9a92448dbe14aec7e1154bb0173e8b82e830e9fb0c91fbd450e4d0c61a",
+        "reviewer": "612dcde3d5abdd59e56797b9870d3333dfdbcb36516b4aa38dd4ad2504c58c63"}
+    assert run_shadow.APPROVED_ROLE_CLASSES == {
+        "worker": (dryrun_roles.DryRunWorker,), "supervisor": (dryrun_roles.DryRunSupervisor,),
+        "reviewer": (dryrun_roles.DryRunReviewer,), "sandbox": (DockerSandbox,)}
+    empty = run_shadow.Registration(commit=None, files=None, digests=None)
     git, lock = _Git(), _Lock(True)
     sys.modules.pop(PROBE, None)
-    code = run_shadow.main(_argv(f"{PROBE}:build"), git=git, lock=lock)
+    code = run_shadow.main(_argv(f"{PROBE}:build"), registration=empty, git=git, lock=lock)
     assert code == EXIT_STARTUP_REFUSED
     assert _codes(capsys.readouterr().err) == [run_shadow.NOT_REGISTERED]
     assert git.calls == [] and lock.asked == 0 and PROBE not in sys.modules

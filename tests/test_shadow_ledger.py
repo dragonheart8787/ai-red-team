@@ -229,10 +229,14 @@ def test_a_ledger_that_cannot_be_read_or_skips_a_number_is_corrupt(text, said, o
 # == the reading ===================================================================================
 
 
-def test_the_product_reading_is_empty_and_every_look_is_refused(one, capsys):
-    assert analyse_shadow.REGISTERED_READING is None
+def test_the_product_reading_is_the_dry_run_s_and_an_empty_one_refuses_every_look(one, capsys):
+    """Renamed from ``test_the_product_reading_is_empty_and_every_look_is_refused`` (plan item
+    166): the reading is the dry run's, and an empty reading, handed in, is still refused."""
+    # dry-run registration of plan item 166; restored to empty by the commit that empties the registration (S8 2b)  # noqa: E501
+    assert analyse_shadow.REGISTERED_READING == "scripts.shadow_lab.dryrun_reading:read"
     code = analyse_shadow.main(["look"], registration=run_shadow.Registration(
-        commit=one.commit, files=None, digests=None), records_root=one.path, git=one.git)
+        commit=one.commit, files=None, digests=None), reading="", records_root=one.path,
+        git=one.git)
     assert code == REFUSED
     assert set(_codes(capsys.readouterr().err)) == {run_shadow.NOT_REGISTERED,
                                                     analyse_shadow.READING_UNREGISTERED}

@@ -140,7 +140,9 @@ def test_a_records_dir_that_is_not_inside_the_repository_is_refused_at_step_1(
 
 def test_the_suggested_records_dir_is_inside_the_repository():
     assert run_shadow.records_dir_outside(RECDIR, ROOT) is None
-    assert run_shadow.REGISTERED_RECORDS_DIR is None        # nothing is registered
+    # dry-run registration of plan item 166; restored to empty by the commit that empties the registration (S8 2b)  # noqa: E501
+    assert run_shadow.REGISTERED_RECORDS_DIR == "docs/D69_SHADOW_DRYRUN/records"
+    assert run_shadow.records_dir_outside(run_shadow.REGISTERED_RECORDS_DIR, ROOT) is None
 
 
 # == the records directory: not ignored by git (step 2a) ===========================================

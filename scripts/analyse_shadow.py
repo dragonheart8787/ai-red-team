@@ -64,7 +64,8 @@ from scripts.run_shadow import LEDGER_NAME, Problem, Registration  # noqa: E402
 # -- the registration ------------------------------------------------------------------------------
 # The reading, ``"module:function"``: written only by the commit that registers the shadow (plan
 # section 10; item 156 (d)). Until then empty, and every look is refused.
-REGISTERED_READING: str | None = None
+#: S8's dry run (plan item 166): the dry-run reading, not the owner's reading rule.
+REGISTERED_READING: str | None = "scripts.shadow_lab.dryrun_reading:read"
 
 #: The longest result a reading may return: a verdict, not a report.
 VERDICT_MAX_CHARS = 200
