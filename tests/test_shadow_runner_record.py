@@ -38,7 +38,7 @@ CLASSES = {"worker": (compliant.RecordWorker,), "supervisor": (compliant.RecordS
 HEADER_KEYS = {"line", "format", "started_at", "registered_commit", "head", "registered_sha256",
                "code_sha256", "digests", "supervisor_warn_about_duplicates", "role_factory",
                "role_classes", "bounds", "once", "auth_guard", "login",
-               "claude_cli_version"}                                     # plan items 148, 150
+               "claude_cli_version", "dry_run"}                          # plan items 148, 150, 164
 
 
 def _registration():

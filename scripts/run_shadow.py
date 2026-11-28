@@ -53,7 +53,11 @@ Before anything reads the database the runner refuses, in this order (plan items
    ``records_dir_unexpected_entry``, by name; a directory that does not exist is not refused
    here (the record cannot be created, ``record_unwritable``);
 3. **the factory string**, which must be in ``run_harness.APPROVED_ROLE_FACTORIES`` (the runner
-   keeps no list of its own);
+   keeps no list of its own), or, under a dry-run registration only (``REGISTERED_DRY_RUN`` true,
+   S8, plan item 164), equal to ``REGISTERED_DRY_RUN_FACTORY``; that string is then handed to
+   ``run_harness.main`` as ``dry_run_factory`` with the roles already built (numbered change
+   D69-NC-3), and the header says ``dry_run``; a dry-run registration with no factory is
+   ``not_registered``;
 4. **the factory**, imported and called once;
 5. **the roles**: each role's class exactly one of ``APPROVED_ROLE_CLASSES[role]`` (``type(...)``,
    not ``isinstance``), a subclass of its base, and its inherited boundary methods the base's own
@@ -179,6 +183,13 @@ REGISTERED_LURE_TARGETS: tuple[Mapping[str, object], ...] = ()
 REGISTERED_APPROVED_TARGETS: tuple[Mapping[str, object], ...] = ()
 REGISTERED_RECORDS_DIR: str | None = None
 REGISTERED_ACKS_DIR: str | None = None
+# S8's dry run (plan item 164): a registration marked as a dry run, and the one factory it may name
+# besides ``run_harness.APPROVED_ROLE_FACTORIES`` (scripted roles with a real sandbox,
+# ``scripts/shadow_lab/dryrun_roles.py:build``). Written by the registration commit with the
+# others, and emptied by a commit after the dry run; ``run_harness`` accepts the string only when
+# this runner hands it in with the roles it built (numbered change D69-NC-3).
+REGISTERED_DRY_RUN: bool = False
+REGISTERED_DRY_RUN_FACTORY: str | None = None
 
 #: The exit codes of a record that needs no acknowledgement: the draft's controlled stops (stop
 #: event 3's set). Any other code, 15 included, and a record with no footer, need one.
@@ -273,12 +284,21 @@ class Registration:
     approved_targets: tuple[Mapping[str, object], ...] = ()
     records_dir: str | None = None
     acks_dir: str | None = None
+    dry_run: bool = False                                   # S8, plan item 164
+    dry_run_factory: str | None = None
 
 
 def registered() -> Registration:
     return Registration(REGISTERED_COMMIT, REGISTERED_FILES, REGISTERED_DIGESTS,
                         APPROVED_ROLE_CLASSES, REGISTERED_LURE_TARGETS,
-                        REGISTERED_APPROVED_TARGETS, REGISTERED_RECORDS_DIR, REGISTERED_ACKS_DIR)
+                        REGISTERED_APPROVED_TARGETS, REGISTERED_RECORDS_DIR, REGISTERED_ACKS_DIR,
+                        REGISTERED_DRY_RUN, REGISTERED_DRY_RUN_FACTORY)
+
+
+def dry_run_factory_of(reg: Registration) -> str | None:
+    """The dry-run factory this registration allows, or None: only a registration marked as a dry
+    run has one (S8, plan item 164)."""
+    return reg.dry_run_factory if reg.dry_run else None
 
 
 # -- 1. the registration constants -----------------------------------------------------------------
@@ -304,6 +324,9 @@ def registration_problems(reg: Registration, *, repo: Path = REPO_ROOT,
     if empty:
         return [(NOT_REGISTERED, f"{', '.join(empty)} empty: the shadow is not registered")]
     problems: list[Problem] = []
+    if reg.dry_run and not reg.dry_run_factory:                 # S8, plan item 164
+        problems.append((NOT_REGISTERED, "REGISTERED_DRY_RUN is set and REGISTERED_DRY_RUN_FACTORY "
+                                         "is empty: a dry run names its factory"))
     for role, classes in reg.role_classes.items():
         for cls in classes:
             name = module_file(cls, repo)
@@ -904,9 +927,12 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
         return refuse(problems)
     run_argv = ["run", *harness_argv]
     args = run_harness.build_parser().parse_args(run_argv)
-    if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES:                       # 3
+    dry_factory = dry_run_factory_of(reg)                          # S8, plan item 164
+    if args.role_factory not in run_harness.APPROVED_ROLE_FACTORIES and (                 # 3
+            dry_factory is None or args.role_factory != dry_factory):
         return refuse([(FACTORY_NOT_APPROVED, f"{args.role_factory} is not in "
-                                              "run_harness.APPROVED_ROLE_FACTORIES")])
+                                              "run_harness.APPROVED_ROLE_FACTORIES"
+                        + (" and is not REGISTERED_DRY_RUN_FACTORY" if dry_factory else ""))])
     try:
         roles = _factory(args.role_factory)                                                 # 4
     except Exception as exc:  # noqa: BLE001 - what a factory raised is not printed
@@ -967,13 +993,16 @@ def main(argv: list[str] | None = None, *, registration: Registration | None = N
                            "no_progress_limit": args.no_progress_limit,
                            "live_task_limit": args.live_task_limit,
                            "max_tokens": args.max_tokens, "max_minutes": args.max_minutes},
-                "once": args.once})
+                "once": args.once, "dry_run": bool(reg.dry_run)})
         except OSError as exc:
             return refuse([(RECORD_UNWRITABLE, f"{record_path}: the header cannot be written "
                                                f"({type(exc).__name__})")])
         check = StopEventCheck(reg.lure_targets, reg.approved_targets)
+        # S8 (plan item 164): the dry-run factory is handed over under a dry-run registration only;
+        # any other call is the one it always was
+        handover = {} if dry_factory is None else {"dry_run_factory": dry_factory}
         loop_code = run_harness.main(run_argv, lock=lock, register=register, roles=roles,
-                                     observer=record, stop_events=check)
+                                     observer=record, stop_events=check, **handover)
         code, event, after = loop_code, None, False
         if loop_code == EXIT_STOP_EVENT:
             event = check.reported

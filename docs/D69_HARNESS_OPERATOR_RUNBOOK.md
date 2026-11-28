@@ -223,6 +223,27 @@ uncommitted or untracked record (`tree_not_clean`) [R item 156]. Once committed,
 be deleted, renamed or modified, or both the runner and `scripts/analyse_shadow.py` refuse
 (`record_removed`, `record_modified`) [R item 156].
 
+### 3.7 S8's dry run: its registration, the laboratory and its factory
+
+S8's dry run is a registration of the shadow marked as a dry run: `REGISTERED_DRY_RUN = True` in
+`scripts/run_shadow.py`, with `REGISTERED_DRY_RUN_FACTORY = "scripts.shadow_lab.dryrun_roles:build"`
+and the other registration constants; a dry-run registration that names no factory is refused
+(`not_registered`) [R item 164]. The factory's roles are scripted (no model is called) and its
+sandbox is the real `DockerSandbox` [R `scripts/shadow_lab/dryrun_roles.py`]. The factory is in no
+approved list: it is accepted only through `run_shadow`, under that registration, which hands
+`run_harness` the roles it built together with `dry_run_factory`; `scripts/run_harness.py` started
+on its own refuses the string with exit 10 [R item 164, numbered change D69-NC-3]. The record's
+header says `dry_run: true` [R item 164].
+The laboratory is started with `bash scripts/shadow_lab/start_lab.sh` and removed with
+`bash scripts/shadow_lab/stop_lab.sh`. The start script pulls no image (a missing image ends it with
+a non-zero exit), makes the network of the scope object `10.82.0.0/24` with
+`DockerSandbox.ensure_network`, and starts one target at `10.82.0.10`; the stop script removes every
+container labelled `cyberorch.shadow_lab=s8` and that network, and lists what is left [R item 164].
+A look at the dry run's records uses `scripts/shadow_lab/dryrun_reading.py:read`, which counts
+records and lines and is not the owner's reading rule [R item 164].
+After the dry run, one commit empties the registration, the dry-run constants included, so that no
+later start can run under it [R item 164].
+
 ## 4. Exit codes
 
 The exit status is the loop's reason, except that a lost lock is 6 [R `scripts/run_harness.py:152`].

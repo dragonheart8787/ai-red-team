@@ -43,6 +43,10 @@ DIRECTION_TESTS = ("tests/test_harness_import_direction.py",)
 NC2_API = "control_plane/api/function_api.py"
 NC2_TESTS = ("tests/test_inline_dispatch_allowlist.py",)
 NC2_CASE = "test_a_case_of_the_inline_dispatch_allowlist"
+#: Plan item 164 (S8 part one, D69-NC-3).
+SHADOW = "scripts/run_shadow.py"
+HARNESS = "scripts/run_harness.py"
+S8_TESTS = ("tests/test_shadow_lab_dry_run.py",)
 
 #: D69-H2-5's mutation is a file, not an edit. Written under ``agents/`` so that the rule it breaks
 #: -- nothing under ``agents/`` or ``control_plane/`` imports ``harness`` -- is broken in the place
@@ -1784,6 +1788,69 @@ CATALOGUE = [
 """),),
              prepare=_without_probe,
              targets=(NC2_CASE,)),
+    # -- plan item 164: S8 part one, the dry-run registration and numbered change D69-NC-3 --
+    # S8-1 to S8-8 were named by the review layer's task.
+    Mutation('D69-S8-1', "run_shadow accepts the dry-run factory when the registration is not a dry run [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(SHADOW, """    return reg.dry_run_factory if reg.dry_run else None
+""", """    return reg.dry_run_factory
+"""),),
+             prepare=_without_probe,
+             targets=('test_the_dry_run_factory_is_refused_when_the_registration_is_not_a_dry_run',)),
+    Mutation('D69-S8-2', "run_shadow accepts a factory string that is not REGISTERED_DRY_RUN_FACTORY [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(SHADOW, """            dry_factory is None or args.role_factory != dry_factory):
+""", """            dry_factory is None):
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_factory_string_that_is_not_the_registered_dry_run_factory_is_refused',)),
+    Mutation('D69-S8-3', "the dry-run factory is added to run_harness.APPROVED_ROLE_FACTORIES [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(HARNESS, """APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build")
+""", """APPROVED_ROLE_FACTORIES = ("tests.harness_h5c2_roles:build", "tests.harness_h7_roles:build",
+                           "scripts.shadow_lab.dryrun_roles:build")
+"""),),
+             prepare=_without_probe,
+             targets=('test_run_harness_refuses_the_dry_run_string_without_dry_run_factory',
+                      'test_run_harness_s_command_line_refuses_the_dry_run_string')),
+    Mutation('D69-S8-4', "the record's header has no dry_run [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(SHADOW, """                "once": args.once, "dry_run": bool(reg.dry_run)})
+""", """                "once": args.once})
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_dry_run_registration_hands_its_factory_to_run_harness_s_real_check',)),
+    Mutation('D69-S8-5', "run_harness accepts dry_run_factory without the roles handed in [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(HARNESS, """            dry_run_factory is not None and roles is not None
+""", """            dry_run_factory is not None
+"""),),
+             prepare=_without_probe,
+             targets=('test_run_harness_refuses_dry_run_factory_without_roles_and_imports_nothing',)),
+    Mutation('D69-S8-6', "run_harness accepts the dry-run string without dry_run_factory [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(HARNESS, """            dry_run_factory is not None and roles is not None
+            and args.role_factory == dry_run_factory):
+""", """            roles is not None):
+"""),),
+             prepare=_without_probe,
+             targets=('test_run_harness_refuses_the_dry_run_string_without_dry_run_factory',)),
+    Mutation('D69-S8-7', "run_shadow hands dry_run_factory over under a registration that is not a dry run [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(SHADOW, """        handover = {} if dry_factory is None else {"dry_run_factory": dry_factory}
+""", """        handover = {"dry_run_factory": reg.dry_run_factory}
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_registration_that_is_not_a_dry_run_hands_no_dry_run_factory_over',)),
+    Mutation('D69-S8-8', "run_shadow replaces the factory string in the argv it hands over [review layer's task, item 164]",
+             S8_TESTS,
+             edits=(Edit(SHADOW, """        loop_code = run_harness.main(run_argv, lock=lock, register=register, roles=roles,
+""", """        loop_code = run_harness.main([run_harness.APPROVED_ROLE_FACTORIES[0]
+                                      if a == args.role_factory else a for a in run_argv],
+                                     lock=lock, register=register, roles=roles,
+"""),),
+             prepare=_without_probe,
+             targets=('test_a_dry_run_registration_hands_its_factory_to_run_harness_s_real_check',)),
 ]
 
 if __name__ == "__main__":
