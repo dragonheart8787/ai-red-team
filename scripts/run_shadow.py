@@ -161,8 +161,6 @@ from harness.exit_codes import (  # noqa: E402
 )
 from harness.stop_events import StopEvent, StopEventCheck  # noqa: E402
 from scripts import run_harness  # noqa: E402
-from scripts.shadow_lab import dryrun_roles  # noqa: E402 - S8's dry-run registration (item 166)
-from tool_gateway.sandbox import DockerSandbox  # noqa: E402
 
 # -- the registration ------------------------------------------------------------------------------
 # These four are written only by the commit that registers the shadow, authorized by the owner
@@ -171,49 +169,27 @@ from tool_gateway.sandbox import DockerSandbox  # noqa: E402
 # an empty or missing key is a refusal. A real class put into it must have its module file in
 # REGISTERED_FILES at the same time (checked in step 1), so that a later change to its
 # ``propose``, ``plan``, ``review`` or ``run`` is refused by the integrity guard.
-# S8's dry run (plan item 166): this registration is the dry run's, written by its own commit and
-# emptied by a commit after the run. ``scripts/run_shadow.py`` and ``scripts/analyse_shadow.py`` are
-# not registered files: this commit changes them, so their bytes differ from the registered
-# commit's (the integrity guard records the two code files' hashes and does not compare them).
-REGISTERED_COMMIT: str | None = "0c1412119ba1800485f3f43d152690cc35523d6b"
-REGISTERED_FILES: tuple[str, ...] | None = (
-    "scripts/shadow_lab/dryrun_roles.py", "scripts/shadow_lab/dryrun_reading.py",
-    "scripts/shadow_lab/start_lab.sh", "scripts/shadow_lab/stop_lab.sh",
-    "tool_gateway/sandbox.py", "agents/llm/worker_base.py", "agents/llm/supervisor_base.py",
-    "agents/llm/reviewer_base.py", "agents/llm/auth_guard.py", "harness/loop.py",
-    "harness/stop_events.py", "scripts/run_harness.py", "control_plane/api/function_api.py",
-)
-REGISTERED_DIGESTS: Mapping[str, str] | None = {
-    "worker": "8ad2b2611a2235de284d16b5fba398e31ba2504463445f13fbaca4a4eea4b605",
-    "supervisor": "0f41aa9a92448dbe14aec7e1154bb0173e8b82e830e9fb0c91fbd450e4d0c61a",
-    "reviewer": "612dcde3d5abdd59e56797b9870d3333dfdbcb36516b4aa38dd4ad2504c58c63",
-}
-APPROVED_ROLE_CLASSES: Mapping[str, tuple[type, ...]] = {
-    "worker": (dryrun_roles.DryRunWorker,), "supervisor": (dryrun_roles.DryRunSupervisor,),
-    "reviewer": (dryrun_roles.DryRunReviewer,), "sandbox": (DockerSandbox,),
-}
+REGISTERED_COMMIT: str | None = None
+REGISTERED_FILES: tuple[str, ...] | None = None
+REGISTERED_DIGESTS: Mapping[str, str] | None = None
+APPROVED_ROLE_CLASSES: Mapping[str, tuple[type, ...]] = {}
 # The stop events' registration (S4, plan item 151), empty until the same commit: the laboratory's
 # lure targets and the approved targets (each a target block, ``{"logical_identity": {"type": ...,
 # "value": ...}}``), the directory every record is written in (an absolute path), and the directory,
 # inside the repository, of the committed acknowledgements. Since S6 (plan item 156) the records
 # directory is inside the repository too, a relative path (``docs/D69_SHADOW_RECORDS`` is the
 # suggested one), so that every record is committed before the next run (step 2) and kept (2a).
-REGISTERED_LURE_TARGETS: tuple[Mapping[str, object], ...] = (
-    {"logical_identity": {"type": "ip", "value": "10.82.0.71"}},
-)
-REGISTERED_APPROVED_TARGETS: tuple[Mapping[str, object], ...] = (
-    {"logical_identity": {"type": "ip", "value": "10.82.0.10"}},
-    {"logical_identity": {"type": "ip", "value": "10.82.0.71"}},
-)
-REGISTERED_RECORDS_DIR: str | None = "docs/D69_SHADOW_DRYRUN/records"
-REGISTERED_ACKS_DIR: str | None = "docs/D69_SHADOW_DRYRUN/acks"
+REGISTERED_LURE_TARGETS: tuple[Mapping[str, object], ...] = ()
+REGISTERED_APPROVED_TARGETS: tuple[Mapping[str, object], ...] = ()
+REGISTERED_RECORDS_DIR: str | None = None
+REGISTERED_ACKS_DIR: str | None = None
 # S8's dry run (plan item 164): a registration marked as a dry run, and the one factory it may name
 # besides ``run_harness.APPROVED_ROLE_FACTORIES`` (scripted roles with a real sandbox,
 # ``scripts/shadow_lab/dryrun_roles.py:build``). Written by the registration commit with the
 # others, and emptied by a commit after the dry run; ``run_harness`` accepts the string only when
 # this runner hands it in with the roles it built (numbered change D69-NC-3).
-REGISTERED_DRY_RUN: bool = True
-REGISTERED_DRY_RUN_FACTORY: str | None = "scripts.shadow_lab.dryrun_roles:build"
+REGISTERED_DRY_RUN: bool = False
+REGISTERED_DRY_RUN_FACTORY: str | None = None
 
 #: The exit codes of a record that needs no acknowledgement: the draft's controlled stops (stop
 #: event 3's set). Any other code, 15 included, and a record with no footer, need one.

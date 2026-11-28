@@ -283,19 +283,11 @@ def test_an_empty_or_unusable_stop_event_constant_is_refused_at_step_1(
     assert git.calls == [] and lock.asked == 0 and through == []
 
 
-def test_the_product_constants_are_the_dry_run_registration_and_empty_ones_are_refused(capsys):
-    """Renamed from ``test_the_product_constants_are_all_empty_and_refused_as_not_registered``
-    (plan item 166)."""
-    # dry-run registration of plan item 166; restored to empty by the commit that empties the registration (S8 2b)  # noqa: E501
+def test_the_product_constants_are_all_empty_and_refused_as_not_registered(capsys):
     reg = run_shadow.registered()
-    assert (reg.lure_targets, reg.approved_targets, reg.records_dir, reg.acks_dir) == (
-        ({"logical_identity": {"type": "ip", "value": "10.82.0.71"}},),
-        ({"logical_identity": {"type": "ip", "value": "10.82.0.10"}},
-         {"logical_identity": {"type": "ip", "value": "10.82.0.71"}}),
-        "docs/D69_SHADOW_DRYRUN/records", "docs/D69_SHADOW_DRYRUN/acks")
-    empty = run_shadow.Registration(commit=None, files=None, digests=None)
-    assert run_shadow.main(_argv(), registration=empty, git=_Git()) == \
-        run_shadow.EXIT_STARTUP_REFUSED
+    assert (reg.lure_targets, reg.approved_targets, reg.records_dir, reg.acks_dir) == \
+        ((), (), None, None)
+    assert run_shadow.main(_argv(), git=_Git()) == run_shadow.EXIT_STARTUP_REFUSED
     assert _codes(capsys.readouterr().err) == [run_shadow.NOT_REGISTERED]
 
 
