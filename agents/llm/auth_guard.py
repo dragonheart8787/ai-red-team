@@ -201,8 +201,20 @@ REVIEWED_REFUSE_2 = (
     "VERTEX_AUTH_HOSTS",
     "VERTEX_OAUTH_CREDENTIAL_KIND",
 )
+#: Plan item 165: the same scan on the installed CLI 2.1.332, the names in neither list: all
+#: refused, none kept. The last was found by the same search with a looser boundary: it is the
+#: scan's kind of name behind a leading underscore ("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL is
+#: already set"), a provider base url.
+REVIEWED_REFUSE_3 = (
+    "CLAUDE_CODE_HOST_SHORT_SCRATCHPAD",
+    "CLAUDE_CODE_HOST_STARTED_AHEAD",
+    "CLAUDE_CODE_USER_DELEGATED_SESSION_ROUTINE_SERVER_CHECK_PROVIDERS",
+    "CLAUDE_CODE_USER_DELEGATED_SESSION_SERVER_CHECK_PROVIDERS",
+    "CLAUDE_GATEWAY_IDP_CONNECT_BY_HOSTNAME",
+    "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+)
 BILLING_VARIABLES: tuple[str, ...] = (DECIDED + SAME_KIND + REVIEWED_REFUSE
-                                       + REVIEWED_REFUSE_2)
+                                       + REVIEWED_REFUSE_2 + REVIEWED_REFUSE_3)
 
 #: Found by the same search and kept, each with the evidence for it (plan item 145, B4).
 REVIEWED_KEEP: Mapping[str, str] = {
@@ -369,7 +381,8 @@ def login_problems(status: Mapping[str, object]) -> list[str]:
 #: The version of the installed CLI the name lists were reviewed on (plan items 145 and 147). A CLI
 #: of another version may read names the lists do not hold: the lists and this constant are
 #: reviewed again together, and until then the shadow runner refuses (``cli_version_unreviewed``).
-REVIEWED_CLI_VERSION = "2.1.330"
+#: Reviewed again on 2.1.332 (plan item 165).
+REVIEWED_CLI_VERSION = "2.1.332"
 VERSION_ARGS = ("--version",)
 VERSION_QUERY_TIMEOUT_SECONDS = 30.0
 #: ``claude --version`` prints the version, optionally followed by `` (Claude Code)``.

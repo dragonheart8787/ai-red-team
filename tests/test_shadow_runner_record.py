@@ -116,7 +116,7 @@ def test_one_round_is_recorded_line_by_line_without_any_model_text(run):
                                 "no_progress_limit": 5, "live_task_limit": 200,
                                 "max_tokens": 100000, "max_minutes": 60}
     assert header["auth_guard"] == "passed"
-    assert header["claude_cli_version"] == "2.1.330"                     # plan items 148, 150
+    assert header["claude_cli_version"] == "2.1.332"                     # plan items 148, 150
     assert lines[1]["facts"]["caps"] == {"max_rounds": 1, "max_model_calls": 100,
                                          "no_progress_limit": 5, "max_tokens": 100000,
                                          "max_minutes": 60}

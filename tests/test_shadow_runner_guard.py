@@ -79,7 +79,7 @@ def _subscription_only(monkeypatch, tmp_path, tmp_path_factory):
     monkeypatch.setattr(auth_guard, "query_login", lambda **kwargs: dict(SUBSCRIPTION_LOGIN))
     # the CLI's version (plan item 148): the reviewed one, written out; its own tests are in
     # ``tests/test_shadow_runner_cli_version.py``
-    monkeypatch.setattr(auth_guard, "query_cli_version", lambda **kwargs: "2.1.330")
+    monkeypatch.setattr(auth_guard, "query_cli_version", lambda **kwargs: "2.1.332")
 
 
 def _registration(**override):

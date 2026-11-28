@@ -42,7 +42,7 @@ CLEAN = {"PATH": "/usr/bin:/bin", "HOME": "/home/shadow"}
 
 
 def test_the_reviewed_version_is_the_one_the_lists_were_read_from():
-    assert auth_guard.REVIEWED_CLI_VERSION == "2.1.330"
+    assert auth_guard.REVIEWED_CLI_VERSION == "2.1.332"
     assert run_shadow.CLI_VERSION_UNREVIEWED in run_shadow.REASONS
     assert len(set(run_shadow.REASONS)) == len(run_shadow.REASONS) == 31    # 19+6+4+2 (item 159)
 
@@ -53,7 +53,7 @@ def _start(tmp_path, *, version=None, query=None, login_query=None):
     git, lock = _Git(), _Lock(True)
     record = tmp_path / "run.jsonl"
     if query is None:
-        query = lambda: "2.1.330" if version is None else version  # noqa: E731
+        query = lambda: "2.1.332" if version is None else version  # noqa: E731
     code = run_shadow.main(_argv(record=record), registration=_registration(), git=git, lock=lock,
                            environ=CLEAN, settings_files=(), login_query=login_query,
                            version_query=query)
@@ -64,7 +64,7 @@ def test_the_reviewed_version_passes_and_is_in_the_header(tmp_path, through):  #
     code, git, lock, record = _start(tmp_path)
     assert lock.asked == 1 and len(through) == 1 and git.calls
     header = json.loads(record.read_text().splitlines()[0])
-    assert header["claude_cli_version"] == "2.1.330"
+    assert header["claude_cli_version"] == "2.1.332"
 
 
 @pytest.mark.parametrize("version", ["2.1.331", "2.1.33", "2.1.3300", "3.0.0", "2.1.329", "",
@@ -75,7 +75,7 @@ def test_a_cli_version_that_is_not_the_reviewed_one_is_refused(
     err = capsys.readouterr().err
     assert code == EXIT_STARTUP_REFUSED, version
     assert _codes(err) == [run_shadow.CLI_VERSION_UNREVIEWED], version
-    assert "2.1.330" in err
+    assert "2.1.332" in err
     # refused before the integrity guard: no git, no factory, no lock, no record
     assert git.calls == [] and compliant.BUILT == [] and lock.asked == 0 and through == []
     assert not record.exists()
@@ -98,7 +98,7 @@ def test_a_cli_version_that_cannot_be_read_is_refused(failure, tmp_path, through
 def test_the_login_is_checked_before_the_version_is_asked(tmp_path, through, capsys):  # noqa: F811
     asked = []
     code, _, _, _ = _start(tmp_path, login_query=lambda: {**SUBSCRIPTION_LOGIN, "loggedIn": False},
-                           query=lambda: asked.append(1) or "2.1.330")
+                           query=lambda: asked.append(1) or "2.1.332")
     assert code == EXIT_STARTUP_REFUSED and asked == []
     assert set(_codes(capsys.readouterr().err)) == {run_shadow.LOGIN_NOT_SUBSCRIPTION}
 

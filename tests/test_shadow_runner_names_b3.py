@@ -84,6 +84,14 @@ B3_KEEP = (
 )
 #: Every name of the scan.
 B3_FOUND = frozenset(B3_REFUSE) | frozenset(B3_KEEP)
+#: Plan item 165: the same scan on CLI 2.1.332, the names in neither list, all refused
+#: (``REVIEWED_REFUSE_3``), in the module's order; the last one was found with a looser boundary.
+V332_REFUSE = (
+    "CLAUDE_CODE_HOST_SHORT_SCRATCHPAD", "CLAUDE_CODE_HOST_STARTED_AHEAD",
+    "CLAUDE_CODE_USER_DELEGATED_SESSION_ROUTINE_SERVER_CHECK_PROVIDERS",
+    "CLAUDE_CODE_USER_DELEGATED_SESSION_SERVER_CHECK_PROVIDERS",
+    "CLAUDE_GATEWAY_IDP_CONNECT_BY_HOSTNAME", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+)
 
 
 def test_the_second_review_is_written_into_the_module_as_listed_here():
@@ -112,3 +120,19 @@ def test_the_second_review_does_not_overlap_the_first():
                 "ANTHROPIC_WEBHOOK_SIGNING_KEY", "CLAUDE_CODE_USE_POWERSHELL_TOOL",
                 "CLAUDE_CODE_USE_COWORK_PLUGINS"})
     assert not B3_FOUND & first
+
+
+def test_the_2_1_332_review_refuses_every_new_name_and_keeps_none():
+    """Plan item 165: the scan on 2.1.332 found these names in neither list; each is refused."""
+    assert auth_guard.REVIEWED_REFUSE_3 == V332_REFUSE
+    assert set(V332_REFUSE) <= set(auth_guard.BILLING_VARIABLES)
+    assert not set(V332_REFUSE) & set(auth_guard.REVIEWED_KEEP)
+    assert not set(V332_REFUSE) & B3_FOUND
+    assert len(set(V332_REFUSE)) == len(V332_REFUSE) == 6
+
+
+def test_the_lists_cover_the_2_1_332_scan():
+    """Every name of the 2.1.332 scan (168 by the pattern, and the one behind an underscore) is in
+    a list: refused or kept."""
+    listed = set(auth_guard.BILLING_VARIABLES) | set(auth_guard.REVIEWED_KEEP)
+    assert B3_FOUND | set(V332_REFUSE) <= listed

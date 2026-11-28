@@ -39,7 +39,7 @@ from tests.test_shadow_runner_guard import (  # noqa: F401 - fixtures
     _subscription_only,
     through,
 )
-from tests.test_shadow_runner_names_b3 import B3_REFUSE
+from tests.test_shadow_runner_names_b3 import B3_REFUSE, V332_REFUSE
 from tests.test_shadow_runner_pins import CANDIDATES, SCOPE, TASK
 
 #: A value no refusal line and no record may contain.
@@ -59,7 +59,7 @@ EXPECTED = (
     "CLAUDE_CODE_LAUNCHER_RUNS_API_KEY_HELPER", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
     "CLAUDE_CODE_MCP_SERVE_AUTH_TOKEN", "CLAUDE_CODE_USE_CCR_V2",
     "CLAUDE_CODE_USE_NATIVE_FILE_SEARCH",
-) + B3_REFUSE                                    # plan item 147, B3
+) + B3_REFUSE + V332_REFUSE                      # plan items 147 (B3), 165
 CLEAN = {"PATH": "/usr/bin:/bin", "HOME": "/home/shadow", "CLAUDE_CODE_OAUTH_TOKEN": "login"}
 
 
